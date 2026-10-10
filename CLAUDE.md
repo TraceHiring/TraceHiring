@@ -38,6 +38,7 @@ Trace is an India-first online assessment platform for high-volume hiring where 
 - **Context:** one milestone stream per session. Use subagents for broad reading/search so file dumps stay out of this context. When context passes ~60%, run the `trace-handoff` skill, then `/clear` and resume from the handoff — prefer this over long auto-compacted sessions.
 - **No guessing:** never claim a test passes, a file exists or an API behaves a certain way without checking in this session (run it, read it, or check the installed package types / Context7 docs). If something isn't in the repo, the spec or the plan, ask — don't invent it. Cite file paths for every claim in summaries.
 - **Commit often** on the milestone branch (at least every passing sub-step). Never leave work uncommitted at the end of a session.
+- **Every commit is backed up to GitHub** by a local `post-commit` hook that pushes the current branch to the `trace` remote (never force). If a commit prints an auto-push warning, read `.git/autopush.log`, fix the cause and push before continuing; never rewrite pushed history.
 
 ## Compact instructions
 When compacting, keep: current milestone and branch, the exact task in progress, failing tests and why, decisions made this session, open questions, and the next step. Drop file contents and command output; they can be re-read.
