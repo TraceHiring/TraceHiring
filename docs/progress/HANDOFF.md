@@ -1,78 +1,69 @@
-# HANDOFF — 2026-10-11 01:05 IST
-Reason for stopping: context. S1.0 is done. The next step (S1.1–S1.3, one checkpoint) is the largest lead step in M0a, so it should start in a fresh session.
+# HANDOFF — 2026-10-11 01:40 IST
+Reason for stopping: blocked. This was the one-time infra-setup session. Its remaining steps need the founder: creating the Supabase projects, plus GitHub environment/variable and git-remote changes that auto mode refused.
 
 ## Where we are
-- Milestone: **M0a**: toolchain, pipeline and skeleton. **Phase: BUILD.** S1.0 is done; next is **S1.1–S1.3**.
-- Branch: `milestone/m0a`. HEAD before this handoff: `49fe131` ("docs(skills): add M0a/M0b/M3a/M3b rows to milestone review (Q57)"). After this handoff, `main` is merged into it.
-- Checkpoints: `cp/m0a-01` → `bdeb679` (S1.0 green). Earlier tags: `cp/m0a-00` and `cp/autopilot-installed`.
-- `pnpm verify:fast` doesn't exist yet. The root `package.json` has only `prepare`; `verify` arrives in S1.1–S1.3.
-- Spec: `specs/m0-foundations.md` **revision 9**, which applies the founder answers and the day-one results.
-- Issues in this milestone: ABH-80 (observability part: "no candidate PII is found in logs (scan)").
+- Milestone: **M0a**: toolchain, pipeline and skeleton. **Phase: BUILD.** S1.0 is done; next is **S1.1–S1.3** (unchanged from the previous handoff).
+- Branch: `milestone/m0a` at `80b5368` ("docs(infra): record dev/staging environments; defer Sentry until before D1"). It was fast-forwarded from `infra/staging-setup` (worktree `trace-autopilot-continue-325375`).
+- Last checkpoint: `cp/m0a-01` → `bdeb679`. No new `cp/*` tag; this session changed docs only.
+- `pnpm verify:fast` doesn't exist yet: "Command verify:fast not found", exit 1, at 01:36. That is expected; it arrives in S1.1–S1.3.
+- Spec: `specs/m0-foundations.md` **revision 10**.
 
 ## Done this session (verified)
-- **Founder answers recorded** (`8b7974e` on `main`):
-  - build-notes §0: H1, CI option (b), Q55/Q56/Q57/D3 approved, ABH-80's "Done when" line;
-  - plan-conflicts #16 (RPO ≤ 2 min, RTO ≤ 2 h);
-  - FOUNDER-QUEUE "Resolved" section;
-  - AUTOPILOT §6 and CLAUDE.md: plain `git push` at session end.
-- **Toolchain verified** (01:00 IST): Node v22.23.3, pnpm 12.11.2, gitleaks 8.30.1, Docker server 29.5.2.
-  - Fix: Corepack's global `lastKnownGood` still named the broken pnpm 12.8.1, so I ran `corepack install --global pnpm@12.11.2`.
-- **S1.0 committed** (`bdeb679`, tag `cp/m0a-01`). Files:
-  - root `package.json` and `pnpm-workspace.yaml` (`allowBuilds: lefthook: true`);
-  - `pnpm-lock.yaml`;
-  - `lefthook.yml`: **pre-commit** runs a staged gitleaks scan, and **pre-push** runs a full-history gitleaks scan. Both fail if gitleaks is missing;
-  - `.gitleaks.toml`;
-  - Q56 deny rules in `.claude/settings.json`;
-  - spec revision 9.
-- **S1.0 checks:**
-  - AT-6, run by hand in a temp repo:
-    - clean commit: exit 0;
-    - a staged `ghp_` token generated at runtime: exit 1, and no commit was made;
-    - gitleaks removed from PATH: exit 1, with the install hint.
-  - Pre-push: a leak committed with `--no-verify` makes the push exit 1, and the remote stays unchanged.
-  - Full-history `gitleaks git` scan: no leaks.
-- **Reviews:**
-  - spec-reviewer: APPROVE after fixes.
-  - security-reviewer: 1 High (no scan on the new push path), fixed with the pre-push hook and the AUTOPILOT §6 scan step. Its 2 Medium findings went to the founder queue (wider deny rules, remote protection). Its 1 Low (allowlist edits in `.gitleaks.toml`) is a to-do for S1.5 CI.
-- **Q57 done** (`49fe131`): the review skill now has M0a, M0b, M3a and M3b rows.
-- `pnpm install --frozen-lockfile` was run in the m0a worktree, so the hooks find lefthook there.
+- **Connections checked (step 1):**
+  - Supabase connector: org "rajabhay.work@gmail.com's Org", Free plan. It holds one empty default project, "rajabhay.work@gmail.com's Project" (ref `giuisatnjoagzlbcbktu`).
+  - Cloudflare connector: it works (0 Workers, 0 KV), but it can't show the account. The founder supplied the account name and ID. R2 is not enabled on the account.
+  - `gh`: logged in as `TraceHiring`. The old remote `AbhayRajGit/Tracehiring` returns "Repository not found".
+- **Founder answers:**
+  - the repo is now **`TraceHiring/TraceHiring`**;
+  - the founder deletes the old Supabase project in the dashboard;
+  - Cloudflare account "Rajabhay.work@gmail.com's Account".
+- **Supabase `create_project` failed:** "Cost confirmation ID does not match". The connector exposes no cost-confirmation tool, so the founder creates `trace-dev` and `trace-staging` in the dashboard.
+- **Commit `80b5368`:**
+  - `docs/infra/environments.md`: every dev/staging resource name, region, plan and status, and which GitHub variable or secret holds what. Names, refs and public values only.
+  - Spec revision 10:
+    - repo rename (H3, §7.2 gate);
+    - **Sentry deferred until before D1**: an `ErrorReporter` interface plus `noopErrorReporter` in §9.2; AT-9 rewritten; new AT-9-sentry, deferred with owner "before D1"; H6 deferred; §13.1 says Sentry is not an M0a gate;
+    - §7.3 adds `SUPABASE_STAGING_{PROJECT_REF,URL,PUBLISHABLE_KEY}`.
+  - A build-notes "Autopilot changes" row.
+  - A build-order deviation pointer (lines 26–27).
+  - FOUNDER-QUEUE rows.
+  - The pre-commit gitleaks scan found no leaks.
+- **spec-reviewer on revision 10:** CHANGES REQUIRED, with 0 Blocking, 3 Medium and 2 Low. All Medium findings and Low 4 are fixed in `80b5368`.
 
 ## In progress (exact)
-- Nothing. All trees are clean after this commit.
+- Nothing in the repo. All trees are clean after this handoff commit.
+- **Not done (blocked):**
+  - Supabase projects;
+  - GitHub `staging` environment and its variables;
+  - `git remote set-url trace https://github.com/TraceHiring/TraceHiring.git`. Auto mode denied it as a remote repoint;
+  - **the session-end push**. The `trace` remote still points at the unreachable old repo, so no push was made. That is recorded in FOUNDER-QUEUE.
 
 ## Next step (one precise action)
-Start **S1.1–S1.3** (spec §14 row S1, §2 layout, §4 pins, §5 table row "S1.1–S1.3"), on `milestone/m0a`, as one checkpoint:
-- ADR-028;
-- the workspace globs and catalog in `pnpm-workspace.yaml`, `.npmrc`, `.node-version`;
-- `.gitattributes` plus a renormalise commit;
-- `@trace/config` with its rule fixture tests;
-- every workspace's `package.json`, `tsconfig.json` and Vitest config, with a placeholder and one smoke test each;
-- root scripts `typecheck`, `lint`, `test`, `build` and `verify`;
-- add Prettier to lefthook pre-commit.
-
-Watch out for:
-- `prettier --check .` will flag the existing `docs/**` Markdown. Decide on purpose whether to format it or put it in `.prettierignore`, and record the choice.
-
-When `pnpm verify` is green, run spec-reviewer and security-reviewer, commit, and tag `cp/m0a-02`.
+1. If the founder has created `trace-staging`:
+   - read its ref, URL and publishable key with the Supabase connector (`list_projects`, `get_project_url`, `get_publishable_keys`);
+   - set the three `SUPABASE_STAGING_*` variables with `gh variable set … --env staging --repo TraceHiring/TraceHiring`, after the environment exists;
+   - fill in the "pending" rows in `docs/infra/environments.md`.
+2. Then go back to the autopilot: start **S1.1–S1.3** on `milestone/m0a`. This is the "Next step" of the previous handoff (spec §14 row S1, §2, §4, §5 "S1.1–S1.3"). S1.7 now writes `error-reporter.ts` with `noopErrorReporter`, not `sentry-scrub.ts`.
 
 ## Decisions made this session
-- CI also triggers on push to `milestone/**` (spec revision 9, build-notes "Autopilot changes").
-- The pre-commit hook has gitleaks only until S1.1 (Prettier) and S1.6 (commitlint).
-- Extra deny rules: `git push --force-with-lease`, `--delete` and `-d`.
-- A pre-push full-history scan, plus an explicit scan before the session-end push (AUTOPILOT §6).
+- Sentry is deferred until before D1. Recorded in spec revision 10 §9.2 and §13.1, in build-notes "Autopilot changes", and in build-order line 26.
+- The GitHub home is `TraceHiring/TraceHiring`. Recorded in spec revision 10 (H3, §7.2) and `docs/infra/environments.md`.
+- No Cloudflare resources are created by hand. CI creates Pages ×2 and Workers ×3 on the first deploy (spec §7.2). Queues, R2 and Durable Objects come in later milestones.
+- The staging publishable key is a GitHub *variable* named `SUPABASE_STAGING_PUBLISHABLE_KEY`.
 
 ## Open questions for the founder (all in docs/progress/FOUNDER-QUEUE.md)
-- **`gh auth login`.** Blocking: M0a CLOSE, which needs `gh` to read CI results on the private repo.
-- **Branch protection vs the session-end push of `main`.** Options (a) and (b). Blocks the AT-13 design at S1.5 and CLOSE. No default; the autopilot waits for an answer.
-- **H3–H6** (staging environment, tokens, Sentry). Blocking: M0a CLOSE (AT-11, AT-18, AT-22-staging).
-- **Wider deny rules and remote protection.** Hardening; blocks nothing.
+- **Supabase:** delete the old project, then create `trace-staging` and `trace-dev` (Mumbai, Free). Blocking: M0b and AT-18.
+- **GitHub env, variable and remote:** run the four commands in FOUNDER-QUEUE, or allow the autopilot to run them. Blocking: the session-end push and AT-11.
+- **`*.workers.dev` subdomain** (H4). Blocking: AT-11 smoke URLs.
+- **What "D1" means.** Blocking: nothing in M0a.
+- **Still open from before:** branch protection vs the session-end push (spec §17 item 8), H3–H5 secrets, wider deny rules.
 
 ## Gotchas / do not touch
-- Git hooks are shared by every worktree (`.git/hooks`). A checkout with no `node_modules` or no `lefthook.yml` (for example the `main` checkout) runs **no** pre-commit scan. Run `pnpm install` before committing in a worktree, and run `gitleaks git --redact --no-banner` by hand before any push.
-- Never re-enable `.git/hooks/post-commit.disabled`. Never force-push. Never move or delete `cp/*` tags.
-- On Windows, lefthook runs each command as `sh -c "<cmd>"`, so there must be **no double quotes** inside a lefthook `run:`.
-- `milestone/m0a` is checked out in `.claude/worktrees/milestone-m0-spec-e4db77`. This session worked on `lead/m0a-s1` in its own worktree and fast-forwarded `milestone/m0a` with `git -C <m0a worktree> merge --ff-only`.
-- `refs/agents/*` checkpoint refs from the desktop app exist. gitleaks scans them too, and they are clean.
+- The `trace` remote is still `AbhayRajGit/Tracehiring`, which is unreachable. Don't push until it's repointed. Never force-push.
+- The Supabase connector can't create projects (it asks for a cost confirmation), and the Cloudflare connector has no account, Pages, Queues or Durable Objects tools.
+- Free Supabase plan: 2 active projects in total, across every org the founder owns.
+- Git hooks are shared by every worktree. Run `pnpm install --frozen-lockfile` in a new worktree before committing, or no scan runs. This worktree has `node_modules`.
+- Never re-enable `.git/hooks/post-commit.disabled`. Never move or delete `cp/*` tags.
 
 ## Verify first (the next session runs these before any change)
-git log --oneline -5 milestone/m0a · git status · git tag · node -v · pnpm -v · gitleaks version · docker info · gitleaks git --redact --no-banner
+git log --oneline -5 milestone/m0a · git status · git remote -v · gh api repos/TraceHiring/TraceHiring/environments/staging · Supabase `list_projects` · gitleaks git --redact --no-banner
