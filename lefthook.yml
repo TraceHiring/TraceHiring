@@ -1,12 +1,15 @@
 # Git hooks for Trace (spec specs/m0-foundations.md §6).
 # There is no post-commit hook: nothing pushes automatically (build-notes Q54).
-# Prettier joins pre-commit in S1.1 and commitlint (commit-msg) in S1.6, once each is installed.
+# Prettier joined pre-commit in S1.1; commitlint (commit-msg) joins in S1.6, once it is installed.
 pre-commit:
   commands:
     gitleaks:
       # Fails, never skips, when gitleaks is missing.
       # No double quotes inside: on Windows lefthook passes this to sh -c inside double quotes.
       run: "(command -v gitleaks >/dev/null 2>&1 || (echo 'gitleaks is not installed, so the secret scan cannot run. Install it (Windows: winget install Gitleaks.Gitleaks), then commit again.' >&2; exit 1)) && gitleaks git --pre-commit --staged --redact --no-banner"
+    prettier:
+      # --ignore-unknown: staged files Prettier has no parser for (SQL, images) pass; .prettierignore still applies.
+      run: pnpm exec prettier --check --ignore-unknown {staged_files}
 
 # Pushes are allowed since 2026-10-11 (founder, option (b)). Scan every ref before anything leaves the machine,
 # because cherry-picks, rebases, merges and --no-verify commits never ran pre-commit.

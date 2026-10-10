@@ -5,7 +5,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 const dir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-const sh = (c) => { try { return execSync(c, { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { return ''; } };
+const sh = (c) => {
+  try {
+    return execSync(c, { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+  } catch {
+    return '';
+  }
+};
 const out = [];
 out.push('=== TRACE SESSION START (injected by .claude hook) ===');
 out.push(`Branch: ${sh('git branch --show-current') || 'unknown'}`);
@@ -20,5 +28,7 @@ if (fs.existsSync(h)) {
 } else {
   out.push('No docs/progress/HANDOFF.md yet — this is the first session.');
 }
-out.push('RULES: Treat the handoff as a claim, not a fact. Before continuing, verify it against git log and by running `pnpm verify:fast` (if it exists). If the repo and the handoff disagree, the repo wins — note the mismatch in the handoff.');
+out.push(
+  'RULES: Treat the handoff as a claim, not a fact. Before continuing, verify it against git log and by running `pnpm verify:fast` (if it exists). If the repo and the handoff disagree, the repo wins — note the mismatch in the handoff.',
+);
 process.stdout.write(out.join('\n') + '\n');

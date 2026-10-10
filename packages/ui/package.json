@@ -1,0 +1,26 @@
+{
+  "name": "@trace/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "lint": "eslint . --max-warnings=0 && pnpm tokens:check",
+    "test": "vitest run",
+    "tokens:build": "node scripts/build-tokens.mjs",
+    "tokens:check": "node scripts/build-tokens.mjs --check"
+  },
+  "dependencies": {
+    "@trace/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@trace/config": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

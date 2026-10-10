@@ -6,9 +6,24 @@
     "node": ">=22.22 <23"
   },
   "scripts": {
-    "prepare": "lefthook install"
+    "prepare": "lefthook install",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "lint": "pnpm -r --if-present lint && prettier --check . && gitleaks git --redact --no-banner",
+    "test": "pnpm -r --if-present test",
+    "build": "pnpm -r --if-present build",
+    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   },
   "devDependencies": {
-    "lefthook": "2.2.1"
-  }
+    "@commitlint/cli": "catalog:",
+    "@commitlint/config-conventional": "catalog:",
+    "@trace/config": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "lefthook": "catalog:",
+    "prettier": "catalog:",
+    "supabase": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "type": "module"
 }

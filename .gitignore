@@ -13,3 +13,6 @@ test-results/
 .claude/allow-red
 .claude/usage.json
 .claude/usage-guard-state.json
+.dev.vars*
+.claude/worktrees/
+*.tsbuildinfo

@@ -1,0 +1,29 @@
+{
+  "name": "@trace/jobs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "types:gen": "wrangler types",
+    "typecheck": "wrangler types --check && tsc --noEmit -p .",
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@trace/shared": "workspace:*",
+    "@trace/vendors": "workspace:*",
+    "hono": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@trace/config": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "@cloudflare/vitest-pool-workers": "catalog:",
+    "wrangler": "catalog:"
+  }
+}
