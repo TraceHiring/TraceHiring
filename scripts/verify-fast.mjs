@@ -12,8 +12,8 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { isEntryPoint } from './lib/cli.mjs';
 import { changedFiles, mergeBase, repoTop } from './lib/git.mjs';
 import { dependentsClosure, loadWorkspaces, packageForFile } from './lib/workspace.mjs';
 

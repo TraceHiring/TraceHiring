@@ -6,8 +6,7 @@
 // The planning is pure and unit-tested in scripts/test/lib-clean-clone.test.mjs.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import {
   USAGE,
   cloneParentDir,
@@ -20,6 +19,7 @@ import {
   parseArgs,
   pnpmVersionFrom,
 } from './lib/clean-clone.mjs';
+import { isEntryPoint } from './lib/cli.mjs';
 import { commonDir, git, gitOut, refExists, repoTop } from './lib/git.mjs';
 import { shellCommandLine } from './verify-fast.mjs';
 
