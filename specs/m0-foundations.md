@@ -1,7 +1,22 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** revision 6 (autopilot, 2026-10-11). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). For approval of revisions 4–6, see the end of this file.
+- **Status:** revision 7 (autopilot, 2026-10-11). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). For approval of revisions 4–7, see the end of this file.
 - **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a`, created from `main` at `b7af663`, with `main` at `4863db2` merged in. Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
+- **Revision 7 changes (2026-10-11).** This revision fixes the findings on revision 6. `spec-reviewer` found 1 Blocking, 2 Medium and 1 Low. `database-reviewer` approved, with 7 Low.
+  - **Every checkpoint can now go green:**
+    - S1.1–S1.3 form one checkpoint, so `@trace/config` exists before any workspace config uses it.
+    - Every placeholder has one real smoke test; there is no `passWithNoTests`.
+    - The Worker and service placeholders include `wrangler.jsonc` and the committed `wrangler types` output.
+    - A check joins `verify` only once both the script and the files it checks exist. That means `check-workflows` joins at S1.5, and `check-boundaries` treats a missing `config.toml` like `check-migrations` does.
+  - **§14 table:** now has a Scope column, so every row has the same number of cells.
+  - **Missing base manifest:** counts as the empty set.
+  - **Owners:** AT-6 and AT-6c are owned by S1.4, AT-7 by S1.6.
+  - **Branch controls:**
+    - MT-1 now has 2 branches, MT-2 3, MT-5b 3, MT-5c 3 and MT-6 4, giving 51 branch controls and a floor of 71.
+    - The spec now gives the MT-12(a) PUBLIC fixture recipe.
+    - MT-12(b) no longer flags PostgreSQL's built-in PUBLIC USAGE on types.
+    - A day-one check confirms the MT-11 fixtures can be created.
+    - The stale sentence about positive controls is fixed.
 - **Revision 6 changes (2026-10-11).** This revision fixes the re-review findings on revision 5. `spec-reviewer` found 1 Blocking, 2 Medium and 5 Low; `database-reviewer` found 2 Medium and 8 Low.
   - **Making `pnpm verify` reachable at every step:**
     - §5 now says how `verify` grows step by step.
@@ -269,14 +284,16 @@ TypeScript base config:
 | **`verify`** | `pnpm typecheck && pnpm lint && pnpm test && pnpm test:rls && pnpm build` (exactly the CLAUDE.md list). `test:rls` joins `verify` in S1.7, the step that creates the database. Before S1.7, `verify` is the other four. |
 | **`verify:fast`** | `node scripts/verify-fast.mjs` (Stop hook) |
 
-**How `verify` grows during M0a.** Each script call joins `lint`, `test` or `build` in the same commit that adds the script, so `pnpm verify` only ever calls scripts that exist. A step is green when `pnpm verify`, as it stands at that step, passes (§14).
+**How `verify` grows during M0a.** A check joins `lint`, `test` or `build` only once both the script and the files it checks exist. So `pnpm verify` never calls a missing script and never fails on a missing target. Until S1.7, `check-boundaries` (item 4) and `check-migrations` read a missing `supabase/config.toml` as "no database yet". From S1.7 on, both require it. A step is green when `pnpm verify`, as it stands at that step, passes (§14).
 
 | After step | `pnpm verify` runs |
 | --- | --- |
-| S1.0 | Nothing yet; `verify` isn't defined. S1.0 is green when AT-6 (run by hand, output recorded) and a full-history `gitleaks git` scan both pass. |
-| S1.2 | `typecheck`, `lint` (ESLint, Prettier, full-history gitleaks), `test` and `build`, over the placeholder workspaces (§14) |
-| S1.3–S1.6 | the above, plus each `check-*` script, `check-migrations`, `scan-dist`, `check-headers` and `check-bundle-size` as it lands |
-| S1.7 onward | the full list in the table above: `gen-catalog-tests --check` joins `lint`, and `test:rls` joins `verify` |
+| S1.0 | Nothing yet, because `verify` isn't defined. S1.0 is green when AT-6 (run by hand, output recorded) and a full-history `gitleaks git` scan both pass. |
+| S1.1–S1.3 (one checkpoint) | `typecheck`; `lint` (ESLint, Prettier, full-history gitleaks); `test`, which is `pnpm -r test` with one smoke test per placeholder; and `build`, which is `pnpm -r build` |
+| S1.4 | the above, plus: `vitest run --root scripts` in `test`; `check-boundaries` and `check-migrations` in `lint`; `check-bundle-size`, `check-headers` and `scan-dist` in `build` |
+| S1.5 | the above, plus `check-workflows` in `lint`, now that `ci.yml` exists |
+| S1.6 | the above, plus the commitlint tests (AT-7) |
+| S1.7 onward | the full list in the table above. `gen-catalog-tests --check` joins `lint`, and `test:rls` joins `verify`. |
 
 S1.7 adds `scripts/test/root-scripts.test.mjs`. It fails if the root `lint`, `build` or `verify` scripts lack any command in the table above.
 
@@ -518,7 +535,7 @@ In CI, the harness runs with `--stop`.
     - The base is resolved the same way as for `check-migrations` (`--base`, then `MIGRATIONS_BASE`, then `main`), and a ref that doesn't resolve fails.
     - A floor file missing at the base counts as 0. That is the first-run case in M0a.
     - On `main`, the floors are also compared against every `m*-reviewed` tag that is an ancestor of HEAD.
-  - the manifest at the base (its IDs and branches) is not a subset of the current one. That stops a check being swapped for another while the count stays the same.
+  - the manifest at the base (its IDs and branches) is not a subset of the current one. A manifest missing at the base counts as the empty set, which is the case throughout M0a. That stops a check being swapped for another while the count stays the same.
 - **Against staging:** step 4 of §7.2 runs the check files only, without the fixtures.
 
 **What they inspect.** The scope is every relation, function, policy, trigger, constraint and type in the schemas `public`, `private`, `quality` and `integrity`. It also covers every member of `pg_partition_tree()` of a partitioned table in those schemas, whatever schema the partition lives in. MT-8b makes sure no other non-system schema exists.
@@ -553,9 +570,9 @@ In CI, the harness runs with `--stop`.
 | MT-9 | an in-scope relation or function not owned by `postgres`; a `pg_extension` whose `extnamespace` is in scope; or a relation or function in `extensions` that is **owned by `postgres`** and is not an extension member, meaning our own migrations made it. Supabase's own non-member helpers in `extensions` (such as `grant_pg_net_access` and `pgrst_ddl_watch`) are owned by `supabase_admin`, so they are excluded. A day-one check lists them (§8.2). | Default-ACL integrity (database review F2) |
 | MT-10 | a view (`relkind = 'v'`) whose `reloptions` lacks the literal `security_invoker=true` (migrations must write exactly that; `on`, `1` and `yes` count as violations); a materialized view in `public`; or a materialized view with any privilege for `anon` or `authenticated` (M0b adds the candidate roles) | Views can't bypass RLS (rule 5) |
 | MT-11 | a policy with `polcmd = '*'` (FOR ALL); an INSERT policy without `polwithcheck`; an UPDATE policy without both `polqual` and `polwithcheck`; a SELECT or DELETE policy without `polqual`; a policy whose `polroles` contains `0` (PUBLIC); a policy whose qual or with-check is literally `true` on a table that isn't on the reference-table list inside `MT-11.sql` (empty in M0a); or a policy calling `auth.uid()` or `auth.jwt()` outside a scalar sub-select (`(select auth.uid())`) | Separate per-operation policies (CLAUDE.md) |
-| MT-12 | in `pg_default_acl` for `defaclrole = 'postgres'::regrole`: (a) the global (`defaclnamespace = 0`) function entry is missing, or `aclexplode` shows EXECUTE for PUBLIC (grantee 0); (b) any global entry, or any per-schema entry for an in-scope schema, grants anything, of any `objtype`, to PUBLIC (grantee 0), `anon`, `authenticated` or `service_role` | Default ACLs stay locked, on staging too |
+| MT-12 | in `pg_default_acl` for `defaclrole = 'postgres'::regrole`: (a) the global (`defaclnamespace = 0`) function entry is missing, or `aclexplode` shows EXECUTE for PUBLIC (grantee 0); (b) any global entry, or any per-schema entry for an in-scope schema, grants anything, of any `objtype`, to PUBLIC (grantee 0), `anon`, `authenticated` or `service_role`. One exception: USAGE on types (`objtype 'T'`) to PUBLIC is PostgreSQL's built-in type default, so it is not flagged. | Default ACLs stay locked, on staging too |
 
-**Positive controls** (one fixture per row except MT-4b, which is its own probe). Examples:
+**Positive controls.** There is one fixture per branch, as listed in the `manifest.json` (§8.5); MT-4b is its own probe. Examples:
 - MT-1: a compliant partitioned parent (RLS on, `org_id uuid not null`) with a partition in a non-scope schema that has RLS off. Partitions don't inherit `relrowsecurity`, so this proves the `pg_partition_tree` path.
 - MT-2: a plain table without `org_id`.
 - MT-9, hand-made branch: a function created as `postgres` in `extensions`. If `postgres` lacks CREATE there, the day-one check records which non-postgres path the fixture uses instead.
@@ -563,13 +580,20 @@ In CI, the harness runs with `--stop`.
 - MT-7: a SECURITY DEFINER function without `search_path`.
 - MT-11: a FOR ALL policy. MT-6: an `integrity` enum with `auto_reject`.
 - MT-10: a view without `security_invoker`. MT-8b: `create schema reports`.
-- MT-12: `alter default privileges … grant select on tables to anon`, inside the savepoint.
+- MT-12(b): `alter default privileges … grant select on tables to anon`, inside the savepoint.
+- MT-12(a), the PUBLIC branch: PostgreSQL deletes a `pg_default_acl` row that equals the built-in default. Granting EXECUTE to PUBLIC on its own would therefore fire only the "entry missing" branch. The fixture keeps the row different from the default:
+  ```sql
+  alter default privileges for role postgres grant execute on functions to public;
+  alter default privileges for role postgres revoke execute on functions from postgres;
+  ```
+  The row becomes `{=X/postgres}`.
+- MT-11: check on day one that PostgreSQL accepts `CREATE POLICY` without `WITH CHECK` (INSERT) and without `USING` (SELECT, DELETE). If it rejects one, that branch is marked unreachable in the manifest. It then gets no fixture, and the floor drops by one with a note, the only allowed exception to "floors only go up", made once in S1.7.
 
 **Thresholds:**
-- `catalog-min-count` is set to the exact number of assertions written in S1.7. The expected number is **65**: 16 clean checks, 45 branch controls and 4 MT-4b probes. The 45 branch controls are:
-  - MT-1: 1, MT-2: 1, MT-3: 2, MT-4: 5
-  - MT-5a: 3, MT-5b: 2, MT-5c: 2, MT-5d: 3
-  - MT-6: 3, MT-7: 2, MT-8: 4, MT-8b: 1
+- `catalog-min-count` is set to the exact number of assertions written in S1.7. The expected number is **71**: 16 clean checks, 51 branch controls and 4 MT-4b probes. The 51 branch controls are:
+  - MT-1: 2 (an in-scope table without RLS; the partition path), MT-2: 3 (the column is missing; `org_id text`; a nullable `org_id uuid`), MT-3: 2, MT-4: 5
+  - MT-5a: 3, MT-5b: 3 (`pg_depend` through a `BEGIN ATOMIC` body; `prosrc`; `proconfig`), MT-5c: 3 (a direct grantee on both; membership in two roles that each hold one schema; `pg_read_all_data`/`pg_write_all_data`), MT-5d: 3
+  - MT-6: 4 (an unused `integrity` enum; another schema's enum used directly by an `integrity` column; use through an array; use through a domain), MT-7: 2, MT-8: 4, MT-8b: 1
   - MT-9: 3, MT-10: 3, MT-11: 7, MT-12: 3
 
   `manifest.json` is the authority on branches.
@@ -691,7 +715,7 @@ It fails if any of the following holds:
    - `postgres://`, `postgresql://`, `DB_URL`, `DATABASE_URL`
 2. Git tracks a `.dev.vars*` file, or any `.env*` file other than `env.example`.
 3. An app references a `VITE_*` name containing `SECRET`, `TOKEN`, `PASSWORD`, `PRIVATE`, `JWT`, `DB`, or `KEY` (other than `VITE_SENTRY_DSN`).
-4. `supabase/config.toml` exposes `private`, `quality` or `integrity` (§8.1).
+4. `supabase/config.toml` exposes `private`, `quality` or `integrity` (§8.1). A missing `config.toml` passes only while `supabase/migrations/` is also missing, which is the state before S1.7 (§5).
 5. A text file in the index has CRLF line endings (`git ls-files --eol`).
 
 **At deploy time,** `check-staging-secrets.mjs` (§7.2 step 6) catches secrets bound outside the code, through `wrangler secret put` or the dashboard.
@@ -767,7 +791,7 @@ It fails if any of the following holds:
 | AT-16 | No secret in any build output | Local: `scan-dist.mjs` in `build`, unit-tested with a fixture `dist/` holding a fake key generated at runtime. **Deferred part:** deploy step 2. |
 | AT-17 | Migration rules: name, real timestamp ≤ now + 1 day, unique versions, changes against the working tree, base-tip ordering, frozen set, a missing base fails, and a missing `supabase/migrations/` is allowed only before `supabase/config.toml` exists | `check-migrations.mjs` unit tests, plus the run in `lint`; CI repeats it |
 | AT-18 | The catalog checks hold on **staging** after `db push` | Deploy step 4. **Deferred.** |
-| AT-19 | The generated catalog test file is current; every manifest ID has a check, and every listed branch has a fixture; no floor went down (the base is resolved as in `check-migrations`, and a floor missing at the base counts as 0); the base manifest is a subset of the current one | `gen-catalog-tests.mjs --check` in `lint`, + unit tests |
+| AT-19 | The generated catalog test file is current; every manifest ID has a check, and every listed branch has a fixture; no floor went down (the base is resolved as in `check-migrations`, and a floor missing at the base counts as 0); the base manifest is a subset of the current one (a manifest missing at the base counts as empty) | `gen-catalog-tests.mjs --check` in `lint`, + unit tests |
 | AT-20 | Token files are current; contrast pairs pass | `@trace/ui` tests |
 | AT-21 | Candidate app initial JS ≤ 150 KB gzip | `check-bundle-size.mjs` |
 | AT-22-local | Security headers are present in both `dist/` outputs | `check-headers.mjs` in `build` |
@@ -799,14 +823,14 @@ Every deferred item goes in the **Deferred gates** table of `docs/milestones/M0a
 
 ## 14. Work plan and streams (parallelism policy: AUTOPILOT §2)
 
-| Step | Who | Owns | Depends on |
-| --- | --- | --- | --- |
-| **S1.0** | Lead | **Commit-path safety**, the first commit of M0a: root `package.json` (minimal), `lefthook.yml`, `.gitleaks.toml`, and the `.claude/settings.json` deny rules if Q56 is approved | H1, (H7) |
-| S1 | Lead | **Foundation:**<br>• S1.1 ADR-028<br>• S1.2 the workspace, catalog, `.npmrc`, `.node-version`, and `.gitattributes` + renormalise. Also, for **every workspace**: its `package.json` with its final M0a dependencies, `tsconfig.json` and Vitest config. Then `pnpm i`, so the lockfile is complete. Every workspace also gets a minimal **placeholder** that typechecks and builds:<br>&nbsp;&nbsp;– libraries: `src/index.ts`<br>&nbsp;&nbsp;– Workers and the service: a fetch handler that returns 404<br>&nbsp;&nbsp;– apps: `index.html`, `src/main.tsx` showing the product name, and `public/_headers` with the §10.3 headers<br>`scan-dist`, `check-headers` and `check-bundle-size` therefore pass from S1.2 on, and S3's branch builds without S2. The streams replace the placeholders.<br>• S1.3 `@trace/config` + rule fixture tests<br>• S1.4 the `verify-fast`, `check-*` (including `check-migrations`), `scan-dist` and `verify-clean-clone` scripts + tests; `scripts/lib/` (git, workspace map, TAP parser) + tests; the `backup.sh` test (AT-24)<br>• S1.5 `ci.yml` (no deploy job yet), `dependabot.yml`<br>• S1.6 commitlint | root files; every workspace's `package.json`, `tsconfig.json` and Vitest config; `pnpm-lock.yaml`; `packages/config/`; `scripts/` except `test-rls.mjs` and `gen-catalog-tests.mjs`; `.github/`; `docs/adr/ADR-028*` | S1.0 |
+| Step | Who | Scope | Owns | Depends on |
+| --- | --- | --- | --- | --- |
+| **S1.0** | Lead | **Commit-path safety**, the first commit of M0a | root `package.json` (minimal), `lefthook.yml`, `.gitleaks.toml`, and the `.claude/settings.json` deny rules if Q56 is approved | H1, (H7) |
+| S1 | Lead | **Foundation** (checkpoints as in §5):<br>• **S1.1–S1.3**, one checkpoint:<br>&nbsp;&nbsp;– ADR-028<br>&nbsp;&nbsp;– the workspace, catalog, `.npmrc`, `.node-version`, and `.gitattributes` + renormalise<br>&nbsp;&nbsp;– `@trace/config` + rule fixture tests<br>&nbsp;&nbsp;– for **every workspace**: its `package.json` with its final M0a dependencies, `tsconfig.json` and Vitest config, then `pnpm i`, so the lockfile is complete<br>&nbsp;&nbsp;– a **placeholder** per workspace that typechecks, builds and has one real smoke test:<br>&nbsp;&nbsp;&nbsp;&nbsp;· libraries: `src/index.ts`, and the test imports it<br>&nbsp;&nbsp;&nbsp;&nbsp;· Workers and the service: `wrangler.jsonc`, the committed `wrangler types` output, and a fetch handler that returns 404, which the test asserts<br>&nbsp;&nbsp;&nbsp;&nbsp;· apps: `index.html`, `src/main.tsx` rendering the product name (asserted), and `public/_headers` with the §10.3 headers<br>&nbsp;&nbsp;– no `passWithNoTests` anywhere. The streams replace the placeholders.<br>• **S1.4**:<br>&nbsp;&nbsp;– the `verify-fast`, `check-*` (including `check-migrations` and `check-workflows`), `scan-dist` and `verify-clean-clone` scripts + tests<br>&nbsp;&nbsp;– `scripts/lib/` (git, workspace map, TAP parser) + tests<br>&nbsp;&nbsp;– the automated AT-6 and AT-6c, and the `backup.sh` test (AT-24)<br>• **S1.5** `ci.yml` (no deploy job yet) and `dependabot.yml`; `check-workflows` joins `lint`<br>• **S1.6** commitlint + AT-7 | root files; every workspace's `package.json`, `tsconfig.json`, Vitest config and placeholder; `pnpm-lock.yaml`; `packages/config/`; `scripts/` except `test-rls.mjs` and `gen-catalog-tests.mjs`; `.github/`; `docs/adr/ADR-028*` | S1.0 |
 | **S1.7** | Lead | **Shared code and the database**, before any stream starts:<br>• `packages/shared/src/`: the §9.4 zod contracts, `health.ts`, `version.ts`, the `log/` module (logger, redactor, `serializeError`, `sentry-scrub.ts`) and the package's `index.ts` and exports, with all their tests (AT-8, AT-9 unit part)<br>• all of `supabase/`: `config.toml`, the baseline migration, catalog checks, manifest and fixtures, `tests/`, floors<br>• `scripts/test-rls.mjs` and `scripts/gen-catalog-tests.mjs`, with their tests<br>• all of `packages/db-types/`<br>• adding `test:rls` to `verify`<br>• the §8.2 day-one checks, run on the local stack before the checkpoint | the files listed | S1 |
-| S2 | Stream | **UI and apps** (parallel with S3): `packages/ui/`, `packages/vendors/` and `apps/*/`, except the lead-only files in each (`package.json`, `tsconfig.json`, Vitest config) | S1.7 merged |
-| S3 | Stream | **Workers, services and deploy** (parallel with S2): `workers/*/` and `services/*/` (same exclusions), and the `deploy-staging` job in `ci.yml` | S1.7 merged. H3–H6 are needed only to *run* the deploy (§13.1), not to write and unit-test it. |
-| S4 | Lead | **Close-out** (the AUTOPILOT CLOSE phase, after REVIEW passes): `docs/milestones/M0a-summary.md` | S2 + S3 merged; `pnpm verify` green; AT-1a-local and AT-1b recorded; **the founder's answer to "Local-only mode vs CI exit gates"** |
+| S2 | Stream | **UI and apps** (parallel with S3) | `packages/ui/`, `packages/vendors/` and `apps/*/`, except the lead-only files in each (`package.json`, `tsconfig.json`, Vitest config) | S1.7 merged |
+| S3 | Stream | **Workers, services and deploy** (parallel with S2) | `workers/*/` and `services/*/` (same exclusions), and the `deploy-staging` job in `ci.yml` | S1.7 merged. H3–H6 are needed only to *run* the deploy (§13.1), not to write and unit-test it. |
+| S4 | Lead | **Close-out** (the AUTOPILOT CLOSE phase, after REVIEW passes) | `docs/milestones/M0a-summary.md` | S2 + S3 merged; `pnpm verify` green; AT-1a-local and AT-1b recorded; **the founder's answer to "Local-only mode vs CI exit gates"** |
 
 **Parallelism.** S1.0, S1 and S1.7 run in the lead session alone. After that, **S2 ∥ S3** run as 2 writers, which is under the default of 3. They share no files and neither needs the other's output: both consume only what S1.7 delivered. Read-only helpers (reviewers, research) may run up to 6 at once. If S2 and S3 hit a merge conflict, the rest of the session drops to 2 writers or fewer.
 
@@ -818,7 +842,7 @@ At CLOSE, `milestone/m0a` merges into `main` the same way. `pnpm verify` re-runs
 
 **Checkpoints.** A sub-step is **green** only when the full `pnpm verify`, as it exists at that step, passes. That includes the full-history gitleaks scan, and `test:rls` from S1.7 on. `verify:fast` alone never counts.
 
-After every green sub-step (S1.0, each of S1.1–S1.7, and each stream merge), commit on `milestone/m0a` and tag `cp/m0a-<NN>`. Tags are numbered from `01`, in order (AUTOPILOT §5).
+After every green sub-step (S1.0, S1.1–S1.3, S1.4, S1.5, S1.6, S1.7, and each stream merge), commit on `milestone/m0a` and tag `cp/m0a-<NN>`. Tags are numbered from `01`, in order (AUTOPILOT §5).
 
 **Lead-only files.** Neither stream may edit:
 - the root `package.json`, any workspace `package.json`, `tsconfig.json` or Vitest config, `pnpm-lock.yaml` and `pnpm-workspace.yaml`;
@@ -918,4 +942,8 @@ Each of these is a row in `docs/progress/FOUNDER-QUEUE.md`, with exact steps:
   - `spec-reviewer`: CHANGES REQUIRED (1 Blocking, 2 Medium, 5 Low).
   - `database-reviewer`: CHANGES REQUIRED (2 Medium, 8 Low).
   - Every finding is fixed in revision 6.
-- Revision 6: *pending re-review.*
+- Revision 6: re-reviewed 2026-10-11.
+  - `database-reviewer`: **APPROVE**, with 7 Low.
+  - `spec-reviewer`: CHANGES REQUIRED (1 Blocking, 2 Medium, 1 Low).
+  - Every finding is fixed in revision 7.
+- Revision 7: *pending re-review.*
