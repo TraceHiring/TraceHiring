@@ -1,6 +1,6 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** revision 8 (autopilot, 2026-10-11). **Approved by the autopilot reviewers**; see the end of this file.Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
+- **Status:** revision 8 (autopilot, 2026-10-11). **Approved by the autopilot reviewers**; see the end of this file. Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
 - **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a`, created from `main` at `b7af663`, with `main` at `4863db2` merged in. Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
 - **Revision 8 changes (2026-10-11).** These are the Low notes from the approving reviews of revision 7.
   - **App smoke tests** use `react-dom/server` `renderToString` in Node, so no DOM library is needed.
