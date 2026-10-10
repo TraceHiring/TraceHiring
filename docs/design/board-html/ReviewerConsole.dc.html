@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trace reviewer and appeal console</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F6F6F3}
+a{color:#1D3F8F}a:hover{color:#132B66}
+</style>
+</helmet>
+<div style="font-family: 'IBM Plex Sans', system-ui, sans-serif; color: #15171C; background: #F6F6F3; min-height: 100%; display: flex; flex-wrap: wrap;">
+  <aside aria-label="Action items" style="flex: 1 1 300px; max-width: 360px; background: #FFFFFF; border-right: 1px solid #E2E2DC; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px;">
+    <div style="display: flex; justify-content: space-between; align-items: baseline;">
+      <h1 style="margin: 0; font-size: 18px; font-weight: 600;">Action items</h1>
+      <span style="font: 500 13px 'IBM Plex Mono', monospace; color: #3E434C;">4 open</span>
+    </div>
+    <div style="display: flex; gap: 6px; flex-wrap: wrap; font-size: 12px;">
+      <span style="padding: 4px 10px; border-radius: 999px; background: #15171C; color: #FFFFFF;">All</span>
+      <span style="padding: 4px 10px; border-radius: 999px; background: #EFEFEA; color: #3E434C;">Appeals</span>
+      <span style="padding: 4px 10px; border-radius: 999px; background: #EFEFEA; color: #3E434C;">Review</span>
+      <span style="padding: 4px 10px; border-radius: 999px; background: #EFEFEA; color: #3E434C;">Evidence pending</span>
+    </div>
+    <ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;">
+      <li style="border: 2px solid #1D3F8F; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 4px; background: #F3F6FD;">
+        <div style="display: flex; justify-content: space-between; font-size: 12px;"><span style="font-weight: 600; color: #1D3F8F;">Appeal</span><span style="color: #6E4200;">Due in 2 days</span></div>
+        <div style="font-weight: 500;">Candidate A-1042 · Flag 1</div>
+        <div style="font-size: 13px; color: #3E434C;">Burst after focus return</div>
+      </li>
+      <li style="border: 1px solid #E2E2DC; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; justify-content: space-between; font-size: 12px;"><span style="font-weight: 600; color: #6E4200;">Review</span><span style="color: #5A5F6A;">2 families</span></div>
+        <div style="font-weight: 500;">Candidate A-1077</div>
+        <div style="font-size: 13px; color: #3E434C;">Question copy + lag loop</div>
+      </li>
+      <li style="border: 1px solid #E2E2DC; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; justify-content: space-between; font-size: 12px;"><span style="font-weight: 600; color: #9A2F0B;">Strong concern</span><span style="color: #5A5F6A;">Hard evidence</span></div>
+        <div style="font-weight: 500;">Candidate A-1101</div>
+        <div style="font-size: 13px; color: #3E434C;">Synthetic key events (isTrusted)</div>
+      </li>
+      <li style="border: 1px solid #E2E2DC; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; justify-content: space-between; font-size: 12px;"><span style="font-weight: 600; color: #3E434C;">Evidence pending</span><span style="color: #5A5F6A;">Uploading</span></div>
+        <div style="font-weight: 500;">Candidate A-1113</div>
+        <div style="font-size: 13px; color: #3E434C;">2 clips queued on a slow network</div>
+      </li>
+    </ul>
+    <div style="margin-top: auto; border-top: 1px solid #EFEFEA; padding-top: 12px; font-size: 12px; color: #5A5F6A; line-height: 1.5;">Your overturn rate this month: shown after 20 decisions. Consistency is compared with other reviewers.</div>
+  </aside>
+
+  <main style="flex: 999 1 720px; min-width: 0; padding: 20px 28px 32px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+      <div>
+        <div style="font-size: 13px; color: #5A5F6A;">Appeal · Candidate A-1042 · Java Backend · Campus Drive</div>
+        <h2 style="margin: 4px 0 0; font-size: 24px; font-weight: 600;">Flag 1 · Burst after focus return</h2>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; font-size: 13px; color: #3E434C;">
+        <span style="padding: 6px 12px; border-radius: 8px; background: #FFF1D6; color: #6E4200; font-weight: 500;">SLA: 2 business days left</span>
+        <span>Confirmed by R. M. · you are the second reviewer</span>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px;">
+      <section aria-label="Evidence" style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 12px;">
+        <h3 style="margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: #3E434C;">Evidence</h3>
+        <div style="aspect-ratio: 16 / 9; border-radius: 8px; background: #20232A; color: #C9CCD3; display: flex; align-items: center; justify-content: center; font-size: 13px; text-align: center; padding: 12px;">[Flag clip · 30:58–31:43 · webcam + typing overlay]</div>
+        <div style="height: 40px; position: relative; background: #F0F0EB; border-radius: 6px;" aria-hidden="true">
+          <div style="position: absolute; left: 6%; width: 10%; top: 0; bottom: 0; background: #F3D9A8; border-radius: 6px;"></div>
+          <div style="position: absolute; left: 30%; width: 52%; top: 8px; bottom: 8px; background: #2F55C4; border-radius: 4px; opacity: 0.85;"></div>
+        </div>
+        <div style="font-size: 12px; color: #5A5F6A;">Tab away (14 s) then a typing burst</div>
+        <dl style="margin: 0; display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 6px 10px; font-size: 13px;">
+          <dt style="color: #5A5F6A;">Chars / time</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace;">212 / 31 s</dd>
+          <dt style="color: #5A5F6A;">Deletions</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace;">2% (warm-up 11%)</dd>
+          <dt style="color: #5A5F6A;">Speed</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace;">2.1× own median</dd>
+          <dt style="color: #5A5F6A;">Paste in burst</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace;">None</dd>
+        </dl>
+        <a href="Main.dc.html" style="font-size: 13px;">Open full report and replay</a>
+      </section>
+
+      <section aria-label="Candidate's account" style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 12px;">
+        <h3 style="margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: #3E434C;">Candidate's account</h3>
+        <div style="font-size: 12px; color: #5A5F6A;">In-test note (at the warning)</div>
+        <blockquote style="margin: 0; padding: 12px 14px; background: #FAFAF7; border: 1px solid #EFEFEA; border-radius: 8px; font-size: 14px; line-height: 1.55;">[Candidate's in-test explanation, if any]</blockquote>
+        <div style="font-size: 12px; color: #5A5F6A;">Appeal text</div>
+        <blockquote style="margin: 0; padding: 12px 14px; background: #FAFAF7; border: 1px solid #EFEFEA; border-radius: 8px; font-size: 14px; line-height: 1.55;">[Candidate's appeal explanation, verbatim]</blockquote>
+        <div style="font-size: 13px; color: #3E434C;">Requested: supervised re-attempt of Q3</div>
+        <div style="font-size: 12px; color: #5A5F6A; border-top: 1px solid #EFEFEA; padding-top: 10px;">Accommodation applied: no</div>
+      </section>
+
+      <section aria-label="Decision" style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 12px;">
+        <h3 style="margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: #3E434C;">Decision</h3>
+        <fieldset style="border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;">
+          <legend style="font-size: 13px; color: #5A5F6A; margin-bottom: 6px;">Outcome</legend>
+          <label style="display: flex; gap: 10px; align-items: center; min-height: 44px; padding: 0 12px; border: 1px solid #C9C9C1; border-radius: 8px;"><input type="radio" name="outcome" checked=""> Overturn — flag removed</label>
+          <label style="display: flex; gap: 10px; align-items: center; min-height: 44px; padding: 0 12px; border: 1px solid #C9C9C1; border-radius: 8px;"><input type="radio" name="outcome"> Partially uphold</label>
+          <label style="display: flex; gap: 10px; align-items: center; min-height: 44px; padding: 0 12px; border: 1px solid #C9C9C1; border-radius: 8px;"><input type="radio" name="outcome"> Uphold (rationale required)</label>
+          <label style="display: flex; gap: 10px; align-items: center; min-height: 44px; padding: 0 12px; border: 1px solid #C9C9C1; border-radius: 8px;"><input type="radio" name="outcome"> Offer supervised re-attempt</label>
+        </fieldset>
+        <label for="rationale" style="font-size: 13px; font-weight: 500;">Rationale (shown to the candidate)</label>
+        <textarea id="rationale" rows="4" style="font: 400 14px 'IBM Plex Sans', sans-serif; padding: 10px; border: 1px solid #C9C9C1; border-radius: 8px; resize: vertical;" placeholder="Write the reason in plain language"></textarea>
+        <button type="button" style="min-height: 44px; border-radius: 8px; border: 1px solid #1D3F8F; background: #1D3F8F; color: #FFFFFF; font: 600 14px 'IBM Plex Sans', sans-serif;">Save decision · next item (J)</button>
+        <div style="font-size: 12px; color: #5A5F6A; line-height: 1.5;">Saving logs your name, active review time and rationale to the audit trail. The candidate is notified.</div>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":980}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

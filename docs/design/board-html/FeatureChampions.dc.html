@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Feature champions</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1D3F8F}a:hover{color:#132B66}
+</style>
+</helmet>
+<div style="width: 1600px; height: 1180px; box-sizing: border-box; padding: 48px 56px; background: #F6F6F3; font-family: 'IBM Plex Sans', system-ui, sans-serif; color: #15171C; display: flex; flex-direction: column; gap: 28px;">
+  <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 24px;">
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="font: 500 13px 'IBM Plex Mono', monospace; color: #5A5F6A; text-transform: uppercase; letter-spacing: 0.08em;">Best-in-class, by capability</div>
+      <h1 style="margin: 0; font-size: 40px; font-weight: 600; letter-spacing: -0.02em;">Borrow the best of each, then add the shared report</h1>
+    </div>
+    <div style="font-size: 14px; color: #3E434C; max-width: 420px; line-height: 1.5;">Winners picked per capability from about 35 vendors (Oct 2026). Full matrix and sources are in the teardown doc.</div>
+  </div>
+  <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; flex: 1;">
+    <sc-for list="{{ cards }}" as="c" hint-placeholder-count="12">
+      <article style="{{ c.cardStyle }}">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
+          <span style="font: 500 12px 'IBM Plex Mono', monospace; color: #5A5F6A; text-transform: uppercase; letter-spacing: 0.06em;">{{ c.cap }}</span>
+        </div>
+        <div style="font-size: 22px; font-weight: 600; letter-spacing: -0.01em;">{{ c.winner }}</div>
+        <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #3E434C;">{{ c.what }}</p>
+        <div style="margin-top: auto; border-top: 1px solid #EFEFEA; padding-top: 10px; display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-size: 12px; font-weight: 600; color: #1D3F8F;">Trace improves it</span>
+          <span style="font-size: 13px; line-height: 1.45; color: #15171C;">{{ c.trace }}</span>
+        </div>
+      </article>
+    </sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1600,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const base = 'background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 10px;';
+    const unique = 'background: #F3F6FD; border: 2px solid #1D3F8F; border-radius: 12px; padding: 17px 17px 15px; display: flex; flex-direction: column; gap: 10px;';
+    const c = (cap, winner, what, trace, isUnique) => ({ cap, winner, what, trace, cardStyle: isUnique ? unique : base });
+    return {
+      cards: [
+        c('Provenance view', 'Grammarly Authorship', 'Origin bar with % typed / copied / unknown, sentence tinting, colour-matched replay.', 'Every tint links to its raw event; unknowns get a named cause.'),
+        c('Evidence ↔ timeline', 'Turnitin Clarity', 'Numbered findings, auto-pause at each, card · timeline · text kept in sync.', 'Adds camera and mic tracks plus the candidate explanation.'),
+        c('Keystroke replay', 'CodeSignal', '32× speed, idle skip, filterable paste markers, clickable activity list.', 'Burst-after-blur markers; Changed / Unchanged on each paste.'),
+        c('Reviewer workflow', 'Honorlock', 'Action-items inbox, flag dictionary, outcomes with required summary, append-only history.', 'Appeals as items; rationale shown to the candidate; overturn rates.'),
+        c('Scoring model', 'Codility', 'Deterministic integrity risk, no ML; AI follow-up answers are evidence, not score.', 'Band + evidence strength, ruleset frozen and versioned per test.'),
+        c('Onboarding', 'HackerRank', 'Staged gate: compatibility, consent listing prohibited actions, permissions, fullscreen.', 'Live preview of what is captured; private accommodation request.'),
+        c('Fairness', 'Integrity Advocate', 'Human reviews every flag; specific violation email; fix ID issues without a retake.', 'In-product appeal per flag with an SLA and a named reviewer.'),
+        c('Overlay detection', 'Codility desktop app', 'Detects any window hidden from screen capture, whatever the tool.', 'Optional Secure Mode helper that shows candidates its scan list.'),
+        c('Identity (India)', 'HackerEarth', 'DigiLocker e-KYC and face match against five reference captures.', 'Vendor API + in-session continuity; masked ID only.'),
+        c('Privacy', 'Integrity Advocate', 'Still frames only; video deleted 24 h after review.', 'On-device ML; flag clips only; retention timer in the report.'),
+        c('Content binding', 'HackerEarth', '“Surprise question” asks the candidate to explain their code.', '60–90 s explain probe, itself checked for provenance.'),
+        c('Shared report + appeal', 'Nobody', 'No vendor reviewed shows candidates their evidence or offers an in-product appeal.', 'Trace’s core: one report, both sides, appeal on every flag.', true)
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trace assessment setup: integrity settings</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F6F6F3}
+a{color:#1D3F8F}a:hover{color:#132B66}
+</style>
+</helmet>
+<div style="font-family: 'IBM Plex Sans', system-ui, sans-serif; color: #15171C; background: #F6F6F3; min-height: 100%;">
+  <header style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 32px; background: #FFFFFF; border-bottom: 1px solid #E2E2DC;">
+    <div style="display: flex; align-items: center; gap: 20px; flex-wrap: wrap;">
+      <div style="font-weight: 700; font-size: 20px; letter-spacing: -0.02em;">trace<span style="color: #1D3F8F;">.</span></div>
+      <ol aria-label="Setup steps" style="list-style: none; margin: 0; padding: 0; display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px;">
+        <li style="padding: 6px 12px; border-radius: 999px; background: #E2F1EC; color: #0B5643;">1 Job details</li>
+        <li style="padding: 6px 12px; border-radius: 999px; background: #E2F1EC; color: #0B5643;">2 Questions</li>
+        <li style="padding: 6px 12px; border-radius: 999px; background: #15171C; color: #FFFFFF; font-weight: 600;">3 Integrity</li>
+        <li style="padding: 6px 12px; border-radius: 999px; background: #EFEFEA; color: #3E434C;">4 Review and publish</li>
+      </ol>
+    </div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+      <a href="CandidateConsent.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid #C9C9C1; background: #FFFFFF; color: #15171C; text-decoration: none; font-weight: 500; font-size: 14px;">Preview as candidate</a>
+      <button type="button" style="min-height: 44px; padding: 0 18px; border-radius: 8px; border: 1px solid #1D3F8F; background: #1D3F8F; color: #FFFFFF; font: 600 14px 'IBM Plex Sans', sans-serif;">Continue</button>
+    </div>
+  </header>
+
+  <main style="max-width: 1440px; margin: 0 auto; padding: 24px 32px 48px; box-sizing: border-box; display: flex; flex-wrap: wrap; gap: 20px;">
+    <div style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 16px;">
+      <div>
+        <h1 style="margin: 0 0 6px; font-size: 26px; font-weight: 600;">Integrity settings</h1>
+        <p style="margin: 0; font-size: 14px; color: #3E434C; line-height: 1.55;">Choose a preset, then adjust. Settings freeze as ruleset v1 when the first candidate starts; later changes create a new version.</p>
+      </div>
+
+      <div role="group" aria-label="Preset" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+        <button type="button" onClick="{{ pickStrict }}" style="{{ strictStyle }}"><span style="display: block; font-weight: 600; font-size: 15px;">Strict</span><span style="display: block; font-size: 13px; color: #3E434C; margin-top: 4px;">Final rounds. Paste blocked, single screen, explain probe on Review.</span></button>
+        <button type="button" onClick="{{ pickStandard }}" style="{{ standardStyle }}"><span style="display: block; font-weight: 600; font-size: 15px;">Standard</span><span style="display: block; font-size: 13px; color: #3E434C; margin-top: 4px;">Volume screening. Paste allowed and logged, warn before flag.</span></button>
+        <button type="button" onClick="{{ pickOpen }}" style="{{ openStyle }}"><span style="display: block; font-weight: 600; font-size: 15px;">Open-book</span><span style="display: block; font-size: 13px; color: #3E434C; margin-top: 4px;">Notes and search allowed. Focus signals off; typing provenance only.</span></button>
+      </div>
+
+      <section aria-label="Signals" style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 8px 20px;">
+        <sc-for list="{{ rows }}" as="r" hint-placeholder-count="9">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid #EFEFEA; flex-wrap: wrap;">
+            <div style="flex: 1 1 360px; min-width: 0;">
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <span style="font-weight: 600; font-size: 15px;">{{ r.name }}</span>
+                <sc-if value="{{ r.locked }}" hint-placeholder-val="{{ false }}"><span style="font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #EFEFEA; color: #3E434C;">Locked by admin</span></sc-if>
+                <sc-if value="{{ r.note }}" hint-placeholder-val="{{ false }}"><span style="font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #FFF1D6; color: #6E4200;">{{ r.note }}</span></sc-if>
+              </div>
+              <div style="font-size: 13px; color: #3E434C; margin-top: 4px; line-height: 1.5;">{{ r.desc }}</div>
+            </div>
+            <span style="{{ r.stateStyle }}">{{ r.state }}</span>
+          </div>
+        </sc-for>
+      </section>
+
+      <section aria-label="Paste rules per question" style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 16px 20px; overflow-x: auto;">
+        <h2 style="margin: 0 0 10px; font-size: 15px; font-weight: 600;">Paste rules per question</h2>
+        <table style="width: 100%; min-width: 520px; border-collapse: collapse; font-size: 14px;">
+          <thead><tr style="text-align: left; color: #5A5F6A; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;"><th style="padding: 8px 8px 8px 0; font-weight: 500;">Question</th><th style="padding: 8px; font-weight: 500;">Type</th><th style="padding: 8px; font-weight: 500;">Paste</th><th style="padding: 8px; font-weight: 500;">Provenance check</th></tr></thead>
+          <tbody>
+            <tr style="border-top: 1px solid #EFEFEA;"><td style="padding: 10px 8px 10px 0;">Q1 · Write a SQL query</td><td style="padding: 10px 8px;">Code</td><td style="padding: 10px 8px;">Allowed, logged</td><td style="padding: 10px 8px;">On</td></tr>
+            <tr style="border-top: 1px solid #EFEFEA;"><td style="padding: 10px 8px 10px 0;">Q2 · Reply to an upset customer</td><td style="padding: 10px 8px;">Written answer</td><td style="padding: 10px 8px;">Blocked, attempts logged</td><td style="padding: 10px 8px;">On</td></tr>
+            <tr style="border-top: 1px solid #EFEFEA;"><td style="padding: 10px 8px 10px 0;">Q3 · Explain your approach</td><td style="padding: 10px 8px;">Written answer</td><td style="padding: 10px 8px;">Blocked, attempts logged</td><td style="padding: 10px 8px;">On</td></tr>
+            <tr style="border-top: 1px solid #EFEFEA;"><td style="padding: 10px 8px 10px 0;">Q4 · Aptitude MCQ set</td><td style="padding: 10px 8px;">Multiple choice</td><td style="padding: 10px 8px;">n/a</td><td style="padding: 10px 8px;">Focus and timing only</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </div>
+
+    <aside aria-label="What candidates will see" style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 16px;">
+      <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600;">What candidates will see</h2>
+        <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #3E434C;">{{ candidateText }}</p>
+        <a href="CandidateConsent.dc.html" style="font-size: 13px;">Open the full transparency screen</a>
+      </div>
+      <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600;">Accommodations</h2>
+        <label style="display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.5;"><input type="checkbox" checked="" style="width: 20px; height: 20px; margin-top: 2px;"> Candidates can request extra time, screen-reader or dictation support, or English-proficiency support</label>
+        <p style="margin: 0; font-size: 12px; color: #6E4200; line-height: 1.5;">Turning this off may breach disability and fair-employment law. Candidates with accommodations are excluded from cohort baselines.</p>
+      </div>
+      <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; font-size: 14px;">
+        <h2 style="margin: 0 0 4px; font-size: 15px; font-weight: 600;">Data and review</h2>
+        <div style="display: flex; justify-content: space-between; gap: 12px;"><span style="color: #3E434C;">Flag clips kept</span><span style="font-weight: 500;">90 days</span></div>
+        <div style="display: flex; justify-content: space-between; gap: 12px;"><span style="color: #3E434C;">Appeal response SLA</span><span style="font-weight: 500;">5 business days</span></div>
+        <div style="display: flex; justify-content: space-between; gap: 12px;"><span style="color: #3E434C;">Report shared with candidate</span><span style="font-weight: 500;">After review, or 7 days</span></div>
+        <div style="display: flex; justify-content: space-between; gap: 12px;"><span style="color: #3E434C;">Automatic rejection</span><span style="font-weight: 500;">Not available</span></div>
+      </div>
+    </aside>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"preset":{"editor":"enum","options":["strict","standard","open"],"default":"standard"},"$preview":{"width":1440,"height":1240}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { preset: null };
+  }
+  renderVals() {
+    const p = this.state.preset || this.props.preset || 'standard';
+    const on = 'border: 2px solid #1D3F8F; background: #F3F6FD; border-radius: 10px; padding: 14px 16px; text-align: left; min-height: 44px; cursor: pointer; font-family: inherit; color: #15171C;';
+    const off = 'border: 1px solid #C9C9C1; background: #FFFFFF; border-radius: 10px; padding: 15px 17px; text-align: left; min-height: 44px; cursor: pointer; font-family: inherit; color: #15171C;';
+    const pill = (s) => s === 'On' || s === 'Warn first' || s === 'When Review'
+      ? 'font-size: 13px; padding: 4px 12px; border-radius: 999px; background: #E2F1EC; color: #0B5643; font-weight: 500; white-space: nowrap;'
+      : 'font-size: 13px; padding: 4px 12px; border-radius: 999px; background: #EFEFEA; color: #3E434C; font-weight: 500; white-space: nowrap;';
+    const strict = p === 'strict', open = p === 'open';
+    const row = (name, desc, state, locked, note) => ({ name, desc, state, stateStyle: pill(state), locked: !!locked, note: note || '' });
+    const rows = [
+      row('Calibration warm-up', 'Two ungraded 60-second tasks set each candidate’s own typing baseline.', 'On', true),
+      row('Typing provenance', 'Pause location, revision ratio, linearity and synthetic-input checks on code and written answers.', 'On', true),
+      row('Burst after leaving the tab', 'Flags large text typed quickly after returning to the test.', open ? 'Off' : 'On'),
+      row('Fullscreen and tab focus', 'Shows an inline warning first; repeated exits become a flag. Never auto-submits by default.', open ? 'Off' : 'Warn first'),
+      row('Single screen', 'Asks candidates to disconnect extra displays and pauses if one reconnects.', strict ? 'On' : 'Off', false, 'Chrome and Edge only'),
+      row('Camera: face presence', 'Counts faces and time away from the screen on the device. No emotion or identity inference.', open ? 'Off' : 'On'),
+      row('Mic: speech presence', 'Off outside voice questions. In Strict, speech is context only and never a flag on its own.', strict ? 'Context only' : 'Off'),
+      row('Integrity review scope', 'Only candidates above your score cutoff are reviewed; flags on everyone else are marked not used.', 'On', true),
+      row('Lab / shared-device mode', 'For college labs and cyber cafés: IP and device matches never flag.', 'Off'),
+      row('Explain-your-answer probe', '60–90 s follow-up on any answer that reaches Review. Used as evidence, never scored.', strict ? 'When Review' : 'Off'),
+      row('ID verification', 'DigiLocker or ID plus selfie through a verification partner. ID images never shown to recruiters.', 'Off', false, 'Add-on')
+    ];
+    const candidateText = open
+      ? 'Notes and web search are allowed. We record typing timing in answer boxes and pastes. No camera or mic.'
+      : strict
+        ? 'We record typing timing in answer boxes, pastes, tab focus, one face on camera and whether speech is present. Pasting is blocked on written answers and you must use a single screen.'
+        : 'We record typing timing in answer boxes, pastes, tab focus and whether one face is visible. You get a warning before anything is flagged.';
+    return {
+      rows,
+      candidateText,
+      strictStyle: strict ? on : off,
+      standardStyle: p === 'standard' ? on : off,
+      openStyle: open ? on : off,
+      pickStrict: () => this.setState({ preset: 'strict' }),
+      pickStandard: () => this.setState({ preset: 'standard' }),
+      pickOpen: () => this.setState({ preset: 'open' })
+    };
+  }
+}
+</script>
+</body>
+</html>

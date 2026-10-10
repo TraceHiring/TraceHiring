@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trace evidence report</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F6F6F3}
+a{color:#1D3F8F}a:hover{color:#132B66}
+</style>
+</helmet>
+<div style="font-family: 'IBM Plex Sans', system-ui, sans-serif; color: #15171C; background: #F6F6F3; min-height: 100%;">
+  <header style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 32px; background: #FFFFFF; border-bottom: 1px solid #E2E2DC;">
+    <div style="display: flex; align-items: center; gap: 28px; flex-wrap: wrap;">
+      <div style="font-weight: 700; font-size: 20px; letter-spacing: -0.02em;">trace<span style="color: #1D3F8F;">.</span></div>
+      <nav aria-label="Main" style="display: flex; gap: 20px; flex-wrap: wrap; font-size: 14px;">
+        <a href="#" style="color: #5A5F6A; text-decoration: none;">Assessments</a>
+        <a href="#" style="color: #15171C; text-decoration: none; font-weight: 600;">Review queue (3)</a>
+        <a href="#" style="color: #5A5F6A; text-decoration: none;">Appeals (1)</a>
+        <a href="#" style="color: #5A5F6A; text-decoration: none;">Flag dictionary</a>
+      </nav>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <span style="font-size: 12px; color: #5A5F6A;">Viewing as</span>
+      <button type="button" onClick="{{ asRecruiter }}" style="{{ recruiterTab }}">Recruiter</button>
+      <button type="button" onClick="{{ asCandidate }}" style="{{ candidateTab }}">Candidate</button>
+    </div>
+  </header>
+
+  <main style="max-width: 1440px; margin: 0 auto; padding: 24px 32px 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px;">
+    <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px;">
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="font-size: 13px; color: #5A5F6A;">Java Backend · Campus Drive · Assessment v3 (Standard preset)</div>
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <h1 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.01em;">Candidate A-1042</h1>
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 999px; background: #ECECE6; color: #3E434C;">Sample data</span>
+        </div>
+        <div style="display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: #5A5F6A;">
+          <span>Submitted [DATE, TIME]</span>
+          <span style="font-family: 'IBM Plex Mono', monospace;">Receipt sha256 [HASH]</span>
+          <span>Ruleset v3 · frozen at start</span>
+          <span>Clips retained 90 days</span>
+        </div>
+      </div>
+      <sc-if value="{{ isRecruiter }}" hint-placeholder-val="{{ true }}">
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+          <button type="button" style="min-height: 44px; padding: 0 18px; border-radius: 8px; border: 1px solid #C9C9C1; background: #FFFFFF; color: #15171C; font: 500 14px 'IBM Plex Sans', sans-serif;">Send report to candidate</button>
+          <button type="button" style="min-height: 44px; padding: 0 18px; border-radius: 8px; border: 1px solid #1D3F8F; background: #1D3F8F; color: #FFFFFF; font: 600 14px 'IBM Plex Sans', sans-serif;">Record decision</button>
+        </div>
+      </sc-if>
+      <sc-if value="{{ isCandidate }}" hint-placeholder-val="{{ false }}">
+        <div style="font-size: 14px; color: #3E434C; max-width: 420px; line-height: 1.5;">This is the same report the employer sees. Nothing is decided automatically. If a flag is used in a decision, you get 72 hours to respond and a different reviewer decides.</div>
+      </sc-if>
+    </div>
+
+    <section aria-label="Scores" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px;">
+      <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+          <h2 style="margin: 0; font-size: 15px; font-weight: 600; color: #3E434C; text-transform: uppercase; letter-spacing: 0.06em;">Answer quality</h2>
+          <span style="font-size: 12px; color: #5A5F6A;">LLM rubric v2 · not affected by integrity signals</span>
+        </div>
+        <div style="display: flex; align-items: baseline; gap: 6px;"><span style="font-size: 44px; font-weight: 600; letter-spacing: -0.02em;">78</span><span style="font-size: 18px; color: #5A5F6A;">/ 100</span></div>
+        <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px;">
+          <sc-for list="{{ rubric }}" as="r" hint-placeholder-count="4">
+            <div style="display: grid; grid-template-columns: 120px minmax(0, 1fr) 56px; align-items: center; gap: 12px;">
+              <span style="color: #3E434C;">{{ r.label }}</span>
+              <div style="height: 8px; background: #EFEFEA; border-radius: 4px;"><div style="{{ r.bar }}"></div></div>
+              <span style="font-family: 'IBM Plex Mono', monospace; color: #3E434C; text-align: right;">{{ r.score }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <p style="margin: 0; font-size: 14px; line-height: 1.55; color: #3E434C;">Correct and well-structured answers on Q1–Q2; Q3 misses the concurrency edge case.</p>
+      </div>
+
+      <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+          <h2 style="margin: 0; font-size: 15px; font-weight: 600; color: #3E434C; text-transform: uppercase; letter-spacing: 0.06em;">Integrity signals</h2>
+          <a href="#" style="font-size: 12px;">How the band is set</a>
+        </div>
+        <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
+          <span style="font-size: 22px; font-weight: 600; padding: 6px 16px; border-radius: 8px; background: #FFF1D6; color: #6E4200;">Review suggested</span>
+          <span style="font-size: 13px; color: #3E434C;">Evidence strength <strong style="font-family: 'IBM Plex Mono', monospace;">0.92</strong> · 2 families · 0 confirmed</span>
+        </div>
+        <p style="margin: 0; font-size: 14px; line-height: 1.65; color: #15171C;">On Q3, <a href="#flag-1">212 characters were typed in one linear burst 14 s after returning from another tab</a>, with <a href="#flag-1">2% deletions vs 11% in the candidate's own warm-up</a>. <a href="#signals">No camera, mic or environment signals.</a></p>
+        <div style="font-size: 12px; color: #5A5F6A; border-top: 1px solid #EFEFEA; padding-top: 10px;">Signals are observations, not proof of misconduct. A person makes every decision.</div>
+      </div>
+    </section>
+
+    <section id="signals" aria-label="Signals by family" style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 18px 24px; overflow-x: auto;">
+      <h2 style="margin: 0 0 12px; font-size: 15px; font-weight: 600;">Signals by family</h2>
+      <table style="width: 100%; min-width: 720px; border-collapse: collapse; font-size: 14px;">
+        <thead>
+          <tr style="text-align: left; color: #5A5F6A; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">
+            <th style="padding: 8px 8px 8px 0; font-weight: 500;">Family</th><th style="padding: 8px; font-weight: 500;">Status</th><th style="padding: 8px; font-weight: 500;">Observed</th><th style="padding: 8px; font-weight: 500;">Evidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          <sc-for list="{{ families }}" as="f" hint-placeholder-count="7">
+            <tr style="border-top: 1px solid #EFEFEA;">
+              <td style="padding: 10px 8px 10px 0;"><span style="display: inline-flex; align-items: center; gap: 8px; font-weight: 500;"><span style="{{ f.dot }}"></span>{{ f.name }}</span></td>
+              <td style="padding: 10px 8px;"><span style="{{ f.statusStyle }}">{{ f.status }}</span></td>
+              <td style="padding: 10px 8px; color: #3E434C;">{{ f.observed }}</td>
+              <td style="padding: 10px 8px;"><a href="#timeline">{{ f.link }}</a></td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="timeline" aria-label="Unified timeline" style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 18px 24px; display: flex; flex-direction: column; gap: 10px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600;">Timeline · 47 min active</h2>
+        <div style="display: flex; gap: 8px; align-items: center; font-size: 13px; color: #3E434C; flex-wrap: wrap;">
+          <span>Q1</span><span style="color: #C9C9C1;">|</span><span>Q2</span><span style="color: #C9C9C1;">|</span><span style="font-weight: 600; color: #15171C;">Q3</span>
+          <span style="margin-left: 12px;">Idle compressed</span>
+        </div>
+      </div>
+      <div style="position: relative; display: flex; flex-direction: column; gap: 10px; padding-top: 26px;">
+        <div style="position: absolute; top: 0; left: calc(140px + 62%); transform: translateX(-50%); width: 22px; height: 22px; border-radius: 50%; border: 2px solid #A35F00; background: #FFFFFF; font: 600 12px 'IBM Plex Mono', monospace; display: flex; align-items: center; justify-content: center; color: #6E4200;">1</div>
+        <sc-for list="{{ tracks }}" as="t" hint-placeholder-count="5">
+          <div style="display: grid; grid-template-columns: 128px minmax(0, 1fr); align-items: center; gap: 12px;">
+            <span style="font-size: 13px; color: #3E434C;">{{ t.name }}</span>
+            <div style="position: relative; height: 12px; background: #F0F0EB; border-radius: 6px;">
+              <sc-for list="{{ t.marks }}" as="m" hint-placeholder-count="2">
+                <div style="{{ m.style }}"></div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding-top: 6px;">
+        <button type="button" aria-label="Previous finding" style="min-width: 44px; min-height: 44px; border-radius: 8px; border: 1px solid #C9C9C1; background: #FFFFFF; font: 500 14px 'IBM Plex Sans', sans-serif;">K</button>
+        <button type="button" aria-label="Play" style="min-width: 88px; min-height: 44px; border-radius: 8px; border: 1px solid #15171C; background: #15171C; color: #FFFFFF; font: 600 14px 'IBM Plex Sans', sans-serif;">Play</button>
+        <button type="button" aria-label="Next finding" style="min-width: 44px; min-height: 44px; border-radius: 8px; border: 1px solid #C9C9C1; background: #FFFFFF; font: 500 14px 'IBM Plex Sans', sans-serif;">J</button>
+        <span style="font-size: 13px; color: #5A5F6A;">Speed 1× · 4× · 20× · pauses at each finding</span>
+      </div>
+    </section>
+
+    <section style="display: flex; flex-wrap: wrap; gap: 16px;">
+      <div style="flex: 999 1 560px; min-width: 0; background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 18px 24px; display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+          <h2 style="margin: 0; font-size: 15px; font-weight: 600;">Q3 · answer replay</h2>
+          <div style="display: flex; gap: 14px; font-size: 12px; color: #3E434C; flex-wrap: wrap;">
+            <span><span style="display: inline-block; width: 18px; border-bottom: 2px solid #C9C9C1; vertical-align: middle;"></span> Composed</span>
+            <span><span style="display: inline-block; width: 18px; border-bottom: 2px dotted #A35F00; vertical-align: middle;"></span> Transcription-like</span>
+            <span><span style="display: inline-block; width: 18px; border-bottom: 2px solid #7B3DB0; vertical-align: middle;"></span> Pasted</span>
+          </div>
+        </div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 14px; line-height: 1.8; color: #15171C; background: #FAFAF7; border: 1px solid #EFEFEA; border-radius: 8px; padding: 16px;">
+          <span>To make the counter safe, I first tried a synchronized block but it serialises every request, </span><span style="text-decoration: underline dotted #A35F00 2px; text-underline-offset: 4px; background: #FFF6E5;">so the better approach is to use an AtomicInteger with compareAndSet in a retry loop, which avoids locking while guaranteeing that concurrent increments are never lost under contention.</span><span> I'd still add a load test.</span>
+        </div>
+        <div style="font-size: 13px; color: #3E434C;">241 words · 34 min active · 1 paste (38 chars) · 0 blocked · 2 focus losses · product/process 0.82</div>
+      </div>
+
+      <div id="flag-1" style="flex: 1 1 380px; min-width: 0; background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 18px 22px; display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+          <h2 style="margin: 0; font-size: 15px; font-weight: 600;">Flag 1 · Burst after focus return</h2>
+          <span style="font-size: 12px; padding: 3px 10px; border-radius: 999px; background: #FFF1D6; color: #6E4200;">Awaiting review</span>
+        </div>
+        <dl style="margin: 0; display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 12px; font-size: 13px;">
+          <dt style="color: #5A5F6A;">Rule</dt><dd style="margin: 0;">T-04 · typing family</dd>
+          <dt style="color: #5A5F6A;">Observed</dt><dd style="margin: 0;">212 chars in 31 s, 14 s after tab return, 0 deletions</dd>
+          <dt style="color: #5A5F6A;">Evidence tier</dt><dd style="margin: 0;">Client-reported (T3) · can reach Review only</dd>
+          <dt style="color: #5A5F6A;">Pattern</dt><dd style="margin: 0;"><a href="#">P4 · left the tab, then wrote the whole answer</a></dd>
+          <dt style="color: #5A5F6A;">Own baseline</dt><dd style="margin: 0;">Speed 2.1× warm-up median</dd>
+          <dt style="color: #5A5F6A;">Often innocent</dt><dd style="margin: 0;">Drafted in allowed notes and retyped; memorised phrasing</dd>
+          <dt style="color: #5A5F6A;">Candidate note</dt><dd style="margin: 0; color: #5A5F6A;">None yet</dd>
+        </dl>
+        <sc-if value="{{ isRecruiter }}" hint-placeholder-val="{{ true }}">
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button type="button" style="min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid #C9C9C1; background: #FFFFFF; font: 500 14px 'IBM Plex Sans', sans-serif;">Overturn</button>
+            <button type="button" style="min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid #C9C9C1; background: #FFFFFF; font: 500 14px 'IBM Plex Sans', sans-serif;">Second reviewer</button>
+            <button type="button" style="min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid #1D3F8F; background: #1D3F8F; color: #FFFFFF; font: 600 14px 'IBM Plex Sans', sans-serif;">Confirm with rationale</button>
+          </div>
+        </sc-if>
+        <sc-if value="{{ isCandidate }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <label for="appeal-text" style="font-size: 13px; font-weight: 500;">Explain what happened (optional)</label>
+            <textarea id="appeal-text" rows="3" style="font: 400 14px 'IBM Plex Sans', sans-serif; padding: 10px; border: 1px solid #C9C9C1; border-radius: 8px; resize: vertical;" placeholder="e.g. I had drafted this in the notes panel the test allowed"></textarea>
+            <button type="button" style="min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid #1D3F8F; background: #1D3F8F; color: #FFFFFF; font: 600 14px 'IBM Plex Sans', sans-serif; align-self: flex-start;">Send my response</button>
+          </div>
+        </sc-if>
+      </div>
+    </section>
+
+    <section aria-label="Audit trail" style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 14px 24px; font-size: 13px; color: #3E434C; display: flex; flex-wrap: wrap; gap: 8px 24px;">
+      <strong style="color: #15171C;">Audit trail</strong>
+      <span>Report generated · 22 s after submit</span>
+      <span>Viewed by Reviewer R. M.</span>
+      <span>Shared with candidate · pending review</span>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"audience":{"editor":"enum","options":["recruiter","candidate"],"default":"recruiter"},"$preview":{"width":1440,"height":1480}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { audience: null };
+  }
+  renderVals() {
+    const audience = this.state.audience || this.props.audience || 'recruiter';
+    const isRecruiter = audience === 'recruiter';
+    const tabOn = 'min-height: 36px; padding: 0 14px; border-radius: 999px; border: 1px solid #15171C; background: #15171C; color: #FFFFFF; font: 600 13px "IBM Plex Sans", sans-serif;';
+    const tabOff = 'min-height: 36px; padding: 0 14px; border-radius: 999px; border: 1px solid #C9C9C1; background: #FFFFFF; color: #15171C; font: 500 13px "IBM Plex Sans", sans-serif;';
+    const bar = (pct) => 'height: 8px; border-radius: 4px; background: #1D3F8F; width: ' + pct + '%;';
+    const dot = (c) => 'width: 10px; height: 10px; border-radius: 50%; background: ' + c + '; display: inline-block;';
+    const pill = (kind) => {
+      if (kind === 'review') return 'font-size: 12px; padding: 3px 10px; border-radius: 999px; background: #FFF1D6; color: #6E4200; font-weight: 500;';
+      if (kind === 'clear') return 'font-size: 12px; padding: 3px 10px; border-radius: 999px; background: #E2F1EC; color: #0B5643; font-weight: 500;';
+      return 'font-size: 12px; padding: 3px 10px; border-radius: 999px; background: #EFEFEA; color: #3E434C; font-weight: 500;';
+    };
+    const mark = (left, width, c) => 'position: absolute; top: 0; height: 12px; border-radius: 6px; left: ' + left + '%; width: ' + width + '%; background: ' + c + ';';
+    return {
+      isRecruiter,
+      isCandidate: !isRecruiter,
+      asRecruiter: () => this.setState({ audience: 'recruiter' }),
+      asCandidate: () => this.setState({ audience: 'candidate' }),
+      recruiterTab: isRecruiter ? tabOn : tabOff,
+      candidateTab: isRecruiter ? tabOff : tabOn,
+      rubric: [
+        { label: 'Correctness', score: '32/40', bar: bar(80) },
+        { label: 'Clarity', score: '18/20', bar: bar(90) },
+        { label: 'Depth', score: '16/25', bar: bar(64) },
+        { label: 'Code quality', score: '12/15', bar: bar(80) }
+      ],
+      families: [
+        { name: 'Typing', dot: dot('#2F55C4'), status: 'Review', statusStyle: pill('review'), observed: 'Transcription-like burst on Q3 vs own warm-up', link: 'Flag 1 · 31:12' },
+        { name: 'Focus', dot: dot('#A35F00'), status: 'Review', statusStyle: pill('review'), observed: '2 tab leaves, 21 s total; burst followed one', link: '30:58' },
+        { name: 'Paste', dot: dot('#7B3DB0'), status: 'Within rules', statusStyle: pill('neutral'), observed: '1 paste, 38 chars, Q1 (paste allowed)', link: '06:40' },
+        { name: 'Camera', dot: dot('#0B6E69'), status: 'Not found', statusStyle: pill('clear'), observed: 'One face present throughout', link: '—' },
+        { name: 'Mic', dot: dot('#4F5866'), status: 'Off', statusStyle: pill('neutral'), observed: 'Off outside voice questions (Standard preset)', link: '—' },
+        { name: 'Environment', dot: dot('#8A8F98'), status: 'Not found', statusStyle: pill('clear'), observed: 'Single display; trusted input events', link: '—' },
+        { name: 'Identity', dot: dot('#B9BCC2'), status: 'Not enabled', statusStyle: pill('neutral'), observed: 'ID check off for this assessment', link: '—' }
+      ],
+      tracks: [
+        { name: 'Typing', marks: [ { style: mark(3, 18, '#2F55C4') }, { style: mark(26, 30, '#2F55C4') }, { style: mark(61, 9, '#A35F00') }, { style: mark(72, 20, '#2F55C4') } ] },
+        { name: 'Paste', marks: [ { style: mark(14, 1, '#7B3DB0') } ] },
+        { name: 'Focus lost', marks: [ { style: mark(44, 2, '#A35F00') }, { style: mark(59, 2, '#A35F00') } ] },
+        { name: 'Camera', marks: [] },
+        { name: 'Mic', marks: [] }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

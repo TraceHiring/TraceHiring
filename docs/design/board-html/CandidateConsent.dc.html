@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trace candidate transparency screen</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F6F6F3}
+a{color:#1D3F8F}a:hover{color:#132B66}
+</style>
+</helmet>
+<div style="font-family: 'IBM Plex Sans', system-ui, sans-serif; color: #15171C; background: #F6F6F3; min-height: 100%; padding: 32px 24px 48px; box-sizing: border-box;">
+  <div style="max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+      <div style="font-weight: 700; font-size: 20px; letter-spacing: -0.02em;">trace<span style="color: #1D3F8F;">.</span></div>
+      <ol aria-label="Steps" style="list-style: none; margin: 0; padding: 0; display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: #5A5F6A;">
+        <li style="padding: 4px 10px; border-radius: 999px; background: #E2F1EC; color: #0B5643;">1 Device check</li>
+        <li style="padding: 4px 10px; border-radius: 999px; background: #15171C; color: #FFFFFF;">2 What we record</li>
+        <li style="padding: 4px 10px; border-radius: 999px; background: #EFEFEA;">3 Rules</li>
+        <li style="padding: 4px 10px; border-radius: 999px; background: #EFEFEA;">4 Permissions</li>
+        <li style="padding: 4px 10px; border-radius: 999px; background: #EFEFEA;">5 Warm-up</li>
+      </ol>
+    </div>
+
+    <div>
+      <h1 style="margin: 0 0 8px; font-size: 32px; font-weight: 600; letter-spacing: -0.01em;">Before you start: exactly what is recorded</h1>
+      <p style="margin: 0; font-size: 16px; line-height: 1.6; color: #3E434C; max-width: 760px;">[Employer name] uses Trace to check that answers are your own work. You will see the same report the employer sees, and you can explain or appeal anything it shows. A person makes every decision.</p>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 16px;">
+      <section aria-label="Recorded and not recorded" style="flex: 999 1 560px; min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px;">
+        <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 10px;">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600;">We record</h2>
+          <ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.5; color: #15171C;">
+            <li>Typing timing in answer boxes only (not which keys you press elsewhere)</li>
+            <li>Pastes, and when you leave or return to the test tab</li>
+            <li>Whether one face is visible, and how long you look away</li>
+            <li>Your spoken answers, only in voice questions</li>
+            <li>A few still images, background blurred, only around a moment a person needs to check</li>
+          </ul>
+        </div>
+        <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 10px;">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600;">We never</h2>
+          <ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.5; color: #15171C;">
+            <li>Guess your emotions, stress or personality</li>
+            <li>Store a face or voice template to identify you</li>
+            <li>Record your full session on video</li>
+            <li>Reject you automatically</li>
+            <li>Use your data to train models without permission</li>
+          </ul>
+        </div>
+        <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 10px; grid-column: 1 / -1;">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600;">Who sees it, and for how long</h2>
+          <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #3E434C;">The hiring team and you. Clips are deleted after 90 days (longer only while an appeal is open). You can ask for your data or its deletion at any time. <a href="#">Full notice</a> · <a href="#">Grievance contact</a></p>
+        </div>
+      </section>
+
+      <aside aria-label="Live preview" style="flex: 1 1 320px; min-width: 0; background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px;">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 600;">Live preview: what the reviewer would see now</h2>
+        <div style="aspect-ratio: 4 / 3; border-radius: 8px; background: #20232A; color: #C9CCD3; display: flex; align-items: center; justify-content: center; font-size: 13px; text-align: center; padding: 12px;">[Your camera preview]</div>
+        <ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 14px;">
+          <li style="display: flex; justify-content: space-between;"><span>Face visible</span><span style="color: #0B5643; font-weight: 500;">1 face</span></li>
+          <li style="display: flex; justify-content: space-between;"><span>Lighting</span><span style="color: #6E4200; font-weight: 500;">A bit dark: move a lamp closer</span></li>
+          <li style="display: flex; justify-content: space-between;"><span>Speech</span><span style="color: #0B5643; font-weight: 500;">None</span></li>
+          <li style="display: flex; justify-content: space-between;"><span>Displays</span><span style="color: #0B5643; font-weight: 500;">1</span></li>
+        </ul>
+        <p style="margin: 0; font-size: 12px; color: #5A5F6A; line-height: 1.5;">Lighting never blocks the test. It only makes the camera evidence less reliable.</p>
+      </aside>
+    </div>
+
+    <section aria-label="Accommodations" style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 20px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;">
+      <div style="flex: 1 1 420px; display: flex; flex-direction: column; gap: 6px;">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 600;">Need an accommodation?</h2>
+        <p style="margin: 0; font-size: 14px; line-height: 1.55; color: #3E434C;">If you use a screen reader, dictation, a switch device or need extra time, tell us privately. The employer only sees that an accommodation was applied, never the reason.</p>
+      </div>
+      <button type="button" style="min-height: 44px; padding: 0 18px; border-radius: 8px; border: 1px solid #C9C9C1; background: #FFFFFF; font: 500 14px 'IBM Plex Sans', sans-serif;">Request accommodation</button>
+    </section>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; border-top: 1px solid #E2E2DC; padding-top: 18px;">
+      <label style="display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.5; max-width: 720px;"><input type="checkbox" style="width: 20px; height: 20px; margin-top: 2px;"> I have read what is recorded and agree to continue. I can withdraw by closing the test; my data will then be deleted.</label>
+      <button type="button" style="min-height: 48px; padding: 0 24px; border-radius: 8px; border: 1px solid #1D3F8F; background: #1D3F8F; color: #FFFFFF; font: 600 15px 'IBM Plex Sans', sans-serif;">Continue to rules</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1020}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

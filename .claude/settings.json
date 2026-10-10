@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "SUPERPOWERS_DISABLE_TELEMETRY": "1"
+  },
+  "permissions": {
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/secrets/**)",
+      "Bash(cat .env:*)",
+      "Bash(cat .env.*:*)",
+      "Bash(less .env:*)",
+      "Bash(head .env:*)",
+      "Bash(tail .env:*)",
+      "Bash(source .env:*)",
+      "Bash(printenv:*)",
+      "Bash(wrangler deploy --env production:*)",
+      "Bash(wrangler deploy --env=production:*)",
+      "Bash(wrangler deploy -e production:*)",
+      "Bash(npx wrangler deploy --env production:*)",
+      "Bash(pnpm exec wrangler deploy --env production:*)",
+      "Bash(pnpm dlx wrangler deploy --env production:*)",
+      "Bash(wrangler secret put --env production:*)",
+      "Bash(supabase db push --linked:*)",
+      "Bash(supabase db push --db-url:*)",
+      "Bash(supabase db reset --linked:*)",
+      "Bash(supabase link --project-ref:*)",
+      "Bash(pnpm run deploy:prod:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(wrangler deploy:*)",
+      "Bash(npx wrangler deploy:*)",
+      "Bash(pnpm exec wrangler:*)",
+      "Bash(supabase db push:*)",
+      "Bash(gh workflow run:*)",
+      "Bash(aws:*)",
+      "Bash(cdk deploy:*)",
+      "Bash(terraform apply:*)",
+      "Bash(npm publish:*)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/claude-stop-gate.sh\"",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/claude-session-start.mjs\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/claude-usage-guard.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "node \"$CLAUDE_PROJECT_DIR/scripts/claude-statusline.mjs\""
+  }
+}

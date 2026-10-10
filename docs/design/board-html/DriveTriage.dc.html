@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trace drive results and score-first triage</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F6F6F3}
+a{color:#1D3F8F}a:hover{color:#132B66}
+</style>
+</helmet>
+<div style="font-family: 'IBM Plex Sans', system-ui, sans-serif; color: #15171C; background: #F6F6F3; min-height: 100%;">
+  <header style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 32px; background: #FFFFFF; border-bottom: 1px solid #E2E2DC;">
+    <div style="display: flex; align-items: center; gap: 28px; flex-wrap: wrap;">
+      <div style="font-weight: 700; font-size: 20px; letter-spacing: -0.02em;">trace<span style="color: #1D3F8F;">.</span></div>
+      <nav aria-label="Main" style="display: flex; gap: 20px; flex-wrap: wrap; font-size: 14px;">
+        <a href="#" style="color: #15171C; text-decoration: none; font-weight: 600;">Drives</a>
+        <a href="ReviewerConsole.dc.html" style="color: #5A5F6A; text-decoration: none;">Review queue</a>
+        <a href="#" style="color: #5A5F6A; text-decoration: none;">Client packs</a>
+        <a href="Setup.dc.html" style="color: #5A5F6A; text-decoration: none;">Tests</a>
+      </nav>
+    </div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+      <button type="button" style="min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid #C9C9C1; background: #FFFFFF; font: 500 14px 'IBM Plex Sans', sans-serif;">Export to Excel</button>
+      <button type="button" style="min-height: 44px; padding: 0 18px; border-radius: 8px; border: 1px solid #1D3F8F; background: #1D3F8F; color: #FFFFFF; font: 600 14px 'IBM Plex Sans', sans-serif;">Send client pack</button>
+    </div>
+  </header>
+
+  <main style="max-width: 1440px; margin: 0 auto; padding: 24px 32px 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 18px;">
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div style="font-size: 13px; color: #5A5F6A;">BPO Voice · Bengaluru drive · Slot 2 of 4 · <span style="padding: 2px 8px; border-radius: 999px; background: #ECECE6; color: #3E434C;">Sample data</span></div>
+      <h1 style="margin: 0; font-size: 28px; font-weight: 600;">Results: shortlist on score, then check integrity for the shortlist only</h1>
+    </div>
+
+    <section aria-label="Drive status" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
+      <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 16px;"><div style="font-size: 13px; color: #5A5F6A;">Started</div><div style="font: 600 28px 'IBM Plex Sans', sans-serif;">[N]</div></div>
+      <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 16px;"><div style="font-size: 13px; color: #5A5F6A;">Submitted</div><div style="font: 600 28px 'IBM Plex Sans', sans-serif;">[N]</div></div>
+      <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 16px;"><div style="font-size: 13px; color: #5A5F6A;">Evidence pending</div><div style="font: 600 28px 'IBM Plex Sans', sans-serif;">[N]</div></div>
+      <div style="background: #FFFFFF; border: 2px solid #1D3F8F; border-radius: 12px; padding: 15px;"><div style="font-size: 13px; color: #1D3F8F; font-weight: 600;">Shortlisted at cutoff {{ cutoff }}</div><div style="font: 600 28px 'IBM Plex Sans', sans-serif;">{{ shortCount }} of 8</div></div>
+      <div style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 16px;"><div style="font-size: 13px; color: #5A5F6A;">Need integrity review</div><div style="font: 600 28px 'IBM Plex Sans', sans-serif;">{{ reviewCount }}</div></div>
+    </section>
+
+    <section aria-label="Score cutoff" style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 16px 20px; display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between;">
+      <div style="display: flex; flex-direction: column; gap: 4px; flex: 1 1 360px;">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600;">Answer Quality cutoff</h2>
+        <p style="margin: 0; font-size: 13px; color: #3E434C; line-height: 1.5;">Candidates below the cutoff are not shortlisted on score. Their integrity signals are marked "not used in decision" and need no review or response.</p>
+      </div>
+      <div role="group" aria-label="Cutoff" style="display: flex; gap: 8px;">
+        <button type="button" onClick="{{ pick55 }}" style="{{ s55 }}">55</button>
+        <button type="button" onClick="{{ pick65 }}" style="{{ s65 }}">65</button>
+        <button type="button" onClick="{{ pick75 }}" style="{{ s75 }}">75</button>
+      </div>
+    </section>
+
+    <section aria-label="Candidates" style="background: #FFFFFF; border: 1px solid #E2E2DC; border-radius: 12px; padding: 12px 20px; overflow-x: auto;">
+      <table style="width: 100%; min-width: 820px; border-collapse: collapse; font-size: 14px;">
+        <thead>
+          <tr style="text-align: left; color: #5A5F6A; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">
+            <th style="padding: 10px 8px 10px 0; font-weight: 500;">Candidate</th><th style="padding: 10px 8px; font-weight: 500;">Answer Quality</th><th style="padding: 10px 8px; font-weight: 500;">Spoken English</th><th style="padding: 10px 8px; font-weight: 500;">Integrity band</th><th style="padding: 10px 8px; font-weight: 500;">Device</th><th style="padding: 10px 8px; font-weight: 500;">Next step</th>
+          </tr>
+        </thead>
+        <tbody>
+          <sc-for list="{{ rows }}" as="r" hint-placeholder-count="8">
+            <tr style="border-top: 1px solid #EFEFEA;">
+              <td style="padding: 12px 8px 12px 0; font-weight: 500;">{{ r.id }}</td>
+              <td style="padding: 12px 8px; font-family: 'IBM Plex Mono', monospace;">{{ r.q }}</td>
+              <td style="padding: 12px 8px;">{{ r.cefr }}</td>
+              <td style="padding: 12px 8px;"><span style="{{ r.bandStyle }}">{{ r.band }}</span></td>
+              <td style="padding: 12px 8px; color: #3E434C;">{{ r.device }}</td>
+              <td style="padding: 12px 8px;"><span style="{{ r.stepStyle }}">{{ r.step }}</span></td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+    </section>
+    <p style="margin: 0; font-size: 12px; color: #5A5F6A;">Bulk reject is available on score only. No action on this page can reject anyone for integrity.</p>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"cutoff":{"editor":"enum","options":["55","65","75"],"default":"65"},"$preview":{"width":1440,"height":1100}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { cutoff: null };
+  }
+  renderVals() {
+    const cutoff = Number(this.state.cutoff || this.props.cutoff || 65);
+    const on = 'min-width: 64px; min-height: 44px; border-radius: 8px; border: 2px solid #1D3F8F; background: #F3F6FD; color: #15171C; font: 600 15px "IBM Plex Mono", monospace;';
+    const off = 'min-width: 64px; min-height: 44px; border-radius: 8px; border: 1px solid #C9C9C1; background: #FFFFFF; color: #15171C; font: 500 15px "IBM Plex Mono", monospace;';
+    const pill = (bg, fg) => 'font-size: 12px; padding: 3px 10px; border-radius: 999px; background: ' + bg + '; color: ' + fg + '; font-weight: 500; white-space: nowrap;';
+    const bandStyle = b => b === 'Clear' ? pill('#E2F1EC', '#0B5643') : b === 'Review' ? pill('#FFF1D6', '#6E4200') : b === 'Strong concern' ? pill('#FDE7DF', '#8A2A0A') : pill('#EFEFEA', '#3E434C');
+    const base = [
+      { id: 'A-2001', q: 88, cefr: 'B2', band: 'Clear', device: 'Laptop' },
+      { id: 'A-2002', q: 81, cefr: 'C1', band: 'Review', device: 'Laptop' },
+      { id: 'A-2003', q: 77, cefr: 'B2', band: 'Insufficient evidence', device: 'Phone' },
+      { id: 'A-2004', q: 72, cefr: 'B1', band: 'Strong concern', device: 'Laptop' },
+      { id: 'A-2005', q: 68, cefr: 'B2', band: 'Clear', device: 'Phone' },
+      { id: 'A-2006', q: 63, cefr: 'B1', band: 'Review', device: 'Laptop' },
+      { id: 'A-2007', q: 58, cefr: 'B1', band: 'Strong concern', device: 'Laptop' },
+      { id: 'A-2008', q: 49, cefr: 'A2', band: 'Clear', device: 'Phone' }
+    ];
+    const rows = base.map(r => {
+      const short = r.q >= cutoff;
+      let step, stepStyle;
+      if (!short) { step = 'Not shortlisted · flags not used'; stepStyle = pill('#EFEFEA', '#3E434C'); }
+      else if (r.band === 'Clear') { step = 'Advance with carry-forward pack'; stepStyle = pill('#E2F1EC', '#0B5643'); }
+      else if (r.band === 'Insufficient evidence') { step = 'Advance · judge integrity at interview'; stepStyle = pill('#EFEFEA', '#3E434C'); }
+      else { step = 'In review queue'; stepStyle = pill('#F3F6FD', '#1D3F8F'); }
+      return { ...r, bandStyle: bandStyle(r.band), step, stepStyle, short, needsReview: short && (r.band === 'Review' || r.band === 'Strong concern') };
+    });
+    return {
+      cutoff,
+      rows,
+      shortCount: rows.filter(r => r.short).length,
+      reviewCount: rows.filter(r => r.needsReview).length,
+      s55: cutoff === 55 ? on : off,
+      s65: cutoff === 65 ? on : off,
+      s75: cutoff === 75 ? on : off,
+      pick55: () => this.setState({ cutoff: 55 }),
+      pick65: () => this.setState({ cutoff: 65 }),
+      pick75: () => this.setState({ cutoff: 75 })
+    };
+  }
+}
+</script>
+</body>
+</html>

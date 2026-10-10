@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+.claude/.last-green
+.claude/settings.local.json
+.wrangler/
+supabase/.temp/
+coverage/
+playwright-report/
+test-results/
+.claude/.stop-gate-tries
+.claude/allow-red
+.claude/usage.json
+.claude/usage-guard-state.json
