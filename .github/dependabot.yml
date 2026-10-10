@@ -1,0 +1,86 @@
+# Dependabot (spec specs/m0-foundations.md §2, §4, §7.1).
+# Dependabot PRs run the same `ci` workflow as any other PR; nothing merges without the
+# required checks. Majors that §4 holds back are ignored here, so CI never sees them.
+version: 2
+
+updates:
+  # Keeps the full-SHA pins in .github/workflows/ and the shared composite action current.
+  # Dependabot rewrites the SHA and the trailing `# vX.Y.Z` comment together.
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    # Wait a week after a release before proposing it (supply-chain caution).
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+
+  # Root only: shared versions live in the pnpm `catalog:` (pnpm-workspace.yaml), so one
+  # update to a catalog entry moves every workspace that uses it.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: build
+    # Groups by name pattern, so catalog entries that must stay in step land in one PR and
+    # one CI run (the §4 constraints). A dependency joins the first group it matches; anything
+    # unmatched (prettier, hono, zod, supabase, lefthook, @types/node, fast-check, …) gets its own PR.
+    groups:
+      # typescript-eslint 8.x caps TypeScript (<6.1.0), so they move together.
+      typescript:
+        patterns:
+          - typescript
+          - typescript-eslint
+          - '@typescript-eslint/*'
+      # eslint-plugin-jsx-a11y caps ESLint at 9; the plugins and @eslint/js track eslint.
+      eslint:
+        patterns:
+          - eslint
+          - '@eslint/*'
+          - eslint-plugin-*
+          - globals
+      # @cloudflare/vitest-pool-workers pins the Vitest major and bundles workerd, so it moves
+      # with Vitest and wrangler.
+      cloudflare-vitest:
+        patterns:
+          - vitest
+          - '@vitest/*'
+          - wrangler
+          - '@cloudflare/*'
+      # @vitejs/plugin-react follows the Vite major.
+      vite:
+        patterns:
+          - vite
+          - '@vitejs/*'
+      # React Router 8 needs React >= 19.2.7; the type packages follow React.
+      react:
+        patterns:
+          - react
+          - react-dom
+          - '@types/react'
+          - '@types/react-dom'
+          - react-router
+      commitlint:
+        patterns:
+          - '@commitlint/*'
+    # §4 fixes these majors (TypeScript 6 not 7, ESLint 9 not 10, Vitest 4 not 5). Raising one
+    # is a spec change, not a dependency bump.
+    ignore:
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+      - dependency-name: eslint
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@eslint/js'
+        update-types: ['version-update:semver-major']
+      - dependency-name: vitest
+        update-types: ['version-update:semver-major']
