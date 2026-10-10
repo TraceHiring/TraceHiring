@@ -1,0 +1,872 @@
+#!/usr/bin/env node
+// GitHub Actions hardening checks (spec specs/m0-foundations.md §7.1, §7.2, AT-12 local part).
+// Reads .github/workflows/*.y{a,}ml and .github/actions/**/action.y{a,}ml and fails (exit 1) unless:
+//   - no workflow uses the pull_request_target or workflow_run trigger
+//   - workflow-level permissions are exactly `contents: read`; no job asks for more
+//   - every remote `uses:` is pinned to a full 40-hex commit SHA (docker:// images to a sha256 digest);
+//     local `./` actions must exist and pass the same rules
+//   - every actions/checkout step sets `persist-credentials: false`
+//   - no job or step sets continue-on-error; the required jobs exist and have no `if:`
+//   - secrets appear only in step-level env:/with: of deploy-staging, never on or before an
+//     install/build step, and each staging secret only on the steps that use it (§7.2, §7.3)
+//   - deploy-staging (when present) has the exact needs / if / environment / concurrency of §7.2
+// No YAML library is a root dependency, so this file carries a small parser for the YAML subset
+// workflows use (block mappings and sequences, plain/quoted/block scalars, flow collections).
+// Anything outside that subset (anchors, aliases, tags, merge keys, multiple documents) is an
+// error, so the check fails closed instead of misreading a file.
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// ===================== YAML subset parser =====================
+
+export class YamlError extends Error {}
+
+const indentOf = (raw) => raw.length - raw.trimStart().length;
+const isBlankOrComment = (raw) => {
+  const t = raw.trim();
+  return t === '' || t.startsWith('#');
+};
+const isSeqItem = (text) => text === '-' || text.startsWith('- ');
+
+function resolvePlain(s) {
+  if (s === '' || s === '~' || s === 'null' || s === 'Null' || s === 'NULL') return null;
+  if (s === 'true' || s === 'True' || s === 'TRUE') return true;
+  if (s === 'false' || s === 'False' || s === 'FALSE') return false;
+  if (/^[-+]?(0|[1-9][0-9]*)$/.test(s)) return Number(s);
+  return s;
+}
+
+/** Strips a trailing ` # comment` from plain-scalar text. */
+function stripPlainComment(s) {
+  const m = /(^|\s)#/.exec(s);
+  return (m ? s.slice(0, m.index) : s).trimEnd();
+}
+
+const DQ_ESCAPES = {
+  0: '\0',
+  a: '\x07',
+  b: '\b',
+  t: '\t',
+  n: '\n',
+  v: '\v',
+  f: '\f',
+  r: '\r',
+  e: '\x1b',
+  ' ': ' ',
+  '"': '"',
+  '/': '/',
+  '\\': '\\',
+  N: '\x85',
+  _: '\xa0',
+};
+
+/** Reads a quoted scalar starting at s[pos]. Returns { value, end } (end is past the closing quote) or null. */
+function readQuoted(s, pos) {
+  const q = s[pos];
+  let out = '';
+  for (let i = pos + 1; i < s.length; i++) {
+    const c = s[i];
+    if (q === "'") {
+      if (c === "'") {
+        if (s[i + 1] === "'") {
+          out += "'";
+          i++;
+          continue;
+        }
+        return { value: out, end: i + 1 };
+      }
+      out += c;
+    } else {
+      if (c === '"') return { value: out, end: i + 1 };
+      if (c === '\\') {
+        const e = s[i + 1];
+        const hex = { x: 2, u: 4, U: 8 }[e];
+        if (hex) {
+          const h = s.slice(i + 2, i + 2 + hex);
+          if (!/^[0-9a-fA-F]+$/.test(h) || h.length !== hex) return null;
+          out += String.fromCodePoint(parseInt(h, 16));
+          i += 1 + hex;
+        } else if (e in DQ_ESCAPES) {
+          out += DQ_ESCAPES[e];
+          i++;
+        } else return null;
+        continue;
+      }
+      out += c;
+    }
+  }
+  return null;
+}
+
+class Parser {
+  constructor(text) {
+    this.lines = text.replace(/^﻿/, '').split(/\r?\n/);
+    this.i = 0;
+  }
+
+  fail(msg, line = this.i) {
+    throw new YamlError(`line ${line + 1}: ${msg}`);
+  }
+
+  /** Next significant line (skipping blanks and comments) without consuming it. */
+  peek() {
+    while (this.i < this.lines.length) {
+      const raw = this.lines[this.i];
+      if (/^ *\t/.test(raw) && raw.trim() !== '') this.fail('tab in indentation');
+      if (isBlankOrComment(raw)) {
+        this.i++;
+        continue;
+      }
+      const indent = indentOf(raw);
+      return { indent, text: raw.slice(indent) };
+    }
+    return null;
+  }
+
+  parseDocument() {
+    let n = this.peek();
+    if (n && n.text.startsWith('%')) this.fail('directives are not supported');
+    if (n && n.indent === 0 && /^---(\s|$)/.test(n.text)) {
+      if (!isBlankOrComment(n.text.slice(3))) this.fail('content after --- is not supported');
+      this.i++;
+    }
+    n = this.peek();
+    const value = n ? this.parseNode(-1) : null;
+    n = this.peek();
+    if (n) {
+      if (n.indent === 0 && /^---(\s|$)/.test(n.text))
+        this.fail('multiple documents are not supported');
+      if (n.indent === 0 && /^\.\.\.(\s|$)/.test(n.text)) {
+        this.i++;
+        if (this.peek()) this.fail('content after the document end marker');
+      } else this.fail('unexpected content (bad indentation?)');
+    }
+    return value;
+  }
+
+  /** `key: rest` → { key, rest } or null if the text is not a mapping entry. */
+  keyOf(text) {
+    if (/^\?(\s|$)/.test(text)) this.fail('complex mapping keys are not supported');
+    const c = text[0];
+    if (c === '"' || c === "'") {
+      const q = readQuoted(text, 0);
+      if (!q) return null;
+      const after = text.slice(q.end);
+      const m = /^\s*:(\s|$)/.exec(after);
+      return m ? { key: q.value, rest: after.slice(m[0].length - m[1].length) } : null;
+    }
+    if ('[{&*!|>%@`#'.includes(c) || isSeqItem(text)) return null;
+    const m = /:(\s|$)/.exec(text);
+    if (!m) return null;
+    const key = text.slice(0, m.index).trimEnd();
+    if (key === '' || /\s#/.test(key)) return null;
+    return { key, rest: text.slice(m.index + 1) };
+  }
+
+  /** Parses the block node starting at the next significant line, which must be indented > parentIndent. */
+  parseNode(parentIndent) {
+    const n = this.peek();
+    if (!n || n.indent <= parentIndent) return null;
+    if (isSeqItem(n.text)) return this.parseSeq(n.indent);
+    if (this.keyOf(n.text)) return this.parseMap(n.indent);
+    this.i++;
+    return this.parseInline(n.text, parentIndent);
+  }
+
+  parseMap(indent) {
+    const obj = {};
+    for (;;) {
+      const n = this.peek();
+      if (!n || n.indent < indent) break;
+      if (n.indent > indent) this.fail('bad indentation');
+      if (isSeqItem(n.text)) this.fail('a sequence item where a mapping key was expected');
+      const k = this.keyOf(n.text);
+      if (!k) this.fail('expected a "key: value" entry');
+      if (k.key === '<<') this.fail('merge keys (<<) are not supported');
+      if (Object.hasOwn(obj, k.key)) this.fail(`duplicate key "${k.key}"`);
+      const line = this.i;
+      this.i++;
+      const value = this.parseValue(k.rest, indent, true, line);
+      Object.defineProperty(obj, k.key, {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return obj;
+  }
+
+  parseSeq(indent) {
+    const arr = [];
+    for (;;) {
+      const n = this.peek();
+      if (!n || n.indent < indent) break;
+      if (n.indent > indent) this.fail('bad indentation');
+      if (!isSeqItem(n.text)) break;
+      const rest = n.text.slice(1);
+      if (isBlankOrComment(rest)) {
+        this.i++;
+        arr.push(this.parseNode(indent));
+        continue;
+      }
+      // Re-indent the item's content to its own column and parse it as a node there.
+      const col = indent + 1 + (rest.length - rest.trimStart().length);
+      this.lines[this.i] = ' '.repeat(col) + rest.trimStart();
+      const inner = this.peek();
+      if (isSeqItem(inner.text)) arr.push(this.parseSeq(col));
+      else if (this.keyOf(inner.text)) arr.push(this.parseMap(col));
+      else {
+        this.i++;
+        arr.push(this.parseInline(inner.text, indent));
+      }
+    }
+    return arr;
+  }
+
+  /** Value after `key:`; `rest` is the remainder of that (already consumed) line. */
+  parseValue(rest, ownerIndent, allowSameIndentSeq, line) {
+    if (isBlankOrComment(rest)) {
+      const n = this.peek();
+      if (n && n.indent > ownerIndent) return this.parseNode(ownerIndent);
+      if (n && allowSameIndentSeq && n.indent === ownerIndent && isSeqItem(n.text)) {
+        return this.parseSeq(ownerIndent);
+      }
+      return null;
+    }
+    return this.parseInline(rest.trimStart(), ownerIndent, line);
+  }
+
+  /** A scalar or flow collection that starts on an already-consumed line. */
+  parseInline(t, ownerIndent, line = this.i - 1) {
+    const c = t[0];
+    if (c === '|' || c === '>') return this.parseBlockScalar(t, ownerIndent, line);
+    if (c === '[' || c === '{') return this.parseFlowText(t, line);
+    if (c === '"' || c === "'") {
+      const q = readQuoted(t, 0);
+      if (!q)
+        this.fail(
+          'unterminated or invalid quoted scalar (multi-line quotes are not supported)',
+          line,
+        );
+      if (!isBlankOrComment(t.slice(q.end)))
+        this.fail('unexpected text after a quoted scalar', line);
+      return q.value;
+    }
+    if (c === '&') this.fail('anchors are not supported', line);
+    if (c === '*') this.fail('aliases are not supported', line);
+    if (c === '!') this.fail('tags are not supported', line);
+    if (c === '%' || c === '@' || c === '`')
+      this.fail(`a plain scalar cannot start with ${c}`, line);
+    if (isSeqItem(t)) this.fail('a sequence cannot start on the same line as its key', line);
+    let value = stripPlainComment(t);
+    let ended = value.length < t.trimEnd().length; // a comment ends a plain scalar
+    let blanks = 0;
+    while (!ended && this.i < this.lines.length) {
+      const raw = this.lines[this.i];
+      if (raw.trim() === '') {
+        blanks++;
+        this.i++;
+        continue;
+      }
+      if (indentOf(raw) <= ownerIndent || raw.trim().startsWith('#')) break;
+      const text = raw.trim();
+      if (this.keyOf(text) && indentOf(raw) <= ownerIndent + 0) break;
+      const part = stripPlainComment(text);
+      ended = part.length < text.length;
+      value += blanks > 0 ? '\n'.repeat(blanks) + part : ' ' + part;
+      blanks = 0;
+      this.i++;
+    }
+    return resolvePlain(value);
+  }
+
+  parseBlockScalar(header, ownerIndent, line) {
+    const m = /^([|>])([+-]?)(\s+#.*)?$/.exec(header.trimEnd());
+    if (!m)
+      this.fail('unsupported block scalar header (indentation indicators are not supported)', line);
+    const [, style, chomp] = m;
+    const body = [];
+    let contentIndent = null;
+    while (this.i < this.lines.length) {
+      const raw = this.lines[this.i];
+      if (raw.trim() === '') {
+        body.push('');
+        this.i++;
+        continue;
+      }
+      const ind = indentOf(raw);
+      if (contentIndent === null) {
+        if (ind <= ownerIndent) break;
+        contentIndent = ind;
+      }
+      if (ind < contentIndent) {
+        if (ind > ownerIndent) this.fail('bad indentation in a block scalar');
+        break;
+      }
+      body.push(raw.slice(contentIndent));
+      this.i++;
+    }
+    let trailing = 0;
+    while (body.length > 0 && body[body.length - 1] === '') {
+      body.pop();
+      trailing++;
+    }
+    let text;
+    if (style === '|') text = body.join('\n');
+    else {
+      text = '';
+      for (let k = 0; k < body.length; k++) {
+        const cur = body[k];
+        if (k === 0) text = cur;
+        else if (cur === '') text += '\n';
+        else if (body[k - 1] === '' || /^\s/.test(cur) || /^\s/.test(body[k - 1]))
+          text += (body[k - 1] === '' ? '' : '\n') + cur;
+        else text += ' ' + cur;
+      }
+    }
+    if (body.length === 0) return chomp === '+' ? '\n'.repeat(trailing) : '';
+    if (chomp === '-') return text;
+    if (chomp === '+') return text + '\n' + '\n'.repeat(trailing);
+    return text + '\n';
+  }
+
+  /** A flow collection starting at `t`, possibly continued on later lines. */
+  parseFlowText(t, line) {
+    let s = t;
+    let end = flowEnd(s);
+    while (end < 0 && this.i < this.lines.length) {
+      s += '\n' + this.lines[this.i];
+      this.i++;
+      end = flowEnd(s);
+    }
+    if (end < 0) this.fail('unterminated flow collection', line);
+    const tail = s.slice(end);
+    if (!isBlankOrComment(tail)) this.fail('unexpected text after a flow collection', line);
+    const p = new FlowParser(s.slice(0, end), (msg) => this.fail(msg, line));
+    const value = p.parseValue();
+    p.ws();
+    if (p.pos !== p.s.length) this.fail('unexpected text in a flow collection', line);
+    return value;
+  }
+}
+
+/** Index just past the bracket that closes the flow collection at s[0], or -1. */
+function flowEnd(s) {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"' || c === "'") {
+      const q = readQuoted(s, i);
+      if (!q) return -1;
+      i = q.end - 1;
+    } else if (c === '#' && (i === 0 || /\s/.test(s[i - 1]))) {
+      const nl = s.indexOf('\n', i);
+      if (nl < 0) return -1;
+      i = nl;
+    } else if (c === '[' || c === '{') depth++;
+    else if (c === ']' || c === '}') {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+
+class FlowParser {
+  constructor(s, fail) {
+    this.s = s;
+    this.pos = 0;
+    this.fail = fail;
+  }
+
+  ws() {
+    while (this.pos < this.s.length) {
+      const c = this.s[this.pos];
+      if (c === ' ' || c === '\n' || c === '\r') this.pos++;
+      else if (c === '\t') this.pos++;
+      else if (c === '#') {
+        const nl = this.s.indexOf('\n', this.pos);
+        this.pos = nl < 0 ? this.s.length : nl;
+      } else break;
+    }
+  }
+
+  parseValue() {
+    this.ws();
+    const c = this.s[this.pos];
+    if (c === '[') return this.parseSeq();
+    if (c === '{') return this.parseMap();
+    if (c === '"' || c === "'") {
+      const q = readQuoted(this.s, this.pos);
+      if (!q) this.fail('invalid quoted scalar in a flow collection');
+      this.pos = q.end;
+      return q.value;
+    }
+    if ('&*!|>%@`'.includes(c)) this.fail(`unsupported "${c}" in a flow collection`);
+    return resolvePlain(this.plain(false));
+  }
+
+  plain(isKey) {
+    const start = this.pos;
+    while (this.pos < this.s.length) {
+      const c = this.s[this.pos];
+      if (',[]{}'.includes(c)) break;
+      if (c === ':' && (isKey || /[\s,\]}]/.test(this.s[this.pos + 1] ?? ' '))) break;
+      if (c === '\n') break;
+      this.pos++;
+    }
+    return this.s.slice(start, this.pos).trim();
+  }
+
+  parseSeq() {
+    this.pos++; // [
+    const arr = [];
+    for (;;) {
+      this.ws();
+      if (this.s[this.pos] === ']') {
+        this.pos++;
+        return arr;
+      }
+      arr.push(this.parseValue());
+      this.ws();
+      const c = this.s[this.pos];
+      if (c === ',') this.pos++;
+      else if (c !== ']') this.fail('expected , or ] in a flow sequence');
+    }
+  }
+
+  parseMap() {
+    this.pos++; // {
+    const obj = {};
+    for (;;) {
+      this.ws();
+      if (this.s[this.pos] === '}') {
+        this.pos++;
+        return obj;
+      }
+      let key;
+      const c = this.s[this.pos];
+      if (c === '"' || c === "'") {
+        const q = readQuoted(this.s, this.pos);
+        if (!q) this.fail('invalid quoted key in a flow mapping');
+        this.pos = q.end;
+        key = q.value;
+      } else key = this.plain(true);
+      if (key === '<<') this.fail('merge keys (<<) are not supported');
+      this.ws();
+      let value = null;
+      if (this.s[this.pos] === ':') {
+        this.pos++;
+        this.ws();
+        if (this.s[this.pos] !== ',' && this.s[this.pos] !== '}') value = this.parseValue();
+      }
+      if (Object.hasOwn(obj, key)) this.fail(`duplicate key "${key}"`);
+      Object.defineProperty(obj, key, {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+      this.ws();
+      const d = this.s[this.pos];
+      if (d === ',') this.pos++;
+      else if (d !== '}') this.fail('expected , or } in a flow mapping');
+    }
+  }
+}
+
+/** Parses the YAML subset described at the top of this file. Throws YamlError on anything else. */
+export function parseYaml(text) {
+  return new Parser(text).parseDocument();
+}
+
+// ===================== workflow rules =====================
+
+export const REQUIRED_JOBS = ['static', 'rls', 'security', 'migrations'];
+export const DEPLOY_JOB = 'deploy-staging';
+export const DEPLOY_IF =
+  "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'";
+export const DEPLOY_ENVIRONMENT = 'staging';
+export const DEPLOY_CONCURRENCY = 'deploy-staging';
+export const WORKFLOW_PERMISSIONS = { contents: 'read' };
+export const FORBIDDEN_TRIGGERS = ['pull_request_target', 'workflow_run'];
+
+/** §7.3 staging secrets and the commands a step must run to be allowed to hold each one (§7.2). */
+export const STAGING_SECRET_USERS = {
+  SUPABASE_STAGING_DB_URL: [/\bsupabase\s+db\s+push\b/, /\bpsql\b/],
+  CLOUDFLARE_API_TOKEN: [/\bwrangler\b/, /\bcheck-staging-secrets\b/],
+};
+
+const INSTALL_RE = /\b(?:pnpm|npm|yarn)\s+(?:install|i|ci|add)\b/;
+const BUILD_RE = /\bpnpm\s+(?:(?:-r|--recursive|--filter\s+\S+)\s+)*(?:run\s+)?build\b/;
+const SHA_PIN_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@[0-9a-f]{40}$/;
+const DOCKER_PIN_RE = /^docker:\/\/[^@\s]+@sha256:[0-9a-f]{64}$/;
+
+const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+const v = (file, where, message) => ({ file, where, message });
+
+const normExpr = (s) =>
+  String(s)
+    .trim()
+    .replace(/^\$\{\{([\s\S]*)\}\}$/, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/**
+ * Secret names referenced in a node. Strings are searched inside ${{ }} expressions; values of
+ * `if` keys are expressions as a whole. A bare `secrets` context (e.g. toJSON(secrets)) yields '*'.
+ */
+export function secretRefs(node, key = null) {
+  const out = new Set();
+  const scan = (expr) => {
+    for (const m of expr.matchAll(
+      /\bsecrets\b\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_-]*)|\[\s*['"]([^'"]+)['"]\s*\])?/g,
+    )) {
+      out.add(m[1] ?? m[2] ?? '*');
+    }
+  };
+  const walk = (n, k) => {
+    if (typeof n === 'string') {
+      if (k === 'if') scan(n);
+      else for (const m of n.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) scan(m[1]);
+    } else if (Array.isArray(n)) n.forEach((x) => walk(x, null));
+    else if (isObj(n)) for (const [kk, vv] of Object.entries(n)) walk(vv, kk);
+  };
+  walk(node, key);
+  return [...out];
+}
+
+function checkUses(uses, file, where, out, ctx) {
+  if (typeof uses !== 'string') {
+    out.push(v(file, where, 'uses: must be a string'));
+    return;
+  }
+  if (uses.startsWith('./')) {
+    ctx?.localActions?.add(uses.replace(/^\.\//, '').replace(/\/+$/, ''));
+    return;
+  }
+  if (uses.startsWith('docker://')) {
+    if (!DOCKER_PIN_RE.test(uses))
+      out.push(v(file, where, `uses: ${uses} is not pinned to a full commit SHA / image digest`));
+    return;
+  }
+  if (!SHA_PIN_RE.test(uses))
+    out.push(v(file, where, `uses: ${uses} is not pinned to a full commit SHA`));
+}
+
+const isTruthyFlag = (x) => !(x === undefined || x === null || x === false || x === 'false');
+
+function checkStepCommon(step, file, where, out, ctx) {
+  if (!isObj(step)) {
+    out.push(v(file, where, 'step must be a mapping'));
+    return;
+  }
+  if (step.uses !== undefined) checkUses(step.uses, file, where, out, ctx);
+  if (typeof step.uses === 'string' && /^actions\/checkout@/.test(step.uses)) {
+    const pc = isObj(step.with) ? step.with['persist-credentials'] : undefined;
+    if (!(pc === false || pc === 'false')) {
+      out.push(v(file, where, 'actions/checkout must set persist-credentials: false'));
+    }
+  }
+  if (isTruthyFlag(step['continue-on-error'])) {
+    out.push(v(file, where, 'continue-on-error is not allowed (a failing step must fail the job)'));
+  }
+}
+
+/** Is this step an install or build step (directly, or through a local action that installs)? */
+function isInstallOrBuild(step, ctx) {
+  if (!isObj(step)) return false;
+  if (typeof step.run === 'string' && (INSTALL_RE.test(step.run) || BUILD_RE.test(step.run)))
+    return true;
+  if (typeof step.uses === 'string' && step.uses.startsWith('./')) {
+    const p = step.uses.replace(/^\.\//, '').replace(/\/+$/, '');
+    return ctx?.installActions?.has(p) ?? false;
+  }
+  return false;
+}
+
+function triggerNames(on) {
+  if (typeof on === 'string') return [on];
+  if (Array.isArray(on)) return on.map(String);
+  if (isObj(on)) return Object.keys(on);
+  return [];
+}
+
+const LEVEL = { none: 0, read: 1, write: 2 };
+
+/**
+ * Checks one parsed workflow.
+ * @param ctx {{ installActions?: Set<string>, localActions?: Set<string> }} local actions (repo-relative
+ *   dirs) that run an install; `localActions` collects every local action the workflow references.
+ */
+export function checkWorkflow(doc, file, ctx = {}) {
+  const out = [];
+  if (!isObj(doc)) return [v(file, '', 'workflow must be a mapping')];
+  // Triggers.
+  if (doc.on === undefined) out.push(v(file, 'on', 'workflow has no on: triggers'));
+  for (const t of triggerNames(doc.on)) {
+    if (FORBIDDEN_TRIGGERS.includes(t)) out.push(v(file, 'on', `trigger ${t} is not allowed`));
+  }
+  // Workflow permissions: exactly contents: read.
+  const wp = doc.permissions;
+  if (
+    !isObj(wp) ||
+    JSON.stringify(Object.entries(wp).sort()) !==
+      JSON.stringify(Object.entries(WORKFLOW_PERMISSIONS))
+  ) {
+    out.push(
+      v(file, 'permissions', 'workflow-level permissions must be exactly { contents: read }'),
+    );
+  }
+  // Secrets outside jobs.
+  for (const [k, val] of Object.entries(doc)) {
+    if (k === 'jobs') continue;
+    if (secretRefs(val, k).length > 0)
+      out.push(
+        v(file, k, 'secrets may only be set at step level (env: or with:) in deploy-staging'),
+      );
+  }
+  if (!isObj(doc.jobs)) {
+    out.push(v(file, 'jobs', 'workflow has no jobs mapping'));
+    return out;
+  }
+  for (const [name, job] of Object.entries(doc.jobs)) {
+    const where = `jobs.${name}`;
+    if (!isObj(job)) {
+      out.push(v(file, where, 'job must be a mapping'));
+      continue;
+    }
+    // Job permissions never broader than the workflow's.
+    if (job.permissions !== undefined) {
+      const jp = job.permissions;
+      const ok =
+        isObj(jp) &&
+        Object.entries(jp).every(
+          ([scope, level]) =>
+            Object.hasOwn(WORKFLOW_PERMISSIONS, scope) &&
+            level in LEVEL &&
+            LEVEL[level] <= LEVEL[WORKFLOW_PERMISSIONS[scope]],
+        );
+      if (!ok)
+        out.push(
+          v(
+            file,
+            where,
+            'job permissions may not be broader than the workflow-level { contents: read }',
+          ),
+        );
+    }
+    if (isTruthyFlag(job['continue-on-error'])) {
+      out.push(v(file, where, 'continue-on-error is not allowed on a job'));
+    }
+    if (REQUIRED_JOBS.includes(name) && job.if !== undefined) {
+      out.push(
+        v(file, where, 'a required job may not have an if: (a skipped job reports success)'),
+      );
+    }
+    if (job.uses !== undefined) checkUses(job.uses, file, where, out, ctx);
+    // Secrets anywhere in the job outside its steps (env, secrets:, services, container, if...).
+    for (const [k, val] of Object.entries(job)) {
+      if (k === 'steps') continue;
+      if (k === 'secrets' || secretRefs(val, k).length > 0) {
+        out.push(v(file, where, `secrets may only be set at step level (found in ${k}:)`));
+      }
+    }
+    const steps = Array.isArray(job.steps) ? job.steps : [];
+    if (job.steps !== undefined && !Array.isArray(job.steps))
+      out.push(v(file, where, 'steps must be a sequence'));
+    let lastInstall = -1;
+    steps.forEach((s, i) => {
+      if (isInstallOrBuild(s, ctx)) lastInstall = i;
+    });
+    steps.forEach((step, i) => {
+      const sw = `${where}.steps[${i}]`;
+      checkStepCommon(step, file, sw, out, ctx);
+      if (!isObj(step)) return;
+      const all = secretRefs(step);
+      if (all.length === 0) return;
+      if (name !== DEPLOY_JOB) {
+        out.push(
+          v(
+            file,
+            sw,
+            `secrets (${all.join(', ')}) are not allowed outside ${DEPLOY_JOB}; pull requests run this job`,
+          ),
+        );
+        return;
+      }
+      if (i <= lastInstall) {
+        out.push(
+          v(file, sw, `no secrets on or before the install/build steps (found ${all.join(', ')})`),
+        );
+        return;
+      }
+      for (const [k, val] of Object.entries(step)) {
+        if (k === 'env' || k === 'with') continue;
+        if (secretRefs(val, k).length > 0) {
+          out.push(v(file, sw, `secrets belong only in env: or with: (found in ${k}:)`));
+        }
+      }
+      const run = typeof step.run === 'string' ? step.run : '';
+      for (const s of all) {
+        const users = STAGING_SECRET_USERS[s];
+        if (!users)
+          out.push(
+            v(
+              file,
+              sw,
+              `secret ${s === '*' ? 'context (all secrets)' : s} is not on the §7.3 staging list`,
+            ),
+          );
+        else if (!users.some((re) => re.test(run))) {
+          out.push(
+            v(file, sw, `secret ${s} is set on a step that does not use it (§7.2 step scoping)`),
+          );
+        }
+      }
+    });
+  }
+  // deploy-staging gate (§7.2).
+  const d = doc.jobs[DEPLOY_JOB];
+  if (isObj(d)) {
+    const where = `jobs.${DEPLOY_JOB}`;
+    const needs = typeof d.needs === 'string' ? [d.needs] : Array.isArray(d.needs) ? d.needs : [];
+    if (JSON.stringify([...needs].sort()) !== JSON.stringify([...REQUIRED_JOBS].sort())) {
+      out.push(v(file, where, `${DEPLOY_JOB} must have needs: [${REQUIRED_JOBS.join(', ')}]`));
+    }
+    if (typeof d.if !== 'string' || normExpr(d.if) !== normExpr(DEPLOY_IF)) {
+      out.push(v(file, where, `${DEPLOY_JOB} must have exactly if: ${DEPLOY_IF}`));
+    }
+    const env = isObj(d.environment) ? d.environment.name : d.environment;
+    if (env !== DEPLOY_ENVIRONMENT)
+      out.push(v(file, where, `${DEPLOY_JOB} must use environment: ${DEPLOY_ENVIRONMENT}`));
+    const c = d.concurrency;
+    const group = isObj(c) ? c.group : c;
+    const cancel = isObj(c) ? c['cancel-in-progress'] : undefined;
+    if (group !== DEPLOY_CONCURRENCY || isTruthyFlag(cancel)) {
+      out.push(
+        v(
+          file,
+          where,
+          `${DEPLOY_JOB} must use concurrency: ${DEPLOY_CONCURRENCY} without cancel-in-progress`,
+        ),
+      );
+    }
+  }
+  return out;
+}
+
+/** Checks a local action's action.yml. Only composite actions are allowed. */
+export function checkAction(doc, file, ctx = {}) {
+  const out = [];
+  if (!isObj(doc) || !isObj(doc.runs)) return [v(file, '', 'action must have a runs: mapping')];
+  if (doc.runs.using !== 'composite')
+    out.push(v(file, 'runs.using', 'local actions must be composite actions'));
+  if (secretRefs(doc).length > 0) out.push(v(file, '', 'a local action may not reference secrets'));
+  const steps = Array.isArray(doc.runs.steps) ? doc.runs.steps : [];
+  steps.forEach((s, i) => checkStepCommon(s, file, `runs.steps[${i}]`, out, ctx));
+  return out;
+}
+
+/** Does this composite action run an install or build? */
+export function actionInstalls(doc) {
+  const steps =
+    isObj(doc) && isObj(doc.runs) && Array.isArray(doc.runs.steps) ? doc.runs.steps : [];
+  return steps.some((s) => isInstallOrBuild(s, {}));
+}
+
+// ===================== repo walk =====================
+
+function listFiles(dir, pred, acc = []) {
+  if (!existsSync(dir)) return acc;
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, e.name);
+    if (e.isDirectory()) listFiles(abs, pred, acc);
+    else if (pred(e.name)) acc.push(abs);
+  }
+  return acc;
+}
+
+/** Runs every rule over `.github/` in `root`. Returns a list of violations `{ file, where, message }`. */
+export function runChecks(root) {
+  const out = [];
+  const relp = (abs) => path.relative(root, abs).split(path.sep).join('/');
+  const load = (abs) => {
+    try {
+      return { doc: parseYaml(readFileSync(abs, 'utf8')) };
+    } catch (err) {
+      if (!(err instanceof YamlError)) throw err;
+      out.push(v(relp(abs), '', `YAML: ${err.message}`));
+      return null;
+    }
+  };
+
+  // Local actions first, so workflows know which ones install.
+  const actions = new Map(); // dir → doc
+  for (const abs of listFiles(path.join(root, '.github', 'actions'), (n) =>
+    /^action\.ya?ml$/.test(n),
+  )) {
+    const r = load(abs);
+    if (!r) continue;
+    out.push(...checkAction(r.doc, relp(abs)));
+    actions.set(relp(path.dirname(abs)), r.doc);
+  }
+  const installActions = new Set([...actions].filter(([, d]) => actionInstalls(d)).map(([k]) => k));
+
+  const wfDir = path.join(root, '.github', 'workflows');
+  const workflows = existsSync(wfDir)
+    ? readdirSync(wfDir)
+        .filter((n) => /\.ya?ml$/.test(n) && statSync(path.join(wfDir, n)).isFile())
+        .sort()
+    : [];
+  if (workflows.length === 0) {
+    out.push(
+      v('.github/workflows', '', 'no workflow files found (the check never passes vacuously)'),
+    );
+    return out;
+  }
+  const jobs = new Set();
+  for (const name of workflows) {
+    const abs = path.join(wfDir, name);
+    const r = load(abs);
+    if (!r) continue;
+    const localActions = new Set();
+    out.push(...checkWorkflow(r.doc, relp(abs), { installActions, localActions }));
+    for (const a of localActions) {
+      if (!actions.has(a))
+        out.push(v(relp(abs), a, `local action ./${a} not found (expected ${a}/action.yml)`));
+    }
+    if (isObj(r.doc) && isObj(r.doc.jobs)) Object.keys(r.doc.jobs).forEach((j) => jobs.add(j));
+  }
+  for (const j of REQUIRED_JOBS) {
+    if (!jobs.has(j))
+      out.push(
+        v('.github/workflows', '', `required job "${j}" is missing (branch protection needs it)`),
+      );
+  }
+  return out;
+}
+
+function isMain() {
+  if (!process.argv[1]) return false;
+  const a = path.resolve(process.argv[1]);
+  const b = fileURLToPath(import.meta.url);
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+if (isMain()) {
+  const root = process.argv[2]
+    ? path.resolve(process.argv[2])
+    : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const violations = runChecks(root);
+  for (const x of violations) {
+    console.error(`check-workflows: ${x.file}${x.where ? ` (${x.where})` : ''}: ${x.message}`);
+  }
+  if (violations.length > 0) {
+    console.error(`check-workflows: ${violations.length} violation(s) (spec §7.1, §7.2)`);
+    process.exit(1);
+  }
+  console.log('check-workflows: OK');
+}
