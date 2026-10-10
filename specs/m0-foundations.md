@@ -1,7 +1,46 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** revision 4 (autopilot refresh, 2026-10-11). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). For approval of revision 4, see the end of this file.
+- **Status:** revision 5 (autopilot, 2026-10-11). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). For approval of revisions 4 and 5, see the end of this file.
 - **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a`, created from `main` at `b7af663`, with `main` at `4863db2` merged in. Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
+- **Revision 5 changes (2026-10-11).** This revision fixes every finding from the autopilot's two reviews of revision 4: `spec-reviewer` found 3 Blocking, 7 Medium and 7 Low; `database-reviewer` found 2 Blocking, 7 Medium and 10 Low.
+  - **`check-migrations`:**
+    - The base comes from `--base`, then `MIGRATIONS_BASE`, then `main`. A missing ref fails loudly, never passes vacuously.
+    - `verify-clean-clone` creates `main`, and CI uses `origin/main`.
+    - The script diffs against the working tree, compares with the base tip, and has a frozen set that holds on `main` itself (§8.4).
+  - **Clean-clone container:** it installs gitleaks with checksum verification, and its image is pinned by digest (AT-1a-local).
+  - **Catalog checks get positive controls.** Each check has a fixture that must make it fire, so none can pass vacuously.
+  - **New checks:**
+    - MT-5d (foreign keys, triggers and policies that cross schemas);
+    - MT-8b (unknown schemas);
+    - MT-12 (`pg_default_acl`).
+  - **Tightened checks:**
+    - MT-4, MT-5a/b/c, MT-6, MT-7, MT-9, MT-10 and MT-11;
+    - the extension-member exemption.
+  - **Floors:**
+    - a required-ID manifest;
+    - floors that can only go up, enforced against the base;
+    - the staging run uses `psql -X -v ON_ERROR_STOP=1`.
+  - **`test:rls`:**
+    - holds a lock shared by all worktrees, because they share one local stack;
+    - checks db-types drift against a temp file, with `--schema public`.
+  - **pgTAP day-one check:** confirms that test roles keep EXECUTE after the global revoke, with a fallback if they don't.
+  - **Lead session (S1.7) now owns:**
+    - the whole `supabase/` skeleton and harness;
+    - `packages/db-types`;
+    - the logger, redactor and Sentry scrubber.
+  - **Streams:** S2 (`ui`, `vendors`, apps) and S3 (Workers, services, deploy job) need nothing from each other.
+  - **Green sub-step** means a full `pnpm verify` before any `cp/*` tag.
+  - **Secrets:** the edge cases cover a secret that is reachable from a tag, a rescue branch or a bundle.
+  - **AT-16:** has a local proxy (`scan-dist.mjs` in `build`).
+  - **AT-22:** split into a local half and a staging half.
+  - **One list of deferred items:** with an owner that waits for the founder's answer.
+  - **§7.4:** describes how the first push works with local `--no-ff` merges; "linear history" is dropped.
+  - **Smaller fixes:**
+    - AT-6 and AT-6c read the real commands from config;
+    - AT-24 sets bundle mtimes and needs `sh`;
+    - reviewers run on every step;
+    - stale references fixed;
+    - an approval section added.
 - **Revision 4 changes (2026-10-11):**
   - **Q54 = drop.** The auto-push hook was disabled on 2026-10-11 (`.git/hooks/post-commit.disabled`), and CLAUDE.md line 41 was replaced in `b4c56a4`. `scripts/git-autopush.sh`, AT-6b and the push-path state machine are gone (§2, §6, §13, §15).
   - **Local-only mode.** Nothing is pushed until the founder says so:
@@ -77,7 +116,7 @@ Every open H item is a row in `docs/progress/FOUNDER-QUEUE.md`. The "Blocks" col
 | H2 | ~~Answer Q54~~ **Done 2026-10-11: drop auto-push, work locally only** (build-notes §0) | Recorded | — |
 | H3 | *(only when you allow pushing to GitHub again)* GitHub, on `AbhayRajGit/Tracehiring`:<br>• create environment `staging` with **deployment branches limited to `main`**<br>• add the secrets and variables in §7.3<br>• set the repo's default `GITHUB_TOKEN` permission to **read-only**<br>• enable **secret scanning and push protection** if your plan offers them for this repo<br>• tell me whether the repo is public or private | `gh api repos/AbhayRajGit/Tracehiring/environments/staging` shows the branch policy | Running CI and the staging deploy (AT-1a-CI, AT-11, AT-13, AT-18, AT-22-staging) |
 | H4 | Cloudflare:<br>• account with a registered `*.workers.dev` subdomain<br>• an API token limited to this account with Workers Scripts: Edit, Cloudflare Pages: Edit, Account Settings: Read | Token stored as a `staging` secret | Running the staging deploy (AT-11) |
-| H5 | Supabase:<br>• `trace-dev` and `trace-staging` in Mumbai (`ap-south-1`)<br>• the **staging session-pooler connection string** (with password), stored as a secret. CI needs no Supabase personal access token (security review #9). | Stored as a `staging` secret | Staging migrations (AT-18) |
+| H5 | Supabase:<br>• `trace-dev` and `trace-staging` in Mumbai (`ap-south-1`)<br>• the **staging session-pooler connection string** (with password), stored as a secret. CI needs no Supabase personal access token (security review #9).<br>• in `trace-staging` API settings, exposed schemas = `public` only; tell me the Postgres major version (for `[db] major_version`, §8.1) | Stored as a `staging` secret | Staging migrations (AT-18) |
 | H6 | Sentry:<br>• projects `trace-recruiter` and `trace-workers`<br>• pick the **data region** (there is no India region; tell me which)<br>• turn on **"Prevent storing of IP addresses"** and **server-side data scrubbing** in both projects | DSNs stored as `staging` variables; region recorded in ADR-027 | Sentry on staging only. The code and AT-9 go ahead without a DSN (§9.2). |
 | H7 | *(optional, recommended)* Approve the `.claude/settings.json` deny rules in build-notes Q56, so staging deploys can't run from a local session | Rules added in S1.0 | Nothing. S1.0 ships without them if you haven't answered. |
 
@@ -115,6 +154,8 @@ Every open H item is a row in `docs/progress/FOUNDER-QUEUE.md`. The "Blocks" col
 │  ├─ migrations/<ts>_m0a_baseline.sql
 │  ├─ seed.sql                  empty; comment: synthetic data only
 │  ├─ catalog-checks/           MT-*.sql — plain "violation" queries (return rows = violation); single source of truth (§8.5)
+│  │  ├─ manifest.json          required check IDs (§8.5)
+│  │  └─ fixtures/MT-*.violation.sql   positive controls: each creates one violating object (§8.5)
 │  └─ tests/
 │     ├─ catalog_meta.test.sql      GENERATED from catalog-checks/ by scripts/gen-catalog-tests.mjs; drift-checked
 │     ├─ catalog_probe.test.sql     hand-written probes (MT-4b)
@@ -123,6 +164,7 @@ Every open H item is a row in `docs/progress/FOUNDER-QUEUE.md`. The "Blocks" col
 ├─ scripts/
 │  ├─ verify-fast.mjs  test-rls.mjs  gen-catalog-tests.mjs  check-migrations.mjs  check-boundaries.mjs
 │  ├─ check-workflows.mjs  check-bundle-size.mjs  check-headers.mjs  check-staging-secrets.mjs
+│  ├─ scan-dist.mjs             gitleaks dir over every dist/ (AT-16 local)
 │  ├─ verify-clean-clone.mjs    clone HEAD into a temp dir, then `pnpm i --frozen-lockfile && pnpm verify` there (AT-1a-local, AT-1b)
 │  ├─ lib/ (git, workspace map, TAP parser)   test/*.test.mjs (Vitest; includes backup.test.mjs for AT-24)
 │  ├─ backup.sh                 existing (autopilot, b4c56a4); gains a test (AT-24), behaviour unchanged
@@ -197,11 +239,11 @@ TypeScript base config:
 | Script | Command |
 | --- | --- |
 | `typecheck` | `pnpm -r --if-present typecheck` (each package: `tsc --noEmit -p .`; Workers also check that `wrangler types` output is current) |
-| `lint` | `pnpm -r --if-present lint && prettier --check . && node scripts/check-boundaries.mjs && node scripts/check-workflows.mjs && node scripts/gen-catalog-tests.mjs --check && node scripts/check-migrations.mjs --base main && gitleaks git --redact --no-banner` (each package: `eslint . --max-warnings=0`; `@trace/ui` also runs `tokens:check`). The last command scans the **full local history** for secrets (the local proxy for AT-5) and fails if gitleaks is missing. |
+| `lint` | `pnpm -r --if-present lint && prettier --check . && node scripts/check-boundaries.mjs && node scripts/check-workflows.mjs && node scripts/gen-catalog-tests.mjs --check && node scripts/check-migrations.mjs && gitleaks git --redact --no-banner` (each package: `eslint . --max-warnings=0`; `@trace/ui` also runs `tokens:check`). `check-migrations` takes its base from `MIGRATIONS_BASE` (default `main`; §8.4). The last command scans the **full local history of every ref** for secrets (the local proxy for AT-5) and fails if gitleaks is missing. Day-one check: confirm that gitleaks 8.30.1 `git` mode scans `--all` by default, and pass `--log-opts="--all"` if it doesn't. |
 | `test` | `pnpm -r --if-present test && vitest run --root scripts` |
 | `test:rls` | `node scripts/test-rls.mjs` (§8.3) |
-| `build` | `pnpm -r --if-present build && node scripts/check-bundle-size.mjs && node scripts/check-headers.mjs` |
-| **`verify`** | `pnpm typecheck && pnpm lint && pnpm test && pnpm test:rls && pnpm build` (exactly the CLAUDE.md list) |
+| `build` | `pnpm -r --if-present build && node scripts/check-bundle-size.mjs && node scripts/check-headers.mjs && node scripts/scan-dist.mjs`. `scan-dist.mjs` runs `gitleaks dir --redact --no-banner` over every app and Worker `dist/`. It fails on a finding, or if it finds no `dist/` at all (AT-16 local). |
+| **`verify`** | `pnpm typecheck && pnpm lint && pnpm test && pnpm test:rls && pnpm build` (exactly the CLAUDE.md list). `test:rls` joins `verify` in S1.7, the step that creates the database. Before S1.7, `verify` is the other four. |
 | **`verify:fast`** | `node scripts/verify-fast.mjs` (Stop hook) |
 
 ### `verify:fast` algorithm
@@ -252,15 +294,15 @@ Fixing a finding locally is safe because nothing was pushed. Rotate the secret a
 - **Triggers:** `pull_request` and `push` to `main`.
 - **Permissions:** workflow-level `permissions: contents: read`.
 - **Pinning:** every `uses:` is pinned to a full commit SHA, `actions/*` included. `check-workflows.mjs` enforces this, and Dependabot keeps the SHAs current.
-- **Checkout:** always `persist-credentials: false`.
+- **Checkout:** always `persist-credentials: false`, with `fetch-depth: 0` in `static` and `security`. `static` sets `MIGRATIONS_BASE=origin/main`, because a PR checkout has no local `main` (§8.4).
 - **Shared setup:** `pnpm/action-setup` (reads `packageManager`), `actions/setup-node` (`.node-version`, pnpm cache), the checksum-verified gitleaks binary, then `pnpm install --frozen-lockfile`. **No secrets in the environment during install.**
 
 | Job | Steps |
 | --- | --- |
 | `static` *(required)* | typecheck → lint → test → build (includes bundle budget and header checks) |
-| `rls` *(required)* | `pnpm test:rls` → `pnpm exec supabase gen types typescript --local` → `git diff --exit-code packages/db-types` |
+| `rls` *(required)* | `pnpm test:rls`, which includes the db-types drift check (§8.3 step 6) |
 | `security` *(required)* | `gitleaks git --redact` over **full history** (`fetch-depth: 0`) · `pnpm audit --prod --audit-level=high` · `osv-scanner scan -r .` |
-| `migrations` *(required)* | `node scripts/check-migrations.mjs --base origin/main` (§8.4) |
+| `migrations` *(required)* | `node scripts/check-migrations.mjs --base origin/main` (§8.4), with `fetch-depth: 0` |
 | `deploy-staging` | Gated and step-scoped; see §7.2. |
 
 ### 7.2 `deploy-staging` job
@@ -274,7 +316,11 @@ Fixing a finding locally is safe because nothing was pushed. Rotate the secret a
 1. **Checkout, setup, install, build.** No secrets.
 2. **Scan the build output:** `gitleaks dir` over `apps/*/dist` and every Worker's `dist`. A finding fails the job.
 3. **Apply migrations:** `pnpm exec supabase db push --db-url "$SUPABASE_STAGING_DB_URL"`. Only this step and step 4 get `SUPABASE_STAGING_DB_URL`.
-4. **Run the catalog checks against staging** (§8.5). Each `supabase/catalog-checks/MT-*.sql` runs through `psql` in a read-only transaction (`set transaction read only`). Any returned row fails the deploy, so drift in staging's default ACLs is caught (database review F9).
+4. **Run the catalog checks against staging** (§8.5).
+   - Each `supabase/catalog-checks/MT-*.sql` runs through `psql -X -v ON_ERROR_STOP=1 -At`, inside `begin; set transaction read only; … rollback;`. The positive-control fixtures do not run here.
+   - Any output line or non-zero exit fails the deploy.
+   - The step also asserts that the number of files run equals `manifest.json`.
+   - MT-12 reads `pg_default_acl` directly, so drift in staging's default ACLs is caught even before the first table exists (database review F9).
 5. **Deploy the Workers:** `wrangler deploy --env staging` for edge, jobs and api, with `VERSION=<sha>`. Only this step and steps 6–7 get `CLOUDFLARE_API_TOKEN`.
 6. **Check Worker secrets:** `node scripts/check-staging-secrets.mjs` reads `wrangler secret list` for each staging Worker and **fails unless the set is a subset of the allow-list**:
    - edge: `[]`
@@ -296,13 +342,15 @@ Fixing a finding locally is safe because nothing was pushed. Rotate the secret a
 
 **No secret ever reaches an app build.** The recruiter build gets only `VITE_SENTRY_DSN`, which is a public value.
 
-### 7.4 Repository settings (you run these after the first push; I give the exact commands after the first CI run, when the check names exist)
+### 7.4 Repository settings and the first push (you run these; I give the exact commands after the first CI run, when the check names exist)
+**First push.** The local `main` holds `--no-ff` merge commits. Push it **before** branch protection is turned on: `git push trace main`, plus the milestone branches if you want them on GitHub. Then apply the protection below. From then on, changes reach `main` by PR.
+
 **Branch protection on `main`:**
-- required checks `static`, `rls`, `security`, `migrations`, **strict** (the branch must be up to date with `main` before merging, so `migrations` re-runs on the latest base)
+- required checks `static`, `rls`, `security` and `migrations`, **strict**: the branch must be up to date with `main` before merging, so `migrations` re-runs on the latest base
 - PR required to merge
 - stale approvals dismissed
 - no force-push or deletion
-- linear history
+- linear history **not** required, because milestone merges are `--no-ff` merge commits
 
 **Repo-level settings:**
 - default workflow token read-only
@@ -313,13 +361,16 @@ The output of every command goes into the M0a summary.
 
 ---
 
-## 8. Supabase skeleton
+## 8. Supabase skeleton (owned by the lead session in S1.7)
 
 ### 8.1 `config.toml`
-`supabase init` defaults, with `project_id = "trace"` and Studio off locally. **`[api] schemas` and `extra_search_path` must not include `private`, `quality` or `integrity`.** `check-boundaries.mjs` asserts this.
+- Start from the `supabase init` defaults, with `project_id = "trace"` and Studio off locally.
+- `[db] major_version` is pinned to staging's Postgres major version, which the founder reports with H5. Until then it keeps the CLI 2.120.0 default, and the first staging run (AT-18) compares the two.
+- **`[api] schemas` and `extra_search_path` must not include `private`, `quality` or `integrity`.** `check-boundaries.mjs` asserts this.
+- On staging, the exposed schemas are set in the dashboard and must be `public` only (H5).
 
 ### 8.2 Baseline migration `<ts>_m0a_baseline.sql`
-Reviewed by `database-reviewer` before merge. It contains no tables.
+Created with `pnpm exec supabase migration new m0a_baseline`, so the timestamp is UTC; never hand-named. It contains no tables, and `database-reviewer` reviews it in S1.7.
 
 ```sql
 -- Reserved schemas, so boundaries and catalog checks exist before any table does (build-notes Q12).
@@ -342,75 +393,145 @@ alter default privileges for role postgres in schema public, private, quality, i
   revoke execute on functions from anon, authenticated, service_role;
 ```
 
-**Rules every later migration follows.** `database-reviewer` enforces them, and MT-4, MT-7, MT-9 and MT-10 check them.
-- Every function is followed by `revoke execute on function … from public, anon, authenticated, service_role;` and then explicit grants.
-- Extensions are always created `with schema extensions`.
-- Views are always created `with (security_invoker = true)`.
-- No materialized views in `public`.
-- Every grant to a worker role is explicit.
+`create schema if not exists` would quietly accept a schema that already exists with another owner. MT-8 checks schema ownership, so that case fails.
 
-**Day-one checks on the local stack:**
-- that `postgres` owns objects created by migrations on CLI 2.120.0;
-- which schema `supabase test db` installs pgTAP into;
-- that revoking `service_role` defaults doesn't break any Supabase service M0b needs.
+**Rules every later migration follows.** `database-reviewer` enforces them, and the catalog checks cover them where a query can.
+- **Creating migrations:**
+  - Every migration is created with `pnpm exec supabase migration new`.
+  - A migration that isn't yet on `main` may be amended in place. Once it is on `main`, it is frozen (§8.4).
+  - After the first `db push` to staging, never roll back past an applied migration; fix forward.
+  - Whoever changes a migration regenerates `packages/db-types` in the same commit (`pnpm db:types`; drift is checked in §8.3 step 6).
+- **Functions:**
+  - Every function is followed by `revoke execute on function … from public, anon, authenticated, service_role;` and then explicit grants.
+  - SECURITY DEFINER functions live only in `private` (MT-7).
+- **Extensions:**
+  - Extensions are always created `with schema extensions`.
+  - An extension created by a migration gets explicit EXECUTE grants on the functions that roles need, because the global revoke above removes PUBLIC EXECUTE from them.
+- **Views:**
+  - Views are always created exactly `with (security_invoker = true)` (MT-10).
+  - No materialized views in `public` (MT-10).
+- **Grants:** every grant to a worker role is explicit.
 
-MT-4b proves the default ACLs **non-vacuously**, even in M0a (§8.5).
+**Day-one checks on the local stack.** S1.7 runs these before its checkpoint:
+- `postgres` owns the objects that migrations create on CLI 2.120.0.
+- pgTAP still works for the test roles. Find which schema `supabase test db` installs pgTAP into. Then, after `db reset` and `test db`, check that `has_function_privilege('authenticated', '<that schema>.is(anyelement,anyelement,text)', 'EXECUTE')` is true.
+  - If pgTAP lands in `public`, or the test roles lose EXECUTE, the harness creates pgTAP `with schema extensions` before the run.
+  - In that case, each test file grants EXECUTE on the pgTAP functions to the test roles inside its own rolled-back transaction.
+  - The result goes into §8.3 and the M0a summary.
+- Revoking the `service_role` defaults doesn't break any Supabase service that M0b needs.
+- The list of system schemas in §8.5 matches `select nspname from pg_namespace` on the local stack. Any extra Supabase schema is added to the list with a note.
+
+MT-4b proves the default ACLs **non-vacuously**, even in M0a, and every other catalog check has a positive control (§8.5).
 
 ### 8.3 Harness (`scripts/test-rls.mjs`)
-1. `docker info` must succeed. Otherwise exit 1 with: "Docker is not running — RLS tests cannot run. Start Docker Desktop. This check never skips."
-2. `pnpm exec supabase start`, excluding services M0a doesn't need. Auth stays on.
-3. `pnpm exec supabase db reset`: rebuilds from zero.
-4. `pnpm exec supabase test db`, then parse the TAP output.
+1. **Docker.** `docker info` must succeed. If it fails, exit 1 with: "Docker is not running — RLS tests cannot run. Start Docker Desktop. This check never skips."
+2. **Lock.** Every worktree shares one local stack (project `trace`). The harness therefore takes an exclusive lock file at `$(git rev-parse --git-common-dir)/trace-test-rls.lock`, which records its PID and worktree.
+   - It waits up to 15 minutes. Then it fails, naming the holder. It never skips.
+   - A lock whose PID is dead is taken over, with a warning.
+   - The lock is released on exit, on failure and on a signal.
+3. **Start.** `pnpm exec supabase start`, excluding services M0a doesn't need. Auth stays on.
+4. **Reset.** `pnpm exec supabase db reset` rebuilds from zero.
+5. **Test.** `pnpm exec supabase test db`, then parse the TAP output.
    - It fails on any `not ok`, a plan mismatch, or a file with zero tests.
    - It counts assertions **by file prefix**:
      - `catalog_*` against `catalog-min-count`
      - `rls_*` against `rls-min-count`
    - Catalog checks therefore **cannot** count toward the ≥ 50 RLS tests M0b needs.
-5. In CI it runs with `--stop`.
+6. **db-types drift.** `pnpm exec supabase gen types typescript --local --schema public` writes to a temp file. The run fails if that file differs from `packages/db-types/src/database.ts`. It never overwrites the tracked file; `pnpm db:types` regenerates it on purpose.
+7. **Release** the lock.
+
+In CI, the harness runs with `--stop`.
 
 ### 8.4 `check-migrations.mjs`
+**Base.** The base is `--base <ref>`, otherwise the env var `MIGRATIONS_BASE`, otherwise `main`.
+- If the base ref doesn't resolve, or `git merge-base` fails, the script **exits 1** and names the ref. It never passes vacuously.
+- `verify-clean-clone.mjs` creates `main` from `origin/main` after cloning.
+- CI uses `origin/main` with `fetch-depth: 0` (§7.1).
+
+**Checks:**
 1. Every entry in `supabase/migrations/` is a file named `^\d{14}_m\d{1,2}[ab]?_[a-z0-9_]+\.sql$`. No sub-directories or other files are allowed.
 2. The 14 digits parse as a real UTC `YYYYMMDDHHMMSS`, no later than **now + 1 day**. That stops a far-future timestamp from blocking all later migrations.
 3. Version numbers are unique.
-4. It compares against `git merge-base <base> HEAD` using `git diff --no-renames --name-status`:
-   - no existing migration may be modified or deleted (a rename shows up as a deletion plus an addition);
-   - every new version must be newer than the newest version on the base.
-5. Strict status checks (§7.4) make sure this runs against the latest `main`.
-6. The script has unit tests that use fixture git repositories.
+4. **Changes.** Compare `git merge-base <base> HEAD` with the **working tree** (`git diff --no-renames --name-status <merge-base>`), plus untracked files (`git ls-files -o --exclude-standard supabase/migrations`).
+   - No existing migration may be modified or deleted. A rename shows up as a deletion plus an addition.
+   - Every new version must be newer than the newest version at the **base tip** (`git ls-tree <base> supabase/migrations`), not just at the merge-base.
+5. **Frozen set.** Every migration that exists at the latest `m*-reviewed` tag (if there is one) or at the base tip must be byte-identical in the working tree. This still holds when running on `main` itself, where the merge-base is `HEAD`.
+6. CLOSE re-runs `pnpm verify` on the merge result before tagging. Once the repo is pushed, strict status checks (§7.4) add the CI re-run.
+7. The script has unit tests that use fixture git repositories. They cover:
+   - a missing base ref;
+   - running on `main`;
+   - an untracked new migration;
+   - an edit to a frozen migration;
+   - a new migration older than the base tip;
+   - the cases in checks 1–3.
 
 ### 8.5 Catalog checks
-**Single source of truth.** Each check is a plain SQL file in `supabase/catalog-checks/MT-<n>.sql`. A file returns one row per violation and no rows when clean. Where the checks run:
-- **Locally and in CI:** `gen-catalog-tests.mjs` wraps each file as `select is_empty($q$…$q$, 'MT-n: …')` in the generated `tests/catalog_meta.test.sql`. That file is committed, and `--check` fails if it is stale.
-- **Against staging:** step 4 of §7.2 runs the same files.
+**Single source of truth.**
+- Each check is a plain SQL file, `supabase/catalog-checks/MT-<id>.sql`. It returns one row per violation, and no rows when clean.
+- `manifest.json` lists the required IDs: MT-1, 2, 3, 4, 5a, 5b, 5c, 5d, 6, 7, 8, 8b, 9, 10, 11 and 12.
+- Every listed check also has a **positive control**, `fixtures/MT-<id>.violation.sql`, which creates a minimal object that violates it.
 
-**What they inspect.** Unless a check says otherwise, the scope is every relation and function in the schemas `public`, `private`, `quality` and `integrity`, plus every member of `pg_partition_tree()` of any partitioned table in those schemas, whatever schema the partition lives in.
+**Where the checks run:**
+- **Locally and in CI:** `gen-catalog-tests.mjs` writes the committed file `tests/catalog_meta.test.sql`. For each check it emits two assertions:
+  - `select is_empty($q$<check>$q$, 'MT-<id>: clean');`
+  - `savepoint mt; <fixture SQL inlined>; select isnt_empty($q$<check>$q$, 'MT-<id>: fires'); rollback to savepoint mt;`
+- **`gen-catalog-tests.mjs --check` fails if:**
+  - the generated file is stale;
+  - a manifest ID has no check or no fixture;
+  - a check file isn't in the manifest;
+  - either floor file is lower than its value at the base (`git show <base>:supabase/tests/<floor>`). This is how "floors only go up" is enforced.
+- **Against staging:** step 4 of §7.2 runs the check files only, without the fixtures.
+
+**What they inspect.** The scope is every relation, function, policy, trigger, constraint and type in the schemas `public`, `private`, `quality` and `integrity`. It also covers every member of `pg_partition_tree()` of a partitioned table in those schemas, whatever schema the partition lives in. MT-8b makes sure no other non-system schema exists.
 
 **What they skip:**
-- **extension members**: objects with `pg_depend.deptype = 'e'`;
-- **system objects**: `pg_catalog`, `information_schema`, and Supabase's own schemas (`auth`, `storage`, `extensions`, `realtime`, `graphql*`, `supabase_*`, `vault`, `pgsodium*`, `net`, `cron`).
+- **System schemas.** This is the complete list, for both the local stack and hosted Supabase, and it is checked on day one (§8.2):
+  - `pg_catalog`, `information_schema`, `pg_toast*`, `pg_temp*`
+  - `auth`, `storage`, `extensions`, `realtime`, `_realtime`
+  - `graphql`, `graphql_public`, `supabase_functions`, `supabase_migrations`
+  - `vault`, `pgsodium`, `pgsodium_masks`, `net`, `cron`, `pgbouncer`, `_analytics`
+- **Extension members.** An object is skipped only if both of these hold:
+  - it has a `pg_depend` row with `deptype = 'e'`, matched on both `classid` and `objid`;
+  - it lives in its extension's own namespace (`pg_extension.extnamespace`).
+
+  An object added to an extension from another schema (`ALTER EXTENSION … ADD`) is still checked.
 
 | ID | Violation query finds… | Guards |
 | --- | --- | --- |
 | MT-1 | a table (`relkind in ('r','p')`, partitions included) with `relrowsecurity = false` | Tenancy |
-| MT-2 | a table without a column `org_id` with `atttypid = 'uuid'::regtype and attnotnull and not attisdropped` | Tenancy |
+| MT-2 | a table without a column `org_id` with `atttypid = 'uuid'::regtype and attnotnull and not attisdropped`. Exemptions are a literal list inside `MT-2.sql`, each entry citing an ADR. The list is empty in M0a, and the check also fails if a listed table doesn't exist. | Tenancy |
 | MT-3 | a column (`attnum > 0 and not attisdropped`) of any table, view or materialized view whose `lower(attname)` is LIKE `%dob%`, `%birth%`, `%honesty%`, `%trust\_score%`, `%cheat%`, `%emotion%`, `%voiceprint%`, `%face\_template%` or `%gaze\_flag%` (underscores escaped). **`%reject%` applies only to schema `integrity`**, because quality-cutoff rejection and item review are legitimate elsewhere. | Rules 2, 7, 9 |
-| MT-4 | for `anon`, any table privilege (`has_table_privilege(…, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')`) or column privilege (`has_any_column_privilege(…, 'SELECT,INSERT,UPDATE,REFERENCES')`); `has_sequence_privilege(…, 'USAGE,SELECT,UPDATE')`; or `has_function_privilege(…, 'EXECUTE')` for `prokind in ('f','p')` | Tenancy |
-| MT-4b *(pgTAP only, `catalog_probe.test.sql`)* | Inside the rolled-back transaction, a throwaway table, sequence and function is created in each of the four schemas. The test asserts that `anon`, `authenticated` and `service_role` have no privilege on any of them, and that `PUBLIC` has no `EXECUTE`. | **Proves the default ACLs now, not only when the first table appears** |
-| MT-5a | a view or materialized view, in **any** non-system schema, whose recursive dependency closure reaches objects in both `quality` and `integrity`. The closure follows `pg_rewrite.ev_class → pg_depend(classid = 'pg_rewrite')`, excluding the rule's self-reference, through `pg_class` and `pg_proc` refs. | Rule 1 |
-| MT-5b | a non-extension function whose `prosrc` matches both `quality\.` and `integrity\.` (plpgsql bodies are not in `pg_depend`) | Rule 1 |
-| MT-5c | any role other than the owner holding privileges on objects in both `quality` and `integrity` | Rule 1 (separate worker roles, Q12) |
-| MT-6 | an enum label starting with `reject` on an enum in schema `integrity`, or used by a column of a table in `integrity` | Rule 2 |
-| MT-7 | a `SECURITY DEFINER` function whose `proconfig` does not contain exactly `search_path=""` | database-reviewer standard |
-| MT-8 | a missing `private`, `quality` or `integrity` schema; `USAGE` on them for `anon` or `authenticated`; or `CREATE` on `public` for `public`, `anon`, `authenticated` or `service_role` | Rule 1, tenancy |
-| MT-9 | a relation or function not owned by `postgres`, or a `pg_extension` whose `extnamespace` is in scope | Default-ACL integrity (database review F2) |
-| MT-10 | a view (`relkind = 'v'`) whose `reloptions` lacks `security_invoker=true`; or a materialized view with any privilege for `anon` or `authenticated` | Views can't bypass RLS (rule 5) |
-| MT-11 | a policy with `polcmd = '*'` (FOR ALL); an INSERT policy without `polwithcheck`; or an UPDATE policy without both `polqual` and `polwithcheck` | Separate per-operation policies (CLAUDE.md) |
+| MT-4 | (a) for `anon`, any table privilege (`has_table_privilege(…, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')`), column privilege (`has_any_column_privilege(…, 'SELECT,INSERT,UPDATE,REFERENCES')`), `has_sequence_privilege(…, 'USAGE,SELECT,UPDATE')`, or `has_function_privilege(…, 'EXECUTE')` for `prokind in ('f','p','a','w')`; (b) any non-owner role holding TRUNCATE, TRIGGER or REFERENCES on an in-scope table (TRUNCATE ignores RLS) | Tenancy |
+| MT-4b *(pgTAP only, `catalog_probe.test.sql`)* | Inside the rolled-back transaction, a throwaway table, sequence and function is created as `postgres` in each of the four schemas. The test asserts that `anon`, `authenticated` and `service_role` have no privilege on any of them, and that `PUBLIC` has no `EXECUTE`. | **Proves the default ACLs now, not only when the first table appears** |
+| MT-5a | a view or materialized view, in **any** non-system schema, whose recursive dependency closure reaches both `quality` and `integrity`. The closure follows `pg_rewrite.ev_class → pg_depend(classid = 'pg_rewrite')`, excluding the rule's self-reference, through `pg_class` and `pg_proc` refs. A function counts as reaching a schema if `pg_depend` says so, **or** its `prosrc` names it (case-insensitive: `quality.`, `"quality".`, or `'quality'` as a `format()` argument), **or** its `proconfig` `search_path` includes it. | Rule 1 |
+| MT-5b | a non-extension function that reaches both schemas, using the same rule as MT-5a (plpgsql bodies are not in `pg_depend`) | Rule 1 |
+| MT-5c | any role other than the owner and superusers that holds privileges on objects in both `quality` and `integrity`. Grantees are expanded recursively through `pg_auth_members`, for any membership with inherit or set. | Rule 1 (separate worker roles, Q12) |
+| MT-5d | a foreign key between a `quality` relation and an `integrity` relation; a trigger on a table in one schema whose function reaches the other (MT-5a rule); or a policy whose expression depends on the other schema (`pg_depend` with `classid = 'pg_policy'`, plus the MT-5a function rule) | Rule 1 |
+| MT-6 | an enum with a label where `lower(enumlabel) like '%reject%'`, if the enum type is in `integrity` or is used by a column of a table in `integrity`. The column can use it directly, through an array type (`typelem`) or through a domain (`typbasetype`). | Rule 2 |
+| MT-7 | a `SECURITY DEFINER` function whose `proconfig` does not contain exactly `search_path=""`; or **any** `SECURITY DEFINER` function outside `private` (functions in `public` are callable as PostgREST RPCs) | database-reviewer standard |
+| MT-8 | one of `private`, `quality`, `integrity` is missing or isn't owned by `postgres`; `USAGE` on them for `anon` or `authenticated`; or `CREATE` on `public` for `public`, `anon`, `authenticated` or `service_role` | Rule 1, tenancy |
+| MT-8b | a schema that is neither one of the four in-scope schemas nor on the system list | Scope can't be escaped |
+| MT-9 | an in-scope relation or function not owned by `postgres`; a `pg_extension` whose `extnamespace` is in scope; or a relation or function in `extensions` that is not an extension member (that is, made by hand) | Default-ACL integrity (database review F2) |
+| MT-10 | a view (`relkind = 'v'`) whose `reloptions` lacks the literal `security_invoker=true` (migrations must write exactly that; `on`, `1` and `yes` count as violations); a materialized view in `public`; or a materialized view with any privilege for `anon` or `authenticated` (M0b adds the candidate roles) | Views can't bypass RLS (rule 5) |
+| MT-11 | a policy with `polcmd = '*'` (FOR ALL); an INSERT policy without `polwithcheck`; an UPDATE policy without both `polqual` and `polwithcheck`; a SELECT or DELETE policy without `polqual`; a policy whose `polroles` contains `0` (PUBLIC); a policy whose qual or with-check is literally `true` on a table that isn't on the reference-table list inside `MT-11.sql` (empty in M0a); or a policy calling `auth.uid()` or `auth.jwt()` outside a scalar sub-select (`(select auth.uid())`) | Separate per-operation policies (CLAUDE.md) |
+| MT-12 | in `pg_default_acl` for `defaclrole = 'postgres'::regrole`: (a) the global (`defaclnamespace = 0`) function entry is missing, or `aclexplode` shows EXECUTE for PUBLIC (grantee 0); (b) any global entry, or any per-schema entry for an in-scope schema, grants anything to `anon`, `authenticated` or `service_role` | Default ACLs stay locked, on staging too |
+
+**Positive controls** (one fixture per row except MT-4b, which is its own probe). Examples:
+- MT-1 and MT-2: a partitioned table with a partition in a non-scope schema.
+- MT-5a: a view joining `quality` and `integrity`. MT-5b: a plpgsql function that reads both.
+- MT-7: a SECURITY DEFINER function without `search_path`.
+- MT-11: a FOR ALL policy. MT-6: an `integrity` enum with `auto_reject`.
+- MT-10: a view without `security_invoker`. MT-8b: `create schema reports`.
+- MT-12: `alter default privileges … grant select on tables to anon`, inside the savepoint.
 
 **Thresholds:**
-- `catalog-min-count` is set to the number of assertions written in M0a. That is 15: MT-1…MT-11 with MT-5 split into three, plus four MT-4b probes. It may only go up.
+- `catalog-min-count` is set to the number of assertions written in S1.7. The expected number is **36**: 16 clean checks, 16 positive controls, and 4 MT-4b probes.
 - `rls-min-count` is **0** in M0a and **50** from M0b.
+- Both floors only go up, which `gen-catalog-tests.mjs --check` enforces.
 
-**M0b adds:** per-partition append-only checks for `audit_log`. No role other than the owner may have UPDATE, DELETE or TRUNCATE on any member of `pg_partition_tree('public.audit_log')`, and every partition gets a BEFORE TRUNCATE trigger (database review F4).
+**M0b adds:**
+- Per-partition append-only checks for `audit_log`. No role other than the owner may have UPDATE, DELETE or TRUNCATE on any member of `pg_partition_tree('public.audit_log')`, and every partition gets a BEFORE TRUNCATE trigger (database review F4).
+- The candidate roles in MT-10.
 
 ---
 
@@ -451,6 +572,8 @@ There is an allow-list of safe exact keys that contain a stem, such as `orgId`, 
 - property tests that redaction never throws, is idempotent, and never outputs input beyond the caps.
 
 ### 9.2 Sentry (recruiter app, `workers/jobs`, `services/api` only)
+The scrubber is `scrubSentryEvent()` in `packages/shared/src/log/sentry-scrub.ts`. It is written in S1.7, together with the logger, the redactor and `serializeError`, and the three consumers share it.
+
 - `sendDefaultPii: false`; no Session Replay; `tracesSampleRate: 0`; `release` = the commit SHA.
 - **`beforeSend` and `beforeBreadcrumb`:**
   - delete `event.request.headers`, `cookies`, `query_string`, `data` and `event.user`;
@@ -572,57 +695,58 @@ It fails if any of the following holds:
 
 ## 13. Acceptance tests
 
+"Local" means the test runs inside `pnpm verify` or `verify-clean-clone.mjs` on this machine. "Deferred" means it needs a real push, CI run or staging. All deferred items are listed in §13.1.
+
 | AT | Exit-gate item / behaviour | How |
 | --- | --- | --- |
-| AT-1a-CI | Clean clone → `pnpm i && pnpm verify` green on Linux | CI `static` + `rls` on a fresh checkout with `--frozen-lockfile`. **Deferred gate** until the first push (§7). |
-| AT-1a-local | Clean clone → `pnpm i --frozen-lockfile && pnpm verify` green on Linux | `verify-clean-clone.mjs --linux` runs `typecheck`, `lint`, `test` and `build` over a fresh clone in a `node:22.23.3` container. `test:rls` runs on the host, because it needs the host's Docker engine. The output is recorded in the summary. |
-| AT-1b | The same on the founder's Windows machine | `verify-clean-clone.mjs` on the host; the output is recorded in the summary |
-| AT-2 | `supabase db reset` from zero; the catalog checks pass, including the MT-4b probes | `pnpm test:rls` in CI |
-| AT-3 | `test:rls` fails, and never skips, when Docker is down, a floor is missed, or a file has 0 tests; catalog assertions never count toward `rls-min-count` | Unit tests with a stubbed `docker info` and TAP fixtures |
+| AT-1a-CI | Clean clone → `pnpm i && pnpm verify` green on Linux | CI `static` + `rls` on a fresh checkout with `--frozen-lockfile`. **Deferred.** |
+| AT-1a-local | Clean clone → `pnpm i --frozen-lockfile && pnpm verify` green on Linux | `verify-clean-clone.mjs --linux`:<br>• clones HEAD into a temp dir;<br>• runs `git branch main origin/main` if the source has `main`;<br>• in a `node:22.23.3@sha256:<digest>` container, downloads gitleaks 8.30.1 with checksum verification (same as CI's shared setup), then runs `pnpm i --frozen-lockfile`, `typecheck`, `lint`, `test` and `build`.<br>`test:rls` runs on the host, because it needs the host Docker engine. The digest is pinned at implementation time and recorded in §4. The output is recorded in the summary. |
+| AT-1b | The same on the founder's Windows machine | `verify-clean-clone.mjs` runs the full `pnpm verify` in a host clone; the output is recorded in the summary |
+| AT-2 | `supabase db reset` from zero: every catalog check is clean, every positive control fires, and the MT-4b probes pass | `pnpm test:rls` (local, inside `pnpm verify`; CI repeats it) |
+| AT-3 | `test:rls` fails, and never skips, when Docker is down, a floor is missed, or a file has 0 tests. Catalog assertions never count toward `rls-min-count`. A second concurrent run waits for the lock. | Unit tests with a stubbed `docker info`, TAP fixtures and a held lock file |
 | AT-4 | `verify:fast` selects the changed packages and their dependents; global files → full run; docs-only → Prettier only | Unit tests over fixture git repos |
-| AT-5 | No secret in repo history | `pnpm lint` runs gitleaks over the full local history (§5). CI `security` repeats it after the first push. |
-| AT-6 | The pre-commit hook blocks a staged secret | Temp repo + a runtime-generated fake key shape → non-zero exit (gitleaks is in the shared CI setup) |
-| AT-6c | A commit made with `--no-verify` that holds a secret makes `pnpm lint` fail | Temp repo with a fake key shape generated at runtime. Run the lint's gitleaks command and assert a non-zero exit. |
-| AT-7 | commitlint rejects `update stuff`; accepts `feat(api): x` and `wip(api): x` | Unit test |
+| AT-5 | No secret in repo history | `pnpm lint` runs gitleaks over the full history of every ref (§5). CI `security` repeats it after the first push. |
+| AT-6 | The pre-commit hook blocks a staged secret | Temp repo with a fake key shape generated at runtime. The test reads the command from `lefthook.yml` (or calls `lefthook run pre-commit`), so it checks the real configuration. Expects a non-zero exit. |
+| AT-6c | A commit made with `--no-verify` that holds a secret makes `pnpm lint` fail | Temp repo with a fake key shape generated at runtime. The test runs the gitleaks command read from `scripts.lint` in the root `package.json`. Expects a non-zero exit. |
+| AT-7 | commitlint rejects `update stuff` and accepts `feat(api): x` and `wip(api): x` | Unit test |
 | AT-8 | Redactor: key stems, Indian ID and value patterns, caps → `[TRUNCATED]`, idempotence, error messages dropped | Vitest + property tests in `@trace/shared` |
-| AT-9 | Sentry `beforeSend` strips request, user and query data and exception values | Vitest with synthetic events (recruiter, jobs, api) |
-| AT-10 | Every Worker's `/health` returns a schema-valid body | Vitest (pool-workers) |
-| AT-11 | Staging deploys from CI and every endpoint reports the deployed SHA | `deploy-staging` smoke step; run URL recorded |
-| AT-12 | **Deploys run from CI only**: the deploy job runs only on push to `main` in this repo; secrets are step-scoped; every action is SHA-pinned; workflow permissions are read-only | `check-workflows.mjs` unit tests + lint; environment branch policy recorded (H3); Q56 deny rules recorded if approved |
-| AT-13 | CI blocks merge on red | Branch-protection output (§7.4) + one deliberately red PR shown blocked, then closed |
+| AT-9 | Sentry `beforeSend` strips request, user and query data and exception values | Vitest of `scrubSentryEvent` with synthetic events, plus one wiring test each in the recruiter app, jobs and api |
+| AT-10 | Every Worker's `/health` returns a schema-valid body that carries the injected `VERSION` | Vitest (pool-workers) |
+| AT-11 | Staging deploys from CI, and every endpoint reports the deployed SHA | `deploy-staging` smoke step; run URL recorded. **Deferred.** |
+| AT-12 | **Deploys run from CI only**: the deploy job runs only on push to `main` in this repo; secrets are step-scoped; every action is SHA-pinned; workflow permissions are read-only; required jobs have no `continue-on-error` | Local: `check-workflows.mjs` unit tests + lint. **Deferred part:** the H3 environment branch policy is recorded. Q56 deny rules are recorded if approved. |
+| AT-13 | CI blocks merge on red | Branch-protection output (§7.4), plus one deliberately red PR shown blocked, then closed. **Deferred.** |
 | AT-14 | The boundary rules fire (imports, secret names, `.dev.vars*`, `VITE_` names, exposed schemas, CRLF) | ESLint fixture tests + `check-boundaries.mjs` unit tests |
-| AT-15 | Edge has no Worker secrets; jobs and api match the allow-list | `check-staging-secrets.mjs` unit tests + deploy step 6 |
-| AT-16 | No secret in any build output | Deploy step 2 (`gitleaks dir` over `dist/`) |
-| AT-17 | Migration rules: name, real timestamp ≤ now + 1 day, unique versions, immutability, ordering | `check-migrations.mjs` unit tests + CI |
-| AT-18 | Catalog checks hold on **staging** after `db push` | Deploy step 4 |
-| AT-19 | The generated catalog test file is current | `gen-catalog-tests.mjs --check` in lint |
+| AT-15 | Edge has no Worker secrets; jobs and api match the allow-list | Local: `check-staging-secrets.mjs` unit tests over recorded `wrangler secret list` outputs. **Deferred part:** deploy step 6. |
+| AT-16 | No secret in any build output | Local: `scan-dist.mjs` in `build`, unit-tested with a fixture `dist/` holding a fake key generated at runtime. **Deferred part:** deploy step 2. |
+| AT-17 | Migration rules: name, real timestamp ≤ now + 1 day, unique versions, changes against the working tree, base-tip ordering, frozen set, a missing base fails | `check-migrations.mjs` unit tests, plus the run in `lint`; CI repeats it |
+| AT-18 | The catalog checks hold on **staging** after `db push` | Deploy step 4. **Deferred.** |
+| AT-19 | The generated catalog test file is current; every manifest ID has a check and a fixture; no floor went down | `gen-catalog-tests.mjs --check` in `lint`, + unit tests |
 | AT-20 | Token files are current; contrast pairs pass | `@trace/ui` tests |
 | AT-21 | Candidate app initial JS ≤ 150 KB gzip | `check-bundle-size.mjs` |
-| AT-22 | Security headers are present in both `dist/` outputs and on staging | `check-headers.mjs` + smoke step |
-| AT-23 | db-types are current | Locally, `test:rls` runs `supabase gen types` and then `git diff --exit-code packages/db-types`. CI repeats this. |
-| AT-24 | `scripts/backup.sh` writes a bundle that `git bundle verify` accepts, includes every branch and tag, and keeps only the newest 10 | Vitest over a temp repo that already holds 12 dummy bundles |
+| AT-22-local | Security headers are present in both `dist/` outputs | `check-headers.mjs` in `build` |
+| AT-22-staging | Security headers are present on both staging apps | Smoke step. **Deferred.** |
+| AT-23 | db-types are current | `test:rls` step 6 compares against a temp file (local); CI repeats it |
+| AT-24 | `scripts/backup.sh` writes a bundle that `git bundle verify` accepts, holds every branch and tag, and keeps only the newest 10 | Vitest over a temp repo with 12 dummy bundles whose mtimes are set in the past. The test finds `sh` on `PATH`, falling back to Git for Windows' `usr/bin`. It fails, never skips, if `sh` is missing. |
 
 ### 13.1 Exit gate → acceptance tests (build-order M0a, as merged in `b7af663`)
-The third column lists the checks that need a real push. Their owner is M0a CLOSE if the founder pushes before then, and otherwise the M8 gate.
+The third column is the **single list of deferred items**. The owner of every deferred item waits on the founder's answer to the founder-queue item "Local-only mode vs CI exit gates". Proposed owner: M0a CLOSE if the founder pushes first, otherwise the M8 gate.
 
-| Exit-gate item | Covered by (local) | Deferred until the first push |
+| Exit-gate item | Covered locally by | Deferred (needs a push, CI or staging) |
 | --- | --- | --- |
 | Clean clone → `pnpm i && pnpm verify` green on Linux CI | AT-1a-local | AT-1a-CI |
 | …and once on the founder's Windows machine | AT-1b | — |
 | `supabase db reset` rebuilds from zero and the pgTAP harness runs; catalog meta-tests pass | AT-2, AT-19, AT-23 | — |
 | `test:rls` fails if Docker is down | AT-3 | — |
-| Staging deploys from CI only | AT-12, AT-15, AT-16 (workflow and script unit tests) | AT-11, AT-18 |
-| Every health endpoint responds with the deployed commit | AT-10 (`VERSION` injected in the test) | AT-11 |
-| No secret in repo history (gitleaks clean) | AT-5 | CI `security` |
+| Staging deploys from CI only | AT-12, AT-15, AT-16 (local parts) | AT-11, AT-18, AT-22-staging, the deferred parts of AT-12, AT-15 and AT-16 |
+| Every health endpoint responds with the deployed commit | AT-10 | AT-11 |
+| No secret in repo history (gitleaks clean) | AT-5 | the CI `security` re-run |
 | The pre-commit scan blocks a staged secret | AT-6, AT-6c | — |
 | PII-redaction tests pass | AT-8, AT-9 | — |
-| CI blocks merge on red | AT-12 (`check-workflows.mjs` checks the required jobs and that none uses `continue-on-error`), plus the local rule that nothing merges into `milestone/m0a` or `main` without a green `pnpm verify` (AUTOPILOT §2) | AT-13 |
+| CI blocks merge on red | AT-12 local part. The local rule that nothing merges into `milestone/m0a` or `main` without a green `pnpm verify` (AUTOPILOT §2) also covers it. | AT-13 |
 
-Every item in the third column goes in the **Deferred gates** table of `docs/milestones/M0a-summary.md` (build-order rule 6). Whether M0a may close with them deferred is the founder-queue item "Local-only mode vs CI exit gates".
+Every deferred item goes in the **Deferred gates** table of `docs/milestones/M0a-summary.md` (build-order rule 6), with its proxy test and owner.
 
-**"Done when" lines.** M0a carries part of ABH-80 (observability). The build-order gives no other issue for M0a. ABH-80's "Done when" text is not in the repo (build-notes line 167), and Linear isn't connected in this session. Until you paste that line, AT-8, AT-9, AT-10 and AT-22 stand in for it, and §17 item 6 tracks the gap.
-
-**Deferred gates from M0a:** the third column of the table above, plus any that appear during BUILD.
+**"Done when" lines.** M0a carries part of ABH-80 (observability), and build-order names no other issue for M0a. ABH-80's "Done when" text is not in the repo (see the build-notes paragraph that starts "Build-order makes each ABH issue's 'Done when'"), and Linear isn't connected. Until the founder pastes that line, AT-8, AT-9, AT-10 and AT-22-local stand in for it. §17 item 7 tracks the gap.
 
 ---
 
@@ -630,37 +754,38 @@ Every item in the third column goes in the **Deferred gates** table of `docs/mil
 
 | Step | Who | Owns | Depends on |
 | --- | --- | --- | --- |
-| **S1.0** | Lead | **Commit-path safety** (first commit of M0a): root `package.json` (minimal), `lefthook.yml`, `.gitleaks.toml`, `.claude/settings.json` deny rules (if Q56 is approved) | H1, (H7) |
-| S1 | Lead | **Foundation:**<br>S1.1 ADR-028<br>S1.2 workspace, catalog, `.npmrc`, `.node-version`, `.gitattributes` + renormalise; **every workspace's `package.json` with its final M0a dependencies**, then `pnpm i`, so the lockfile is complete<br>S1.3 `@trace/config` + rule fixture tests<br>S1.4 the `verify-fast`, `check-*`, `gen-catalog-tests` and `verify-clean-clone` scripts + tests; the `backup.sh` test (AT-24)<br>S1.5 `ci.yml` (no deploy job yet), `dependabot.yml`<br>S1.6 commitlint | root files, every `*/package.json`, `pnpm-lock.yaml`, `packages/config/`, `scripts/`, `.github/`, `docs/adr/ADR-028*` | S1.0 |
-| **S1.7** | Lead | **Shared contracts and schema** (before any stream): `packages/shared/src/{contracts.ts,health.ts,version.ts,index.ts}` with the §9.4 zod contracts and their tests; `supabase/migrations/<ts>_m0a_baseline.sql` (§8.2), reviewed by `database-reviewer` | S1 |
-| S2 | Stream | **Libraries + apps** (parallel with S3): `packages/shared/src/log/`, `packages/ui/`, `packages/vendors/`, `apps/` (except their `package.json`) | S1.7 merged |
-| S3 | Stream | **Workers + database + deploy** (parallel with S2): `workers/`, `services/`, `supabase/` except `migrations/`, `packages/db-types/src/`, `scripts/test-rls.mjs`, and the `deploy-staging` job in `ci.yml` (all except `package.json` files) | S1.7 merged. H3–H6 are needed only to *run* the deploy (Deferred gates, §13.1), not to write and unit-test it. |
-| S4 | Lead | **Close-out** (AUTOPILOT CLOSE phase, after REVIEW passes): `docs/milestones/M0a-summary.md` | S2 + S3 merged; `pnpm verify` green; AT-1a-local and AT-1b recorded |
+| **S1.0** | Lead | **Commit-path safety**, the first commit of M0a: root `package.json` (minimal), `lefthook.yml`, `.gitleaks.toml`, and the `.claude/settings.json` deny rules if Q56 is approved | H1, (H7) |
+| S1 | Lead | **Foundation:**<br>• S1.1 ADR-028<br>• S1.2 the workspace, catalog, `.npmrc`, `.node-version`, and `.gitattributes` + renormalise. Also, for **every workspace**: its `package.json` with its final M0a dependencies, `tsconfig.json` and Vitest config. Then `pnpm i`, so the lockfile is complete.<br>• S1.3 `@trace/config` + rule fixture tests<br>• S1.4 the `verify-fast`, `check-*` (including `check-migrations`), `scan-dist` and `verify-clean-clone` scripts + tests; `scripts/lib/` (git, workspace map, TAP parser) + tests; the `backup.sh` test (AT-24)<br>• S1.5 `ci.yml` (no deploy job yet), `dependabot.yml`<br>• S1.6 commitlint | root files; every workspace's `package.json`, `tsconfig.json` and Vitest config; `pnpm-lock.yaml`; `packages/config/`; `scripts/` except `test-rls.mjs` and `gen-catalog-tests.mjs`; `.github/`; `docs/adr/ADR-028*` | S1.0 |
+| **S1.7** | Lead | **Shared code and the database**, before any stream starts:<br>• `packages/shared/src/`: the §9.4 zod contracts, `health.ts`, `version.ts`, the `log/` module (logger, redactor, `serializeError`, `sentry-scrub.ts`) and the package's `index.ts` and exports, with all their tests (AT-8, AT-9 unit part)<br>• all of `supabase/`: `config.toml`, the baseline migration, catalog checks, manifest and fixtures, `tests/`, floors<br>• `scripts/test-rls.mjs` and `scripts/gen-catalog-tests.mjs`, with their tests<br>• all of `packages/db-types/`<br>• adding `test:rls` to `verify`<br>• the §8.2 day-one checks, run on the local stack before the checkpoint | the files listed | S1 |
+| S2 | Stream | **UI and apps** (parallel with S3): `packages/ui/src/` and `packages/ui/scripts/`, `packages/vendors/src/`, `apps/*/` (excluding each `package.json`, `tsconfig.json` and Vitest config) | S1.7 merged |
+| S3 | Stream | **Workers, services and deploy** (parallel with S2): `workers/*/` and `services/*/` (same exclusions), and the `deploy-staging` job in `ci.yml` | S1.7 merged. H3–H6 are needed only to *run* the deploy (§13.1), not to write and unit-test it. |
+| S4 | Lead | **Close-out** (the AUTOPILOT CLOSE phase, after REVIEW passes): `docs/milestones/M0a-summary.md` | S2 + S3 merged; `pnpm verify` green; AT-1a-local and AT-1b recorded; **the founder's answer to "Local-only mode vs CI exit gates"** |
 
-**Parallelism.** S1.0, S1 and S1.7 run in the lead session alone. After that, **S2 ∥ S3** run as 2 writers, which is under the default of 3. Read-only helpers (reviewers, research) may run up to 6 at once. If S2 and S3 hit a merge conflict, the rest of the session stays at 2 writers or fewer.
+**Parallelism.** S1.0, S1 and S1.7 run in the lead session alone. After that, **S2 ∥ S3** run as 2 writers, which is under the default of 3. They share no files and neither needs the other's output: both consume only what S1.7 delivered. Read-only helpers (reviewers, research) may run up to 6 at once. If S2 and S3 hit a merge conflict, the rest of the session drops to 2 writers or fewer.
 
 **Each stream:**
 - runs in its own worktree under `.claude/worktrees/m0a-<stream>`, on branch `m0a/<stream>` cut from `milestone/m0a`;
 - merges into `milestone/m0a` locally with `git merge --no-ff`, only after its reviewers pass and `pnpm verify` is green (AUTOPILOT §2).
 
-At CLOSE, `milestone/m0a` merges into `main` the same way and gets the tag `m0a-reviewed`.
+At CLOSE, `milestone/m0a` merges into `main` the same way. `pnpm verify` re-runs on the merge result, and only then is the merge tagged `m0a-reviewed`.
 
-**Checkpoints.** After every green sub-step (S1.0, each of S1.1–S1.7, and each stream merge), commit on `milestone/m0a` and tag `cp/m0a-<NN>`, numbered from `01` in order (AUTOPILOT §5).
+**Checkpoints.** A sub-step is **green** only when the full `pnpm verify`, as it exists at that step, passes. That includes the full-history gitleaks scan, and `test:rls` from S1.7 on. `verify:fast` alone never counts.
 
-**Lead-only files.** Neither stream may edit these:
-- root `package.json`, any workspace `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`
-- `supabase/migrations/`
-- `packages/shared/src/` outside `log/`
-- `packages/config/`
-- `ci.yml` jobs other than `deploy-staging`
+After every green sub-step (S1.0, each of S1.1–S1.7, and each stream merge), commit on `milestone/m0a` and tag `cp/m0a-<NN>`. Tags are numbered from `01`, in order (AUTOPILOT §5).
 
-If a stream needs a change in one of these files (a new dependency, a contract field, a migration), it stops at a green commit and reports the need. The lead makes the change on `milestone/m0a` after the stream merges, or before the stream restarts from an updated `milestone/m0a`. A stream never runs `pnpm add`, and it never regenerates or hand-merges the lockfile. `spec-reviewer` fails any stream diff that touches a lead-only path.
+**Lead-only files.** Neither stream may edit:
+- the root `package.json`, any workspace `package.json`, `tsconfig.json` or Vitest config, `pnpm-lock.yaml` and `pnpm-workspace.yaml`;
+- anything under `supabase/`, `packages/shared/`, `packages/db-types/` or `packages/config/`;
+- `scripts/`;
+- the `ci.yml` jobs other than `deploy-staging`.
 
-**Every stream:**
-- TDD for script, logger and redactor logic, then `pnpm verify` before the merge.
+If a stream needs one of these changed (a new dependency, a contract field, a migration), it stops at a green commit and reports the need. The lead makes the change on `milestone/m0a`, either after the stream merges or before the stream restarts from an updated `milestone/m0a`. A stream never runs `pnpm add`, and never regenerates or hand-merges the lockfile. `spec-reviewer` fails any stream diff that touches a lead-only path.
+
+**Every step, lead or stream:**
+- TDD for script, logger, redactor and harness logic. Then `pnpm verify` before the checkpoint or merge.
 - A fresh `spec-reviewer` runs on the diff.
-- `database-reviewer` reviews the baseline migration (S1.7) and the catalog checks (S3).
-- `security-reviewer` reviews hooks, CI and deploy, boundaries, the redactor, Sentry and headers.
+- `database-reviewer` reviews the S1.7 database work (baseline migration, catalog checks, fixtures and harness).
+- `security-reviewer` reviews the hooks (S1.0), CI and deploy (S1.5, S3), boundaries and the `check-*` scripts (S1.4), the redactor and Sentry scrubber (S1.7), and the headers (S2).
 
 **Then:** the M0a REVIEW phase runs in a fresh session that did not write the code (AUTOPILOT §2). It needs build-notes Q57 (the review skill's sub-milestone rows), which is in the founder queue.
 
@@ -669,17 +794,23 @@ If a stream needs a change in one of these files (a new dependency, a contract f
 ## 15. Edge cases and failure modes
 
 - **Docker down:** `test:rls` fails loudly. `verify:fast` never needs Docker, so the Stop hook still works.
-- **No `main` locally:** `verify-fast` runs everything. It never passes vacuously.
+- **No local `main`:** `verify-fast` runs everything. `check-migrations` exits 1 and names the missing ref, so it never passes vacuously. `verify-clean-clone` creates `main` from `origin/main`, and CI uses `origin/main`.
 - **gitleaks missing:** the pre-commit hook and `pnpm lint` both fail with an install hint. Nothing commits cleanly or merges until gitleaks is installed.
 - **Commit made with `--no-verify` or `LEFTHOOK=0`:** nothing pushes automatically, and `pnpm lint`'s full-history scan fails before the next merge (AT-6c).
+- **The full-history scan finds a secret.**
+  - In every case, rotate the secret first.
+  - If the commit exists only on an unmerged stream branch, rewrite that branch; nothing else references it.
+  - If it is reachable from `main`, a `cp/*` tag, a `rescue/*` branch, or a bundle in `../trace-backups/`, the autopilot stops and adds a founder-queue item. AUTOPILOT §5 forbids deleting tags, and RESTORE.md forbids deleting rescue branches without the founder, so the founder decides how to purge the refs and bundles.
+- **Two worktrees run `test:rls` at once:** the second waits for the lock (§8.3) and then runs. It never skips.
 - **A stream needs a lead-only file changed:** it stops at a green commit and reports; the lead makes the change (§14). `spec-reviewer` blocks any stream diff that touches a lead-only path.
-- **Backups:** `scripts/backup.sh` bundles every branch and tag into `../trace-backups/` at the end of every session and keeps the newest 10 (AT-24). How to restore: `docs/progress/RESTORE.md`.
+- **Backups:** `scripts/backup.sh` bundles every branch and tag into `../trace-backups/` at the end of every session and keeps the newest 10 (AT-24). For restoring, see `docs/progress/RESTORE.md`.
 - **Fork PR whose branch is named `main`:** the deploy job's `if:` requires `event_name == 'push'` and this repository, so it never runs (AT-12).
 - **A Worker secret added through the dashboard:** deploy step 6 fails (AT-15).
-- **Staging default ACLs differ from local:** deploy step 4 fails (AT-18).
+- **Staging default ACLs differ from local:** MT-12 in deploy step 4 fails (AT-18).
+- **A staging migration goes wrong:** fix forward with a new migration. Never roll back past an applied migration (§8.2).
 - **Pages project missing:** it is created idempotently. A token without the needed scope fails with the scope named.
 - **Free-plan limits:** M0a uses only Workers, Pages and Supabase.
-- **Parallel streams adding migrations:** streams never add migrations; only the lead does (S1.7). `check-migrations` still checks ordering and immutability on every `pnpm verify`.
+- **Migrations and parallel streams:** streams never add migrations; only the lead does (S1.7). `check-migrations` checks ordering, immutability and the frozen set on every `pnpm verify`.
 
 ### 15.1 State machines
 M0a has no domain entities. It has two process flows with states that the tests pin down.
@@ -723,9 +854,16 @@ The data model is in `docs/build-notes.md` §4, M0 table.
 ## 17. Open items needing you
 Each of these is a row in `docs/progress/FOUNDER-QUEUE.md`, with exact steps:
 1. **H1 (toolchain).** Blocks all of BUILD.
-2. **Local-only mode vs CI exit gates.** Can M0a close with AT-1a-CI, AT-11, AT-13 and AT-18 deferred, or will you push to GitHub before M0a closes? If you push, H3–H6 apply, and you need `gh auth login` for the §7.4 commands.
+2. **Local-only mode vs CI exit gates.** Can M0a close with the §13.1 deferred items deferred, or will you push to GitHub before M0a closes? Blocks M0a CLOSE. If you push, H3–H6 apply, and `gh auth login` is needed for the §7.4 commands.
 3. **Q57:** approve the review-skill update for the sub-milestones. Blocks the M0a REVIEW phase.
 4. **H7 / Q56:** deny rules for local deploys. Optional.
 5. **Q55:** separate Supabase org and Cloudflare account for prod at M8 (D5). Not needed before M8.
-6. **D3:** the candidate app's 150 KB budget stands unless you give another number. Blocks nothing.
-7. **ABH-80's "Done when" line:** paste it, or connect Linear, so §13.1 can cite it exactly. Blocks nothing; AT-8, AT-9, AT-10 and AT-22 stand in for it.
+6. **D3:** the 150 KB budget for the candidate app stands unless you give another number. Blocks nothing.
+7. **ABH-80's "Done when" line:** paste it, or connect Linear, so §13.1 can cite it exactly. Blocks nothing; AT-8, AT-9, AT-10 and AT-22-local stand in for it.
+
+---
+
+## Approval
+- Revision 3: approved by the founder, 2026-10-10.
+- Revision 4: reviewed 2026-10-11 by `spec-reviewer` and `database-reviewer`. Both returned CHANGES REQUIRED, and every finding is fixed in revision 5.
+- Revision 5: *pending re-review.*
