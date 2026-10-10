@@ -1,6 +1,6 @@
 # Trace demo prototype (D1 preview)
 
-**Live:** https://demo.tracehiring.tech (Cloudflare Custom Domain on the `trace-demo` Worker; added 2026-10-11 at the founder's explicit request, overriding the earlier "no DNS changes on tracehiring.tech" rule for this one subdomain only) and https://trace-demo.abhayraj.workers.dev (workers.dev subdomain `abhayraj`, confirmed 2026-10-11)
+**Live:** https://tracehiring.tech (root, founder request 2026-10-11) and https://demo.tracehiring.tech (Cloudflare Custom Domain on the `trace-demo` Worker; added 2026-10-11 at the founder's explicit request, overriding the earlier "no DNS changes on tracehiring.tech" rule for this one subdomain only) and https://trace-demo.abhayraj.workers.dev (workers.dev subdomain `abhayraj`, confirmed 2026-10-11)
 
 A self-contained demo slice of Trace, built on 2026-10-11 at the founder's request so the product can be shown live.
 It runs on **staging only, with synthetic data only**. It is **not** the M0a production skeleton: it sits beside the
@@ -16,4 +16,10 @@ autopilot milestones and does not replace any milestone gate.
 cd demo && npm install && npm run build && npx wrangler dev   # local
 cd demo && npm run deploy                                     # staging workers.dev
 bash demo/smoke.sh https://trace-demo.abhayraj.workers.dev # API smoke test
+```
+
+## Automated E2E (D1 exit gate)
+
+```bash
+node demo/e2e/e2e.mjs https://tracehiring.tech   # 17 steps; resets demo data before and after
 ```

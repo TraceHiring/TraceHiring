@@ -2,7 +2,10 @@ name = "trace-demo"
 main = "worker/index.ts"
 compatibility_date = "2025-09-01"
 workers_dev = true
-routes = [{ pattern = "demo.tracehiring.tech", custom_domain = true }]
+routes = [
+  { pattern = "tracehiring.tech", custom_domain = true },
+  { pattern = "demo.tracehiring.tech", custom_domain = true },
+]
 
 [assets]
 directory = "./dist"

@@ -4,6 +4,7 @@ import { api } from '../../api';
 import { AppShell, BandBadge, Card, ErrorNote, QualityScore } from '../../ui';
 import type { CandidateStatus, Test, TriageRow } from '../../shared/types';
 import LiveMonitor from './LiveMonitor';
+import { BulkInvite } from './InviteTools';
 import './recruiter.css';
 
 const STATUS_LABEL: Record<CandidateStatus, string> = {
@@ -114,6 +115,23 @@ function Stat({ label, value, hint }: { label: string; value: number; hint?: str
 }
 
 function InvitePanel({ testId, nextN, onInvited }: { testId: string; nextN: number; onInvited: () => void }) {
+  const [mode, setMode] = useState<'single' | 'bulk'>('single');
+  const tabs = (
+    <div className="rc-tabs" role="tablist" aria-label="Invite mode">
+      <button role="tab" aria-selected={mode === 'single'} className={mode === 'single' ? 'on' : ''} onClick={() => setMode('single')}>Single invite</button>
+      <button role="tab" aria-selected={mode === 'bulk'} className={mode === 'bulk' ? 'on' : ''} onClick={() => setMode('bulk')}>Bulk invite</button>
+    </div>
+  );
+  return (
+    <Card title={mode === 'single' ? 'Invite a candidate' : 'Bulk invite candidates'} actions={tabs}>
+      {/* Both stay mounted so switching tabs never loses a paste or results in progress. */}
+      <div hidden={mode !== 'single'}><SingleInvite testId={testId} nextN={nextN} onInvited={onInvited} /></div>
+      <div hidden={mode !== 'bulk'}><BulkInvite testId={testId} onInvited={onInvited} /></div>
+    </Card>
+  );
+}
+
+function SingleInvite({ testId, nextN, onInvited }: { testId: string; nextN: number; onInvited: () => void }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [touched, setTouched] = useState(false);
@@ -155,7 +173,7 @@ function InvitePanel({ testId, nextN, onInvited }: { testId: string; nextN: numb
   }
 
   return (
-    <Card title="Invite a candidate">
+    <>
       <p className="caption muted" style={{ marginTop: 0 }}>Synthetic names and emails only in this demo.</p>
       <div className="row gap8 wrap" style={{ alignItems: 'flex-end' }}>
         <label style={{ flex: '1 1 200px' }}>Name
@@ -179,7 +197,7 @@ function InvitePanel({ testId, nextN, onInvited }: { testId: string; nextN: numb
       <p className="caption muted" style={{ marginBottom: 0, marginTop: 12 }}>
         Tip: <a href="/t/demo-candidate" target="_blank" rel="noreferrer" className="mono">/t/demo-candidate</a> is a ready-made demo invite.
       </p>
-    </Card>
+    </>
   );
 }
 
