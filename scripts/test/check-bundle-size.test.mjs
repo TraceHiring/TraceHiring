@@ -108,6 +108,50 @@ describe('measureInitialJs', () => {
     expect(r.total).toBe(gz(entry) + gz(a) + gz(b) + gz('1'));
   });
 
+  // S1.4 security review L8: an inline module's static imports load up front too, resolved
+  // against index.html (the dist root).
+  it('counts the static imports of an inline module script, resolved from the dist root', () => {
+    const vendor = heavy(1_000);
+    const shared = 'export const s=1;';
+    const inline = 'import"./assets/vendor.js";import{s}from"/assets/shared.js";';
+    const root = repo({
+      'dist/index.html': html(`<script type="module">${inline}</script>`),
+      'dist/assets/vendor.js': vendor,
+      'dist/assets/shared.js': shared,
+    });
+    const r = measureInitialJs(`${root}/dist`);
+    expect(r.errors).toEqual([]);
+    expect(r.files.map((f) => f.file).sort()).toEqual([
+      'assets/shared.js',
+      'assets/vendor.js',
+      'index.html <script> #1',
+    ]);
+    expect(r.total).toBe(gz(inline) + gz(vendor) + gz(shared));
+  });
+
+  it('fails when an inline module imports a missing chunk or one outside dist/', () => {
+    const missing = repo({
+      'dist/index.html': html('<script type="module">import "./assets/gone.js";</script>'),
+    });
+    expect(measureInitialJs(`${missing}/dist`).errors.join('\n')).toMatch(
+      /assets\/gone\.js is referenced but missing/,
+    );
+    const escape = repo({
+      'dist/index.html': html('<script type="module">import "../escape.js";</script>'),
+    });
+    expect(measureInitialJs(`${escape}/dist`).errors.join('\n')).toMatch(/outside dist/);
+  });
+
+  it('pushes the candidate over budget through an inline module import', () => {
+    const root = repo({
+      'apps/candidate/dist/index.html': html(
+        '<script type="module">import "./assets/vendor.js";</script>',
+      ),
+      'apps/candidate/dist/assets/vendor.js': heavy(160_000),
+    });
+    expect(runChecks(root).violations[0]).toMatch(/over budget/);
+  });
+
   it.each([
     ['no index.html', { 'dist/assets/x.js': 'x' }, /index\.html is missing/],
     ['no script', { 'dist/index.html': html('') }, /loads no script/],

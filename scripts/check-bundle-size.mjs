@@ -3,8 +3,9 @@
 // "Initial JS" is every script the first page load fetches before the app can run:
 //   - each <script src> and <link rel="modulepreload"> / <link rel="preload" as="script"> in
 //     apps/candidate/dist/index.html, plus the text of any inline <script>
-//   - every chunk those files import statically (`import … from "./x.js"`, `import "./x.js"`,
-//     `export … from "./x.js"`), transitively. Dynamic import() chunks load later and do not count.
+//   - every chunk those files and inline module scripts (resolved from the dist root) import
+//     statically (`import … from "./x.js"`, `import "./x.js"`, `export … from "./x.js"`),
+//     transitively. Dynamic import() chunks load later and do not count.
 // Each file is gzipped on its own (zlib default level), since each is a separate request, and the
 // sizes are summed. 1 kB = 1,000 bytes, as Vite reports it. Over-counting fails closed.
 // Fails (exit 1) when the budget is exceeded, dist/index.html is missing, it names no script, a
@@ -88,6 +89,10 @@ export function measureInitialJs(distDir) {
   const root = path.resolve(distDir);
   const seen = new Set();
   const queue = entries.map((url) => ({ url, from: null }));
+  // An inline module's static imports load up front too; they resolve against index.html, the
+  // dist root (`from: null`). A classic script cannot import, so counting every inline script's
+  // imports only over-counts, which fails closed (S1.4 security review L8).
+  for (const code of inline) for (const url of staticImports(code)) queue.push({ url, from: null });
   while (queue.length > 0) {
     const { url, from } = queue.shift();
     const clean = decodeURIComponent(url.replace(/[?#].*$/, ''));
