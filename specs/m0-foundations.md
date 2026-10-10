@@ -754,7 +754,7 @@ It fails if any of the following holds:
    - `service_role`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`
    - `sb_secret_`, `JWT_SECRET`, `SUPABASE_JWT`
    - `postgres://`, `postgresql://`, `DB_URL`, `DATABASE_URL`
-   - *Exemption (autopilot, S1.4 integration):* `packages/shared/src/log/redact.ts` may contain `sb_secret_`, and only that name, because §9.1 requires the redactor to match `sb_secret_…` values. The exemption is one frozen entry in `check-boundaries.mjs`, pinned by tests.
+   - *Exemption (autopilot, S1.4 integration):* `packages/shared/src/log/redact.ts` may contain the exact regex text `sb_secret_[w-]*`, and nothing else credential-shaped, because §9.1 requires the redactor to match `sb_secret_…` values. That text is cut out before the check, so a key literal there still fails. The exemption is one frozen entry in `check-boundaries.mjs`, pinned by tests; `.gitleaks.toml` adds a `supabase-secret-key` rule so scans detect real keys (S1.4 security review M6).
 2. Git tracks a `.dev.vars*` file, or any `.env*` file other than `env.example`.
 3. An app references a `VITE_*` name containing `SECRET`, `TOKEN`, `PASSWORD`, `PRIVATE`, `JWT`, `DB`, or `KEY` (other than `VITE_SENTRY_DSN`).
 4. `supabase/config.toml` exposes `private`, `quality` or `integrity` (§8.1). A missing `config.toml` passes only while `supabase/migrations/` is also missing, which is the state before S1.7 (§5).
