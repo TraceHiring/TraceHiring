@@ -1,7 +1,14 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** draft for founder approval (2026-10-10), revision 2. Revision 2 fixes every finding from the spec, security and database reviews of revision 1. No code is written until you approve this spec.
-- **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a`. Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
+- **Status:** draft for founder approval (2026-10-10), revision 3. Revision 2 fixed every finding from the spec, security and database reviews of revision 1. Revision 3 is a refresh after the docs merge to `main` (`b7af663`); see "Revision 3 changes" below. No code is written until you approve this spec.
+- **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a` (created from `main` at `b7af663`). Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
+- **Revision 3 changes:**
+  - Added §13.1, which maps each M0a exit-gate item to its acceptance tests.
+  - Added §9.4 (zod contracts), §15.1 (state machines) and §15.2 (plan §11 rows that touch M0a).
+  - §6: the current hook logs to the wrong file in worktrees.
+  - §14: worktree paths, lockfile rule and the 3-writer cap.
+  - §17: ABH-80's "Done when" line isn't in the repo, and Linear isn't connected.
+  - No decision from revision 2 was changed.
 - **Sources:**
   - CLAUDE.md
   - `docs/build-order.md` M0a and rules 5–6
@@ -217,6 +224,12 @@ What `scripts/git-autopush.sh` does when Q54 = keep:
 5. It never force-pushes.
 
 `lefthook install` runs from the root `prepare` script, so a fresh clone gets the hooks on `pnpm i`.
+
+**Today's hook, checked 2026-10-10.** The hook is `.git/hooks/post-commit`. It is untracked and shared by every worktree.
+- **Line 6:** `git push -u trace "$branch"`. There is no scan.
+- **Line 5:** logs to `$(git rev-parse --git-dir)/autopush.log`. In a linked worktree that path resolves to `.git/worktrees/<name>/autopush.log`, not the `.git/autopush.log` that CLAUDE.md line 41 names. A failed push from a worktree is therefore logged where nobody looks.
+
+Point 4 above fixes the log path. Until S1.0 lands, the hook stays as it is (founder instruction: don't change it).
 
 ---
 
@@ -442,6 +455,35 @@ There is an allow-list of safe exact keys that contain a stem, such as `orgId`, 
 - Apps emit a static `/version.json` at build time.
 - Deep database checks arrive in M0b.
 
+### 9.4 Contracts (zod, in `@trace/shared`)
+M0a has no business API. These are its only wire contracts. Each one is exported from `@trace/shared` and validated in tests on both the producer and the consumer side.
+
+```ts
+export const Version = z.string().regex(/^[0-9a-f]{7,40}$|^dev$/);
+export const HealthResponse = z.object({
+  status: z.literal("ok"),
+  service: z.enum(["edge", "jobs", "api"]),
+  version: Version,
+  time: z.iso.datetime(),
+}).strict();
+export const AppVersionFile = z.object({         // apps/*/dist/version.json
+  app: z.enum(["candidate", "recruiter"]),
+  version: Version,
+}).strict();
+export const LogLine = z.object({                // one JSON line per log call
+  ts: z.iso.datetime(),
+  level: z.enum(["debug", "info", "warn", "error"]),
+  service: z.string().min(1),
+  version: Version,
+  event: z.string().regex(/^[a-z0-9_.]+$/),      // literal at the call site (ESLint)
+  requestId: z.string().uuid().optional(),
+  orgId: z.string().uuid().optional(),
+  data: z.unknown().optional(),                  // always post-redaction
+}).strict();
+```
+
+The `/health` responders, the deploy smoke step (§7.2 step 8) and the logger's own output tests all parse with these schemas. An unknown key fails, because every schema is `.strict()`.
+
 ---
 
 ## 10. Boundaries
@@ -545,6 +587,22 @@ It fails if any of the following holds:
 | AT-22 | Security headers are present in both `dist/` outputs and on staging | `check-headers.mjs` + smoke step |
 | AT-23 | db-types are current | CI `rls` drift check |
 
+### 13.1 Exit gate → acceptance tests (build-order M0a, as merged in `b7af663`)
+| Exit-gate item | Covered by |
+| --- | --- |
+| Clean clone → `pnpm i && pnpm verify` green on Linux CI | AT-1a |
+| …and once on the founder's Windows machine | AT-1b |
+| `supabase db reset` rebuilds from zero and the pgTAP harness runs; catalog meta-tests pass | AT-2, AT-19, AT-23 |
+| `test:rls` fails if Docker is down | AT-3 |
+| Staging deploys from CI only | AT-11, AT-12, AT-15, AT-16, AT-18 |
+| Every health endpoint responds with the deployed commit | AT-10, AT-11 |
+| No secret in repo history (gitleaks clean) | AT-5 |
+| The pre-commit scan blocks a staged secret | AT-6, AT-6b |
+| PII-redaction tests pass | AT-8, AT-9 |
+| CI blocks merge on red | AT-13 |
+
+**"Done when" lines.** M0a carries part of ABH-80 (observability). The build-order gives no other issue for M0a. ABH-80's "Done when" text is not in the repo (build-notes line 167), and Linear isn't connected in this session. Until you paste that line, AT-8, AT-9, AT-10 and AT-22 stand in for it, and §17 item 6 tracks the gap.
+
 **Deferred gates from M0a:** none expected. Any that appear go in `docs/milestones/M0a-summary.md` (build-order rule 6).
 
 ---
@@ -558,6 +616,19 @@ It fails if any of the following holds:
 | S2 | **Libraries + apps** (parallel with S3) | `packages/shared/`, `packages/ui/`, `packages/vendors/`, `apps/` | S1 merged |
 | S3 | **Workers + database + deploy** (parallel with S2) | `workers/`, `services/`, `supabase/`, `packages/db-types/`, `scripts/test-rls.mjs`, the `deploy-staging` job in `ci.yml` | S1 merged; H3–H6 |
 | S4 | **Close-out** | `docs/milestones/M0a-summary.md` | S2 + S3 merged; `pnpm verify` green; AT-1b recorded |
+
+**Parallelism and ownership.** S1.0 and S1 run alone. After that, only **S2 ∥ S3** run in parallel, so there are 2 writers. That fits both the build-order cap of 3 and your cap of 4. Each stream:
+- runs in its own worktree under `.claude/worktrees/m0a-<stream>`, on branch `m0a/<stream>`;
+- merges into `milestone/m0a` by PR, and `milestone/m0a` merges to `main` by PR at the end.
+
+**Shared files neither parallel stream may edit:**
+- root `package.json` scripts
+- `ci.yml` jobs other than `deploy-staging`
+- `packages/config/`
+
+If S2 or S3 needs a change there, it goes back through a small S1 follow-up PR.
+
+**The one shared file that is unavoidable is `pnpm-lock.yaml`.** S1 pins every M0a dependency in the catalog up front. The stream that merges second rebases and regenerates the lockfile with `pnpm i`; it never hand-merges it.
 
 **Every stream:**
 - TDD for script, logger and redactor logic, then `pnpm verify` before the PR.
@@ -582,6 +653,25 @@ It fails if any of the following holds:
 - **Free-plan limits:** M0a uses only Workers, Pages and Supabase.
 - **Parallel streams adding migrations:** only S3 adds migrations in M0a. `check-migrations` checks ordering, and strict status checks re-run it on the latest `main`.
 
+### 15.1 State machines
+M0a has no domain entities. It has two process flows with states that the tests pin down.
+
+**Push path (Q54 = keep).** `committed → scanning → (clean) pushed | (finding) held_local | (gitleaks missing) held_local | (push error) push_failed_logged`.
+- `held_local` and `push_failed_logged` never undo the commit.
+- The next commit retries the push.
+- Nothing in the flow reaches `pushed` without passing through `scanning`. AT-6b tests that.
+
+**Deploy to staging.** `queued → built → output_scanned → migrated → catalog_checked → workers_deployed → secrets_checked → pages_deployed → smoke_passed`.
+- Any failure goes to terminal `failed`. Steps that already ran are not rolled back.
+- Migrations are forward-only, and a re-run of the job is idempotent.
+- Only `push` to `main` in this repo enters `queued` (AT-12).
+
+### 15.2 Plan §11 rows that touch M0a
+Most rows in the register belong to later milestones. M0a lays groundwork for three of them:
+- **#13 and #14 (privacy):** the PII redactor, error-message dropping and Sentry scrubbing (AT-8, AT-9) keep candidate data out of logs from day one.
+- **#43 (residency stated precisely):** every processor outside India is recorded in ADR-027 (§9.2: the Sentry region and Workers Logs).
+- **#39 (database outage mid-drive):** not M0a. The edge Worker gets no database credential (D6), which keeps the Durable Object path independent of Postgres in M3.
+
 ---
 
 ## 16. What M0b will add (orientation only; specced after `m0a-reviewed`)
@@ -605,3 +695,5 @@ The data model is in `docs/build-notes.md` §4, M0 table.
 3. **Q55:** separate Supabase org and Cloudflare account for prod at M8 (D5).
 4. **D3:** confirm the 150 KB budget for the candidate app, or give another number.
 5. **Q57:** approve the review-skill update for the sub-milestones before the M0a review runs.
+6. **ABH-80's "Done when" line:** paste it, or connect Linear, so §13.1 can cite it exactly.
+7. **`gh` on this machine is not signed in.** Step 2 merges only through PRs, so the CLI needs `gh auth login` (you run it) before S1.0 opens its first PR.
