@@ -1,6 +1,16 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { MAX_DEPTH, MAX_STRING, REDACTED, TRUNCATED, redact, redactString } from './redact.js';
+import * as publicLog from './index.js';
+import {
+  MAX_DEPTH,
+  MAX_STRING,
+  REDACTED,
+  TRUNCATED,
+  applyPatterns,
+  canonical,
+  redact,
+  redactString,
+} from './redact.js';
 import { synth } from './synth.test-helpers.js';
 
 const stems = [
@@ -322,5 +332,127 @@ describe('security review regressions (S1.7)', () => {
     const out = JSON.stringify(redact(node));
     expect(performance.now() - start).toBeLessThan(1000);
     expect(out).toContain(TRUNCATED);
+  });
+});
+
+describe('linear-time patterns (S1.7 ReDoS finding)', () => {
+  // ~100 KB per shape, with no length cap: every pattern must stay linear, not just fast at 2,000.
+  const KB100 = 100_000;
+  const fill = (unit: string, prefix = ''): string =>
+    prefix + unit.repeat(Math.ceil((KB100 - prefix.length) / unit.length));
+  const shapes: [string, string][] = [
+    ['account + dots', fill('.', 'account')],
+    ['bank + separators', fill(' :#.-', 'bank')],
+    ['account keywords', fill('account no ')],
+    ['local part, no domain', fill('a', '') + '@'],
+    ['many @', fill('a@')],
+    ['percent-encoded @', fill('a%40')],
+    ['domain labels, no tld', 'x@' + fill('a1.')],
+    ['UPI-like', fill('ab.') + '@' + 'x'.repeat(40)],
+    ['digit pairs', fill('1 ')],
+    ['mobile-like', fill('9-')],
+    ['dotted digits', fill('9.')],
+    ['colons', fill(':')],
+    ['hex colons', fill('a:')],
+    ['mixed base64', fill('A1a')],
+    ['hex then non-hex', fill('a') + 'g'],
+    ['JWT dots', fill('a.', 'eyJ')],
+    ['JWT starts', fill('eyJ-')],
+    ['Bearer spaces', 'Bearer' + fill(' ')],
+    ['key=value pairs', fill('a=b ')],
+    ['key run', fill('a-')],
+    ['token= runs', fill('token=')],
+    ['query marks', fill('?a')],
+    ['query pairs', fill('?a=b ')],
+    ['IPv4-like', fill('1.1.')],
+    ['PAN-like', fill('ABCDE1234')],
+  ];
+
+  it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
+    expect(s.length).toBeGreaterThanOrEqual(KB100);
+    const text = canonical(s);
+    applyPatterns(text.slice(0, 1000)); // warm-up so regex compilation is not timed
+    const start = performance.now();
+    applyPatterns(text);
+    expect(performance.now() - start).toBeLessThan(50);
+  });
+
+  it('returns [TRUNCATED] for a 100 KB string without running the patterns', () => {
+    const start = performance.now();
+    expect(redactString(fill('.', 'account'))).toBe(TRUNCATED);
+    expect(performance.now() - start).toBeLessThan(5);
+  });
+
+  it('keeps the uncapped pattern runner out of the public API', () => {
+    expect(publicLog).not.toHaveProperty('applyPatterns');
+    expect(publicLog).not.toHaveProperty('canonical');
+    expect(publicLog).toHaveProperty('redactString');
+  });
+});
+
+describe('free-text secrets and query strings (S1.7 findings 2 and 3)', () => {
+  const secret = synth.base64(5).slice(0, 10);
+
+  it.each(['password', 'otp', 'token', 'api_key', 'secret', 'pin', 'session', 'access_token'])(
+    'redacts the value after "%s=" and "%s:" in free text',
+    (key) => {
+      for (const s of [`${key}=${secret}`, `${key}: ${secret}`, `"${key}":"${secret}"`]) {
+        const out = redactString(`login failed ${s} retry`);
+        expect(out).not.toContain(secret);
+        expect(out).toContain(key);
+        expect(out.endsWith(' retry')).toBe(true);
+      }
+    },
+  );
+
+  it('leaves non-sensitive key=value pairs alone', () => {
+    const s = 'status=ok count: 3 level=warn';
+    expect(redactString(s)).toBe(s);
+  });
+
+  it('keeps scheme, host and path but drops the query values', () => {
+    const out = redactString(`fetch https://api.example/v1/start?t=${secret}&lang=en failed`);
+    expect(out).toBe('fetch https://api.example/v1/start?[REDACTED] failed');
+  });
+
+  it('drops fragment parameters (implicit-flow tokens)', () => {
+    const out = redactString(`/cb#access_token=${secret}&state=x`);
+    expect(out).toBe('/cb#[REDACTED]');
+  });
+
+  it('leaves a plain question mark alone', () => {
+    const s = 'is it ready? yes';
+    expect(redactString(s)).toBe(s);
+  });
+
+  it('is idempotent on redacted query strings and key=value pairs', () => {
+    const once = redactString(`a?b=${secret} password=${secret}`);
+    expect(redactString(once)).toBe(once);
+  });
+});
+
+describe('free-text key stems (S1.7 finding 5)', () => {
+  it.each([
+    'answerText',
+    'response_body',
+    'transcript',
+    'reviewerComment',
+    'note',
+    'messageBody',
+    'feedback',
+    'essay',
+    'llmPrompt',
+    'description',
+    'passwd',
+    'pwd',
+    'signature',
+    'credentials',
+  ])('redacts "%s"', (key) => {
+    expect(redact({ [key]: 'v' })).toEqual({ [key]: REDACTED });
+  });
+
+  it('keeps allow-listed metadata keys', () => {
+    const input = { contentType: 'application/json', statusCode: 200, responseStatus: 404 };
+    expect(redact(input)).toEqual(input);
   });
 });

@@ -1,5 +1,11 @@
 // PII redactor for logs and error reports (spec specs/m0-foundations.md §9.1).
 // No dependencies: it runs in the browser, Workers and Node.
+//
+// Every value pattern runs in linear time (security review S1.7, ReDoS):
+// - a pattern whose first quantifier could start anywhere inside a run of its own characters is
+//   anchored with a negative lookbehind of that class, so it starts at most once per run;
+// - neighbouring quantifiers never share characters, or are bounded.
+// redact.test.ts times applyPatterns on ~100 KB adversarial inputs to keep it that way.
 import { serializeError, type SerializedError } from './serialize-error.js';
 
 export const REDACTED = '[REDACTED]';
@@ -10,6 +16,8 @@ export const MAX_STRING = 2000;
 export const MAX_DEPTH = 6;
 /** Arrays and objects keep at most this many entries; the rest becomes one TRUNCATED marker. */
 export const MAX_ENTRIES = 100;
+/** Values visited per redact() call; shared references would otherwise multiply the work. */
+export const MAX_NODES = 5000;
 
 const KEY_STEMS = [
   // contact and identity
@@ -17,67 +25,103 @@ const KEY_STEMS = [
   // government IDs and protected traits
   'aadhaar', 'aadhar', 'pan', 'passport', 'voter', 'epic', 'caste', 'religion', 'disability',
   // background and network
-  'college', 'ip', 'forwardedfor', 'connectingip', 'realip',
+  'college', 'ip', 'forwardedfor', 'connectingip', 'realip', 'referer', 'referrer', 'asorganization',
+  // location (implied by address, pincode and ip)
+  'city', 'location', 'latitude', 'longitude', 'geo', 'postal', 'zip',
   // credentials and secrets
-  'otp', 'code', 'password', 'passcode', 'pin', 'token', 'secret', 'key', 'authorization', 'cookie',
-  'session', 'nonce', 'invite', 'signedurl', 'jwt',
+  'otp', 'code', 'password', 'passwd', 'pwd', 'passcode', 'pin', 'token', 'secret', 'key',
+  'authorization', 'cookie', 'session', 'nonce', 'invite', 'signedurl', 'jwt', 'signature',
+  'credential',
   // answer content and media
   'answer', 'finaltext', 'transcript', 'scratchpad', 'jdtext', 'photo', 'image', 'audio', 'video',
   'accommodation',
+  // free text that can echo answers or PII (implied by answer, finaltext and transcript)
+  'text', 'content', 'body', 'message', 'msg', 'detail', 'hint', 'note', 'comment', 'feedback',
+  'essay', 'prompt', 'completion', 'response', 'resume', 'reason', 'description', 'query', 'search',
 ]; // prettier-ignore
 
-/** Exact keys (normalised) that contain a stem but only ever hold IDs or versions. */
+/** Exact keys (normalised) that contain a stem but only ever hold IDs, versions or counts. */
 const SAFE_KEYS = new Set([
-  'orgid',
-  'requestid',
-  'sessionid',
-  'keyversion',
-  'attemptid',
-  'invitationid',
-  'workspaceid',
-  'statuscode',
-  'errorcode',
-  'stage',
-  'page',
-  'pagesize',
-]);
+  'orgid', 'requestid', 'sessionid', 'keyversion', 'attemptid', 'invitationid', 'workspaceid',
+  'statuscode', 'errorcode', 'stage', 'page', 'pagesize', 'contenttype', 'contentlength',
+  'responsestatus', 'responsetimems',
+]); // prettier-ignore
 
-const normaliseKey = (key: string): string => key.toLowerCase().replace(/[\s_-]/g, '');
+/**
+ * Keys are compared after NFKC (fullwidth and other compatibility forms), lower-casing, and
+ * removing every character that is not a letter or digit (spaces, `_`, `-`, zero-width marks).
+ */
+const normaliseKey = (key: string): string =>
+  key
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, '');
 
 export const isSensitiveKey = (key: string): boolean => {
   const k = normaliseKey(key);
   return !SAFE_KEYS.has(k) && KEY_STEMS.some((stem) => k.includes(stem));
 };
 
+/** Indian-script and fullwidth digit blocks: each holds 0-9 at consecutive code points. */
+const DIGIT_ZEROS = [0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66, 0xff10];
+const NON_ASCII_DIGIT =
+  /[\u0966-\u096f\u09e6-\u09ef\u0a66-\u0a6f\u0ae6-\u0aef\u0b66-\u0b6f\u0be6-\u0bef\u0c66-\u0c6f\u0ce6-\u0cef\u0d66-\u0d6f\uff10-\uff19]/g;
+/** Zero-width and other invisible format characters that could split a value. */
+const INVISIBLE = /[\u00ad\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g;
+
+const toAsciiDigit = (ch: string): string => {
+  const cp = ch.codePointAt(0) ?? 0;
+  const zero = DIGIT_ZEROS.find((z) => cp >= z && cp <= z + 9) ?? cp;
+  return String(cp - zero);
+};
+
+/**
+ * The text the patterns see: compatibility forms folded, invisible marks dropped, ASCII digits.
+ * Internal (not exported from index.ts).
+ */
+export const canonical = (s: string): string =>
+  s.normalize('NFKC').replace(INVISIBLE, '').replace(NON_ASCII_DIGIT, toAsciiDigit);
+
 type Replacer = (match: string, ...groups: string[]) => string;
-const PATTERNS: [RegExp, string | Replacer][] = [
+const keepPrefix: Replacer = (_m, prefix = '') => `${prefix}${REDACTED}`;
+
+/** Builds a digit pattern; SEP is one gap between digit groups: up to two spaces, dots or dashes. */
+const digits = (source: string): RegExp =>
+  new RegExp(source.replaceAll('SEP', '[\\s.-]{0,2}'), 'g');
+
+const PATTERNS: readonly [RegExp, string | Replacer][] = [
   // secrets and tokens first, so later patterns never see their pieces
-  [/\beyJ[\w-]+\.[\w-]+\.[\w-]*/g, REDACTED],
-  [/\bBearer\s+[^\s"',;]+/gi, REDACTED],
+  [/(?<![\w-])eyJ[\w-]*\.[\w-]*\.[\w-]*/g, REDACTED],
+  [/\bBearer\s{1,8}[^\s"',;]+/gi, REDACTED],
   [/\bsb_secret_[\w-]*/g, REDACTED],
   [/\bpostgres(?:ql)?:\/\/[^\s"']+/gi, REDACTED],
-  // email, then UPI (handle@psp without a dot after the psp)
-  [/[\w.%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi, REDACTED],
-  [/[\w.-]{2,}@[a-z]{2,}(?![\w.@-])/gi, REDACTED],
-  // bank account numbers next to account keywords
+  // query strings and fragments that carry parameters: keep the '?' or '#', drop the rest
+  [/([?#])[^\s?#"'<>]*=[^\s"'<>]*/g, keepPrefix],
+  // `key=value` and `key: value` in free text, when the key would be redacted as an object key
   [
-    /(\b(?:a\/c|acct|account|bank)[\w.]*[\s:#.-]*(?:no\.?|number)?[\s:#.-]*)\d{9,18}(?!\d)/gi,
-    (_m, prefix) => `${prefix}${REDACTED}`,
+    /(?<![\w-])([\w-]{1,64})("?\s{0,3}[=:]\s{0,3}"?)([^\s"'&,;)]+)/g,
+    (m, key = '', sep = '') => (isSensitiveKey(key) ? `${key}${sep}${REDACTED}` : m),
+  ],
+  // email (also percent-encoded), then UPI (handle@psp without a dot after the psp)
+  [/(?<![\w.%+-])[\w.%+-]+(?:@|%40)(?:[a-z0-9-]+\.)+[a-z]{2,}/gi, REDACTED],
+  [/(?<![\w.-])[\w.-]{2,}(?:@|%40)[a-z]{2,32}(?![\w.@-])/gi, REDACTED],
+  // bank account numbers next to account keywords (a short, bounded non-digit gap)
+  [/(\b(?:a\/c|acct|account|bank)\D{0,24}?)\d{9,18}(?!\d)/gi, keepPrefix],
+  // IPv4 (before the digit patterns, which could otherwise take part of an address)
+  [
+    /(?<!\d)(?<!\d\.)(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?!\d)(?!\.\d)/g,
+    REDACTED,
   ],
   // Aadhaar VID (16 digits), Aadhaar (12, starting 2-9), Indian mobile numbers
-  [/(?<![\w])\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d)/g, REDACTED],
-  [/(?<![\w])[2-9]\d{3}[\s-]?\d{4}[\s-]?\d{4}(?!\d)/g, REDACTED],
-  [/(?<![\w+])(?:(?:\+|00)?91[\s-]?|0)?[6-9](?:[\s-]?\d){9}(?!\d)/g, REDACTED],
+  [digits('(?<!\\d)\\d{4}SEP\\d{4}SEP\\d{4}SEP\\d{4}(?!\\d)'), REDACTED],
+  [digits('(?<!\\d)[2-9]\\d{3}SEP\\d{4}SEP\\d{4}(?!\\d)'), REDACTED],
+  [digits('(?<!\\d)(?:(?:\\+|00)?91SEP|0)?[6-9](?:SEP\\d){9}(?!\\d)'), REDACTED],
   // PAN, voter EPIC, IFSC, passport
   [/(?<![a-z0-9])[a-z]{5}\d{4}[a-z](?![a-z0-9])/gi, REDACTED],
   [/(?<![a-z0-9])[a-z]{3}\d{7}(?![a-z0-9])/gi, REDACTED],
   [/(?<![a-z0-9])[a-z]{4}0[a-z0-9]{6}(?![a-z0-9])/gi, REDACTED],
   [/(?<![a-z0-9])[a-z]\d{7}(?![a-z0-9])/gi, REDACTED],
-  // IPv4, then IPv6 (needs "::" or at least three colons, so clock times are left alone)
-  [
-    /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d.])/g,
-    REDACTED,
-  ],
+  // IPv6 (needs "::" or at least three colons, so clock times are left alone)
   [
     /(?<![0-9a-z:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-z:])/gi,
     (m) => (m.includes('::') || (m.match(/:/g)?.length ?? 0) >= 3 ? REDACTED : m),
@@ -85,22 +129,42 @@ const PATTERNS: [RegExp, string | Replacer][] = [
   // long hex, and long base64 that mixes upper case, lower case and digits (random tokens)
   [/(?<![a-z0-9])[0-9a-f]{32,}(?![a-z0-9])/gi, REDACTED],
   [
-    /(?<![\w+/=-])[\w+/-]{32,}={0,2}/g,
+    /(?<![\w+/-])[\w+/-]{32,}={0,2}/g,
     (m) => (/[A-Z]/.test(m) && /[a-z]/.test(m) && /\d/.test(m) ? REDACTED : m),
   ],
 ];
 
-/** Redacts PII and secret patterns inside one string. Strings over the cap become TRUNCATED. */
+/**
+ * Runs every value pattern over canonical text. No length cap, so it is internal (not exported
+ * from index.ts) and only redactString calls it, after the cap.
+ */
+export const applyPatterns = (text: string): string => {
+  let out = text;
+  for (const [re, rep] of PATTERNS) out = out.replace(re, rep as string);
+  return out;
+};
+
+/**
+ * Redacts PII and secret patterns inside one string. Strings over the cap become TRUNCATED.
+ * Text with no match comes back unchanged; otherwise the canonical text with its redactions does.
+ */
 export const redactString = (input: string): string => {
   if (input.length > MAX_STRING) return TRUNCATED;
-  let out = input;
-  for (const [re, rep] of PATTERNS) out = out.replace(re, rep as string);
+  const text = canonical(input);
+  const out = applyPatterns(text);
+  if (out === text) return input;
   return out.length > MAX_STRING ? TRUNCATED : out;
 };
 
 const PII_NUMBER = /^(?:[6-9]\d{9}|[2-9]\d{11}|\d{16})$/;
 
-const redactInner = (value: unknown, depth: number, seen: WeakSet<object>): unknown => {
+interface State {
+  seen: WeakSet<object>;
+  budget: number;
+}
+
+const redactInner = (value: unknown, depth: number, state: State): unknown => {
+  if (--state.budget < 0) return TRUNCATED;
   switch (typeof value) {
     case 'string':
       return redactString(value);
@@ -122,13 +186,17 @@ const redactInner = (value: unknown, depth: number, seen: WeakSet<object>): unkn
   if (value === null) return null;
   const obj = value as object;
   if (depth >= MAX_DEPTH) return TRUNCATED;
-  if (seen.has(obj)) return CIRCULAR;
-  if (obj instanceof Error) return redactSerializedError(serializeError(obj));
-  if (obj instanceof Date) return Number.isNaN(obj.getTime()) ? 'Invalid Date' : obj.toISOString();
-  seen.add(obj);
+  if (state.seen.has(obj)) return CIRCULAR;
+  state.seen.add(obj);
   try {
+    if (obj instanceof Error) return redactSerializedError(serializeError(obj));
+    if (obj instanceof Date) {
+      // Built-ins only: an own getTime or toISOString on the object is never called.
+      const t = Date.prototype.getTime.call(obj);
+      return Number.isNaN(t) ? 'Invalid Date' : Date.prototype.toISOString.call(obj);
+    }
     if (Array.isArray(obj)) {
-      const out = obj.slice(0, MAX_ENTRIES).map((v) => redactInner(v, depth + 1, seen));
+      const out = obj.slice(0, MAX_ENTRIES).map((v) => redactInner(v, depth + 1, state));
       if (obj.length > MAX_ENTRIES) out.push(TRUNCATED);
       return out;
     }
@@ -139,14 +207,14 @@ const redactInner = (value: unknown, depth: number, seen: WeakSet<object>): unkn
       const safeKey = redactString(key);
       out[safeKey] = isSensitiveKey(key)
         ? REDACTED
-        : redactInner((obj as Record<string, unknown>)[key], depth + 1, seen);
+        : redactInner((obj as Record<string, unknown>)[key], depth + 1, state);
     }
     if (keys.length > MAX_ENTRIES) out[TRUNCATED] = TRUNCATED;
     return out;
   } catch {
     return UNSUPPORTED;
   } finally {
-    seen.delete(obj);
+    state.seen.delete(obj);
   }
 };
 
@@ -164,7 +232,7 @@ export const redactSerializedError = (err: SerializedError): SerializedError => 
 /** Returns a JSON-safe, redacted copy. Never throws and never returns input beyond the caps. */
 export const redact = (value: unknown): unknown => {
   try {
-    return redactInner(value, 0, new WeakSet());
+    return redactInner(value, 0, { seen: new WeakSet(), budget: MAX_NODES });
   } catch {
     return UNSUPPORTED;
   }

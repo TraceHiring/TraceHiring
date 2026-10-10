@@ -1,12 +1,31 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { LogLine } from '../contracts.js';
 import { noopErrorReporter, reportError, type ErrorReporter } from './error-reporter.js';
-import { createLogger } from './logger.js';
-import { REDACTED } from './redact.js';
+import { createLogger, type LiteralEvent, type Logger } from './logger.js';
+import { REDACTED, redact } from './redact.js';
 import { serializeError } from './serialize-error.js';
 import { synth } from './synth.test-helpers.js';
+
+/**
+ * Calls the logger the way untyped JS (or an `any` value) would, to prove the runtime event guard.
+ * The parameter is deliberately not named like a logger: the `trace/log-event-literal` rule would
+ * (rightly) reject these calls in product code, and eslint-disable for trace/ rules is banned.
+ */
+const callUntyped = (target: Logger, event: unknown): void => target.info(event as never);
+
+/** The workspace root: the nearest ancestor of this file that holds pnpm-workspace.yaml. */
+const workspaceRoot = (): string => {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  while (!existsSync(path.join(dir, 'pnpm-workspace.yaml'))) {
+    const up = path.dirname(dir);
+    if (up === dir) throw new Error('workspace root not found');
+    dir = up;
+  }
+  return dir;
+};
 
 const fixedNow = () => new Date('2026-10-11T00:00:00.000Z');
 const capture = () => {
@@ -49,8 +68,7 @@ describe('createLogger', () => {
 
   it('replaces an event that breaks the LogLine pattern at runtime', () => {
     const { log, parsed } = capture();
-    const dynamic = `user ${synth.email()}` as 'x';
-    log.info(dynamic);
+    callUntyped(log, `user ${synth.email()}`);
     expect(parsed()[0]?.event).toBe('log.invalid_event');
     expect(JSON.stringify(parsed())).not.toContain('@');
   });
@@ -76,12 +94,19 @@ describe('createLogger', () => {
   });
 
   it('only accepts literal events at the type level', () => {
-    const { log } = capture();
-    const dynamic: string = 'a.b';
-    // @ts-expect-error a non-literal string is not a valid event
-    log.info(dynamic);
+    // A widened `string` event resolves to `never`, so `log.info(someString)` cannot type-check.
+    expectTypeOf<LiteralEvent<string>>().toBeNever();
+    expectTypeOf<LiteralEvent<'a.b'>>().toEqualTypeOf<'a.b'>();
+    expectTypeOf<Parameters<Logger['info']>[0]>().toBeNever();
+    const { log, parsed } = capture();
     log.info('a.b');
-    expect(true).toBe(true);
+    expect(parsed()[0]?.event).toBe('a.b');
+  });
+
+  it('rejects non-string events at runtime', () => {
+    const { log, parsed } = capture();
+    for (const ev of [undefined, null, 42, { e: 'a.b' }, ['a.b']]) callUntyped(log, ev);
+    expect(parsed().map((l) => l.event)).toEqual(Array(5).fill('log.invalid_event'));
   });
 });
 
@@ -121,10 +146,8 @@ describe('ErrorReporter (AT-9)', () => {
   });
 
   it('has no Sentry package in any lockfile importer (revision 10)', () => {
-    const lock = readFileSync(
-      fileURLToPath(new URL('../../../../pnpm-lock.yaml', import.meta.url)),
-      'utf8',
-    );
+    const lock = readFileSync(path.join(workspaceRoot(), 'pnpm-lock.yaml'), 'utf8');
+    expect(lock).toMatch(/^importers:/m);
     expect(lock).not.toMatch(/@sentry\//);
   });
 });
@@ -139,8 +162,36 @@ describe('security review regressions (S1.7)', () => {
 
   it('redacts and caps the event, falling back to log.invalid_event', () => {
     const { log, parsed } = capture();
-    log.info(`otp.sent.${synth.mobile()}` as 'x');
-    log.info('a'.repeat(100) as 'x');
+    for (const ev of [`otp.sent.${synth.mobile()}`, 'a'.repeat(100)]) callUntyped(log, ev);
     expect(parsed().map((l) => l.event)).toEqual(['log.invalid_event', 'log.invalid_event']);
+  });
+
+  it('never repeats the message in any stack line, even a frame-shaped one', () => {
+    const msg = `dup ${synth.email()}\n    at leak (${synth.mobile()}:1:2)`;
+    const err = new Error(msg);
+    const out = serializeError(err);
+    expect(out.stack?.length).toBeGreaterThan(0);
+    const text = JSON.stringify(out);
+    expect(text).not.toContain('dup ');
+    expect(text).not.toContain('at leak');
+    expect(text).not.toContain(synth.mobile());
+  });
+
+  it('keeps only V8 frames ending in line:column, at most 20', () => {
+    const err = new Error('x');
+    err.stack = ['Error: x', ...Array.from({ length: 30 }, (_, i) => `    at f${i} (m.js:${i}:1)`)]
+      .concat('    at native', '    at Array.map (<anonymous>)')
+      .join('\n');
+    const out = serializeError(err);
+    expect(out.stack).toHaveLength(20);
+    expect(out.stack?.[0]).toBe('at f0 (m.js:0:1)');
+  });
+
+  it('serialises an error inside data without its message, in the message-free stack too', () => {
+    const msg = `Key (email)=(${synth.email()})`;
+    const once = redact({ err: Object.assign(new Error(msg), { code: '23505' }) });
+    expect(once).toMatchObject({ err: { name: 'Error', code: '23505', stack: expect.any(Array) } });
+    expect(JSON.stringify(once)).not.toContain('Key (email)');
+    expect(JSON.stringify(redact(once))).not.toContain('Key (email)');
   });
 });

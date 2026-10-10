@@ -1,7 +1,7 @@
 // Redacting JSON-lines logger (spec §9.1). No dependencies: browser, Workers and Node.
 // Events must be string literals: enforced by the type below, by the `trace/log-event-literal`
 // ESLint rule, and at runtime (a non-matching event becomes `log.invalid_event`).
-import { redact, redactSerializedError } from './redact.js';
+import { redact, redactSerializedError, redactString } from './redact.js';
 import { serializeError } from './serialize-error.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -30,9 +30,15 @@ export interface LoggerConfig {
   now?: () => Date;
 }
 
-const EVENT = /^[a-z0-9_.]+$/;
+const EVENT = /^[a-z0-9_.]{1,64}$/;
 const VERSION = /^[0-9a-f]{7,40}$|^dev$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Valid only as a short contract-shaped string that the redactor would leave untouched. */
+const safeEvent = (event: unknown): string =>
+  typeof event === 'string' && EVENT.test(event) && redactString(event) === event
+    ? event
+    : 'log.invalid_event';
 
 const defaultSink = (line: string): void => {
   console.log(line);
@@ -44,14 +50,14 @@ export const createLogger = (config: LoggerConfig): Logger => {
   const sink = config.sink ?? defaultSink;
   const now = config.now ?? (() => new Date());
 
-  const write = (level: LogLevel, event: string, data: unknown, opts: LogOptions = {}): void => {
+  const write = (level: LogLevel, event: unknown, data: unknown, opts: LogOptions = {}): void => {
     try {
       const line: Record<string, unknown> = {
         ts: now().toISOString(),
         level,
         service: config.service,
         version: config.version,
-        event: EVENT.test(event) ? event : 'log.invalid_event',
+        event: safeEvent(event),
       };
       if (opts.requestId !== undefined && UUID.test(opts.requestId)) {
         line.requestId = opts.requestId;
