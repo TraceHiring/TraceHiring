@@ -1,6 +1,6 @@
 # Git hooks for Trace (spec specs/m0-foundations.md §6).
 # There is no post-commit hook: nothing pushes automatically (build-notes Q54).
-# Prettier joined pre-commit in S1.1; commitlint (commit-msg) joins in S1.6, once it is installed.
+# Prettier joined pre-commit in S1.1; commitlint (commit-msg) joined in S1.6.
 pre-commit:
   commands:
     gitleaks:
@@ -10,6 +10,14 @@ pre-commit:
     prettier:
       # --ignore-unknown: staged files Prettier has no parser for (SQL, images) pass; .prettierignore still applies.
       run: pnpm exec prettier --check --ignore-unknown {staged_files}
+
+# Conventional commits, plus `wip` (commitlint.config.js; spec §6, AT-7).
+commit-msg:
+  commands:
+    commitlint:
+      # {1} is the message file git passes to the hook. Lefthook does not quote it, and this repo's
+      # path has spaces, so it is single-quoted (no double quotes: on Windows lefthook runs sh -c "…").
+      run: pnpm exec commitlint --edit '{1}'
 
 # Pushes are allowed since 2026-10-11 (founder, option (b)). Scan every ref before anything leaves the machine,
 # because cherry-picks, rebases, merges and --no-verify commits never ran pre-commit.
