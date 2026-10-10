@@ -50,6 +50,21 @@ Planned: deployment branches limited to `main` (H3). **Checked 2026-10-11: the e
 
 The autopilot never sets or reads a secret value. `trace-dev` gets no GitHub variables: dev runs locally.
 
+## AWS (staging), set up by the founder 2026-10-11
+Identifiers only; no keys are recorded here. Plan: AWS is used only for Bedrock, SES and KMS/Secrets Manager (CLAUDE.md, ADR-027).
+
+| Item | Value |
+| --- | --- |
+| Account | `423741523885` |
+| Region | `ap-south-1` (Mumbai) |
+| Bedrock inference profile (as set) | `apac.anthropic.claude-3-haiku-20240307-v1:0`. **Cross-region:** it routes to ap-northeast-1, ap-northeast-2, ap-southeast-1, ap-southeast-2 and ap-south-1, so prompts can be processed outside India. This conflicts with "Claude via Bedrock India" and needs a founder decision (FOUNDER-QUEUE). Not used by any code yet. |
+| KMS key | `arn:aws:kms:ap-south-1:423741523885:key/931c62c9-07c6-4aa3-85a8-67c5e2466e21` |
+| IAM policy | `arn:aws:iam::423741523885:policy/trace-staging-app` |
+| IAM user | `arn:aws:iam::423741523885:user/trace-staging-app` |
+| SES identity | `tracehiring.tech`, with DKIM and MAIL FROM `mail.tracehiring.tech`. Sandbox mode. Verification status: **unknown**; the founder's note still had the `<SUCCESS/PENDING>` placeholder. One founder-owned test recipient is verified; its address is not recorded here (no PII in the repo). |
+
+GitHub `staging` secrets (names only, per the founder): `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`. **No workflow reads any AWS secret yet** (.github/workflows/ci.yml has no deploy job; spec §7.3 lists no AWS names), so nothing mismatches today. These are the standard names `aws-actions/configure-aws-credentials` and the AWS SDK use; the deploy job (S3) must read exactly these, or the names get fixed then.
+
 ## Verified 2026-10-11 (read-only, names only)
 
 - `git remote -v`: `trace` → `https://github.com/TraceHiring/TraceHiring.git` (fetch and push).
