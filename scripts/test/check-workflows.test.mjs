@@ -11,6 +11,7 @@ import {
   checkWorkflow,
   parseYaml,
   runChecks,
+  secretRefs,
 } from '../check-workflows.mjs';
 import { cleanupTempDirs, makeTempDir, writeFiles } from './fixtures/checks/temp-repo.mjs';
 
@@ -142,6 +143,66 @@ describe('parseYaml (the subset GitHub workflows use)', () => {
     ['a complex key', '? a\n: b'],
   ])('rejects %s', (_label, y) => {
     expect(() => parseYaml(y)).toThrow(YamlError);
+  });
+
+  // S1.4 security review HIGH 2: a flow key or scalar starting with a YAML indicator is a real
+  // key to GitHub/js-yaml (`&a uses` is the key `uses` with an anchor), so the gate must not read
+  // it as a literal key or value.
+  describe.each([
+    ['&', '&a uses'],
+    ['*', '*a'],
+    ['!', '!!str continue-on-error'],
+    ['?', '? uses'],
+    ['|', '|'],
+    ['>', '>'],
+    ['%', '%x'],
+    ['@', '@x'],
+    ['`', '`x'],
+  ])('a flow token starting with %s', (indicator, token) => {
+    it('is rejected as a flow-mapping key', () => {
+      expect(() => parseYaml(`steps:\n  - { name: T, ${token}: evil/action@main }`)).toThrow(
+        YamlError,
+      );
+    });
+
+    it('is rejected as a flow-mapping value', () => {
+      expect(() => parseYaml(`step: { name: T, uses: ${token} }`)).toThrow(YamlError);
+    });
+
+    it('is rejected as a flow-sequence item', () => {
+      expect(() => parseYaml(`needs: [static, ${token}]`)).toThrow(YamlError);
+    });
+
+    it('is rejected as a key of a mapping nested in a flow sequence', () => {
+      expect(() => parseYaml(`steps: [{ name: T, ${token}: x }]`)).toThrow(YamlError);
+    });
+
+    it(`names the indicator in the error (${indicator})`, () => {
+      expect(() => parseYaml(`a: { ${token}: x }`)).toThrow(/flow/);
+    });
+  });
+
+  it('rejects an empty key in a flow mapping', () => {
+    expect(() => parseYaml('a: { : x }')).toThrow(YamlError);
+  });
+
+  it('ends a flow plain scalar at a " #" comment, as YAML does', () => {
+    expect(parseYaml('a: { k: v #c\n }\nb: [x #c\n ]')).toEqual({ a: { k: 'v' }, b: ['x'] });
+  });
+
+  // S1.4 security review LOW 7: YAML 1.1 parsers (js-yaml) treat these as line breaks, which
+  // this line-based parser would not, so a file containing one is refused before parsing.
+  it.each([
+    ['a bare CR', 'a: 1\rcontinue-on-error: true\n'],
+    ['U+0085', 'a: 1\u0085b: 2\n'],
+    ['U+2028', 'a: 1\u2028b: 2\n'],
+    ['U+2029', 'a: 1\u2029b: 2\n'],
+  ])('rejects %s anywhere in the file', (_label, y) => {
+    expect(() => parseYaml(y)).toThrow(/line break/);
+  });
+
+  it('still accepts CRLF line endings', () => {
+    expect(parseYaml('a: 1\r\nb: 2\r\n')).toEqual({ a: 1, b: 2 });
   });
 });
 
@@ -311,6 +372,43 @@ describe('checkWorkflow', () => {
     expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/jobs\.migrations.*if:/);
   });
 
+  // S1.4 security review MED 4: a required check must not be emptied.
+  it.each(REQUIRED_JOBS)('rejects an if: on any step of the required job %s', (job) => {
+    const d = doc();
+    const last = d.jobs[job].steps.length - 1;
+    d.jobs[job].steps[last].if = 'false';
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+      new RegExp(`jobs\\.${job}\\.steps\\[${last}\\].*if:`),
+    );
+  });
+
+  it('allows an if: on a step of a job that is not required', () => {
+    const d = doc();
+    d.jobs.extra = {
+      'runs-on': 'ubuntu-24.04',
+      steps: [{ if: "github.event_name == 'push'", run: 'echo hi' }],
+    };
+    expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
+  });
+
+  it('rejects a job name: that differs from its id, and accepts one equal to it', () => {
+    const d = doc();
+    d.jobs.extra = { name: 'static', 'runs-on': 'ubuntu-24.04', steps: [{ run: 'true' }] };
+    d.jobs.rls.name = 'RLS tests';
+    const m = msgs(checkWorkflow(d, 'ci.yml', ctx));
+    expect(m).toMatch(/jobs\.extra.*name:/);
+    expect(m).toMatch(/jobs\.rls.*name:/);
+    const ok = doc();
+    ok.jobs.rls.name = 'rls';
+    expect(checkWorkflow(ok, 'ci.yml', ctx)).toEqual([]);
+  });
+
+  it('rejects a job whose id differs from a required job only by case', () => {
+    const d = doc();
+    d.jobs.Static = { 'runs-on': 'ubuntu-24.04', steps: [{ run: 'true' }] };
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/jobs\.Static.*required/);
+  });
+
   describe('secrets', () => {
     it('rejects secrets in workflow-level or job-level env', () => {
       const d = doc();
@@ -381,6 +479,58 @@ describe('checkWorkflow', () => {
       const d = doc();
       d.jobs['deploy-staging'].steps[6].env.ALL = '${{ toJSON(secrets) }}';
       expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/steps\[6\].*secrets/);
+    });
+
+    // S1.4 security review HIGH 1: GitHub expression contexts and property names are
+    // case-insensitive, so `SECRETS.X` is `secrets.X`.
+    it.each([
+      ['SECRETS.X', '${{ SECRETS.X }}', ['X']],
+      ["Secrets['X']", "${{ Secrets['X'] }}", ['X']],
+      ['secrets.lower_case', '${{ secrets.lower_case }}', ['LOWER_CASE']],
+      ['GITHUB.TOKEN', '${{ GITHUB.TOKEN }}', ['GITHUB_TOKEN']],
+      ["GitHub['Token']", "${{ GitHub['Token'] }}", ['GITHUB_TOKEN']],
+      ['toJson(Secrets)', '${{ toJson(Secrets) }}', ['*']],
+      ['toJSON(SECRETS)', '${{ toJSON(SECRETS) }}', ['*']],
+      ['toJSON(github), which holds the token', '${{ toJSON(github) }}', ['GITHUB_TOKEN']],
+      ['a computed index', "${{ secrets[format('{0}', 'X')] }}", ['*']],
+      ["a '}}' inside a string", "${{ format('}}', secrets.X) }}", ['X']],
+    ])('finds %s', (_label, value, refs) => {
+      expect(secretRefs({ env: { V: value } }).sort()).toEqual(refs);
+    });
+
+    it.each([
+      ['SECRETS.X', 'SECRETS.X != ""'],
+      ["Secrets['X']", "Secrets['X'] != ''"],
+      ['GITHUB.TOKEN', "GITHUB.TOKEN != ''"],
+      ['toJson(Secrets)', "toJson(Secrets) != '{}'"],
+    ])('finds %s in an if: value, which is an expression without ${{ }}', (_label, cond) => {
+      expect(secretRefs({ if: cond }).length).toBeGreaterThan(0);
+    });
+
+    it('ignores ordinary github.* properties', () => {
+      expect(secretRefs({ if: "github.event_name == 'push' && GITHUB.REF == 'x'" })).toEqual([]);
+    });
+
+    it.each([
+      ['SECRETS.X', '${{ SECRETS.X }}'],
+      ["Secrets['X']", "${{ Secrets['X'] }}"],
+      ['GITHUB.TOKEN', '${{ GITHUB.TOKEN }}'],
+      ['toJson(Secrets)', '${{ toJson(Secrets) }}'],
+    ])('rejects %s outside deploy-staging and at job level', (_label, value) => {
+      const d = doc();
+      d.jobs.static.steps[2].env = { T: value };
+      d.jobs.rls.env = { T: value };
+      d.env.T = value;
+      const m = msgs(checkWorkflow(d, 'ci.yml', ctx));
+      expect(m).toMatch(/jobs\.static\.steps\[2\].*not allowed outside deploy-staging/);
+      expect(m).toMatch(/jobs\.rls.*found in env:/);
+      expect(m).toMatch(/ci\.yml \(env\).*step level/);
+    });
+
+    it('rejects a mixed-case secret in an if: on a deploy-staging step', () => {
+      const d = doc();
+      d.jobs['deploy-staging'].steps[6].if = "Secrets.CLOUDFLARE_API_TOKEN != ''";
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/steps\[6\].*only in env: or with:/);
     });
   });
 
@@ -515,6 +665,92 @@ describe('runChecks over a fixture repository', () => {
     const fail = spawnSync(process.execPath, [script, bad], { encoding: 'utf8' });
     expect(fail.status).toBe(1);
     expect(fail.stderr).toMatch(/ci\.yml \(permissions\).*\n[\s\S]*1 violation/);
+  });
+
+  it('rejects a second workflow with a job named like a required job (S1.4 review MED 4)', () => {
+    const other = (job, extra = '') =>
+      [
+        'on: push',
+        'permissions:',
+        '  contents: read',
+        'jobs:',
+        `  ${job}:`,
+        '    runs-on: ubuntu-24.04',
+        extra,
+        '    steps:',
+        '      - run: "true"',
+      ]
+        .filter(Boolean)
+        .join('\n');
+    for (const [label, text] of [
+      ['same id', other('security')],
+      ['id differing by case', other('Security')],
+      ['name: of another job', other('x', '    name: security')],
+    ]) {
+      const root = repo({
+        '.github/workflows/ci.yml': CI,
+        '.github/workflows/other.yml': text,
+        '.github/actions/setup/action.yml': ACTION,
+      });
+      expect(msgs(runChecks(root)), label).toMatch(/required job "security"/);
+    }
+  });
+
+  describe('nested local actions (S1.4 review MED 3)', () => {
+    const composite = (steps) =>
+      ['runs:', '  using: composite', '  steps:', ...steps.map((s) => `    - ${s}`)].join('\n');
+
+    it('checks an action used by another action, by the same rules', () => {
+      const root = repo({
+        '.github/workflows/ci.yml': CI,
+        '.github/actions/setup/action.yml': `${ACTION}\n    - uses: ./.github/actions/inner\n`,
+        '.github/actions/inner/action.yml': composite(['uses: evil/action@main']),
+      });
+      expect(msgs(runChecks(root))).toMatch(/inner\/action\.yml.*not pinned/);
+    });
+
+    it('fails when a nested local action is missing', () => {
+      const root = repo({
+        '.github/workflows/ci.yml': CI,
+        '.github/actions/setup/action.yml': `${ACTION}\n    - uses: ./.github/actions/gone\n`,
+      });
+      expect(msgs(runChecks(root))).toMatch(
+        /setup\/action\.yml.*\.\/\.github\/actions\/gone.*not found/,
+      );
+    });
+
+    it('fails when a nested local action lives outside .github/actions', () => {
+      const root = repo({
+        '.github/workflows/ci.yml': CI,
+        '.github/actions/setup/action.yml': `${ACTION}\n    - uses: ./tools/evil\n`,
+        'tools/evil/action.yml': composite(['run: "true"\n      shell: bash']),
+      });
+      expect(msgs(runChecks(root))).toMatch(/setup\/action\.yml.*\.\/tools\/evil.*not found/);
+    });
+
+    it('fails on a cycle of local actions instead of looping', () => {
+      const root = repo({
+        '.github/workflows/ci.yml': CI,
+        '.github/actions/setup/action.yml': `${ACTION}\n    - uses: ./.github/actions/a\n`,
+        '.github/actions/a/action.yml': composite(['uses: ./.github/actions/b']),
+        '.github/actions/b/action.yml': composite(['uses: ./.github/actions/a']),
+      });
+      expect(msgs(runChecks(root))).toMatch(/cycle/);
+    });
+
+    it('counts an install in a nested action, so a secret on a step using the outer one fails', () => {
+      const d = CI.replace(
+        '      - uses: ./.github/actions/setup\n      - run: pnpm build',
+        '      - uses: ./.github/actions/outer\n        env:\n          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
+      );
+      expect(d).not.toBe(CI);
+      const root = repo({
+        '.github/workflows/ci.yml': d,
+        '.github/actions/setup/action.yml': ACTION,
+        '.github/actions/outer/action.yml': composite(['uses: ./.github/actions/setup']),
+      });
+      expect(msgs(runChecks(root))).toMatch(/deploy-staging\.steps\[1\].*install/);
+    });
   });
 
   it('applies the rules to every workflow file', () => {

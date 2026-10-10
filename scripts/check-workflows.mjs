@@ -4,12 +4,17 @@
 //   - triggers are only pull_request and push (§7.1); pull_request_target / workflow_run are named
 //   - workflow-level permissions are exactly `contents: read`; no job asks for more
 //   - every remote `uses:` is pinned to a full 40-hex commit SHA (docker:// images to a sha256 digest);
-//     local `./` actions must exist and pass the same rules
+//     local `./` actions (also those used by another local action) must exist under
+//     .github/actions and pass the same rules; a cycle of local actions fails
 //   - every actions/checkout step sets `persist-credentials: false`; static, security and
 //     migrations check out with `fetch-depth: 0`; static sets MIGRATIONS_BASE=origin/main (§8.4)
 //   - only deploy-staging names an environment (environments hold the staging secrets)
-//   - github.token counts as a secret (GITHUB_TOKEN)
-//   - no job or step sets continue-on-error; the required jobs exist and have no `if:`
+//   - github.token (and the whole github context) counts as a secret (GITHUB_TOKEN); contexts
+//     match case-insensitively, as GitHub evaluates them
+//   - no job or step sets continue-on-error; the required jobs exist, have no `if:` on the job or
+//     any of its steps, and no other job (in any workflow) reports a required check name; a job
+//     `name:` must equal its id
+//   - no bare CR, U+0085, U+2028 or U+2029 line break anywhere in the file
 //   - secrets appear only in step-level env:/with: of deploy-staging, never on or before an
 //     install/build step, and each staging secret only on the steps that use it (§7.2, §7.3)
 //   - deploy-staging (when present) has the exact needs / if / environment / concurrency of §7.2
@@ -377,6 +382,9 @@ function flowEnd(s) {
   return -1;
 }
 
+/** Characters that may not start a flow key or scalar (see FlowParser.rejectIndicator). */
+const FLOW_INDICATORS = '&*!?|>%@`';
+
 class FlowParser {
   constructor(s, fail) {
     this.s = s;
@@ -407,8 +415,18 @@ class FlowParser {
       this.pos = q.end;
       return q.value;
     }
-    if ('&*!|>%@`'.includes(c)) this.fail(`unsupported "${c}" in a flow collection`);
+    this.rejectIndicator(c);
     return resolvePlain(this.plain(false));
+  }
+
+  /**
+   * A flow key or scalar that starts with a YAML indicator (anchor, alias, tag, complex key, block
+   * scalar, directive or reserved character) means something else to GitHub/js-yaml than the
+   * literal text, so it is refused (S1.4 security review H2).
+   */
+  rejectIndicator(c) {
+    if (c !== undefined && FLOW_INDICATORS.includes(c))
+      this.fail(`unsupported "${c}" in a flow collection`);
   }
 
   plain(isKey) {
@@ -418,6 +436,7 @@ class FlowParser {
       if (',[]{}'.includes(c)) break;
       if (c === ':' && (isKey || /[\s,\]}]/.test(this.s[this.pos + 1] ?? ' '))) break;
       if (c === '\n') break;
+      if (c === '#' && this.pos > start && /\s/.test(this.s[this.pos - 1])) break; // a comment
       this.pos++;
     }
     return this.s.slice(start, this.pos).trim();
@@ -456,7 +475,11 @@ class FlowParser {
         if (!q) this.fail('invalid quoted key in a flow mapping');
         this.pos = q.end;
         key = q.value;
-      } else key = this.plain(true);
+      } else {
+        this.rejectIndicator(c);
+        key = this.plain(true);
+        if (key === '') this.fail('empty key in a flow mapping');
+      }
       if (key === '<<') this.fail('merge keys (<<) are not supported');
       this.ws();
       let value = null;
@@ -480,8 +503,21 @@ class FlowParser {
   }
 }
 
+/**
+ * Line breaks other than LF / CRLF. YAML 1.1 parsers (js-yaml) break lines at these, but this
+ * line-based parser would not, so the two could read different keys (S1.4 security review L7).
+ */
+const FOREIGN_LINE_BREAK = /\r(?!\n)|[\u0085\u2028\u2029]/;
+
 /** Parses the YAML subset described at the top of this file. Throws YamlError on anything else. */
 export function parseYaml(text) {
+  const m = FOREIGN_LINE_BREAK.exec(text);
+  if (m) {
+    const line = text.slice(0, m.index).split('\n').length;
+    throw new YamlError(
+      `line ${line}: a bare CR, U+0085, U+2028 or U+2029 line break is not supported (use LF)`,
+    );
+  }
   return new Parser(text).parseDocument();
 }
 
@@ -522,24 +558,51 @@ const normExpr = (s) =>
     .trim();
 
 /**
- * Secret names referenced in a node. Strings are searched inside ${{ }} expressions; values of
- * `if` keys are expressions as a whole. A bare `secrets` context (e.g. toJSON(secrets)) yields '*'.
+ * The bodies of the ${{ }} expressions in a string. Each expression is read twice, once ending at
+ * the first `}}` and once skipping `}}` inside a '…' string literal, and both bodies are returned,
+ * so a `}}` inside a string can never hide part of an expression from the secret scan.
+ */
+function expressionBodies(s) {
+  const out = [];
+  for (const m of s.matchAll(/\$\{\{([\s\S]*?)(?:\}\}|$)/g)) out.push(m[1]);
+  let i = 0;
+  while ((i = s.indexOf('${{', i)) >= 0) {
+    let j = i + 3;
+    let inString = false;
+    for (; j < s.length; j++) {
+      if (s[j] === "'")
+        inString = !inString; // '' (an escaped quote) toggles twice
+      else if (!inString && s[j] === '}' && s[j + 1] === '}') break;
+    }
+    out.push(s.slice(i + 3, j));
+    i = j + 2;
+  }
+  return out;
+}
+
+/**
+ * Secret names referenced in a node, upper-cased. Strings are searched inside ${{ }} expressions;
+ * values of `if` keys are expressions as a whole. Contexts and property names match
+ * case-insensitively, as GitHub evaluates them (S1.4 security review H1). A bare or computed
+ * `secrets` reference (toJSON(secrets), secrets[format(…)], secrets.*) yields '*'. The `github`
+ * context holds the token, so github.token, github['token'] and a bare github (toJSON(github)) all
+ * yield GITHUB_TOKEN; ordinary properties such as github.ref do not.
  */
 export function secretRefs(node, key = null) {
   const out = new Set();
   const scan = (expr) => {
-    for (const m of expr.matchAll(
-      /\bsecrets\b\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_-]*)|\[\s*['"]([^'"]+)['"]\s*\])?/g,
-    )) {
-      out.add(m[1] ?? m[2] ?? '*');
+    const re =
+      /\b(secrets|github)\b\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_-]*)|\[\s*(?:'([^']*)'|"([^"]*)")\s*\])?/gi;
+    for (const m of expr.matchAll(re)) {
+      const prop = m[2] ?? m[3] ?? m[4];
+      if (m[1].toLowerCase() === 'secrets') out.add(prop === undefined ? '*' : prop.toUpperCase());
+      else if (prop === undefined || prop.toLowerCase() === 'token') out.add('GITHUB_TOKEN');
     }
-    // github.token is the same credential as secrets.GITHUB_TOKEN.
-    if (/\bgithub\s*(?:\.\s*token\b|\[\s*['"]token['"]\s*\])/.test(expr)) out.add('GITHUB_TOKEN');
   };
   const walk = (n, k) => {
     if (typeof n === 'string') {
       if (k === 'if') scan(n);
-      else for (const m of n.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) scan(m[1]);
+      else for (const body of expressionBodies(n)) scan(body);
     } else if (Array.isArray(n)) n.forEach((x) => walk(x, null));
     else if (isObj(n)) for (const [kk, vv] of Object.entries(n)) walk(vv, kk);
   };
@@ -604,6 +667,12 @@ function triggerNames(on) {
 }
 
 const LEVEL = { none: 0, read: 1, write: 2 };
+
+/** The required job a check name stands for, compared case-insensitively, or null. */
+function requiredNameOf(checkName) {
+  if (typeof checkName !== 'string') return null;
+  return REQUIRED_JOBS.find((r) => r.toLowerCase() === checkName.trim().toLowerCase()) ?? null;
+}
 
 /**
  * Checks one parsed workflow.
@@ -678,6 +747,29 @@ export function checkWorkflow(doc, file, ctx = {}) {
       out.push(
         v(file, where, 'a required job may not have an if: (a skipped job reports success)'),
       );
+    }
+    // The check name is the job's name: (or its id). A renamed job, or a second job reporting a
+    // required name, could satisfy branch protection without running the real checks (S1.4 M4).
+    if (job.name !== undefined && job.name !== name) {
+      out.push(v(file, where, 'a job name: must equal its job id (check names are protected)'));
+    }
+    const required = requiredNameOf(name);
+    if (required !== null && name !== required) {
+      out.push(
+        v(file, where, `job id "${name}" collides with the required job "${required}" (case)`),
+      );
+    }
+    if (REQUIRED_JOBS.includes(name) && Array.isArray(job.steps)) {
+      job.steps.forEach((s, i) => {
+        if (isObj(s) && s.if !== undefined)
+          out.push(
+            v(
+              file,
+              `${where}.steps[${i}]`,
+              'a step of a required job may not have an if: (a skipped step reports success)',
+            ),
+          );
+      });
     }
     if (job.uses !== undefined) checkUses(job.uses, file, where, out, ctx);
     if (job.environment !== undefined && name !== DEPLOY_JOB) {
@@ -843,17 +935,44 @@ export function runChecks(root) {
     }
   };
 
-  // Local actions first, so workflows know which ones install.
-  const actions = new Map(); // dir → doc
+  // Local actions first, so workflows know which ones install. Every action.yml under
+  // .github/actions is checked; the local actions each one uses must exist there too.
+  const actions = new Map(); // dir → { doc, file, refs }
   for (const abs of listFiles(path.join(root, '.github', 'actions'), (n) =>
     /^action\.ya?ml$/.test(n),
   )) {
     const r = load(abs);
     if (!r) continue;
-    out.push(...checkAction(r.doc, relp(abs)));
-    actions.set(relp(path.dirname(abs)), r.doc);
+    const refs = new Set();
+    out.push(...checkAction(r.doc, relp(abs), { localActions: refs }));
+    actions.set(relp(path.dirname(abs)), { doc: r.doc, file: relp(abs), refs });
   }
-  const installActions = new Set([...actions].filter(([, d]) => actionInstalls(d)).map(([k]) => k));
+  for (const { file, refs } of actions.values()) {
+    for (const a of refs) {
+      if (!actions.has(a))
+        out.push(v(file, a, `local action ./${a} not found (expected ${a}/action.yml)`));
+    }
+  }
+  // An action installs if it, or any local action it uses (transitively), installs (S1.4 M3).
+  const installs = new Map(); // dir → boolean, once resolved
+  const cycles = new Set();
+  const resolveInstalls = (dir, stack) => {
+    if (installs.has(dir)) return installs.get(dir);
+    const a = actions.get(dir);
+    if (!a) return false; // reported as not found above
+    if (stack.includes(dir)) {
+      cycles.add([...stack.slice(stack.indexOf(dir)), dir].join(' -> '));
+      return false;
+    }
+    let result = actionInstalls(a.doc);
+    for (const ref of a.refs) if (resolveInstalls(ref, [...stack, dir])) result = true;
+    installs.set(dir, result);
+    return result;
+  };
+  for (const dir of actions.keys()) resolveInstalls(dir, []);
+  for (const c of cycles)
+    out.push(v('.github/actions', '', `local actions use each other in a cycle: ${c}`));
+  const installActions = new Set([...installs].filter(([, i]) => i).map(([k]) => k));
 
   const wfDir = path.join(root, '.github', 'workflows');
   const workflows = existsSync(wfDir)
@@ -867,7 +986,7 @@ export function runChecks(root) {
     );
     return out;
   }
-  const jobs = new Set();
+  const jobs = []; // { file, id, check } for every job in every workflow
   for (const name of workflows) {
     const abs = path.join(wfDir, name);
     const r = load(abs);
@@ -878,13 +997,33 @@ export function runChecks(root) {
       if (!actions.has(a))
         out.push(v(relp(abs), a, `local action ./${a} not found (expected ${a}/action.yml)`));
     }
-    if (isObj(r.doc) && isObj(r.doc.jobs)) Object.keys(r.doc.jobs).forEach((j) => jobs.add(j));
+    if (isObj(r.doc) && isObj(r.doc.jobs)) {
+      for (const [id, job] of Object.entries(r.doc.jobs)) {
+        const check = isObj(job) && job.name !== undefined ? job.name : id;
+        jobs.push({ file: relp(abs), id, check });
+      }
+    }
   }
+  // Each required check name must come from exactly one job, the one whose id is that name.
   for (const j of REQUIRED_JOBS) {
-    if (!jobs.has(j))
+    const owners = jobs.filter((x) => x.id === j);
+    if (owners.length === 0)
       out.push(
         v('.github/workflows', '', `required job "${j}" is missing (branch protection needs it)`),
       );
+    const claimants = jobs.filter(
+      (x) => requiredNameOf(x.id) === j || requiredNameOf(x.check) === j,
+    );
+    if (claimants.length > 1) {
+      out.push(
+        v(
+          '.github/workflows',
+          '',
+          `required job "${j}" is reported by ${claimants.length} jobs (` +
+            `${claimants.map((x) => `${x.file} jobs.${x.id}`).join(', ')}); exactly one may use it`,
+        ),
+      );
+    }
   }
   return out;
 }
