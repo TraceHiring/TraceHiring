@@ -6,9 +6,14 @@
   "main": "src/index.ts",
   // Newest date the test runtime supports: @cloudflare/vitest-pool-workers 0.23.0 runs
   // workerd 1.20260815.1, so tests and deploys use the same date. From 2026-08-04 on,
-  // nodejs_compat is on by default, which the test pool needs; no extra flags are set.
+  // nodejs_compat is on by default, which the test pool needs.
   "compatibility_date": "2026-08-15",
+  // Keep bindings and secrets out of process.env, so only the typed `env` argument sees them
+  // (ADR-027 service-role boundary; S1 security review).
+  "compatibility_flags": ["nodejs_compat_do_not_populate_process_env"],
   "workers_dev": false,
+  // No per-version preview URLs: an old version must not stay reachable after a redeploy.
+  "preview_urls": false,
   // No usage telemetry or npm dependency metadata leaves this machine or CI.
   "send_metrics": false,
   "dependencies_instrumentation": { "enabled": false },
