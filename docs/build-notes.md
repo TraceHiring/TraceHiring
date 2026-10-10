@@ -28,7 +28,8 @@ These answers override anything below that disagrees with them. Each affected qu
 | plan-conflicts #14 | M4 does not start until one design-partner LOI is signed. |
 | plan-conflicts #9 | Face-absent tiered rule is the default **M4 ruleset config** (not code): log ≥3 s; flag ≥20 s continuous, or ≥10 s followed by a typing burst, or ≥60 s total per question. |
 | Design conflicts | Follow the plan in every case (Q33, Q34). |
-| Risks | Split M0 → **M0a / M0b** and M3 → **M3a / M3b** (now in `docs/build-order.md`); cap parallel writers at **3**. No fixed beta date: beta starts when the M8 gate passes. |
+| Risks | Split M0 → **M0a / M0b** and M3 → **M3a / M3b** (now in `docs/build-order.md`); cap parallel writers at **3** (superseded 2026-10-11: default 3, max 4 — see the Parallelism row). No fixed beta date: beta starts when the M8 gate passes. |
+| Parallelism (2026-10-11) | Writers default **3**, max **4**, each in its own worktree with strictly separate directories; shared files (root package.json, lockfile, migrations, `packages/shared` types) change only in the lead session, before or after streams. Read-only helpers up to **6**. Drop to 2 writers after a merge conflict between streams or at 95%+ usage. Full text: `docs/AUTOPILOT.md` §2. |
 | Q54 (2026-10-11) | **Drop auto-push; work locally only.** The hook is disabled (renamed to `.git/hooks/post-commit.disabled`) and CLAUDE.md line 41 is replaced. Backups are local git bundles via `scripts/backup.sh` (docs/AUTOPILOT.md §5). Pushes happen only when the founder asks. |
 | Still open | **Q55** (prod isolation), **Q56** (local deploy deny rules), **Q57** (review-skill rows for M0a/M0b/M3a/M3b), **Q58** (deferred gates the plan itself places after M8) — all in §2. Also stale, not edited by me: `docs/setup-checklist.md` line 9 ("separate dev account (Organizations) … ECS/ECR … in M5") contradicts Q4 and ADR-027. plan-conflicts #4 (explain probe) stays "founder to confirm" until M4. |
 
