@@ -1,0 +1,21 @@
+.landing-hero { padding:56px 0 32px; max-width:860px; }
+.landing-hero h1 { font-size:44px; line-height:52px; letter-spacing:-0.8px; margin-bottom:16px; }
+.landing-hero .lede { font-size:18px; line-height:28px; color:var(--text-2); max-width:680px; margin:0; }
+.landing-hero .accent { color:var(--accent-chart); }
+.cta-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px; margin:24px 0 48px; }
+.cta-card { display:flex; flex-direction:column; gap:10px; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--r-lg); padding:22px; color:var(--text); transition:border-color .15s, box-shadow .15s, transform .15s; }
+.cta-card:hover { border-color:var(--accent); box-shadow:0 6px 24px rgba(29,63,143,.10); transform:translateY(-2px); text-decoration:none; }
+.cta-step { width:32px; height:32px; border-radius:50%; background:var(--accent-subtle); color:var(--accent); display:flex; align-items:center; justify-content:center; font-weight:600; }
+.cta-card h3 { font-size:18px; }
+.cta-card p { margin:0; color:var(--text-3); }
+.cta-go { margin-top:auto; color:var(--accent); font-weight:500; }
+.section-title { margin:8px 0 16px; }
+.principles { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px; margin-bottom:48px; }
+.principle { background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--r-lg); padding:20px; border-top:3px solid var(--accent); }
+.principle h3 { font-size:16px; margin-bottom:6px; }
+.principle p { margin:0; color:var(--text-2); }
+.bands-strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-bottom:48px; }
+.band-cell { background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--r-lg); padding:16px; display:flex; flex-direction:column; gap:8px; }
+.band-cell p { margin:0; color:var(--text-2); font-size:13px; line-height:20px; }
+.landing-footer { border-top:1px solid var(--border); padding:20px 0; display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
+@media (max-width:640px) { .landing-hero { padding:32px 0 16px; } .landing-hero h1 { font-size:32px; line-height:40px; } }
