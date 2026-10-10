@@ -4,6 +4,7 @@
 // bytes, so no secret-shaped string is ever committed.
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { INSTALL_HINT, findDists, scanDist } from '../scan-dist.mjs';
@@ -12,6 +13,7 @@ import { cleanupTempDirs, makeTempDir, writeFiles } from './fixtures/checks/temp
 afterEach(cleanupTempDirs);
 
 const SCRIPT = fileURLToPath(new URL('../scan-dist.mjs', import.meta.url));
+const REPO_CONFIG = fileURLToPath(new URL('../../.gitleaks.toml', import.meta.url));
 const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
 /** A random string in the shape of a GitHub personal access token (gitleaks rule github-pat). */
@@ -102,6 +104,56 @@ describe('scanDist (real gitleaks)', () => {
       env: { ...process.env, GITLEAKS_CONFIG: `${allowAll}/allow.toml` },
     });
     expect(r.ok).toBe(false);
+  });
+
+  // S1.4 security review M5: `gitleaks dir` honours a .gitleaksignore in the scanned directory
+  // and inline allow markers, so build output may carry neither.
+  it.each([
+    ['a .gitleaksignore at the top of dist/', 'apps/candidate/dist/.gitleaksignore'],
+    ['a nested .gitleaksignore', 'workers/edge/dist/a/b/.gitleaksignore'],
+    ['a nested .gitleaks.toml', 'apps/recruiter/dist/assets/.gitleaks.toml'],
+    ['a .gitleaksbaseline', 'apps/candidate/dist/.gitleaksbaseline'],
+    ['a .gitleaksignore in another case', 'apps/candidate/dist/.GitLeaksIgnore'],
+  ])('fails on %s, even when the scan is clean', (_label, file) => {
+    const r = scanDist({ root: cleanRepo({ [file]: '# fixture\n' }) });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toContain(`${file}: gitleaks ignore/config/baseline file`);
+  });
+
+  it('fails on a file that contains the inline allow marker, which would hide a finding', () => {
+    const marker = ['gitleaks', 'allow'].join(':');
+    const root = cleanRepo({
+      'apps/candidate/dist/assets/index.js': `const t = "${fakeToken()}"; // ${marker}\n`,
+      'workers/edge/dist/chunk.js': `/* ${marker.toUpperCase()} */\n`,
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    const p = r.problems.join('\n');
+    expect(p).toContain('apps/candidate/dist/assets/index.js: contains the inline allow marker');
+    expect(p).toContain('workers/edge/dist/chunk.js: contains the inline allow marker');
+  });
+
+  // S1.4 security review M6: gitleaks' default rules miss Supabase secret keys.
+  it('finds a Supabase sb_secret_ key with the repository .gitleaks.toml', () => {
+    const tail = [...randomBytes(40)].map((b) => ALNUM[b % ALNUM.length]).join('');
+    const key = ['sb', 'secret', tail].join('_');
+    expect(key).toMatch(/^sb_secret_[A-Za-z0-9]{40}$/);
+    const root = cleanRepo({
+      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+      'workers/edge/dist/index.js': `x("${key}");\n`,
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toMatch(/workers\/edge\/dist: gitleaks found a secret/);
+    expect(r.problems.join('\n')).not.toContain(key);
+  });
+
+  it('keeps the default rules in the repository .gitleaks.toml', () => {
+    const root = cleanRepo({
+      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+      'apps/candidate/dist/assets/index.js': `const t = "${fakeToken()}";\n`,
+    });
+    expect(scanDist({ root }).ok).toBe(false);
   });
 
   it('fails when no dist/ exists at all', () => {

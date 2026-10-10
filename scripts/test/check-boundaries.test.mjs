@@ -70,19 +70,48 @@ describe('rule 1: credential names in apps, packages, workers/edge', () => {
 describe('rule 1: the redactor pattern exemption (spec §9.1 vs §10.2)', () => {
   const REDACT = 'packages/shared/src/log/redact.ts';
 
-  it('is exactly one token in exactly one file', () => {
-    expect(CREDENTIAL_PATTERN_EXEMPTIONS).toEqual({ [REDACT]: ['sb_secret_'] });
+  // The exemption is the regex-literal text `sb_secret_[\w-]*` only (S1.4 security review M6),
+  // so a real key literal in the redactor still fails.
+  const PATTERN = String.raw`sb_secret_[\w-]*`;
+
+  it('is exactly one regex-literal form in exactly one file', () => {
+    expect(CREDENTIAL_PATTERN_EXEMPTIONS).toEqual({ [REDACT]: [PATTERN] });
     expect(Object.isFrozen(CREDENTIAL_PATTERN_EXEMPTIONS)).toBe(true);
     expect(Object.isFrozen(CREDENTIAL_PATTERN_EXEMPTIONS[REDACT])).toBe(true);
   });
 
-  it('allows the redactor to match sb_secret_ values', () => {
-    expect(checkCredentialNames([f(REDACT, 'const p = /\bsb_secret_[\w-]*/g;')])).toEqual([]);
+  it('allows the redactor to match sb_secret_ values with the regex-literal form', () => {
+    expect(checkCredentialNames([f(REDACT, String.raw`const p = /\bsb_secret_[\w-]*/g;`)])).toEqual(
+      [],
+    );
+    // The redactor's line as it stands (packages/shared/src/log/redact.ts).
+    expect(
+      checkCredentialNames([f(REDACT, String.raw`  [/\bsb_secret_[\w-]*/g, REDACTED],`)]),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ['a key literal', `const k = '${['sb', 'secret', 'abcdefghijklmnopqrstuvwx'].join('_')}';`],
+    ['the bare prefix', "const s = 'sb_secret_';"],
+    ['the prefix in another regex form', String.raw`const p = /sb_secret_\w+/;`],
+    ['the prefix in another case', String.raw`const p = /SB_SECRET_[\w-]*/;`],
+    [
+      'a key next to the allowed form',
+      String.raw`const p = /sb_secret_[\w-]*/; const k = 'sb_secret_` +
+        'abcdefghijklmnopqrst' +
+        "';",
+    ],
+  ])('flags %s in the redactor', (_label, content) => {
+    const v = checkCredentialNames([f(REDACT, content)]);
+    expect(v).toHaveLength(1);
+    expect(v[0].message).toContain('sb_secret_');
   });
 
   it('still flags every other credential name in the redactor', () => {
     for (const name of CREDENTIAL_NAMES.filter((n) => n !== 'sb_secret_')) {
-      const v = checkCredentialNames([f(REDACT, `const p = /\bsb_secret_/; const q = '${name}';`)]);
+      const v = checkCredentialNames([
+        f(REDACT, String.raw`const p = /\bsb_secret_[\w-]*/; const q = '` + name + "';"),
+      ]);
       expect(v, name).toHaveLength(1);
       expect(v[0].message).toContain(name);
       expect(v[0].message).not.toContain('sb_secret_');
@@ -98,6 +127,10 @@ describe('rule 1: the redactor pattern exemption (spec §9.1 vs §10.2)', () => 
       'packages/shared/src/log/redact.ts.bak',
     ]) {
       expect(checkCredentialNames([f(p, "const s = 'sb_secret_';")]), p).toHaveLength(1);
+      expect(
+        checkCredentialNames([f(p, String.raw`const p = /\bsb_secret_[\w-]*/g;`)]),
+        p,
+      ).toHaveLength(1);
     }
   });
 });

@@ -6,10 +6,12 @@
 //   - no dist/ exists at all (the scan never passes vacuously)
 //   - a workspace there has a `build` script but no dist/ (a partial build)
 //   - gitleaks is not installed (prints an install hint; never skips)
+//   - a dist/ holds, at any depth, a .gitleaksignore, .gitleaks.toml or .gitleaksbaseline (any
+//     case), or a file containing gitleaks' inline allow marker: `gitleaks dir` honours an ignore
+//     file in the scanned directory and skips marked lines, so either could hide a finding
 // The repository's .gitleaks.toml is always passed with --config (a built-in default config when
 // it is missing), and GITLEAKS_CONFIG / GITLEAKS_CONFIG_TOML are dropped from gitleaks' environment,
-// so a .gitleaks.toml that a build copies into dist/ can never change the rules. gitleaks runs
-// with the repo root as its working directory, so only the root .gitleaksignore applies.
+// so a config that a build copies into dist/ can never change the rules.
 // Output is redacted; this script prints only paths and gitleaks' own redacted summary.
 // No environment variables. Optional argument: the repository root (default: this script's repo).
 import { spawnSync } from 'node:child_process';
@@ -72,6 +74,45 @@ export function findDists(root) {
   return { dists, missing };
 }
 
+/** File names gitleaks reads to skip findings or change rules (compared case-insensitively). */
+export const HIDER_NAMES = ['.gitleaksignore', '.gitleaks.toml', '.gitleaksbaseline'];
+/** gitleaks skips any line holding this marker (built here so this file holds no marker). */
+const ALLOW_MARKER = ['gitleaks', 'allow'].join(':');
+
+/**
+ * Anything in a dist/ that could make gitleaks skip a finding there (S1.4 security review M5):
+ * an ignore, config or baseline file at any depth, or a file containing the inline allow marker
+ * (in any case). Symlinks are not followed; a symlink with a hider's name still counts.
+ * @param {string} root repository root
+ * @param {string} rel repo-relative POSIX path of the dist/ directory
+ * @returns {string[]} problems
+ */
+export function findHiders(root, rel) {
+  const problems = [];
+  const walk = (abs, relPath) => {
+    for (const e of readdirSync(abs, { withFileTypes: true })) {
+      const childAbs = path.join(abs, e.name);
+      const childRel = `${relPath}/${e.name}`;
+      if (HIDER_NAMES.includes(e.name.toLowerCase())) {
+        problems.push(
+          `${childRel}: gitleaks ignore/config/baseline file in build output (it could hide findings)`,
+        );
+        continue;
+      }
+      if (e.isDirectory()) walk(childAbs, childRel);
+      else if (e.isFile()) {
+        const text = readFileSync(childAbs).toString('latin1').toLowerCase();
+        if (text.includes(ALLOW_MARKER))
+          problems.push(
+            `${childRel}: contains the inline allow marker, which makes gitleaks skip that line`,
+          );
+      }
+    }
+  };
+  walk(path.join(root, ...rel.split('/')), rel);
+  return problems;
+}
+
 /** gitleaks' environment: the caller's, minus anything that could swap its config. */
 function gitleaksEnv(env) {
   const out = { ...env };
@@ -105,6 +146,7 @@ export function scanDist({ root, gitleaks = 'gitleaks', env = process.env }) {
   const scanned = [];
   try {
     for (const rel of dists) {
+      problems.push(...findHiders(root, rel));
       const r = spawnSync(
         gitleaks,
         [...GITLEAKS_ARGS, '--config', config, path.join(root, ...rel.split('/'))],

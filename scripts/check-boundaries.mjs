@@ -31,10 +31,13 @@ export const CREDENTIAL_NAMES = [
 /**
  * The one place a credential name may appear in browser-reachable code: the log redactor must
  * match `sb_secret_…` values to redact them (spec §9.1), which rule 1 would otherwise forbid.
- * Exactly one token in exactly one file; every other name is still checked there.
+ * Exactly one exact text in exactly one file: the regex-literal form `sb_secret_[\w-]*` (S1.4
+ * security review M6). Occurrences of that text are removed before the check, so any other
+ * mention there (a key literal, the bare prefix, another case or form) still fails, and every
+ * other name is still checked there.
  */
 export const CREDENTIAL_PATTERN_EXEMPTIONS = Object.freeze({
-  'packages/shared/src/log/redact.ts': Object.freeze(['sb_secret_']),
+  'packages/shared/src/log/redact.ts': Object.freeze([String.raw`sb_secret_[\w-]*`]),
 });
 
 /** Directories whose code must never mention a credential (rule 1). workers/jobs and services/api are server-side. */
@@ -70,13 +73,12 @@ export function checkCredentialNames(files) {
   const out = [];
   for (const { path: p, content } of files) {
     if (!inScope(p, CREDENTIAL_SCOPES) || isMarkdown(p)) continue;
-    const lower = content.toLowerCase();
     const exempt = Object.hasOwn(CREDENTIAL_PATTERN_EXEMPTIONS, p)
       ? CREDENTIAL_PATTERN_EXEMPTIONS[p]
       : [];
-    const hits = CREDENTIAL_NAMES.filter(
-      (n) => !exempt.includes(n) && lower.includes(n.toLowerCase()),
-    );
+    // Exempt texts match exactly (case-sensitive) and are cut out; the rest is checked as usual.
+    const lower = exempt.reduce((text, form) => text.split(form).join(' '), content).toLowerCase();
+    const hits = CREDENTIAL_NAMES.filter((n) => lower.includes(n.toLowerCase()));
     if (hits.length > 0) {
       out.push(
         violation(1, p, `mentions credential name(s) ${hits.join(', ')} (server-only, spec §10.2)`),
