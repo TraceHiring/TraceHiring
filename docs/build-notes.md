@@ -603,3 +603,4 @@ Changes to HOW we build, made by the autopilot under docs/AUTOPILOT.md §4. Newe
 | Date | Change | Why |
 | --- | --- | --- |
 | 2026-10-11 | Autopilot installed (docs/AUTOPILOT.md). Sessions run one phase each; checkpoints are `cp/*` tags; backups are local bundles (`scripts/backup.sh`). | Founder request: build without per-step approval, safe to resume on any machine. |
+| 2026-10-11 | `docs/progress/*` (HANDOFF, LOG, FOUNDER-QUEUE) is also updated on `main` at the end of each session; milestone branches merge `main` back in. Apart from that, `main` still holds only reviewed milestones. | A new session may start in a fresh worktree cut from `main`. The SessionStart hook reads HANDOFF.md from there, so it has to be current on `main`. |
