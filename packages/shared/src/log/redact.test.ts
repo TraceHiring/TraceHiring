@@ -216,3 +216,111 @@ describe('properties', () => {
     );
   });
 });
+
+describe('security review regressions (S1.7)', () => {
+  const PATTERN_BUDGET_MS = 50;
+  const adversarial = [
+    'account' + '.'.repeat(1992),
+    'bank' + ' :#.-'.repeat(398),
+    'a'.repeat(1999) + '@',
+    '1 '.repeat(999),
+    '9-'.repeat(999),
+    ':'.repeat(1999),
+    'A1a'.repeat(666),
+    'eyJ' + 'a.'.repeat(998),
+  ];
+  it.each(adversarial.map((s, i) => [i, s] as const))(
+    'redacts adversarial input %i within the time budget',
+    (_i, s) => {
+      const start = performance.now();
+      redactString(s);
+      expect(performance.now() - start).toBeLessThan(PATTERN_BUDGET_MS);
+    },
+  );
+
+  it('redacts a token that follows "="', () => {
+    const tok = synth.base64(3);
+    expect(redactString(`t=${tok}`)).not.toContain(tok);
+    expect(redactString(`api_key=${tok}&x=1`)).not.toContain(tok);
+  });
+
+  it('strips query strings and fragments that carry parameters', () => {
+    const short = 'Ab3dEf6hIj9kLm2nOp5qRs';
+    const out = redactString(`GET /start?t=${short}&name=Priya+S#frag=x done`);
+    expect(out).toBe('GET /start?[REDACTED] done');
+    expect(redactString('/invite?email=a.b%40example.com')).not.toContain('%40');
+  });
+
+  it('redacts percent-encoded emails outside a query', () => {
+    expect(redactString('/u/ab.cd%40example.com/x')).not.toContain('%40example');
+  });
+
+  it('covers free-text and location keys', () => {
+    for (const key of [
+      'details',
+      'hint',
+      'text',
+      'content',
+      'body',
+      'prompt',
+      'completion',
+      'response',
+      'resume',
+      'comment',
+      'notes',
+      'reason',
+      'msg',
+      'message',
+      'referer',
+      'query',
+      'city',
+      'latitude',
+      'longitude',
+      'asOrganization',
+    ]) {
+      expect(redact({ [key]: 'v' })).toEqual({ [key]: REDACTED });
+    }
+  });
+
+  it('normalises keys with zero-width and compatibility characters', () => {
+    expect(redact({ 'e\u200bmail': 'v', ｅｍａｉｌ: 'v' })).toEqual({
+      'e\u200bmail': REDACTED,
+      ｅｍａｉｌ: REDACTED,
+    });
+  });
+
+  it('catches more Indian number formats', () => {
+    const m = synth.mobile();
+    for (const s of [
+      `${m.slice(0, 5)}.${m.slice(5)}`,
+      `${m.slice(0, 5)}  ${m.slice(5)}`,
+      `resume_${m}.pdf`,
+      `uid${synth.aadhaar()}`,
+      synth.aadhaar().replace(/(\d{4})(\d{4})(\d{4})/, '$1.$2.$3'),
+      [...m].map((d) => String.fromCodePoint(0x966 + Number(d))).join(''),
+    ]) {
+      expect(redactString(`x ${s} y`)).toContain(REDACTED);
+    }
+    expect(redactString(`from ${synth.ipv4()}.`)).toContain(REDACTED);
+  });
+
+  it('never calls an overridden toISOString on a Date', () => {
+    const d = Object.assign(new Date(0), { toISOString: () => 'leak' });
+    expect(redact({ when: d })).toEqual({ when: '1970-01-01T00:00:00.000Z' });
+  });
+
+  it('caps total work on shared references', () => {
+    const leaf: Record<string, unknown> = {};
+    for (let i = 0; i < 100; i++) leaf[`k${i}`] = 'v';
+    let node: Record<string, unknown> = leaf;
+    for (let d = 0; d < 4; d++) {
+      const next: Record<string, unknown> = {};
+      for (let i = 0; i < 100; i++) next[`k${i}`] = node;
+      node = next;
+    }
+    const start = performance.now();
+    const out = JSON.stringify(redact(node));
+    expect(performance.now() - start).toBeLessThan(1000);
+    expect(out).toContain(TRUNCATED);
+  });
+});
