@@ -1,0 +1,163 @@
+#!/usr/bin/env node
+// Secret scan of every build output (spec specs/m0-foundations.md §5 `build`, §7.2 step 2, AT-16 local).
+// Runs `gitleaks dir --redact --no-banner` over the dist/ of every app, Worker and service
+// (apps/*, workers/*, services/*). Fails (exit 1) when:
+//   - gitleaks reports a finding (or fails) for any dist/
+//   - no dist/ exists at all (the scan never passes vacuously)
+//   - a workspace there has a `build` script but no dist/ (a partial build)
+//   - gitleaks is not installed (prints an install hint; never skips)
+// The repository's .gitleaks.toml is always passed with --config (a built-in default config when
+// it is missing), and GITLEAKS_CONFIG / GITLEAKS_CONFIG_TOML are dropped from gitleaks' environment,
+// so a .gitleaks.toml that a build copies into dist/ can never change the rules. gitleaks runs
+// with the repo root as its working directory, so only the root .gitleaksignore applies.
+// Output is redacted; this script prints only paths and gitleaks' own redacted summary.
+// No environment variables. Optional argument: the repository root (default: this script's repo).
+import { spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export const WORKSPACE_DIRS = ['apps', 'workers', 'services'];
+export const GITLEAKS_ARGS = ['dir', '--redact', '--no-banner'];
+export const INSTALL_HINT =
+  'gitleaks is not installed, so the build-output secret scan cannot run. Install gitleaks 8.30.1 (Windows: winget install Gitleaks.Gitleaks; CI: the checksum-verified binary in the shared setup), then build again.';
+const DEFAULT_CONFIG =
+  '# scan-dist fallback: the repository has no .gitleaks.toml.\n[extend]\nuseDefault = true\n';
+
+/** Colour codes in gitleaks' log lines. */
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+
+const isDir = (p) => existsSync(p) && statSync(p).isDirectory();
+const posix = (p) => p.split(path.sep).join('/');
+
+/**
+ * The dist/ directories to scan and the workspaces that should have one.
+ * @returns {{ dists: string[], missing: string[] }} repo-relative POSIX paths
+ */
+export function findDists(root) {
+  const dists = [];
+  const missing = [];
+  for (const top of WORKSPACE_DIRS) {
+    const base = path.join(root, top);
+    if (!isDir(base)) continue;
+    for (const name of readdirSync(base).sort()) {
+      const ws = path.join(base, name);
+      if (!isDir(ws)) continue;
+      const rel = posix(path.join(top, name));
+      if (isDir(path.join(ws, 'dist'))) {
+        dists.push(`${rel}/dist`);
+        continue;
+      }
+      const pkg = path.join(ws, 'package.json');
+      if (!existsSync(pkg)) continue;
+      let build = false;
+      try {
+        build = typeof JSON.parse(readFileSync(pkg, 'utf8'))?.scripts?.build === 'string';
+      } catch {
+        missing.push(`${rel} (package.json does not parse)`);
+        continue;
+      }
+      if (build) missing.push(rel);
+    }
+  }
+  return { dists, missing };
+}
+
+/** gitleaks' environment: the caller's, minus anything that could swap its config. */
+function gitleaksEnv(env) {
+  const out = { ...env };
+  for (const k of Object.keys(out)) if (/^GITLEAKS_CONFIG(_TOML)?$/i.test(k)) delete out[k];
+  return out;
+}
+
+/**
+ * Scans every dist/ under `root`.
+ * @param {{ root: string, gitleaks?: string, env?: NodeJS.ProcessEnv }} opts
+ * @returns {{ ok: boolean, problems: string[], scanned: string[] }}
+ */
+export function scanDist({ root, gitleaks = 'gitleaks', env = process.env }) {
+  const problems = [];
+  const { dists, missing } = findDists(root);
+  for (const m of missing) problems.push(`${m}: has a build script but no dist/ (build it first)`);
+  if (dists.length === 0) {
+    problems.push(
+      `no dist/ found under ${WORKSPACE_DIRS.join('/, ')}/ (run the builds first; the scan never passes vacuously)`,
+    );
+    return { ok: false, problems, scanned: [] };
+  }
+  const rootConfig = path.join(root, '.gitleaks.toml');
+  let tmp = null;
+  let config = rootConfig;
+  if (!existsSync(rootConfig)) {
+    tmp = mkdtempSync(path.join(tmpdir(), 'trace-scan-dist-'));
+    config = path.join(tmp, 'gitleaks.toml');
+    writeFileSync(config, DEFAULT_CONFIG);
+  }
+  const scanned = [];
+  try {
+    for (const rel of dists) {
+      const r = spawnSync(
+        gitleaks,
+        [...GITLEAKS_ARGS, '--config', config, path.join(root, ...rel.split('/'))],
+        { cwd: root, env: gitleaksEnv(env), encoding: 'utf8' },
+      );
+      if (r.error) {
+        if (r.error.code === 'ENOENT') {
+          problems.push(INSTALL_HINT);
+          return { ok: false, problems, scanned };
+        }
+        throw r.error;
+      }
+      scanned.push(rel);
+      if (r.status !== 0) {
+        const summary = `${r.stdout ?? ''}${r.stderr ?? ''}`
+          .split(/\r?\n/)
+          .map((l) => l.replace(ANSI, '').trim())
+          .filter(Boolean)
+          .slice(-3)
+          .join(' | ');
+        problems.push(
+          `${rel}: gitleaks found a secret or failed (exit ${r.status}): ${summary}. ` +
+            `See where with: gitleaks dir --redact --no-banner -v --config .gitleaks.toml ${rel}`,
+        );
+      }
+    }
+  } finally {
+    if (tmp) rmSync(tmp, { recursive: true, force: true });
+  }
+  return { ok: problems.length === 0, problems, scanned };
+}
+
+function isMain() {
+  if (!process.argv[1]) return false;
+  const a = path.resolve(process.argv[1]);
+  const b = fileURLToPath(import.meta.url);
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+if (isMain()) {
+  const root = process.argv[2]
+    ? path.resolve(process.argv[2])
+    : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  try {
+    const { ok, problems, scanned } = scanDist({ root });
+    for (const p of problems) console.error(`scan-dist: ${p}`);
+    if (!ok) {
+      console.error(`scan-dist: FAILED (spec §5, AT-16)`);
+      process.exit(1);
+    }
+    console.log(`scan-dist: OK, no secrets in ${scanned.length} dist/ (${scanned.join(', ')})`);
+  } catch (err) {
+    console.error(`scan-dist: ${err.message}`);
+    process.exit(1);
+  }
+}
