@@ -1,0 +1,9 @@
+{
+  "extends": "@trace/config/tsconfig.base.json",
+  "compilerOptions": {
+    // Worker source sees only the runtime types from `wrangler types` (worker-configuration.d.ts),
+    // never @types/node. vitest.config.ts runs in Node and is checked by tsconfig.node.json.
+    "types": []
+  },
+  "include": ["worker-configuration.d.ts", "src"]
+}

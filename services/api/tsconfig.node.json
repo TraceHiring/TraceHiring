@@ -1,0 +1,9 @@
+{
+  "extends": "@trace/config/tsconfig.base.json",
+  "compilerOptions": {
+    // @trace/config/vitest is plain JS with JSDoc types.
+    "allowJs": true,
+    "types": ["node"]
+  },
+  "include": ["vitest.config.ts"]
+}
