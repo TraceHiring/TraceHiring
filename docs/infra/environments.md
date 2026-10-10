@@ -2,7 +2,7 @@
 
 Every Trace dev and staging resource: its name, region, plan, environment, and the GitHub variable or secret that holds its config. **Names, refs and public values only. Never put a secret value here.**
 
-- Written in the infra-setup session of 2026-10-11 (spec `specs/m0-foundations.md` revision 10).
+- Written in the infra-setup session of 2026-10-11 (spec `specs/m0-foundations.md` revision 10). Updated the same day with the founder's answers and a read-only check of GitHub (see "Verified 2026-10-11").
 - **Production does not exist yet.** It arrives at M8, in a **separate Supabase org and a separate Cloudflare account** (build-notes Q55, spec D5). Nothing below may ever be reused for prod.
 - **No DNS changes on `tracehiring.tech`.** Staging uses `*.pages.dev` and `*.workers.dev` only.
 - Free plans only. If anything would cost money, the autopilot stops and asks the founder.
@@ -13,17 +13,17 @@ Status key: **live**: exists and verified · **pending**: approved, not created 
 
 | Provider | Account | Plan | Notes |
 | --- | --- | --- | --- |
-| GitHub | repo **`TraceHiring/TraceHiring`** (private), `gh` logged in as `TraceHiring` | Personal account | Moved from `AbhayRajGit/Tracehiring` (founder, 2026-10-11). The local `trace` remote still points at the old URL until the founder repoints it (see "Open steps"). |
+| GitHub | repo **`TraceHiring/TraceHiring`** (private), `gh` logged in as `TraceHiring` | Personal account | Moved from `AbhayRajGit/Tracehiring` (founder, 2026-10-11). The founder repointed the local `trace` remote to `https://github.com/TraceHiring/TraceHiring.git` and pushed `main`, `milestone/m0a` and the tags. Visibility `PRIVATE` (checked with `gh repo view`). |
 | Supabase | org **"rajabhay.work@gmail.com's Org"** (slug `vfrqfcytlcbylylqqtdl`) | Free | Free plan allows **2 active projects** across every org you own or administer; paused projects don't count. |
-| Cloudflare | **"Rajabhay.work@gmail.com's Account"**, account ID `94fef930c2ecd2e37fbd5dc3151d99ba` | Workers Free | Account ID is not a secret (it appears in every `workers.dev`/API URL). R2 is **not enabled** on this account. The registered `*.workers.dev` subdomain is not yet confirmed (H4). |
+| Cloudflare | **"Rajabhay.work@gmail.com's Account"**, account ID `94fef930c2ecd2e37fbd5dc3151d99ba` | Workers Free | Account ID is not a secret (it appears in every `workers.dev`/API URL). R2 is **not enabled** on this account. The registered `*.workers.dev` subdomain is **not yet known**: the founder's answer of 2026-10-11 contained the template placeholder `<your-subdomain>.workers.dev`, not a real name (H4, FOUNDER-QUEUE). |
 
 ## Resources
 
 | Resource | Provider | Environment | Region | Plan / cost | Status | Created by |
 | --- | --- | --- | --- | --- | --- | --- |
-| `trace-dev` | Supabase project | dev | `ap-south-1` (Mumbai) | Free, $0 | pending | Founder, in the dashboard (the Supabase connector can't create projects; see below) |
-| `trace-staging` | Supabase project | staging | `ap-south-1` (Mumbai) | Free, $0 | pending | Founder, in the dashboard |
-| "rajabhay.work@gmail.com's Project" (ref `giuisatnjoagzlbcbktu`) | Supabase project | none | `ap-south-1` | Free | **to delete** (founder, 2026-10-11) | Supabase default project; empty `public` schema; uses one of the 2 free slots |
+| `trace-dev` | Supabase project | dev | Mumbai (founder) | Free, $0 | **created** (founder, 2026-10-11); ref, region and URL not yet read | Founder, in the dashboard (the Supabase connector can't create projects) |
+| `trace-staging` | Supabase project | staging | Mumbai (founder) | Free, $0 | **created** (founder, 2026-10-11); ref, region and URL not yet read | Founder, in the dashboard |
+| "rajabhay.work@gmail.com's Project" (ref `giuisatnjoagzlbcbktu`) | Supabase project | none | `ap-south-1` | Free | **paused** (founder, 2026-10-11; paused projects don't use a free slot) | Supabase default project; empty `public` schema; uses one of the 2 free slots |
 | `trace-candidate-staging` | Cloudflare Pages | staging | global | Free, $0 | CI | `wrangler pages deploy` in `deploy-staging` (spec §7.2 step 7). URL `https://trace-candidate-staging.pages.dev` |
 | `trace-recruiter-staging` | Cloudflare Pages | staging | global | Free, $0 | CI | Same. URL `https://trace-recruiter-staging.pages.dev` |
 | `trace-edge-staging` | Cloudflare Worker | staging | global | Workers Free, $0 | CI | `wrangler deploy --env staging` (spec §7.2 step 5). URL `https://trace-edge-staging.<workers.dev subdomain>.workers.dev` |
@@ -36,23 +36,37 @@ Why nothing was created in Cloudflare now: the M0a spec needs only Pages ×2 and
 
 ## GitHub environment `staging` (on `TraceHiring/TraceHiring`)
 
-Deployment branches limited to `main` (H3). Each secret is scoped to the step that uses it (spec §7.2).
+Planned: deployment branches limited to `main` (H3). **Checked 2026-10-11: the environment exists, but `deployment_branch_policy` is `null`, so any branch can deploy to it** (FOUNDER-QUEUE). Each secret is scoped to the step that uses it (spec §7.2).
 
 | Name | Kind | Holds | Used by | Status | Set by |
 | --- | --- | --- | --- | --- | --- |
-| `CLOUDFLARE_ACCOUNT_ID` | variable | Cloudflare account ID (above) | `wrangler` steps 5–7 | pending | Founder or autopilot, with `gh variable set` |
+| `CLOUDFLARE_ACCOUNT_ID` | variable | Cloudflare account ID (above) | `wrangler` steps 5–7 | **live** (checked with `gh variable list`) | Founder |
 | `SUPABASE_STAGING_PROJECT_REF` | variable | `trace-staging` project ref | M0b on | pending (needs the project) | Autopilot, after the project exists |
 | `SUPABASE_STAGING_URL` | variable | `https://<ref>.supabase.co` | M0b on (recruiter app, CSP) | pending | Autopilot |
 | `SUPABASE_STAGING_PUBLISHABLE_KEY` | variable | `trace-staging` publishable key (`sb_publishable_…`), a public client key | M0b on | pending | Autopilot |
-| `CLOUDFLARE_API_TOKEN` | **secret** | API token limited to this account: Workers Scripts: Edit, Cloudflare Pages: Edit, Account Settings: Read (H4) | steps 5–7 only | pending | **Founder only** |
-| `SUPABASE_STAGING_DB_URL` | **secret** | `trace-staging` session-pooler connection string, with password (H5) | steps 3–4 only | pending | **Founder only** |
+| `CLOUDFLARE_API_TOKEN` | **secret** | API token limited to this account: Workers Scripts: Edit, Cloudflare Pages: Edit, Account Settings: Read (H4) | steps 5–7 only | **missing**: no secret with this name. A secret with a wrong name exists (see "Verified 2026-10-11") | **Founder only** |
+| `SUPABASE_STAGING_DB_URL` | **secret** | `trace-staging` session-pooler connection string, with password (H5) | steps 3–4 only | **name mismatch**: the founder set `SUPABASE_DB_URL`; the spec (§7.3) and the CI jobs to be written in S1.5 read `SUPABASE_STAGING_DB_URL` | **Founder only** |
 | `SENTRY_DSN_RECRUITER`, `SENTRY_DSN_WORKERS` | variable | Sentry DSNs | Sentry adapter | **deferred until before D1** (H6, spec revision 10) | Founder |
 
 The autopilot never sets or reads a secret value. `trace-dev` gets no GitHub variables: dev runs locally.
 
+## Verified 2026-10-11 (read-only, names only)
+
+- `git remote -v`: `trace` → `https://github.com/TraceHiring/TraceHiring.git` (fetch and push).
+- `gh repo view TraceHiring/TraceHiring --json visibility`: `PRIVATE`.
+- `gh api repos/TraceHiring/TraceHiring/environments`: one environment, `staging`; `protection_rules` empty; `deployment_branch_policy` `null`.
+- `gh variable list --env staging`: `CLOUDFLARE_ACCOUNT_ID` only.
+- `gh secret list --env staging` (names only): `SUPABASE_DB_URL`, and **one secret whose name begins `CFAT_` and looks like a Cloudflare API token value pasted into the name field**. Secret names are not encrypted and are shown to anyone who can list secrets, so that token must be treated as exposed: revoke it and set a new one under the right name (FOUNDER-QUEUE). The name is deliberately not copied here.
+- No repo-level secrets.
+- `.github/workflows/` does not exist yet; CI is written in S1.5. The names checked are those in spec §7.3, which S1.5 implements.
+- The Supabase connector was **not attached** to this session (only Claude Docs, visualize and scheduled-tasks were), so the project refs, URLs and publishable keys could not be read and the three `SUPABASE_STAGING_*` variables are still unset.
+
 ## Open steps (founder)
 
-1. **Supabase:** delete "rajabhay.work@gmail.com's Project", then create `trace-dev` and `trace-staging` (Free plan, region **South Asia (Mumbai)**, org above). Save each database password in your password manager, not in the repo. In `trace-staging`'s API settings, keep exposed schemas = `public` only (H5).
-2. **GitHub:** create the `staging` environment and set `CLOUDFLARE_ACCOUNT_ID` (commands in `docs/progress/FOUNDER-QUEUE.md`), or allow the autopilot to run them.
-3. **Git remote:** `git remote set-url trace https://github.com/TraceHiring/TraceHiring.git`, or allow the autopilot to run it. The session-end push needs it.
-4. **Cloudflare:** confirm the registered `*.workers.dev` subdomain, and create the API token (H4) as the `CLOUDFLARE_API_TOKEN` secret.
+Done by the founder on 2026-10-11: old project paused, `trace-staging` and `trace-dev` created, remote repointed and pushed, `staging` environment and `CLOUDFLARE_ACCOUNT_ID` created. Still open (exact commands in `docs/progress/FOUNDER-QUEUE.md`):
+
+1. **Cloudflare token:** revoke the token whose value became a secret name, create a new one (H4 scopes) and set it as `CLOUDFLARE_API_TOKEN`; delete the misnamed secret.
+2. **Supabase DB URL:** set `SUPABASE_STAGING_DB_URL` (the name CI reads) and delete `SUPABASE_DB_URL`.
+3. **Deployment branches:** limit the `staging` environment to `main` (H3).
+4. **Supabase connector:** attach it to the next autopilot session (or reply with the two project refs) so the autopilot can record refs, URLs and publishable keys and set the `SUPABASE_STAGING_*` variables. In `trace-staging`'s API settings, keep exposed schemas = `public` only (H5).
+5. **`*.workers.dev` subdomain:** reply with the real subdomain name (H4).

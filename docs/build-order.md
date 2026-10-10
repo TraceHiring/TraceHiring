@@ -33,6 +33,10 @@ Split into M0a then M0b (rule 5). The original M0 exit gate is the union of the 
 - Append-only audit log (no UPDATE/DELETE/TRUNCATE for any role, including workers).
 - **Exit gate:** `supabase db reset` rebuilds from zero; ≥50 RLS tests (allowed + denied per role, including cross-org) pass — counted separately from the catalog checks; audit log rejects UPDATE/DELETE/TRUNCATE for every role; an org user can sign in on staging; migrations reach staging from CI only.
 
+### D1 · Demo slice (founder, 2026-10-11)
+D1 — Demo slice (staging, synthetic data only): a recruiter creates a test (written + MCQ), invites a candidate by link; the candidate takes it in the browser with a server-held timer, start photo and autosave; the result shows Answer Quality (0–100, mock grader allowed) and the Integrity band with an evidence timeline as two separate results; a reviewer opens the report. Deployed on `<subdomain>.workers.dev` / Pages. Exit gate: full flow passes an automated E2E test on staging, plus a 5-minute screen recording.
+- *Notes (autopilot):* the `*.workers.dev` subdomain is still to be confirmed by the founder (`docs/infra/environments.md`, H4). Sentry (H6, AT-9-sentry) lands before D1 starts. Whether D1 is built as a thin slice straight after `m0b-reviewed` or reached after the M1–M6 parts it needs is an open founder question (`docs/progress/FOUNDER-QUEUE.md`).
+
 ### M1 · Test authoring ∥ M2
 - ABH-5 role templates + JD → blueprint · ABH-10 pools, sections, shuffle, per-section timers, server-side item delivery model · ABH-9 Excel/Word import · ABH-8 AI drafting with human approval (via `LlmGrader`/Bedrock interface) · ABH-7 parameterised quant variants · ABH-6 item-bank tooling (content itself is a human task).
 - Integrity presets + per-signal settings + admin locks (screen 04). **A test version — items, settings and ruleset — is immutable from publish; editing a published test creates a new draft version; each invitation keeps the version it was sent with** (founder decision 2026-10-10, build-notes Q20).
