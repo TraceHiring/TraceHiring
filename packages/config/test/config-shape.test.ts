@@ -1,4 +1,5 @@
 // The shared config's public shape: the root eslint.config.js imports the default export.
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -24,6 +25,13 @@ describe('@trace/config/eslint', () => {
 
   it('anchors element patterns at the repo root', () => {
     expect(repoRoot).toBe(path.resolve(here, '..', '..', '..'));
+    expect(fs.existsSync(path.join(repoRoot, 'pnpm-workspace.yaml'))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, 'packages', 'config', 'package.json'))).toBe(true);
+  });
+
+  it('ignores generated files only where they are generated', () => {
+    expect(ignores).toContain('packages/ui/src/generated/**');
+    expect(ignores).not.toContain('**/src/generated/**');
   });
 
   it('builds a config for another root without changing the default', () => {

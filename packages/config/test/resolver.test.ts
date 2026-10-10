@@ -13,12 +13,13 @@ type Resolver = {
     config: { rootPath: string; packages: Record<string, string> },
   ) => Resolved;
   UNMAPPED_DIR: string;
+  UNRESOLVED_DIR: string;
 };
 
 const require = createRequire(import.meta.url);
 const resolver = require('../eslint/resolver.cjs') as Resolver;
 const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.join(here, 'fixtures', 'virtual-repo');
+const root = path.join(here, 'fixtures', 'repo');
 const config = { rootPath: root, packages: { '@trace/shared': 'packages/shared' } };
 const from = path.join(root, 'apps', 'candidate', 'src', 'main.tsx');
 
@@ -61,6 +62,22 @@ describe('resolver.cjs', () => {
       path: path.join(here, '..', 'eslint', 'index.js'),
     });
   });
+
+  it('resolves a directory through its package.json exports', () => {
+    expect(resolver.resolve('../../../packages/vendors', from, config)).toEqual({
+      found: true,
+      path: path.join(root, 'packages', 'vendors', 'src', 'index.ts'),
+    });
+  });
+
+  it.each(['#vendors', '#internal/server', '../../../node_modules/@trace/vendors/src/index'])(
+    'sends %s to the reserved unresolved folder',
+    (source) => {
+      const result = resolver.resolve(source, from, config);
+      expect(result.found).toBe(true);
+      expect(result.path?.startsWith(path.join(root, resolver.UNRESOLVED_DIR))).toBe(true);
+    },
+  );
 
   it('leaves third-party packages unresolved (external)', () => {
     expect(resolver.resolve('react', from, config)).toEqual({ found: false });

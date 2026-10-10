@@ -1,8 +1,9 @@
 // Shared ESLint flat config for every Trace workspace (spec specs/m0-foundations.md §10.1).
 // - JS + typescript-eslint recommended everywhere
-// - React hooks + jsx-a11y recommended for apps/**/*.tsx
+// - React hooks + jsx-a11y recommended for apps/**/*.tsx and packages/ui/**/*.tsx
 // - workspace import boundaries and the rule 1 quality/integrity split (./boundaries.js)
-// - custom rules in ./rules: logger events are string literals; Vite `define`/`envPrefix` stay safe
+// - custom rules in ./rules: module paths the boundaries plugin cannot see stay static and local;
+//   logger events are string literals; Vite/Vitest configs cannot leak the environment
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import js from '@eslint/js';
@@ -28,11 +29,13 @@ export const ignores = [
   '**/.wrangler/**',
   '.claude/worktrees/**',
   '**/worker-configuration.d.ts',
-  '**/src/generated/**',
+  'packages/ui/src/generated/**',
   'packages/db-types/src/database.ts',
 ];
 
 const SOURCE_FILES = ['**/*.{js,mjs,cjs,ts,mts,cts,tsx,jsx}'];
+const REACT_FILES = ['apps/**/*.tsx', 'packages/ui/**/*.tsx'];
+const BUNDLER_CONFIGS = ['**/{vite,vitest}.config.{ts,mts,cts,js,mjs,cjs}'];
 
 /**
  * Builds the Trace config with element patterns anchored at `rootPath`.
@@ -56,21 +59,24 @@ export function createTraceConfig({ rootPath = repoRoot } = {}) {
       rules: { '@typescript-eslint/no-require-imports': 'off' },
     },
     {
-      files: ['apps/**/*.tsx'],
+      files: REACT_FILES,
       ...reactHooks.configs.flat.recommended,
     },
     {
-      files: ['apps/**/*.tsx'],
+      files: REACT_FILES,
       ...jsxA11y.flatConfigs.recommended,
     },
     boundariesConfig(rootPath),
     {
       files: SOURCE_FILES,
       plugins: { trace },
-      rules: { 'trace/log-event-literal': 'error' },
+      rules: {
+        'trace/log-event-literal': 'error',
+        'trace/static-module-paths': 'error',
+      },
     },
     {
-      files: ['**/vite.config.{ts,mts,js,mjs}'],
+      files: BUNDLER_CONFIGS,
       plugins: { trace },
       rules: { 'trace/vite-config-env': 'error' },
     },

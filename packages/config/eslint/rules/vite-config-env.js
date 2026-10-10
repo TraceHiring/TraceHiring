@@ -1,34 +1,87 @@
-// trace/vite-config-env (spec specs/m0-foundations.md §10.1). Applied to Vite config files only.
-// - `define` may not read `process.env` (directly, through local variables or destructuring) or call
-//   `loadEnv`, because whatever `define` reads is inlined into the public browser bundle.
-// - `envPrefix`, if set, must be exactly the string literal 'VITE_', so only VITE_* variables reach the client.
+// trace/vite-config-env (spec specs/m0-foundations.md §10.1). Applied to vite.config.* and vitest.config.*.
+// Whatever `define` holds is inlined into the public browser bundle, so this is an allow-list:
+// - `define` is an object literal whose values are literals or `JSON.stringify(<literal>)`;
+// - `envPrefix`, if set, is exactly the string literal 'VITE_';
+// - the file never touches the environment or the disk: no `process` (global, `globalThis.process`,
+//   `import 'node:process'`), no `loadEnv` (any import form, aliased or namespaced), no `fs`;
+// - `define`/`envPrefix` are only written as plain keys of an object literal: computed keys, the
+//   strings 'define'/'envPrefix' anywhere else, and assignments to `.define`/`.envPrefix` are reported.
 
 /** @typedef {import('eslint').Rule.Node} Node */
-/** @typedef {import('eslint').Scope.Scope} Scope */
+
+const BANNED_MODULES = new Set([
+  'process',
+  'node:process',
+  'fs',
+  'node:fs',
+  'fs/promises',
+  'node:fs/promises',
+]);
+const GLOBAL_OBJECTS = new Set(['globalThis', 'global', 'window', 'self']);
+const GUARDED_KEYS = new Set(['define', 'envPrefix']);
+const TS_WRAPPERS = new Set([
+  'TSNonNullExpression',
+  'TSAsExpression',
+  'TSTypeAssertion',
+  'TSSatisfiesExpression',
+]);
 
 /**
- * Static key name of an object property, or null.
- * @param {Node} node
+ * Static string value of a literal or placeholder-free template, or null.
+ * @param {Node | null | undefined} node
  * @returns {string | null}
  */
-function propertyName(node) {
-  if (node.type !== 'Property' || node.computed) return null;
-  if (node.key.type === 'Identifier') return node.key.name;
-  if (node.key.type === 'Literal' && typeof node.key.value === 'string') return node.key.value;
+function staticString(node) {
+  if (!node) return null;
+  if (node.type === 'Literal' && typeof node.value === 'string') return node.value;
+  if (node.type === 'TemplateLiteral' && node.expressions.length === 0) {
+    return node.quasis[0]?.value.cooked ?? null;
+  }
   return null;
 }
 
 /**
- * True for `process.env` and `process['env']`.
+ * Name of a non-computed property key, or null.
+ * @param {Node} property
+ * @returns {string | null}
+ */
+function plainKey(property) {
+  if (property.type !== 'Property' || property.computed) return null;
+  if (property.key.type === 'Identifier') return property.key.name;
+  return staticString(/** @type {Node} */ (property.key));
+}
+
+/**
+ * True for an allowed `define` value: a literal (not a template) or JSON.stringify(<literal>).
+ * @param {Node} value
+ */
+function isAllowedDefineValue(value) {
+  if (value.type === 'Literal') return true;
+  if (value.type !== 'CallExpression' || value.arguments.length !== 1) return false;
+  const callee = value.callee;
+  const arg = /** @type {Node} */ (value.arguments[0]);
+  return (
+    callee.type === 'MemberExpression' &&
+    !callee.computed &&
+    callee.object.type === 'Identifier' &&
+    callee.object.name === 'JSON' &&
+    callee.property.type === 'Identifier' &&
+    callee.property.name === 'stringify' &&
+    arg.type === 'Literal'
+  );
+}
+
+/**
+ * True if `node` is a property key or member name, i.e. a label rather than a read.
  * @param {Node} node
  */
-function isProcessEnv(node) {
-  if (node.type !== 'MemberExpression') return false;
-  if (node.object.type !== 'Identifier' || node.object.name !== 'process') return false;
-  const prop = node.property;
-  return node.computed
-    ? prop.type === 'Literal' && prop.value === 'env'
-    : prop.type === 'Identifier' && prop.name === 'env';
+function isLabel(node) {
+  const parent = /** @type {Node | null} */ (node.parent ?? null);
+  if (parent === null) return false;
+  if (parent.type === 'MemberExpression') return parent.property === node && !parent.computed;
+  if (parent.type === 'Property')
+    return parent.key === node && !parent.computed && !parent.shorthand;
+  return false;
 }
 
 /** @type {import('eslint').Rule.RuleModule} */
@@ -37,89 +90,134 @@ const rule = {
     type: 'problem',
     docs: {
       description:
-        "In vite.config, `define` may not read process.env and `envPrefix` must be 'VITE_'.",
+        "Vite/Vitest config: `define` holds literals only, `envPrefix` is 'VITE_', and the environment is never read.",
     },
     schema: [],
     messages: {
-      defineReadsEnv:
-        '`define` may not read process.env or loadEnv(): its values are inlined into the public bundle. Use VITE_* variables via import.meta.env.',
+      defineValue:
+        '`define` must be an object literal of literals or JSON.stringify(<literal>): its values are inlined into the public bundle.',
       envPrefix: "`envPrefix` must be exactly 'VITE_'.",
+      process:
+        'Vite/Vitest configs may not read `process` (the environment); use VITE_* variables via import.meta.env.',
+      loadEnv: 'Vite/Vitest configs may not use `loadEnv`.',
+      module: "Vite/Vitest configs may not import '{{name}}'.",
+      indirectKey: '`{{name}}` may only be written as a plain key of an object literal.',
+      computedKey:
+        'Computed keys are not allowed in Vite/Vitest configs (they can hide `define`/`envPrefix`).',
     },
   },
   create(context) {
-    const sourceCode = context.sourceCode;
-
     /**
-     * Finds the variable an identifier refers to, walking up from its scope.
-     * @param {Node & { type: 'Identifier' }} id
+     * @param {Node} node
+     * @param {Node | null | undefined} source
      */
-    function findVariable(id) {
-      /** @type {Scope | null} */
-      let scope = sourceCode.getScope(id);
-      while (scope) {
-        const variable = scope.set.get(id.name);
-        if (variable) return variable;
-        scope = scope.upper;
+    function checkModule(node, source) {
+      const name = staticString(source);
+      if (name !== null && BANNED_MODULES.has(name)) {
+        context.report({ node, messageId: 'module', data: { name } });
       }
-      return null;
-    }
-
-    /**
-     * True if the subtree reads process.env or calls loadEnv, following local variable initialisers.
-     * @param {Node} root
-     * @param {Set<unknown>} seen
-     * @returns {boolean}
-     */
-    function readsEnv(root, seen) {
-      /** @type {Node[]} */
-      const stack = [root];
-      while (stack.length > 0) {
-        const node = /** @type {Node} */ (stack.pop());
-        if (isProcessEnv(node)) return true;
-        if (
-          node.type === 'CallExpression' &&
-          node.callee.type === 'Identifier' &&
-          node.callee.name === 'loadEnv'
-        ) {
-          return true;
-        }
-        if (node.type === 'Identifier') {
-          const variable = findVariable(node);
-          if (variable && !seen.has(variable)) {
-            seen.add(variable);
-            for (const def of variable.defs) {
-              if (def.type === 'Variable' && def.node.init) {
-                stack.push(/** @type {Node} */ (def.node.init));
-              }
-            }
-          }
-          continue;
-        }
-        const keys = sourceCode.visitorKeys[node.type] ?? [];
-        for (const key of keys) {
-          // Static property names are labels, not reads.
-          if (key === 'key' && node.type === 'Property' && !node.computed) continue;
-          if (key === 'property' && node.type === 'MemberExpression' && !node.computed) continue;
-          /** @type {unknown} */
-          const child = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (node))[key];
-          const children = Array.isArray(child) ? child : [child];
-          for (const c of children) {
-            if (c && typeof c === 'object' && 'type' in c) stack.push(/** @type {Node} */ (c));
-          }
-        }
-      }
-      return false;
     }
 
     return {
+      ImportDeclaration(node) {
+        checkModule(/** @type {Node} */ (node), /** @type {Node} */ (node.source));
+      },
+      ImportExpression(node) {
+        checkModule(/** @type {Node} */ (node), /** @type {Node} */ (node.source));
+      },
+      ExportAllDeclaration(node) {
+        checkModule(/** @type {Node} */ (node), /** @type {Node} */ (node.source));
+      },
+      ExportNamedDeclaration(node) {
+        if (node.source) checkModule(/** @type {Node} */ (node), /** @type {Node} */ (node.source));
+      },
+      CallExpression(node) {
+        if (node.callee.type === 'Identifier' && node.callee.name === 'require') {
+          checkModule(
+            /** @type {Node} */ (node),
+            /** @type {Node | undefined} */ (node.arguments[0]),
+          );
+        }
+      },
+      Identifier(node) {
+        const id = /** @type {Node & { type: 'Identifier' }} */ (node);
+        if (id.name === 'loadEnv') {
+          context.report({ node: id, messageId: 'loadEnv' });
+        } else if (id.name === 'process' && !isLabel(id)) {
+          context.report({ node: id, messageId: 'process' });
+        }
+      },
+      Literal(node) {
+        const value = /** @type {Node} */ (node);
+        const text = staticString(value);
+        if (text === null) return;
+        if (text === 'loadEnv') {
+          context.report({ node: value, messageId: 'loadEnv' });
+          return;
+        }
+        if (!GUARDED_KEYS.has(text)) return;
+        const parent = /** @type {Node | null} */ (value.parent ?? null);
+        const isPlainKey =
+          parent !== null && parent.type === 'Property' && parent.key === value && !parent.computed;
+        if (!isPlainKey)
+          context.report({ node: value, messageId: 'indirectKey', data: { name: text } });
+      },
+      TemplateLiteral(node) {
+        const text = staticString(/** @type {Node} */ (node));
+        if (text === 'loadEnv') {
+          context.report({ node, messageId: 'loadEnv' });
+        } else if (text !== null && GUARDED_KEYS.has(text)) {
+          context.report({ node, messageId: 'indirectKey', data: { name: text } });
+        }
+      },
+      MemberExpression(node) {
+        const member = /** @type {Node & { type: 'MemberExpression' }} */ (node);
+        // globalThis.process, globalThis['process'], (globalThis as any)[anything]
+        let object = /** @type {Node} */ (member.object);
+        while (TS_WRAPPERS.has(object.type)) {
+          object = /** @type {Node} */ (/** @type {{ expression: unknown }} */ (object).expression);
+        }
+        if (object.type === 'Identifier' && GLOBAL_OBJECTS.has(object.name)) {
+          const prop = member.property;
+          const named = !member.computed && prop.type === 'Identifier' && prop.name === 'process';
+          if (named || member.computed) context.report({ node: member, messageId: 'process' });
+        }
+      },
+      AssignmentExpression(node) {
+        const left = /** @type {Node} */ (node.left);
+        if (left.type !== 'MemberExpression') return;
+        const name =
+          !left.computed && left.property.type === 'Identifier'
+            ? left.property.name
+            : staticString(/** @type {Node} */ (left.property));
+        if (name !== null && GUARDED_KEYS.has(name)) {
+          context.report({ node: left, messageId: 'indirectKey', data: { name } });
+        }
+      },
       Property(node) {
-        const name = propertyName(node);
+        const property = /** @type {Node & { type: 'Property' }} */ (node);
+        if (property.computed) {
+          const key = staticString(/** @type {Node} */ (property.key));
+          // Literal guarded keys are reported by the Literal/TemplateLiteral visitors.
+          if (key === null) context.report({ node: property.key, messageId: 'computedKey' });
+          return;
+        }
+        const name = plainKey(property);
+        const value = /** @type {Node} */ (property.value);
         if (name === 'define') {
-          if (readsEnv(/** @type {Node} */ (node.value), new Set())) {
-            context.report({ node: node.value, messageId: 'defineReadsEnv' });
-          }
+          const ok =
+            property.kind === 'init' &&
+            !property.shorthand &&
+            value.type === 'ObjectExpression' &&
+            value.properties.every(
+              (p) =>
+                p.type === 'Property' &&
+                p.kind === 'init' &&
+                !p.method &&
+                isAllowedDefineValue(/** @type {Node} */ (p.value)),
+            );
+          if (!ok) context.report({ node: value, messageId: 'defineValue' });
         } else if (name === 'envPrefix') {
-          const value = node.value;
           if (!(value.type === 'Literal' && value.value === 'VITE_')) {
             context.report({ node: value, messageId: 'envPrefix' });
           }

@@ -1,15 +1,16 @@
 // Import boundaries between workspaces (spec §10.1, eslint-plugin-boundaries 7.2.0).
-import { describe, expect, it } from 'vitest';
-import { ruleMessages } from './helpers.js';
-
-const RULE = 'boundaries/dependencies';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { boundaryMessages } from './helpers.js';
 
 type Case = readonly [from: string, source: string];
 
 const importOf = (source: string): string => `import { x } from '${source}';\nexport { x };\n`;
 
-function violations(from: string, code: string): number {
-  return ruleMessages(from, code, RULE).length;
+function violations(from: string, code: string, root?: string): number {
+  return boundaryMessages(from, code, root).length;
 }
 
 const allowed: Case[] = [
@@ -41,11 +42,21 @@ const allowed: Case[] = [
   ['workers/edge/src/index.ts', 'hono'],
   ['packages/shared/src/index.ts', 'zod'],
   ['packages/config/eslint/index.js', 'node:path'],
+  ['apps/candidate/src/main.tsx', 'zod'],
+  ['apps/candidate/src/main.tsx', 'node:fs'],
+  // scripts and supabase may import their own files
+  ['scripts/check-boundaries.mjs', './lib/git.mjs'],
+  ['supabase/tests/helpers.ts', './fixtures/data'],
   // tooling files may import the shared config
   ['apps/candidate/vitest.config.ts', '@trace/config/vitest'],
   ['workers/edge/vitest.config.ts', '@trace/config/vitest'],
   ['packages/shared/vitest.config.ts', '@trace/config/vitest'],
   ['eslint.config.js', '@trace/config/eslint'],
+  ['apps/candidate/vite.config.ts', '@trace/config/vite'],
+  ['apps/candidate/vitest.config.mts', '@trace/config/vitest'],
+  ['apps/recruiter/vite.config.mts', '@trace/config/vite'],
+  // a workspace's vitest config may extend its own vite config
+  ['apps/candidate/vitest.config.ts', './vite.config'],
 ];
 
 const denied: Case[] = [
@@ -90,6 +101,31 @@ const denied: Case[] = [
   // a workspace missing from the package map fails closed
   ['apps/candidate/src/main.tsx', '@trace/not-yet-mapped'],
   ['workers/edge/src/index.ts', '@trace/not-yet-mapped/sub/path'],
+  // unclassified targets fail closed
+  ['apps/candidate/src/main.tsx', '../../../packages/vendors'],
+  ['apps/candidate/src/main.tsx', '../../../packages/vendors/'],
+  ['apps/candidate/src/main.tsx', '../../../scripts/x.ts'],
+  ['apps/candidate/src/main.tsx', '../../../eslint.config.js'],
+  ['apps/candidate/src/main.tsx', '../../../vite.config.ts'],
+  ['apps/candidate/src/main.tsx', '../../../docs/notes'],
+  ['apps/candidate/src/main.tsx', '../../../../outside-the-repo/x'],
+  ['apps/candidate/src/main.tsx', '#vendors'],
+  ['apps/candidate/src/main.tsx', '#internal/server'],
+  ['apps/candidate/src/main.tsx', '../../../node_modules/@trace/vendors/src/index'],
+  ['apps/candidate/src/main.tsx', '../node_modules/@trace/shared/src/index'],
+  // scripts, supabase and root tooling import no workspace code
+  ['scripts/check-boundaries.mjs', '@trace/shared'],
+  ['scripts/check-boundaries.mjs', '../packages/shared/src/index.ts'],
+  ['scripts/check-boundaries.mjs', '../apps/candidate/src/main'],
+  ['supabase/tests/helpers.ts', '@trace/db-types'],
+  ['supabase/tests/helpers.ts', '../../scripts/lib/git.mjs'],
+  ['vite.config.ts', '@trace/shared'],
+  ['eslint.config.js', './scripts/lib/git.mjs'],
+  // tooling configs may import only @trace/config (and their own workspace's tooling files)
+  ['apps/candidate/vite.config.ts', '@trace/ui'],
+  ['apps/candidate/vite.config.ts', '@trace/shared'],
+  ['apps/candidate/vite.config.ts', './src/main'],
+  ['apps/candidate/vitest.config.ts', '../recruiter/vite.config'],
 ];
 
 describe('boundaries: allowed imports', () => {
@@ -100,7 +136,51 @@ describe('boundaries: allowed imports', () => {
 
 describe('boundaries: denied imports', () => {
   it.each(denied)('%s may not import %s', (from, source) => {
-    expect(violations(from, importOf(source))).toBe(1);
+    expect(violations(from, importOf(source))).toBeGreaterThan(0);
+  });
+});
+
+describe('boundaries: every file must be classified', () => {
+  it.each(['docs/tool.ts', 'random.ts', 'tools/x.mjs'])('%s is reported', (file) => {
+    expect(violations(file, 'export const x = 1;\n')).toBeGreaterThan(0);
+  });
+
+  it.each(['scripts/a.mjs', 'supabase/tests/a.ts', 'eslint.config.js', 'commitlint.config.js'])(
+    '%s is classified',
+    (file) => {
+      expect(violations(file, 'export const x = 1;\n')).toBe(0);
+    },
+  );
+});
+
+describe('boundaries: bare specifiers that resolve into the repo', () => {
+  // A temp repo with node_modules/linked-vendors -> packages/vendors (a directory junction),
+  // the shape a `link:` dependency or a hoisted workspace symlink would have.
+  let root = '';
+  beforeAll(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'trace-boundaries-')));
+    const vendors = path.join(root, 'packages', 'vendors', 'src');
+    fs.mkdirSync(vendors, { recursive: true });
+    fs.writeFileSync(path.join(vendors, 'index.ts'), 'export const x = 1;\n');
+    fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
+    fs.symlinkSync(
+      path.join(root, 'packages', 'vendors'),
+      path.join(root, 'node_modules', 'linked-vendors'),
+      'junction',
+    );
+  });
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('an unknown bare name that lands in the repo is denied', () => {
+    expect(
+      violations('apps/candidate/src/main.tsx', importOf('linked-vendors'), root),
+    ).toBeGreaterThan(0);
+  });
+
+  it('a bare name that is not installed stays external', () => {
+    expect(violations('apps/candidate/src/main.tsx', importOf('react'), root)).toBe(0);
   });
 });
 
@@ -113,6 +193,6 @@ describe('boundaries: every import form is checked', () => {
     ['dynamic import', "export const m = import('@trace/api');\n"],
     ['side-effect import', "import '@trace/api';\n"],
   ])('%s of a service is denied', (_label, code) => {
-    expect(violations(from, code)).toBe(1);
+    expect(violations(from, code)).toBeGreaterThan(0);
   });
 });
