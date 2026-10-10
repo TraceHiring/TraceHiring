@@ -29,7 +29,8 @@ These answers override anything below that disagrees with them. Each affected qu
 | plan-conflicts #9 | Face-absent tiered rule is the default **M4 ruleset config** (not code): log ≥3 s; flag ≥20 s continuous, or ≥10 s followed by a typing burst, or ≥60 s total per question. |
 | Design conflicts | Follow the plan in every case (Q33, Q34). |
 | Risks | Split M0 → **M0a / M0b** and M3 → **M3a / M3b** (now in `docs/build-order.md`); cap parallel writers at **3**. No fixed beta date: beta starts when the M8 gate passes. |
-| Still open | **Q54** (auto-push hook; blocks the start of M0a), **Q55** (prod isolation), **Q56** (local deploy deny rules), **Q57** (review-skill rows for M0a/M0b/M3a/M3b), **Q58** (deferred gates the plan itself places after M8) — all in §2. Also stale, not edited by me: `docs/setup-checklist.md` line 9 ("separate dev account (Organizations) … ECS/ECR … in M5") contradicts Q4 and ADR-027. plan-conflicts #4 (explain probe) stays "founder to confirm" until M4. |
+| Q54 (2026-10-11) | **Drop auto-push; work locally only.** The hook is disabled (renamed to `.git/hooks/post-commit.disabled`) and CLAUDE.md line 41 is replaced. Backups are local git bundles via `scripts/backup.sh` (docs/AUTOPILOT.md §5). Pushes happen only when the founder asks. |
+| Still open | **Q55** (prod isolation), **Q56** (local deploy deny rules), **Q57** (review-skill rows for M0a/M0b/M3a/M3b), **Q58** (deferred gates the plan itself places after M8) — all in §2. Also stale, not edited by me: `docs/setup-checklist.md` line 9 ("separate dev account (Organizations) … ECS/ECR … in M5") contradicts Q4 and ADR-027. plan-conflicts #4 (explain probe) stays "founder to confirm" until M4. |
 
 ---
 
@@ -329,6 +330,8 @@ Facts checked 2026-10-10:
 - In a worktree the hook writes its log to `.git/worktrees/<name>/autopush.log`, not the `.git/autopush.log` path CLAUDE.md tells me to read.
 - `lefthook install` (M0a) renames existing hooks to `*.old`, which would **silently disable** this hook.
 
+**Answer (founder, 2026-10-11): (b) drop.** "We work locally only." Hook disabled the same day; S1.0 installs lefthook with no `post-commit` push and no `git-autopush.sh`.
+
 Options: (a) keep auto-push — M0a moves it into a versioned `scripts/git-autopush.sh` run from lefthook's `post-commit`, fixes the log path, and CLAUDE.md line 41 is corrected; (b) drop auto-push — M0a removes the hook and CLAUDE.md line 41, and pushes happen explicitly (each one prompts under settings.json). *Recommendation:* (a), because CLAUDE.md's usage-limit protocol relies on every commit being backed up, but you decide. Nothing changes until you answer.
 Since the security review: today's hook pushes commits that no secret scan has seen, and a pre-commit hook alone is bypassed by `git commit --no-verify`. With (a), `scripts/git-autopush.sh` therefore runs gitleaks over every unpushed commit and refuses to push on a finding (spec §6). That is why Q54 now blocks the **start** of M0a: S1.0 is the first commit.
 
@@ -590,3 +593,12 @@ M4: band rule versions (with `validated` flag), signals, flags, integrity result
 ---
 
 *Status (2026-10-10):* founder answers recorded in §0. Waiting for approval of `specs/m0-foundations.md` (M0a), ADR-027, the build-order split and the answer to Q54 — and for the founder's confirmation that the Q5 machine fixes are done.
+
+---
+
+## Autopilot changes
+Changes to HOW we build, made by the autopilot under docs/AUTOPILOT.md §4. Newest at the bottom.
+
+| Date | Change | Why |
+| --- | --- | --- |
+| 2026-10-11 | Autopilot installed (docs/AUTOPILOT.md). Sessions run one phase each; checkpoints are `cp/*` tags; backups are local bundles (`scripts/backup.sh`). | Founder request: build without per-step approval, safe to resume on any machine. |

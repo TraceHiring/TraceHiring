@@ -1,0 +1,45 @@
+# Trace Autopilot — operating manual
+Goal: build Trace exactly as planned, milestone by milestone, without the founder approving each step. The founder is often away; every session must leave the repo safe and resumable on any machine.
+
+## 1. Sources of truth (higher wins)
+CLAUDE.md rules 1–9 > docs/build-notes.md founder answers > docs/plan-conflicts.md resolutions > docs/adr/ > docs/plan.md > docs/design/. Never reopen a settled decision. The build order is docs/build-order.md, including splits such as M0a/M0b and M3a/M3b.
+
+## 2. The loop — exactly ONE phase per session
+Each milestone moves through these phases:
+SPEC → BUILD (may take several sessions) → REVIEW → FIX (repeat REVIEW and FIX until PASS) → CLOSE → next milestone.
+- SPEC: write or refresh specs/<module>.md (scope, data, zod contracts, state machines, §11 edge cases, one automated acceptance test per "Done when" line and exit-gate item, parallel streams with owned directories). Self-approve: run the spec-reviewer agent, plus database-reviewer for any schema or RLS. Fix every finding, then record "Spec approved by autopilot reviewers" in the spec.
+- BUILD: test-driven. Up to 3 parallel implementer subagents, each in its own git worktree and owning only its directories. After each stream: spec-reviewer on the diff, plus security-reviewer and database-reviewer for anything touching auth, RLS, media, payments, webhooks, LLM prompts or deletion. Merge streams into milestone/m<X> locally with `git merge --no-ff` only after the reviewers pass and `pnpm verify` is green.
+- REVIEW: always a fresh session that did not write the code. Run the trace-milestone-review skill and write docs/reviews/M<X>.md.
+- FIX: fix every Blocking finding, one commit per finding, each with a regression test.
+- CLOSE: requires PASS, or PASS WITH CONDITIONS with an owner milestone for each Medium (M8 and M13 need a clean PASS). Write docs/milestones/M<X>-summary.md (built, deferred and why, Deferred gates table, autopilot decisions, how to demo). Merge milestone/m<X> into main with --no-ff, tag m<X>-reviewed, update Linear if connected (otherwise list the changes in the summary).
+
+## 3. Founder gates — the ONLY reasons to stop and ask
+1. A credential, account, domain, payment method or paid plan is needed. Give the exact variable name, where to get it and which account type. Never ask for a value in chat; the founder puts it in .env.local or Doppler.
+2. An action outside the repo that costs money, can't be undone, or touches real people or production: prod deploys, DNS changes, enabling paid plans, deleting cloud resources, real SMS/WhatsApp/email to real people, a live Razorpay mode.
+3. Anything that would break CLAUDE.md rules 1–9 or a founder answer.
+4. The milestone gates: M4 does not start until a design-partner LOI is confirmed (plan-conflicts #14); M8 and M13 need explicit founder sign-off; no real candidate data before M8.
+5. The same problem has failed after 3 different attempts.
+When blocked on a gate: add it to docs/progress/FOUNDER-QUEUE.md (what, why, exact steps for the founder), keep working on everything not blocked (use mocks or adapters), and stop only when nothing unblocked is left.
+
+## 4. Deciding on your own
+- Anything covered by the sources in §1: decide and proceed.
+- A new technical choice the sources don't cover: pick the option most consistent with the plan's principles (security first, simplest, no new vendor), write an ADR marked "Accepted (autopilot)", and list it in the milestone summary.
+- You MAY change HOW we build (order inside a milestone, splitting a milestone, parallelism, tooling) with a note under "Autopilot changes" in docs/build-notes.md. You may NOT change WHAT we build (rules, features, scope, phases) — propose that in FOUNDER-QUEUE.md instead.
+- Never guess facts: run it, read it, or check the docs (Context7). If a rule and the code disagree, the rule wins.
+
+## 5. Safety: checkpoints, rollback, backups (no remote)
+- main contains only reviewed milestones. Work happens on milestone/m<X> and stream branches.
+- After every green sub-step: commit and tag cp/m<X>-<NN>. Never delete tags or rewrite main.
+- Rollback: first `git branch rescue/<YYYYMMDD-HHMM> HEAD`, then `git reset --hard cp/<tag>` on the milestone branch. Log both in docs/progress/LOG.md.
+- At the end of every session, run scripts/backup.sh. It writes `git bundle create ../trace-backups/trace-<date>-<shortsha>.bundle --all` and keeps the last 10.
+- docs/progress/RESTORE.md explains how to restore from a bundle and how to roll back to any checkpoint.
+- Secrets never go in git. .env.local stays git-ignored.
+
+## 6. Session protocol
+- Start: read CLAUDE.md, this file and docs/progress/HANDOFF.md. Verify git state (branch, clean tree, last cp tag) and toolchain (node 22, pnpm, docker, gitleaks), then run `pnpm verify:fast` if it exists. The repo wins over the handoff. If the tree is dirty from a crashed session, make a rescue branch, then either commit as wip or roll back to the last checkpoint. Never silently discard work.
+- If the toolchain is missing on a new machine, list the install commands and add them to FOUNDER-QUEUE.md.
+- During: use subagents for broad reading. Stop when context reaches ~60%, the usage guard reports 80% or more, or the phase is done.
+- End, always: run the trace-handoff skill. HANDOFF.md must state the milestone, the phase and the exact next action. Then run scripts/backup.sh, append to LOG.md, and print the NEXT PROMPT below plus any new FOUNDER-QUEUE items.
+
+## 7. NEXT PROMPT (always this exact text)
+Continue the Trace autopilot. Read CLAUDE.md, docs/AUTOPILOT.md and docs/progress/HANDOFF.md, verify the repo state, then do the next phase. Follow AUTOPILOT.md exactly.
