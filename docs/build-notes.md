@@ -31,7 +31,14 @@ These answers override anything below that disagrees with them. Each affected qu
 | Risks | Split M0 → **M0a / M0b** and M3 → **M3a / M3b** (now in `docs/build-order.md`); cap parallel writers at **3** (superseded 2026-10-11: default 3, max 4 — see the Parallelism row). No fixed beta date: beta starts when the M8 gate passes. |
 | Parallelism (2026-10-11) | Writers default **3**, max **4**, each in its own worktree with strictly separate directories; shared files (root package.json, lockfile, migrations, `packages/shared` types) change only in the lead session, before or after streams. Read-only helpers up to **6**. Drop to 2 writers after a merge conflict between streams or at 95%+ usage. Full text: `docs/AUTOPILOT.md` §2. |
 | Q54 (2026-10-11) | **Drop auto-push; work locally only.** The hook is disabled (renamed to `.git/hooks/post-commit.disabled`) and CLAUDE.md line 41 is replaced. Backups are local git bundles via `scripts/backup.sh` (docs/AUTOPILOT.md §5). Pushes happen only when the founder asks. |
-| Still open | **Q55** (prod isolation), **Q56** (local deploy deny rules), **Q57** (review-skill rows for M0a/M0b/M3a/M3b), **Q58** (deferred gates the plan itself places after M8) — all in §2. Also stale, not edited by me: `docs/setup-checklist.md` line 9 ("separate dev account (Organizations) … ECS/ECR … in M5") contradicts Q4 and ADR-027. plan-conflicts #4 (explain probe) stays "founder to confirm" until M4. |
+| H1 (2026-10-11) | **Toolchain ready.** Verified by the autopilot at 2026-10-11: `node -v` v22.23.3, `pnpm -v` 12.11.2, `gitleaks version` 8.30.1, `docker info` server 29.5.2. Corepack's global default still pointed at the broken pnpm 12.8.1 entry (`lastKnownGood.json`), so the autopilot ran `corepack install --global pnpm@12.11.2`. Inside the repo the `packageManager` pin decides anyway. |
+| CI gates (2026-10-11) | **Option (b): push before M0a closes.** GitHub works from this machine (only the Claude GitHub connector doesn't); `AbhayRajGit/Tracehiring` is **private**. The post-commit hook stays disabled. At the end of every session the autopilot pushes `main`, the current milestone branch and all tags to the `trace` remote with plain `git push` (never force) — docs/AUTOPILOT.md §6 "End". Pushing is blocked only for production deploys, not for git. CI (GitHub Actions) runs on push, and **M0a's exit gate uses the real CI result**: the items spec §13.1 lists as "Deferred" are owned by M0a CLOSE, not M8. |
+| Q57 (2026-10-11) | **Approved.** Add M0a, M0b, M3a, M3b rows to `trace-milestone-review`, copying the split exit gates from `docs/build-order.md` word for word. |
+| Q56 (2026-10-11) | **Approved.** The deny rules go into `.claude/settings.json` in S1.0. Staging deploys happen only from CI, never from a local session. |
+| Q55 (2026-10-11) | **Approved.** Prod uses a separate Cloudflare account and a separate Supabase org/project, created at M8, not now. |
+| D3 (2026-10-11) | **Approved.** Candidate app initial load ≤ 150 KB gzipped. |
+| ABH-80 (2026-10-11) | "Done when" from Linear: *"RPO ≤ 15 minutes and RTO ≤ 2 hours are proven in a restore drill; the on-call alert reaches the phone in under 2 minutes; no candidate PII is found in logs (scan)."* It conflicts with plan §12 (database RPO ≤ 2 min, RTO 4 h). **Resolution: RPO ≤ 2 min (plan wins), RTO ≤ 2 h (the stricter).** Recorded as plan-conflicts #16. M0a owns only the observability part ("no candidate PII is found in logs (scan)"); the drill and the alert belong to M8 (build-order M8 exit gate). |
+| Still open | **Q58** (deferred gates the plan itself places after M8) — in §2. Also stale, not edited by me: `docs/setup-checklist.md` line 9 ("separate dev account (Organizations) … ECS/ECR … in M5") contradicts Q4 and ADR-027. plan-conflicts #4 (explain probe) stays "founder to confirm" until M4. Q55, Q56 and Q57 were answered 2026-10-11 (rows above). |
 
 ---
 
@@ -336,11 +343,11 @@ Facts checked 2026-10-10:
 Options: (a) keep auto-push — M0a moves it into a versioned `scripts/git-autopush.sh` run from lefthook's `post-commit`, fixes the log path, and CLAUDE.md line 41 is corrected; (b) drop auto-push — M0a removes the hook and CLAUDE.md line 41, and pushes happen explicitly (each one prompts under settings.json). *Recommendation:* (a), because CLAUDE.md's usage-limit protocol relies on every commit being backed up, but you decide. Nothing changes until you answer.
 Since the security review: today's hook pushes commits that no secret scan has seen, and a pre-commit hook alone is bypassed by `git commit --no-verify`. With (a), `scripts/git-autopush.sh` therefore runs gitleaks over every unpushed commit and refuses to push on a finding (spec §6). That is why Q54 now blocks the **start** of M0a: S1.0 is the first commit.
 
-**Q55. Prod isolation at M8 — Can-default (confirm before M8)**
+**Q55. Prod isolation at M8 — Answered 2026-10-11: approved (separate Cloudflare account and Supabase org/project, created at M8)**
 A staging CI credential must never be able to reach prod. The CLAUDE.md rule "Never connect to production" relies on that, and so does the security review (#9).
 *Default:* prod gets a **separate Supabase organisation** and a **separate Cloudflare account**, each with its own CI environment and approval rule. Staging CI uses the staging DB connection string, not a personal access token that spans every project. Recorded in ADR-027 as proposed.
 
-**Q56. Stop local sessions from deploying to staging — Can-default (needs your OK because it edits `.claude/settings.json`)**
+**Q56. Stop local sessions from deploying to staging — Answered 2026-10-11: approved (deny rules land in S1.0; staging deploys only from CI)**
 The M0a gate says "staging deploys from CI only". Today `.claude/settings.json` puts `wrangler deploy` and `supabase db push` under **ask**, so one approval in a local session could deploy to staging.
 *Default:* add these to **deny**:
 - `Bash(wrangler deploy --env staging:*)`, `Bash(wrangler deploy -e staging:*)`
@@ -350,7 +357,7 @@ The M0a gate says "staging deploys from CI only". Today `.claude/settings.json` 
 
 Local `wrangler dev` stays allowed. This lands in S1.0 if you approve.
 
-**Q57. The milestone-review skill doesn't know about the sub-milestones — Open (needs your OK because it edits `.claude/skills/trace-milestone-review/SKILL.md`)**
+**Q57. The milestone-review skill doesn't know about the sub-milestones — Answered 2026-10-11: approved**
 The skill's milestone checkpoints (SKILL.md around lines 150–153) check "M0" against the whole old M0 gate (≥50 RLS tests, append-only audit log) and "M3" against voice upload and axe. Run as-is, it would BLOCK M0a and M3a for items that now belong to M0b and M3b. Its list of sibling milestones (around line 30) also lacks M3a/M3b.
 *Proposal:* add M0a, M0b, M3a and M3b rows that copy the split exit gates from `docs/build-order.md` word for word, and add M3a/M3b to the sibling list. One small PR, made before the M0a review runs.
 

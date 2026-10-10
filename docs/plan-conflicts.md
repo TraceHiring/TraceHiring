@@ -16,6 +16,7 @@ These are contradictions found inside `docs/plan.md` (rev 39) and between the pl
 | 10 | Phone mode (screens 06a/06b) appears in the design but is Phase 2 | §5 C | Out of scope for this build; keep the candidate app responsive so phone mode is cheap later |
 | 11 | Auto-refund on system-caused failure is in ABH-77, not in the plan | Linear vs §13 | Build it (it follows the "bill on started attempts" principle); log every refund |
 | 12 | Plan says DPDP-ready at closed beta in Nov 2026; the old roadmap said beta Oct 2026–Jan 2027 | §10 | Beta starts only when the M8 gate passes, whatever the date |
+| 16 | ABH-80 "Done when" (Linear) says RPO ≤ 15 min and RTO ≤ 2 h; plan §12 says database RPO ≤ 2 min, RTO 4 h | Linear ABH-80 vs §12 | Founder, 2026-10-11: **RPO ≤ 2 min** (the plan wins) and **RTO ≤ 2 h** (the stricter of the two). The M8 restore drill proves both. The rest of ABH-80's line stands: on-call alert reaches the phone in under 2 minutes; no candidate PII found in logs (scan) |
 
 ## Founder decisions to confirm before M1 (raised in the final plan review)
 | # | Question | Default if the founder doesn't answer |
