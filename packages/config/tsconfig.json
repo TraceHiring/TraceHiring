@@ -5,5 +5,5 @@
     "checkJs": true,
     "types": ["node"]
   },
-  "include": ["eslint", "vitest", "test", "*.js"]
+  "include": ["eslint", "vitest", "vite", "test", "*.js"]
 }
