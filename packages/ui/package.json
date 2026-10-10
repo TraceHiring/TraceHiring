@@ -8,10 +8,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
-    "lint": "eslint . --max-warnings=0 && pnpm tokens:check",
-    "test": "vitest run",
-    "tokens:build": "node scripts/build-tokens.mjs",
-    "tokens:check": "node scripts/build-tokens.mjs --check"
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run"
   },
   "dependencies": {
     "@trace/shared": "workspace:*"

@@ -573,7 +573,7 @@ function checkStepCommon(step, file, where, out, ctx) {
     return;
   }
   if (step.uses !== undefined) checkUses(step.uses, file, where, out, ctx);
-  if (typeof step.uses === 'string' && /^actions\/checkout@/.test(step.uses)) {
+  if (typeof step.uses === 'string' && /^actions\/checkout@/i.test(step.uses)) {
     const pc = isObj(step.with) ? step.with['persist-credentials'] : undefined;
     if (!(pc === false || pc === 'false')) {
       out.push(v(file, where, 'actions/checkout must set persist-credentials: false'));
@@ -685,7 +685,7 @@ export function checkWorkflow(doc, file, ctx = {}) {
     }
     if (FULL_HISTORY_JOBS.includes(name)) {
       const checkouts = (Array.isArray(job.steps) ? job.steps : []).filter(
-        (s) => isObj(s) && typeof s.uses === 'string' && /^actions\/checkout@/.test(s.uses),
+        (s) => isObj(s) && typeof s.uses === 'string' && /^actions\/checkout@/i.test(s.uses),
       );
       const full = (s) =>
         isObj(s.with) && (s.with['fetch-depth'] === 0 || s.with['fetch-depth'] === '0');

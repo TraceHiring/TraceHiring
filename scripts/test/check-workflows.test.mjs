@@ -223,6 +223,18 @@ describe('checkWorkflow', () => {
     expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/persist-credentials: false/);
   });
 
+  it('matches checkout case-insensitively, as GitHub resolves owner/repo names (S1.4 review L3)', () => {
+    const d = doc();
+    d.jobs.static.steps[0].uses = d.jobs.static.steps[0].uses.replace(
+      'actions/checkout',
+      'Actions/Checkout',
+    );
+    delete d.jobs.static.steps[0].with;
+    const m = msgs(checkWorkflow(d, 'ci.yml', ctx));
+    expect(m).toMatch(/persist-credentials: false/);
+    expect(m).toMatch(/jobs.static.*fetch-depth: 0/);
+  });
+
   it('rejects a checkout with no with: block at all', () => {
     const d = doc();
     delete d.jobs.rls.steps[0].with;

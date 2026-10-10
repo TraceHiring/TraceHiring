@@ -45,9 +45,13 @@ describe('parseTap()', () => {
     expect(r.problems).toContain('all tests skipped (database not ready)');
   });
 
-  it('does not count a failing # TODO test as a failure', () => {
-    const r = parseTap(lines('1..2', 'ok 1', 'not ok 2 - later # TODO write policy'));
-    expect(r).toMatchObject({ failed: 0, todo: 1, ok: true });
+  // Spec §8.3 step 5 fails on any `not ok`; a pgTAP todo() must never hide a failing RLS assertion.
+  it('fails a failing # TODO test, and a passing one too (TODO is never allowed)', () => {
+    const failing = parseTap(lines('1..2', 'ok 1', 'not ok 2 - later # TODO write policy'));
+    expect(failing).toMatchObject({ todo: 1, ok: false });
+    expect(failing.problems).toContain('todo 2 - later (write policy)');
+    const passing = parseTap(lines('1..2', 'ok 1', 'ok 2 - later # TODO write policy'));
+    expect(passing).toMatchObject({ todo: 1, ok: false });
   });
 
   it('detects a plan mismatch in both directions', () => {
@@ -155,11 +159,22 @@ describe('parseProve()', () => {
 });
 
 describe('countAssertionsByPrefix()', () => {
+  it('counts only passing assertions, never TODO, skipped or failing ones', () => {
+    const files = [
+      {
+        file: 'supabase/tests/rls_a.sql',
+        ...parseTap(lines('1..4', 'ok 1', 'not ok 2 # TODO x', 'ok 3 # SKIP y', 'not ok 4')),
+      },
+    ];
+    expect(countAssertionsByPrefix(files, ['rls_'])).toEqual({ rls_: 1 });
+  });
+
   it('counts assertions by the file basename prefix, so catalog never counts as rls', () => {
     const files = parseProve(PROVE_VERBOSE);
+    // rls_orgs has 3 assertions but "not ok 2" fails, so only 2 count toward the floor.
     expect(countAssertionsByPrefix(files, ['catalog_', 'rls_'])).toEqual({
       catalog_: 2,
-      rls_: 3,
+      rls_: 2,
     });
   });
 });

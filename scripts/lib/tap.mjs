@@ -80,8 +80,11 @@ export function parseTap(text) {
   let todo = 0;
   for (const t of tests) {
     const label = `${t.id}${t.description ? ` - ${t.description}` : ''}`;
-    if (t.directive === 'todo') todo++;
-    else if (t.directive === 'skip') {
+    // A TODO never passes: §8.3 fails on any `not ok`, and a todo() must not hide an RLS gap.
+    if (t.directive === 'todo') {
+      todo++;
+      problems.push(`todo ${label}${t.reason ? ` (${t.reason})` : ''}`);
+    } else if (t.directive === 'skip') {
       skipped++;
       problems.push(`skipped ${label}${t.reason ? ` (${t.reason})` : ''}`);
     } else if (t.ok) passed++;
@@ -136,13 +139,16 @@ export function parseProve(text) {
   return sections.map(({ file, lines }) => ({ file, ...parseTap(lines.join('\n')) }));
 }
 
-/** Assertions per file-name prefix, e.g. { catalog_: 12, rls_: 50 }. Uses the file's basename. */
+/**
+ * Passing assertions per file-name prefix, e.g. { catalog_: 12, rls_: 50 }. Uses the file's
+ * basename. TODO, skipped and failing assertions never count toward a floor.
+ */
 export function countAssertionsByPrefix(files, prefixes) {
   const counts = Object.fromEntries(prefixes.map((p) => [p, 0]));
   for (const f of files) {
     const base = f.file.split(/[\\/]/).pop();
     const prefix = prefixes.find((p) => base.startsWith(p));
-    if (prefix) counts[prefix] += f.count;
+    if (prefix) counts[prefix] += f.passed;
   }
   return counts;
 }

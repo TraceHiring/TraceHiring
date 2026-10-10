@@ -93,7 +93,7 @@ export function checkTrackedEnvFiles(paths) {
   for (const p of paths) {
     const base = path.posix.basename(p);
     if (base === 'env.example') continue;
-    if (base.startsWith('.dev.vars') || base === '.env' || base.startsWith('.env.')) {
+    if (base.startsWith('.dev.vars') || base.startsWith('.env')) {
       out.push(violation(2, p, 'env/.dev.vars files must never be committed (only env.example)'));
     }
   }

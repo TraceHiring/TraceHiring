@@ -5,6 +5,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+// A test may run inside a git hook, where GIT_DIR / GIT_INDEX_FILE point at the real repository.
+// Drop them so every git call (here and in the scripts under test) targets the temp repo only.
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith('GIT_')) delete process.env[key];
+}
+
 const IDENTITY = [
   '-c',
   'user.name=Trace Test',

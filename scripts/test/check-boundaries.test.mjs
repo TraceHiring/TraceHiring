@@ -112,6 +112,9 @@ describe('rule 2: tracked .dev.vars* and .env* files', () => {
       'apps/candidate/.env.local',
       '.env.example',
       'src/environment.ts',
+      '.envrc',
+      'workers/jobs/.env-staging',
+      '.env_local',
     ]);
     expect(v.map((x) => x.path)).toEqual([
       'workers/edge/.dev.vars',
@@ -119,6 +122,9 @@ describe('rule 2: tracked .dev.vars* and .env* files', () => {
       '.env',
       'apps/candidate/.env.local',
       '.env.example',
+      '.envrc',
+      'workers/jobs/.env-staging',
+      '.env_local',
     ]);
     expect(v.every((x) => x.rule === 2)).toBe(true);
   });
