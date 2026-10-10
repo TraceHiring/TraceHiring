@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./log": "./src/log/index.ts",
+    "./health": "./src/health.ts",
+    "./contracts": "./src/contracts.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
