@@ -1,6 +1,6 @@
 import type { EventType, Tier } from '../../shared/types';
 
-export type Family = 'focus' | 'paste' | 'typing' | 'camera' | 't1' | 'neutral';
+export type Family = 'focus' | 'paste' | 'typing' | 'camera' | 'mic' | 'appeal' | 't1' | 'neutral';
 
 export const EVENT_LABEL: Record<EventType, string> = {
   start: 'Session started',
@@ -20,6 +20,11 @@ export const EVENT_LABEL: Record<EventType, string> = {
   submit: 'Submitted',
   shared_wrong_answers: 'Shared unusual wrong answers with another candidate',
   grader_injection: 'Instructions to the grader found in answer',
+  face_absent: 'No face in frame',
+  multiple_faces: 'Second person in frame',
+  face_present: 'Face back in frame',
+  mic_speech: 'Speech detected (context only)',
+  appeal: 'Candidate disputed a flag',
 };
 
 export function familyOf(type: EventType, tier: Tier): Family {
@@ -31,8 +36,12 @@ export function familyOf(type: EventType, tier: Tier): Family {
       return 'paste';
     case 'untrusted_input': case 'burst_after_return': case 'grader_injection':
       return 'typing';
-    case 'snapshot': case 'camera_off':
+    case 'snapshot': case 'camera_off': case 'face_absent': case 'multiple_faces': case 'face_present':
       return 'camera';
+    case 'mic_speech':
+      return 'mic';
+    case 'appeal':
+      return 'appeal';
     default:
       return 'neutral';
   }
@@ -43,6 +52,8 @@ export const FAMILY_COLOR: Record<Family, string> = {
   paste: 'var(--sig-paste)',
   typing: 'var(--sig-typing)',
   camera: 'var(--sig-camera)',
+  mic: 'var(--sig-mic)',
+  appeal: '#C2185B',
   t1: '#8A1C1C',
   neutral: 'var(--border-strong)',
 };
@@ -51,7 +62,9 @@ export const FAMILY_LABEL: Record<Family, string> = {
   focus: 'Focus / tab',
   paste: 'Paste / copy',
   typing: 'Typing pattern',
-  camera: 'Camera',
+  camera: 'Camera / face presence',
+  mic: 'Microphone (context only)',
+  appeal: 'Candidate dispute',
   t1: 'Server-computed (T1)',
   neutral: 'Session',
 };
@@ -68,4 +81,14 @@ export function fmtDateTime(iso?: string): string {
   if (!iso) return '—';
   const d = new Date(iso);
   return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Turn an event detail into readable text (face events carry seconds). */
+export function eventDetail(type: EventType, detail?: string): string | undefined {
+  if (!detail) return undefined;
+  if ((type === 'face_absent' || type === 'multiple_faces') && /^\d+(\.\d+)?$/.test(detail.trim())) {
+    return `${Math.round(Number(detail))} seconds`;
+  }
+  if (type === 'appeal') return `“${detail}”`;
+  return detail;
 }

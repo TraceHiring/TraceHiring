@@ -1,6 +1,6 @@
 // Typed client for the demo Worker. Every endpoint the Worker serves is listed here.
 import type {
-  Analytics, AuditEntry, CandidateReportView, CandidateTestView, Candidate, DemoUserId,
+  Appeal, LiveSessionRow, Analytics, AuditEntry, CandidateReportView, CandidateTestView, Candidate, DemoUserId,
   FinalDecision, IntegrityEvent, Item, Report, ReviewerInboxRow, Test, TestSummary, TriageRow,
 } from './shared/types';
 
@@ -47,6 +47,7 @@ export const api = {
   triage: (testId: string) => call<TriageRow[]>('GET', `/tests/${testId}/candidates`),
   shortlist: (testId: string, cutoff: number) =>
     call<{ shortlisted: number; belowCutoff: number }>('POST', `/tests/${testId}/shortlist`, { cutoff }),
+  live: (testId: string) => call<LiveSessionRow[]>('GET', `/tests/${testId}/live`),
   advance: (candidateId: string) => call<{ ok: true }>('POST', `/candidates/${candidateId}/advance`),
 
   // Candidate (token = invite link)
@@ -60,6 +61,7 @@ export const api = {
   submit: (token: string) => call<{ ok: true }>('POST', `/c/${token}/submit`),
   candidateReport: (token: string) => call<CandidateReportView>('GET', `/c/${token}/report`),
   respond: (token: string, text: string) => call<{ ok: true }>('POST', `/c/${token}/respond`, { text }),
+  appeal: (token: string, b: { flagId: string; text: string }) => call<{ ok: true; appeal: Appeal }>('POST', `/c/${token}/appeal`, b),
 
   // Reviewer
   inbox: () => call<ReviewerInboxRow[]>('GET', '/reviewer/inbox'),

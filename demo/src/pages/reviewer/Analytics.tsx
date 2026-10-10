@@ -11,7 +11,7 @@ const BAND_FILL: Record<Band, string> = {
   clear: 'var(--clear-fg)', review: '#C58A1A', strong_concern: 'var(--concern-fg)', insufficient: 'var(--text-3)',
 };
 
-const DETECTORS: { name: string; tier: string; status: 'validated' | 'context' }[] = [
+const DETECTORS: { name: string; tier: string; status: 'validated' | 'context'; note?: string }[] = [
   { name: 'Shared unusual wrong answers (server)', tier: 'T1', status: 'validated' },
   { name: 'Instructions to the grader in an answer', tier: 'T2', status: 'validated' },
   { name: 'Tab / window focus loss', tier: 'T3', status: 'context' },
@@ -19,6 +19,9 @@ const DETECTORS: { name: string; tier: string; status: 'validated' | 'context' }
   { name: 'Scripted (untrusted) input', tier: 'T3', status: 'validated' },
   { name: 'Typing burst after returning', tier: 'T3', status: 'context' },
   { name: 'Camera off / random stills', tier: 'T3', status: 'context' },
+  { name: 'Face absent ≥20s', tier: 'T3', status: 'validated', note: 'Capped at Review' },
+  { name: 'Second face ≥10s', tier: 'T3', status: 'validated', note: 'Can exceed Review only with a viewable still' },
+  { name: 'Speech during test', tier: 'T3', status: 'context', note: 'Strict mode only' },
 ];
 
 function actorName(a: string) {
@@ -125,7 +128,7 @@ export default function Analytics() {
                 <tbody>
                   {DETECTORS.map((d) => (
                     <tr key={d.name}>
-                      <td>{d.name}</td>
+                      <td>{d.name}{d.note && <div className="caption muted">{d.note}</div>}</td>
                       <td><span className={`tag${d.tier === 'T1' ? ' t1' : ''}`}>{d.tier}</span></td>
                       <td>{d.status === 'validated'
                         ? <span className="badge band-clear">Can raise a flag</span>

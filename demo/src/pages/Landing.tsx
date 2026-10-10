@@ -32,6 +32,17 @@ const PRINCIPLES: { title: string; body: string }[] = [
   },
 ];
 
+const FEATURES: { title: string; body: string }[] = [
+  { title: 'On-device face presence', body: 'Present, away, or a second person in frame. Checked on the device; only stills around an event leave it.' },
+  { title: 'Mic check', body: 'Audio never leaves the device. Speech during the test is context only, never a flag (Strict mode).' },
+  { title: 'Candidate can dispute any flag', body: 'Disputes sit right under the flag in the reviewer console. They never change a score.' },
+  { title: 'Recruiter live monitor', body: 'Who is in progress and how far along, with allow-listed stills only. No live camera feed.' },
+  { title: 'Autosave + server-held timer', body: 'Every answer saves as you go. The server holds the clock, so a refresh or dropped connection loses nothing.' },
+  { title: 'Evidence timeline', body: 'Every signal on one track with time, tier and detail. Click a flag to highlight the events behind it.' },
+  { title: 'Notice, 72 h, second reviewer', body: 'A confirmed flag needs a notice and a 72-hour response window. A different reviewer makes the final call.' },
+  { title: 'Audit log', body: 'Every view of evidence and every decision is recorded with who and when.' },
+];
+
 const BANDS: { band: Band; meaning: string }[] = [
   { band: 'clear', meaning: 'No signal that needs a human look. Proceed on Answer Quality alone.' },
   { band: 'review', meaning: 'Something worth a look. A reviewer checks the evidence before anything happens.' },
@@ -88,6 +99,13 @@ export default function Landing() {
           <span className="cta-go">Open reviewer →</span>
         </Link>
       </div>
+
+      <h2 className="section-title">What the demo shows</h2>
+      <ul className="feature-list">
+        {FEATURES.map((f) => (
+          <li key={f.title}><div><strong>{f.title}</strong><span>{f.body}</span></div></li>
+        ))}
+      </ul>
 
       <h2 className="section-title">Our promises</h2>
       <div className="principles">

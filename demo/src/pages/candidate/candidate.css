@@ -26,6 +26,18 @@
 .c-timeline .mono { min-width: 48px; color: var(--text-3); }
 .c-flag { border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
 .c-wrap { flex-wrap: wrap; }
+.c-videowrap { position: relative; width: 100%; max-width: 320px; }
+.c-overlay { position: absolute; left: 8px; bottom: 8px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--insuff-bg); color: var(--insuff-fg); }
+.c-overlay.p-present { background: var(--clear-bg); color: var(--clear-fg); }
+.c-overlay.p-absent { background: var(--review-bg); color: var(--review-fg); }
+.c-overlay.p-multiple { background: var(--concern-bg); color: var(--concern-fg); }
+.c-meter { width: 100%; max-width: 320px; height: 10px; border-radius: 999px; background: var(--bg-muted); overflow: hidden; }
+.c-meter > div { height: 100%; background: var(--clear-fg); transition: width .1s linear; }
+.c-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); vertical-align: middle; }
+.c-dot.p-present { background: #1F9D6B; }
+.c-dot.p-absent { background: #D99A00; }
+.c-dot.p-multiple { background: #C23B12; }
+.c-appeal { border-left: 3px solid var(--accent); padding-left: 8px; }
 @media (max-width: 480px) {
   .c-main { padding: 12px 16px; }
   .c-head .c-title { max-width: 100%; }

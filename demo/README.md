@@ -1,5 +1,7 @@
 # Trace demo prototype (D1 preview)
 
+**Live:** https://trace-demo.abhayraj.workers.dev (workers.dev subdomain `abhayraj`, confirmed 2026-10-11)
+
 A self-contained demo slice of Trace, built on 2026-10-11 at the founder's request so the product can be shown live.
 It runs on **staging only, with synthetic data only**. It is **not** the M0a production skeleton: it sits beside the
 autopilot milestones and does not replace any milestone gate.
@@ -13,5 +15,5 @@ autopilot milestones and does not replace any milestone gate.
 ```bash
 cd demo && npm install && npm run build && npx wrangler dev   # local
 cd demo && npm run deploy                                     # staging workers.dev
-bash demo/smoke.sh https://trace-demo.<subdomain>.workers.dev # API smoke test
+bash demo/smoke.sh https://trace-demo.abhayraj.workers.dev # API smoke test
 ```

@@ -81,7 +81,12 @@ export type EventType =
   | 'answer_saved'
   | 'submit'
   | 'shared_wrong_answers' // T1, computed server-side
-  | 'grader_injection'; // T2, computed by grader guard
+  | 'grader_injection' // T2, computed by grader guard
+  | 'face_absent' // on-device face check: no face for N seconds (detail: seconds)
+  | 'multiple_faces' // on-device face check: 2+ faces (media: still around the event)
+  | 'face_present' // face back in frame
+  | 'mic_speech' // context only, never a flag (Strict mode only)
+  | 'appeal'; // candidate disputes a flag (detail: text)
 
 export interface IntegrityEvent {
   seq: number;
@@ -164,6 +169,7 @@ export interface Report {
   integrity?: IntegrityResult;
   notice?: Notice;
   finalDecision?: FinalDecision;
+  appeals?: Appeal[];
 }
 
 /** Triage row: quality score and band shown in separate columns. */
@@ -197,8 +203,9 @@ export interface CandidateReportView {
   submittedAt?: string;
   quality?: QualityResult;
   integrity?: { band: Band | 'under_review'; flags: Pick<Flag, 'id' | 'label' | 'status' | 'rationale' | 'summary'>[] };
-  notice?: Notice;
+  notice?: Omit<Notice, 'sentBy'>; // reviewer identity never reaches the candidate
   finalDecision?: Pick<FinalDecision, 'outcome' | 'rationale' | 'at'>;
+  appeals?: Appeal[];
   timeline: Pick<IntegrityEvent, 'seq' | 't' | 'type' | 'detail'>[];
 }
 
@@ -219,4 +226,26 @@ export interface Analytics {
   bands: Record<Band, number>;
   flagOutcomes: { confirmed: number; overturned: number; pending: number; not_used: number };
   overturnRateBySignal: { signal: string; label: string; confirmed: number; overturned: number }[];
+}
+
+/** Candidate dispute of a flag ("I was wrongly flagged"). Visible to reviewers; never changes any score. */
+export interface Appeal {
+  flagId: string;
+  text: string;
+  at: string;
+}
+
+/** Recruiter live monitor row. Shows only allow-listed stills, never a live camera feed. */
+export interface LiveSessionRow {
+  candidate: Candidate;
+  startedAt: string;
+  deadline: string;
+  answered: number;
+  totalItems: number;
+  presence: 'present' | 'absent' | 'multiple' | 'no_camera' | 'unknown';
+  lastStill?: string;
+  lastStillAt?: number;
+  recentEvents: Pick<IntegrityEvent, 'seq' | 't' | 'type' | 'detail'>[];
+  flagsSoFar: number;
+  serverNow: string;
 }

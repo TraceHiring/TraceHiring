@@ -73,3 +73,5 @@
 .pill-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
 .pill { border-radius:var(--r-md); padding:12px; }
 .pill .metric { font-size:24px; }
+.dispute-callout { margin:0 0 4px; padding:12px 14px; border-radius:var(--r-md); background:#FCE4EE; color:#7A0F3A; border:1px solid #F2B8CF; }
+.dispute { border-left:3px solid #C2185B; background:#FDF0F5; padding:6px 10px; border-radius:0 var(--r-sm) var(--r-sm) 0; font-size:13px; color:var(--text); white-space:pre-wrap; }

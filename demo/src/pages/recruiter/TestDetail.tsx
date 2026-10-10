@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../../api';
 import { AppShell, BandBadge, Card, ErrorNote, QualityScore } from '../../ui';
 import type { CandidateStatus, Test, TriageRow } from '../../shared/types';
+import LiveMonitor from './LiveMonitor';
 import './recruiter.css';
 
 const STATUS_LABEL: Record<CandidateStatus, string> = {
@@ -94,6 +95,7 @@ export default function TestDetail() {
       <div className="col gap24" style={{ alignItems: 'stretch' }}>
         <InvitePanel testId={testId} nextN={rows.length + 1} onInvited={refresh} />
         <CutoffPanel testId={testId} rows={rows} onDone={refresh} />
+        <LiveMonitor testId={testId} />
         <TriageTable rows={rows} onChanged={refresh} />
         {test && <ItemsList test={test} />}
       </div>
@@ -287,7 +289,7 @@ function TriageTable({ rows, onChanged }: { rows: TriageRow[]; onChanged: () => 
   return (
     <Card title="Score-first triage" actions={<span className="caption muted">Sorted by Answer Quality</span>}>
       <p className="caption muted" style={{ marginTop: 0 }}>
-        Answer Quality and Integrity Signals are two separate results, shown in separate columns and never combined.
+        Answer Quality and Integrity Signals are two separate results, shown in separate columns and never combined. Integrity appears only for shortlisted candidates, and only human-confirmed flags are counted.
       </p>
       {rows.length === 0 ? (
         <div className="rc-empty">No candidates yet. Create an invite link above.</div>
@@ -300,7 +302,7 @@ function TriageTable({ rows, onChanged }: { rows: TriageRow[]; onChanged: () => 
                 <th>Status</th>
                 <th className="sep">Answer Quality</th>
                 <th className="sep">Integrity Signals</th>
-                <th>Flags</th>
+                <th title="Only human-confirmed flags are counted">Confirmed flags</th>
                 <th className="sep">Actions</th>
               </tr>
             </thead>
@@ -308,6 +310,8 @@ function TriageTable({ rows, onChanged }: { rows: TriageRow[]; onChanged: () => 
               {sorted.map((r) => {
                 const c = r.candidate;
                 const canAdvance = c.status === 'shortlisted';
+                // Integrity is reviewed only for the shortlist (score-first triage).
+                const reviewed = c.status === 'shortlisted' || c.status === 'advanced';
                 return (
                   <tr key={c.id}>
                     <td>
@@ -317,10 +321,12 @@ function TriageTable({ rows, onChanged }: { rows: TriageRow[]; onChanged: () => 
                     <td><StatusPill status={c.status} /></td>
                     <td className="sep"><QualityScore score={r.qualityScore} /></td>
                     <td className="sep">
-                      {r.band ? <BandBadge band={r.band} /> : <span className="muted">—</span>}
-                      {c.status === 'below_cutoff' && r.flagCount > 0 && <div className="caption muted">flags not used</div>}
+                      {reviewed
+                        ? (r.band ? <BandBadge band={r.band} /> : <span className="muted">—</span>)
+                        : <span className="caption muted">Not reviewed (score-first)</span>}
+                      {c.status === 'below_cutoff' && <div className="caption muted">flags not used</div>}
                     </td>
-                    <td>{r.band ? <span className="mono">{r.flagCount}</span> : <span className="muted">—</span>}</td>
+                    <td>{reviewed ? <span className="mono">{r.flagCount}</span> : <span className="muted">—</span>}</td>
                     <td className="sep">
                       <div className="row gap8 wrap">
                         {r.qualityScore !== undefined && <Link className="btn" to={`/reviewer/${c.id}`}>Open report</Link>}

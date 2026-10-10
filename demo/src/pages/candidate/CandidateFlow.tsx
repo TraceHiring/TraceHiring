@@ -8,6 +8,8 @@ import type { CandidateTestView, EventType, IntegrityEvent, Item } from '../../s
 import { Card, ErrorNote, fmtTime } from '../../ui';
 import { CandidateHeader } from './CandidateHeader';
 import './candidate.css';
+import { useMicLevel, usePresence } from './presence';
+import type { Presence } from './presence';
 
 type Step = 'loading' | 'welcome' | 'consent' | 'camera' | 'test' | 'submitted';
 type OutEvent = Omit<IntegrityEvent, 'seq' | 'tier'>;
@@ -28,6 +30,20 @@ function wordCount(s: string) {
   const t = s.trim();
   return t ? t.split(/\s+/).length : 0;
 }
+
+/** Camera + mic, falling back to camera only, then nothing. */
+async function getMedia(): Promise<MediaStream | null> {
+  if (!navigator.mediaDevices?.getUserMedia) return null;
+  try { return await navigator.mediaDevices.getUserMedia({ video: true, audio: true }); } catch { /* fall back */ }
+  try { return await navigator.mediaDevices.getUserMedia({ video: true }); } catch { return null; }
+}
+
+const PRESENCE_LABEL: Record<Presence, string> = {
+  present: 'Face detected ✓',
+  absent: 'No face',
+  multiple: '2+ faces',
+  unknown: 'Face check unavailable',
+};
 
 function streamLive(s: MediaStream | null) {
   return !!s && s.getVideoTracks().some((t) => t.readyState === 'live');
@@ -53,7 +69,7 @@ export default function CandidateFlow() {
       else if (v.session) {
         setStep('test');
         // Resume: try to bring the camera back quietly; continue without it if unavailable.
-        navigator.mediaDevices?.getUserMedia({ video: true }).then((s) => alive ? setStream(s) : s.getTracks().forEach((t) => t.stop())).catch(() => undefined);
+        void getMedia().then((s) => { if (!s) return; if (alive) setStream(s); else s.getTracks().forEach((t) => t.stop()); });
       } else setStep('welcome');
     }).catch((e: Error) => { if (alive) { setError(e.message); setStep('welcome'); } });
     return () => { alive = false; };
@@ -163,16 +179,21 @@ function CameraStep({ token, age, consent, onStream, onStarted }: {
   const [photo, setPhoto] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [local, setLocal] = useState<MediaStream | null>(null);
+  const presence = usePresence(videoRef, cam === 'on');
+  const level = useMicLevel(local);
+  const hasMic = !!local && local.getAudioTracks().length > 0;
 
   useEffect(() => {
     let alive = true;
-    if (!navigator.mediaDevices?.getUserMedia) { setCam('unavailable'); return; }
-    navigator.mediaDevices.getUserMedia({ video: true }).then((s) => {
+    void getMedia().then((s) => {
+      if (!s || s.getVideoTracks().length === 0) { s?.getTracks().forEach((t) => t.stop()); if (alive) setCam('unavailable'); return; }
       if (!alive) { s.getTracks().forEach((t) => t.stop()); return; }
       onStream(s);
+      setLocal(s);
       setCam('on');
       if (videoRef.current) { videoRef.current.srcObject = s; void videoRef.current.play().catch(() => undefined); }
-    }).catch(() => { if (alive) setCam('unavailable'); });
+    });
     return () => { alive = false; };
   }, [onStream]);
 
@@ -197,13 +218,27 @@ function CameraStep({ token, age, consent, onStream, onStarted }: {
             <>
               <p className="muted">Only this start photo and a few random stills are saved. The live preview stays on your device.</p>
               <div className="row gap16 c-wrap" style={{ alignItems: 'flex-start' }}>
-                <video ref={videoRef} className="c-video" muted playsInline autoPlay />
+                <div className="c-videowrap">
+                  <video ref={videoRef} className="c-video" muted playsInline autoPlay />
+                  {cam === 'on' && <span className={`c-overlay p-${presence}`}>{PRESENCE_LABEL[presence]}</span>}
+                </div>
                 {photo && <div className="col gap8"><span className="caption muted">Your start photo</span><img className="c-photo" src={photo} alt="Your start photo" /></div>}
               </div>
               <div className="row gap8 c-wrap">
                 <button disabled={cam !== 'on'} onClick={() => setPhoto(captureStill(videoRef.current, 240, 180, 0.6))}>{photo ? 'Retake start photo' : 'Take start photo'}</button>
                 <button className="primary" disabled={!photo || busy} onClick={begin}>{busy ? 'Starting…' : 'Begin test'}</button>
               </div>
+              {cam === 'on' && (
+                <div className="col gap8">
+                  <strong>Mic check: say your name</strong>
+                  {hasMic ? (
+                    <div className="c-meter" role="meter" aria-label="Microphone level" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(level * 100)}>
+                      <div style={{ width: `${Math.round(level * 100)}%` }} />
+                    </div>
+                  ) : <span className="caption muted">No microphone available. That is fine, you can continue.</span>}
+                  <span className="caption muted">Audio never leaves your device. In Standard mode speech is not recorded as a signal. Face detection also runs only on your device; camera frames are not uploaded.</span>
+                </div>
+              )}
               {cam === 'asking' && <span className="caption muted">Waiting for camera permission…</span>}
             </>
           )}
@@ -307,12 +342,12 @@ function TestRunner({ token, view, offset, stream }: { token: string; view: Cand
   const streamRef = useRef(stream);
   streamRef.current = stream;
 
-  const flushingRef = useRef(false);
-  const flushEvents = useCallback(async (force = false) => {
-    if (flushingRef.current) return;
+  const inflightFlushRef = useRef<Promise<void> | null>(null);
+  const flushEvents = useCallback(async (force = false): Promise<void> => {
+    if (inflightFlushRef.current) return inflightFlushRef.current;
     if (!force && queueRef.current.length === 0) return;
-    flushingRef.current = true;
     const batch = queueRef.current.splice(0);
+    const run = (async () => {
     try {
       const r = await api.sendEvents(token, batch);
       if (r.requestSnapshot && streamLive(streamRef.current)) {
@@ -321,7 +356,10 @@ function TestRunner({ token, view, offset, stream }: { token: string; view: Cand
       }
     } catch {
       queueRef.current.unshift(...batch); // retry next tick
-    } finally { flushingRef.current = false; }
+    }
+    })();
+    inflightFlushRef.current = run;
+    try { await run; } finally { inflightFlushRef.current = null; }
   }, [token, push]);
 
   useEffect(() => {
@@ -339,6 +377,18 @@ function TestRunner({ token, view, offset, stream }: { token: string; view: Cand
     track?.addEventListener('ended', onEnd);
     return () => track?.removeEventListener('ended', onEnd);
   }, [stream, push]);
+
+  // On-device face presence + (Strict mode only) speech context. Only counts are computed here;
+  // the one upload is the allow-listed still around a multiple_faces event.
+  const presence = usePresence(camVideoRef, streamLive(stream), {
+    onAbsent: (secs) => push('face_absent', String(secs)),
+    onPresent: () => push('face_present'),
+    onMultiple: (secs) => {
+      const media = captureStill(camVideoRef.current, 160, 120, 0.6);
+      push('multiple_faces', String(secs), media);
+    },
+  });
+  useMicLevel(view.test.mode === 'strict' ? stream : null, () => push('mic_speech', 'speech detected (context only)'));
 
   // Visibility, blur, fullscreen, paste, copy, untrusted input.
   const hiddenAtRef = useRef<number | null>(null);
@@ -431,8 +481,11 @@ function TestRunner({ token, view, offset, stream }: { token: string; view: Cand
     setError(null);
     try {
       await flushSaves();
+      // Wait for any in-flight batch, then flush everything including the submit event.
+      if (inflightFlushRef.current) await inflightFlushRef.current;
       push('submit', auto ? 'auto-submitted when time ran out' : undefined);
       await flushEvents(true);
+      if (queueRef.current.length > 0) await flushEvents(true);
       await api.submit(token);
       streamRef.current?.getTracks().forEach((t) => t.stop());
       if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
@@ -575,7 +628,7 @@ function TestRunner({ token, view, offset, stream }: { token: string; view: Cand
       {streamLive(stream) && (
         <div className="c-cam" aria-label="Camera preview">
           <video ref={camVideoRef} muted playsInline autoPlay />
-          <span className="caption muted">Camera on · only random stills are saved</span>
+          <span className="caption muted"><span className={`c-dot p-${presence}`} title={PRESENCE_LABEL[presence]} aria-label={PRESENCE_LABEL[presence]} /> Camera on · only random stills are saved</span>
         </div>
       )}
     </>

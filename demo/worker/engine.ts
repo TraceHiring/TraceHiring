@@ -1,0 +1,192 @@
+// Mock grader + deterministic band engine. Answer Quality and Integrity are computed
+// separately and never combined. Neither function reads the other's output.
+import type {
+  Band, EventType, Flag, IntegrityEvent, IntegrityResult, QualityResult, Session, Test, Tier,
+} from '../src/shared/types';
+import { GRADER_VERSION, RULESET_VERSION } from '../src/shared/types';
+
+export const INJECTION_RE =
+  /ignore (all )?(previous|prior) instructions|give (me )?full marks|you are (now )?the grader/i;
+
+const clamp = (n: number) => Math.max(0, Math.min(1, n));
+
+/** Mock grader. Pure function of test items + answers. Injection text never changes the score. */
+export function gradeSession(test: Test, session: Session): { quality: QualityResult; injectionItemIds: string[] } {
+  let earned = 0;
+  let total = 0;
+  const perItem: QualityResult['perItem'] = [];
+  const injectionItemIds: string[] = [];
+  for (const item of test.items) {
+    total += item.points;
+    const a = session.answers[item.id];
+    if (item.kind === 'mcq') {
+      const ok = a !== undefined && Number(a.value) === item.correctIndex;
+      const s = ok ? item.points : 0;
+      earned += s;
+      perItem.push({
+        itemId: item.id, score: s, max: item.points,
+        feedback: a === undefined ? 'Not answered.' : ok ? 'Correct.' : 'Incorrect option chosen.',
+      });
+    } else {
+      const text = a === undefined ? '' : String(a.value);
+      const trimmed = text.trim();
+      const words = trimmed ? trimmed.split(/\s+/).length : 0;
+      const rubric = item.rubric ?? [];
+      const lower = text.toLowerCase();
+      const matched = rubric.filter((k) => lower.includes(k.toLowerCase())).length;
+      const frac = clamp(
+        0.3 * Math.min(1, words / Math.max(1, item.minWords)) + 0.7 * (rubric.length ? matched / rubric.length : 0),
+      );
+      const s = Math.round(item.points * frac * 10) / 10;
+      earned += s;
+      if (INJECTION_RE.test(text)) injectionItemIds.push(item.id);
+      perItem.push({
+        itemId: item.id, score: s, max: item.points,
+        feedback: a === undefined
+          ? 'Not answered.'
+          : `${words} words (target ${item.minWords}); covered ${matched} of ${rubric.length} expected key points.`,
+      });
+    }
+  }
+  return {
+    quality: { score: total ? Math.round((100 * earned) / total) : 0, perItem, graderVersion: GRADER_VERSION },
+    injectionItemIds,
+  };
+}
+
+function pasteLength(e: IntegrityEvent): number {
+  const m = e.detail?.match(/(\d+)\s*char/i);
+  return m ? Number(m[1]) : (e.detail?.length ?? 0);
+}
+
+/**
+ * Band engine. Deterministic: a pure function of the session's events (+ answers via grader
+ * events) under RULESET_VERSION. No gaze, emotion, AI-likeness or IP signals exist here.
+ */
+export function computeIntegrity(session: Session): IntegrityResult {
+  const ev = session.events;
+  const of = (t: EventType) => ev.filter((e) => e.type === t);
+  const flags: Flag[] = [];
+
+  const add = (
+    signal: string, label: string, tier: Tier, evs: IntegrityEvent[], summary: string,
+    opts: { hardEvidence?: boolean; forceCap?: boolean } = {},
+  ) => {
+    const hasMedia = evs.some((e) => !!e.media);
+    let capsAtReview = tier === 'T3' ? !(opts.hardEvidence || hasMedia) : false;
+    if (opts.forceCap) capsAtReview = true;
+    flags.push({
+      id: `flg_${signal}`, signal, label, tier, capsAtReview, status: 'pending',
+      evidenceSeqs: evs.map((e) => e.seq), summary,
+    });
+  };
+
+  const hidden = of('tab_hidden');
+  if (hidden.length >= 3) {
+    add('tab_switching', 'Repeatedly left the test tab', 'T3', hidden,
+      `The test tab was hidden ${hidden.length} times (threshold 3).`);
+  }
+  const pastes = ev.filter((e) => e.type === 'paste' && (pasteLength(e) >= 40 || /external/i.test(e.detail ?? '')));
+  if (pastes.length) {
+    add('paste_external', 'Pasted text from outside the test', 'T3', pastes,
+      `${pastes.length} paste${pastes.length > 1 ? 's' : ''} of 40+ characters from outside the test window.`);
+  }
+  const fsExit = of('fullscreen_exit');
+  if (fsExit.length >= 3) {
+    add('fullscreen_exit', 'Left fullscreen repeatedly', 'T3', fsExit,
+      `Fullscreen was exited ${fsExit.length} times (threshold 3).`);
+  }
+  const copies = of('copy_question');
+  if (copies.length) {
+    add('question_copy', 'Copied question text', 'T3', copies,
+      `Question text was copied ${copies.length} time${copies.length > 1 ? 's' : ''}.`);
+  }
+  const bursts = of('burst_after_return');
+  if (bursts.length) {
+    add('burst_after_return', 'Typing burst right after returning to the tab', 'T3', bursts,
+      `${bursts.length} large typing burst${bursts.length > 1 ? 's' : ''} within seconds of returning to the tab.`);
+  }
+  const untrusted = of('untrusted_input');
+  if (untrusted.length) {
+    add('untrusted_input', 'Synthetic (scripted) keystrokes', 'T3', untrusted,
+      `${untrusted.length} input events were generated by script, not a keyboard (isTrusted=false).`,
+      { hardEvidence: true });
+  }
+  const secs = (e: IntegrityEvent) => {
+    const m = e.detail?.match(/(\d+(?:\.\d+)?)/);
+    return m ? Number(m[1]) : 0;
+  };
+  const absent = of('face_absent').filter((e) => secs(e) >= 20);
+  if (absent.length) {
+    const longest = Math.max(...absent.map(secs));
+    add('face_absent', 'Face not visible for an extended period', 'T3', absent,
+      `No face detected on device for ${longest}s continuously (threshold 20s).`, { forceCap: true });
+  }
+  const multi = of('multiple_faces').filter((e) => secs(e) >= 10);
+  if (multi.length) {
+    add('second_face', 'A second face was visible', 'T3', multi,
+      `Two or more faces detected for ${Math.max(...multi.map(secs))}s (threshold 10s)${multi.some((e) => e.media) ? '; a still is available to view' : ''}.`);
+  }
+  // mic_speech is context only: never a flag, never affects the band.
+  const shared = of('shared_wrong_answers');
+  if (shared.length) {
+    add('shared_wrong_answers', 'Identical wrong answers with another candidate', 'T1', shared,
+      shared[0]?.detail ?? 'Rare identical wrong answers shared with another candidate in this test.');
+  }
+  const inj = of('grader_injection');
+  if (inj.length) {
+    add('grader_injection', 'Answer contained instructions aimed at the grader', 'T2', inj,
+      'A written answer tried to instruct the automated grader. The score was not changed by it.',
+      { forceCap: true });
+  }
+
+  // Evidence coverage
+  const hasPhoto = !!session.startPhoto;
+  const fsEntered = of('fullscreen_enter').length > 0;
+  const hasStills = ev.some((e) => e.type === 'snapshot' && !!e.media);
+  const coverage = Math.round((0.4 * (hasPhoto ? 1 : 0) + 0.4 * (fsEntered ? 1 : 0) + 0.2 * (hasStills ? 1 : 0)) * 100) / 100;
+
+  const reasons: string[] = [];
+  for (const f of flags) {
+    reasons.push(`${f.label} (${f.tier}${f.capsAtReview ? ', capped at Review' : ''}): ${f.summary}`);
+  }
+  let band: Band;
+  if (coverage < 0.5) {
+    band = 'insufficient';
+    reasons.push(
+      `Evidence coverage ${Math.round(coverage * 100)}%: ${hasPhoto ? '' : 'no start photo; '}${fsEntered ? '' : 'fullscreen never entered; '}not enough evidence to conclude either way (never shown as Clear).`,
+    );
+  } else if (flags.some((f) => !f.capsAtReview)) {
+    band = 'strong_concern';
+    reasons.push('At least one signal backed by hard evidence (T1/T2, scripted input or viewable media).');
+  } else if (flags.length) {
+    band = 'review';
+    reasons.push('Only client-reported (T3) signals without viewable media: capped at Review.');
+  } else {
+    band = 'clear';
+    reasons.push(`No signals crossed a threshold. Evidence coverage ${Math.round(coverage * 100)}%.`);
+  }
+  return { band, rulesetVersion: RULESET_VERSION, coverage, reasons, flags };
+}
+
+/** Grade + guard + band, returning the finalized session. Idempotent on grader_injection events. */
+export function finalizeSession(test: Test, session: Session, submittedAt: string): {
+  session: Session; quality: QualityResult; integrity: IntegrityResult;
+} {
+  const s: Session = { ...session, events: [...session.events], submittedAt: session.submittedAt ?? submittedAt };
+  const { quality, injectionItemIds } = gradeSession(test, s);
+  const t = Math.max(0, Date.parse(s.submittedAt!) - Date.parse(s.startedAt));
+  let seq = s.events.reduce((m, e) => Math.max(m, e.seq), 0);
+  for (const itemId of injectionItemIds) {
+    if (s.events.some((e) => e.type === 'grader_injection' && e.itemId === itemId)) continue;
+    s.events.push({
+      seq: ++seq, t, type: 'grader_injection', tier: 'T2', itemId,
+      detail: 'Grader guard: written answer contains text addressed to the grader. Ignored; score unaffected.',
+    });
+  }
+  if (!s.events.some((e) => e.type === 'submit')) {
+    s.events.push({ seq: ++seq, t, type: 'submit', tier: 'T2' });
+  }
+  const integrity = computeIntegrity(s);
+  return { session: s, quality, integrity };
+}

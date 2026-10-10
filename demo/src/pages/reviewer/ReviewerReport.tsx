@@ -4,7 +4,7 @@ import { api } from '../../api';
 import { AppShell, BandBadge, Card, ErrorNote, QualityScore, fmtTime, useActingUser } from '../../ui';
 import { DEMO_USERS } from '../../shared/types';
 import type { DemoUserId, FinalDecision, Flag, IntegrityEvent, Item, Report } from '../../shared/types';
-import { EVENT_LABEL, FAMILY_COLOR, FAMILY_LABEL, countdown, familyOf, fmtDateTime } from './eventMeta';
+import { EVENT_LABEL, FAMILY_COLOR, FAMILY_LABEL, countdown, eventDetail, familyOf, fmtDateTime } from './eventMeta';
 import type { Family } from './eventMeta';
 import './reviewer.css';
 
@@ -97,6 +97,9 @@ export default function ReviewerReport() {
   if (!r) return <AppShell><p className="muted">Loading report…</p></AppShell>;
 
   const { candidate, test, session, quality, integrity, notice, finalDecision } = r;
+  const appeals = r.appeals ?? [];
+  const generalAppeals = appeals.filter((a) => a.flagId === 'general' || !flags.some((f) => f.id === a.flagId));
+  const disputedFlagCount = new Set(appeals.filter((a) => flags.some((f) => f.id === a.flagId)).map((a) => a.flagId)).size;
   const anyConfirmed = flags.some((f) => f.status === 'confirmed');
   const anyPending = flags.some((f) => f.status === 'pending');
   const itemById = new Map<string, Item>(test.items.map((i) => [i.id, i]));
@@ -186,6 +189,23 @@ export default function ReviewerReport() {
         These are separate results. Integrity decisions never change the Answer Quality score.
       </div>
 
+      {appeals.length > 0 && (
+        <div className="dispute-callout">
+          <strong>
+            {disputedFlagCount > 0
+              ? `Candidate has disputed ${disputedFlagCount} flag${disputedFlagCount === 1 ? '' : 's'}`
+              : 'Candidate has sent a dispute'}
+          </strong>
+          <span className="caption"> — read their side before deciding. A dispute never changes any score.</span>
+          {generalAppeals.map((a, i) => (
+            <div key={i} className="dispute" style={{ marginTop: 8 }}>
+              <div className="caption"><strong>General dispute</strong> · {fmtDateTime(a.at)}</div>
+              <div>{a.text}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="rv-console">
         {/* Evidence timeline */}
         <Card title="Evidence timeline" actions={selected ? <button onClick={() => setSelFlag(null)} className="caption">Clear highlight</button> : undefined}>
@@ -232,10 +252,10 @@ export default function ReviewerReport() {
                           <span className={`tag${e.tier === 'T1' ? ' t1' : ''}`}>{e.tier}</span>
                           {qn && <span className="caption muted">Q{qn}</span>}
                         </div>
-                        {e.detail && <div className="caption muted">{e.detail}</div>}
+                        {e.detail && <div className="caption muted">{eventDetail(e.type, e.detail)}</div>}
                         {e.media && (
                           <div style={{ marginTop: 6 }}>
-                            <Watermarked src={e.media} viewer={viewer} caption={`${e.type === 'snapshot' ? 'Random still' : 'Still'} · ${fmtTime(e.t)}`} />
+                            <Watermarked src={e.media} viewer={viewer} caption={`${e.type === 'snapshot' ? 'Random still' : e.type === 'multiple_faces' ? 'Still around event' : 'Still'} · ${fmtTime(e.t)}`} />
                           </div>
                         )}
                       </div>
@@ -264,6 +284,12 @@ export default function ReviewerReport() {
                     <span className="caption muted">{f.evidenceSeqs.length} evidence event{f.evidenceSeqs.length === 1 ? '' : 's'}</span>
                   </div>
                   <div className="caption" style={{ color: 'var(--text-2)' }}>{f.summary}</div>
+                  {appeals.filter((a) => a.flagId === f.id).map((a, i) => (
+                    <div key={i} className="dispute" style={{ marginTop: 8 }}>
+                      <div className="caption"><strong>Candidate disputes this flag:</strong> · {fmtDateTime(a.at)}</div>
+                      <div>{a.text}</div>
+                    </div>
+                  ))}
 
                   {f.status === 'not_used' && (
                     <div className="caption muted" style={{ marginTop: 6 }}>Not used in decision (below cutoff) — not appealable.</div>
@@ -359,9 +385,12 @@ export default function ReviewerReport() {
                 </label>
                 <button
                   className="primary"
-                  disabled={busy || !finalRationale.trim()}
+                  disabled={busy || !finalRationale.trim() || Boolean(noticeOpen)}
                   onClick={() => act(async () => { await api.finalDecision(candidate.id, { outcome, rationale: finalRationale.trim() }); setFinalRationale(''); })}
                 >Record final decision</button>
+                {noticeOpen && (
+                  <div className="rv-hint">Waiting for the candidate's response or the 72-hour window to end — use ⏩ Fast-forward in the demo.</div>
+                )}
                 {isFinalDifferentProblem && (
                   <div className="error-note">
                     <strong>{actionErr}</strong>

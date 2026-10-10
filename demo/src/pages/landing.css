@@ -19,3 +19,8 @@
 .band-cell p { margin:0; color:var(--text-2); font-size:13px; line-height:20px; }
 .landing-footer { border-top:1px solid var(--border); padding:20px 0; display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
 @media (max-width:640px) { .landing-hero { padding:32px 0 16px; } .landing-hero h1 { font-size:32px; line-height:40px; } }
+.feature-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:12px 24px; margin:0 0 48px; padding:0; list-style:none; }
+.feature-list li { display:flex; gap:10px; align-items:flex-start; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--r-md); padding:12px 14px; }
+.feature-list li::before { content:'✓'; color:var(--clear-fg); font-weight:600; }
+.feature-list strong { display:block; }
+.feature-list span { color:var(--text-3); font-size:13px; line-height:20px; }

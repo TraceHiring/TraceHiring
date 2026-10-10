@@ -41,6 +41,11 @@ const EVENT_LABEL: Record<EventType, string> = {
   submit: 'Test submitted',
   shared_wrong_answers: 'Unusual matching wrong answers',
   grader_injection: 'Instructions to the grader found in an answer',
+  face_absent: 'No face in view (seconds)',
+  multiple_faces: 'More than one face in view (seconds)',
+  face_present: 'Face back in view',
+  mic_speech: 'Speech nearby (context only)',
+  appeal: 'You disputed a flag',
 };
 
 const OUTCOME_LABEL: Record<FinalDecision['outcome'], string> = {
@@ -55,6 +60,45 @@ function fmtCountdown(ms: number) {
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
   return `${h}h ${String(m).padStart(2, '0')}m left`;
+}
+
+function DisputeBox({ token, flagId, label, onSent }: { token: string; flagId: string; label: string; onSent: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [sentAt, setSentAt] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const send = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.appeal(token, { flagId, text: text.trim() });
+      setSentAt(res.appeal?.at ?? new Date().toISOString());
+      setText('');
+      setOpen(false);
+      onSent();
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="col gap8">
+      {sentAt && <span className="caption">Dispute sent · {new Date(sentAt).toLocaleTimeString()}</span>}
+      {!open ? (
+        <div><button onClick={() => setOpen(true)}>{label}</button></div>
+      ) : (
+        <>
+          <textarea className="c-textarea" style={{ minHeight: 90 }} value={text} onChange={(e) => setText(e.target.value)} placeholder="Explain what happened — Hindi or English accepted" />
+          <div className="row gap8">
+            <button onClick={() => setOpen(false)} disabled={busy}>Cancel</button>
+            <button className="primary" disabled={!text.trim() || busy} onClick={send}>{busy ? 'Sending…' : 'Send'}</button>
+          </div>
+        </>
+      )}
+      <ErrorNote error={error} />
+    </div>
+  );
 }
 
 export default function CandidateReport() {
@@ -154,6 +198,18 @@ export default function CandidateReport() {
                 <div className="col gap16">
                   <div><BandBadge band={r.integrity.band} /></div>
                   <p style={{ margin: 0 }}>{BAND_EXPLAIN[r.integrity.band]}</p>
+                  {r.integrity.band === 'under_review' && r.integrity.flags.length === 0 && (
+                    <div className="col gap8">
+                      <span>If anything in your session was unusual (power cut, network drop, someone walked in), you can add context.</span>
+                      {(r.appeals ?? []).filter((a) => a.flagId === 'general').map((a, i) => (
+                        <div key={i} className="c-appeal">
+                          <span className="caption muted">Note sent · {new Date(a.at).toLocaleString()}</span>
+                          <div style={{ whiteSpace: 'pre-wrap' }}>{a.text}</div>
+                        </div>
+                      ))}
+                      <DisputeBox token={token} flagId="general" label="Add context" onSent={load} />
+                    </div>
+                  )}
                   {r.integrity.flags.length === 0 ? <p className="muted">No flags.</p> : (
                     <div className="col gap8">
                       {r.integrity.flags.map((f) => (
@@ -162,6 +218,13 @@ export default function CandidateReport() {
                           <span className="muted">{f.summary}</span>
                           {f.status === 'confirmed' && f.rationale && <span><span className="caption">Reviewer's reason: </span>{f.rationale}</span>}
                           {f.status === 'overturned' && f.rationale && <span className="caption muted">Reviewer's note: {f.rationale}</span>}
+                          {(r.appeals ?? []).filter((a) => a.flagId === f.id).map((a, i) => (
+                            <div key={i} className="c-appeal">
+                              <span className="caption muted">Dispute sent · {new Date(a.at).toLocaleString()}</span>
+                              <div style={{ whiteSpace: 'pre-wrap' }}>{a.text}</div>
+                            </div>
+                          ))}
+                          {f.status !== 'not_used' && <DisputeBox token={token} flagId={f.id} label="Dispute this flag" onSent={load} />}
                         </div>
                       ))}
                     </div>
