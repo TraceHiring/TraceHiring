@@ -104,7 +104,7 @@ function readQuoted(s, pos) {
 
 class Parser {
   constructor(text) {
-    this.lines = text.replace(/^﻿/, '').split(/\r?\n/);
+    this.lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
     this.i = 0;
   }
 

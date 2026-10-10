@@ -65,7 +65,7 @@ export function parseHeadersFile(text) {
   const rules = [];
   const errors = [];
   text
-    .replace(/^﻿/, '')
+    .replace(/^\uFEFF/, '')
     .split(/\r?\n/)
     .forEach((raw, idx) => {
       const line = idx + 1;
