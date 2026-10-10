@@ -28,7 +28,17 @@
       "Bash(supabase link --project-ref:*)",
       "Bash(pnpm run deploy:prod:*)",
       "Bash(git push --force:*)",
-      "Bash(git push -f:*)"
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push --delete:*)",
+      "Bash(git push -d:*)",
+      "Bash(wrangler deploy --env staging:*)",
+      "Bash(wrangler deploy -e staging:*)",
+      "Bash(pnpm exec wrangler deploy:*)",
+      "Bash(npx wrangler deploy:*)",
+      "Bash(wrangler pages deploy:*)",
+      "Bash(supabase db push:*)",
+      "Bash(pnpm exec supabase db push:*)"
     ],
     "ask": [
       "Bash(git push:*)",

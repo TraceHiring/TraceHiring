@@ -1,0 +1,16 @@
+# Git hooks for Trace (spec specs/m0-foundations.md §6).
+# There is no post-commit hook: nothing pushes automatically (build-notes Q54).
+# Prettier joins pre-commit in S1.1 and commitlint (commit-msg) in S1.6, once each is installed.
+pre-commit:
+  commands:
+    gitleaks:
+      # Fails, never skips, when gitleaks is missing.
+      # No double quotes inside: on Windows lefthook passes this to sh -c inside double quotes.
+      run: "(command -v gitleaks >/dev/null 2>&1 || (echo 'gitleaks is not installed, so the secret scan cannot run. Install it (Windows: winget install Gitleaks.Gitleaks), then commit again.' >&2; exit 1)) && gitleaks git --pre-commit --staged --redact --no-banner"
+
+# Pushes are allowed since 2026-10-11 (founder, option (b)). Scan every ref before anything leaves the machine,
+# because cherry-picks, rebases, merges and --no-verify commits never ran pre-commit.
+pre-push:
+  commands:
+    gitleaks-full-history:
+      run: "(command -v gitleaks >/dev/null 2>&1 || (echo 'gitleaks is not installed, so the pre-push secret scan cannot run. Install it (Windows: winget install Gitleaks.Gitleaks), then push again.' >&2; exit 1)) && gitleaks git --redact --no-banner"

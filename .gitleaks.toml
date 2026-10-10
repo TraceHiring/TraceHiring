@@ -1,0 +1,7 @@
+# gitleaks configuration for Trace (spec specs/m0-foundations.md §6, AT-5, AT-6).
+# Uses gitleaks' default rules. Add an allowlist entry only with a comment naming
+# why the match is not a secret; never allowlist a real credential.
+title = "Trace gitleaks config"
+
+[extend]
+useDefault = true

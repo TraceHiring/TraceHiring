@@ -1,7 +1,17 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** revision 8 (autopilot, 2026-10-11). **Approved by the autopilot reviewers**; see the end of this file. Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
+- **Status:** revision 9 (autopilot, 2026-10-11). Revision 8 was **approved by the autopilot reviewers**; revision 9 only applies founder answers and day-one results (see below and the end of this file). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
 - **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a`, created from `main` at `b7af663`, with `main` at `4863db2` merged in. Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
+- **Revision 9 changes (2026-10-11).** Founder answers (build-notes §0, 2026-10-11) and the S1.0 day-one results. No product scope change.
+  - **H1 done.** Node 22.23.3, pnpm 12.11.2, gitleaks 8.30.1, Docker 29.5.2, verified by the autopilot.
+  - **CI exit gates: option (b).** At the end of every session the autopilot pushes `main`, the milestone branch and all tags to `trace` with plain `git push` (AUTOPILOT §6). CI runs on push, and M0a's exit gate uses the real CI result. Every item in the §13.1 "Deferred" column is now owned by **M0a CLOSE**. The repo is private.
+  - **CI trigger** (§7.1): `push` to `main` **and to `milestone/**`**, plus `pull_request`, so the milestone branch gets a real CI run when it is pushed. The deploy gate (§7.2) is unchanged: push to `main` only.
+  - **Q56 / H7 approved:** the deny rules are in `.claude/settings.json` (S1.0). **Q55 approved** (D5). **D3 approved** (150 KB gzip). **Q57 approved.**
+  - **ABH-80 "Done when"** is now known (build-notes §0; plan-conflicts #16). M0a owns only "no candidate PII is found in logs (scan)"; §13.1 cites it.
+  - **Day-one results (S1.0):** pnpm 12's build-script allow-list is `allowBuilds:` in `pnpm-workspace.yaml` (so S1.0 creates that file with `lefthook: true`; S1.1 adds the workspace globs and catalog); `gitleaks git` scans every ref by default (no `--log-opts` needed); `gitleaks git --pre-commit --staged` exists as specified; `lefthook install` on 2.2.1 leaves `post-commit.disabled` alone. On Windows, lefthook runs each command as `sh -c "<cmd>"`, so a hook command may not contain double quotes.
+  - **Pre-push scan (§6):** a lefthook `pre-push` command and an explicit step in AUTOPILOT §6 run the full-history gitleaks scan before every push (security review of S1.0, High).
+  - **New edge case (§15):** a checkout with no `node_modules` can't find lefthook, and lefthook's generated hook then prints "Can't find lefthook in PATH" and lets the commit through.
+  - **New open item (§17 item 8):** branch protection that requires PRs on `main` would reject the session-end `git push` of `main`. AT-13 needs a design that fits both. The founder queue holds the options, and the autopilot waits for an explicit answer.
 - **Revision 8 changes (2026-10-11).** These are the Low notes from the approving reviews of revision 7.
   - **App smoke tests** use `react-dom/server` `renderToString` in Node, so no DOM library is needed.
   - **MT-12 branches redefined:**
@@ -159,13 +169,13 @@ Every open H item is a row in `docs/progress/FOUNDER-QUEUE.md`. The "Blocks" col
 
 | # | Item | Done when | Blocks |
 | --- | --- | --- | --- |
-| H1 | Machine fixed per build-notes Q5: Node 22.23.3, pnpm 12.11.2 via Corepack, Docker engine running, gitleaks. **Checked 2026-10-11: not done.** Node 22 isn't installed, `pnpm` crashes, the Docker engine is stopped and gitleaks is missing. | You confirm. I re-run the version check at session start. | All of BUILD (S1.0 onward) |
+| H1 | ~~Machine fixed per build-notes Q5~~ **Done 2026-10-11:** Node 22.23.3, pnpm 12.11.2 via Corepack, Docker 29.5.2 running, gitleaks 8.30.1 (verified by the autopilot) | Recorded | — |
 | H2 | ~~Answer Q54~~ **Done 2026-10-11: drop auto-push, work locally only** (build-notes §0) | Recorded | — |
-| H3 | *(only when you allow pushing to GitHub again)* GitHub, on `AbhayRajGit/Tracehiring`:<br>• create environment `staging` with **deployment branches limited to `main`**<br>• add the secrets and variables in §7.3<br>• set the repo's default `GITHUB_TOKEN` permission to **read-only**<br>• enable **secret scanning and push protection** if your plan offers them for this repo<br>• tell me whether the repo is public or private | `gh api repos/AbhayRajGit/Tracehiring/environments/staging` shows the branch policy | Running CI and the staging deploy (AT-1a-CI, AT-11, AT-13, AT-18, AT-22-staging) |
+| H3 | *(needed: the founder chose option (b), 2026-10-11; the repo is private)* GitHub, on `AbhayRajGit/Tracehiring`:<br>• create environment `staging` with **deployment branches limited to `main`**<br>• add the secrets and variables in §7.3<br>• set the repo's default `GITHUB_TOKEN` permission to **read-only**<br>• enable **secret scanning and push protection** if your plan offers them for this repo<br>• tell me whether the repo is public or private | `gh api repos/AbhayRajGit/Tracehiring/environments/staging` shows the branch policy | Running CI and the staging deploy (AT-1a-CI, AT-11, AT-13, AT-18, AT-22-staging) |
 | H4 | Cloudflare:<br>• account with a registered `*.workers.dev` subdomain<br>• an API token limited to this account with Workers Scripts: Edit, Cloudflare Pages: Edit, Account Settings: Read | Token stored as a `staging` secret | Running the staging deploy (AT-11) |
 | H5 | Supabase:<br>• `trace-dev` and `trace-staging` in Mumbai (`ap-south-1`)<br>• the **staging session-pooler connection string** (with password), stored as a secret. CI needs no Supabase personal access token (security review #9).<br>• in `trace-staging` API settings, exposed schemas = `public` only; tell me the Postgres major version (for `[db] major_version`, §8.1) | Stored as a `staging` secret | Staging migrations (AT-18) |
 | H6 | Sentry:<br>• projects `trace-recruiter` and `trace-workers`<br>• pick the **data region** (there is no India region; tell me which)<br>• turn on **"Prevent storing of IP addresses"** and **server-side data scrubbing** in both projects | DSNs stored as `staging` variables; region recorded in ADR-027 | Sentry on staging only. The code and AT-9 go ahead without a DSN (§9.2). |
-| H7 | *(optional, recommended)* Approve the `.claude/settings.json` deny rules in build-notes Q56, so staging deploys can't run from a local session | Rules added in S1.0 | Nothing. S1.0 ships without them if you haven't answered. |
+| H7 | ~~Approve the Q56 deny rules~~ **Approved 2026-10-11:** staging deploys only from CI, never from a local session | Rules added in S1.0 | — |
 
 ---
 
@@ -323,35 +333,40 @@ S1.7 adds `scripts/test/root-scripts.test.mjs`. It fails if the root `lint`, `bu
 
 ## 6. Git hooks (`lefthook.yml`)
 
-> **Q54 = drop (founder, 2026-10-11).** There is no push path. The old auto-push hook was renamed to `.git/hooks/post-commit.disabled` on 2026-10-11, so git no longer runs it. S1.0 is still the first commit of M0a: it puts the secret scan in front of every later commit. Day-one check: confirm that `lefthook install` on 2.2.1 leaves `post-commit.disabled` alone.
+> **Revision 9:** the founder allowed plain pushes at session end (option (b), 2026-10-11). Nothing pushes *automatically*, but there is now a push path, guarded by the `pre-push` scan below and the explicit scan in AUTOPILOT §6.
+>
+> **Q54 = drop (founder, 2026-10-11).** *(Revision 8 text.)* There is no automatic push path. The old auto-push hook was renamed to `.git/hooks/post-commit.disabled` on 2026-10-11, so git no longer runs it. S1.0 is still the first commit of M0a: it puts the secret scan in front of every later commit. Day-one check: confirm that `lefthook install` on 2.2.1 leaves `post-commit.disabled` alone.
 
 | Hook | Command | Behaviour |
 | --- | --- | --- |
 | `pre-commit` | `gitleaks git --pre-commit --staged --redact --no-banner` | **Fails** if gitleaks is missing (prints an install hint). Never skips. |
-| `pre-commit` | `prettier --check {staged_files}` | — |
-| `commit-msg` | `commitlint --edit {1}` | Conventional commits. `wip` is allowed. |
+| `pre-commit` | `prettier --check {staged_files}` | Joins in S1.1, when Prettier is installed (revision 9). |
+| `commit-msg` | `commitlint --edit {1}` | Conventional commits. `wip` is allowed. Joins in S1.6 (revision 9). |
 | `post-commit` | — | None. Nothing pushes automatically. |
+| `pre-push` *(revision 9)* | `gitleaks git --redact --no-banner` | Full-history scan of every ref before a push leaves the machine; fails if gitleaks is missing. Added because the founder allowed plain pushes (option (b)) and cherry-picks, rebases, merges and `--no-verify` commits never run pre-commit. AUTOPILOT §6 also runs the same scan explicitly before the session-end push, so a checkout without `node_modules` is still covered. |
 
 `lefthook install` runs from the root `prepare` script, so a fresh clone gets the hooks on `pnpm i`.
 
-**Commits that skip the hook.** `--no-verify` and `LEFTHOOK=0` both skip the pre-commit scan. Nothing leaves the machine automatically, and a skipped commit is caught in two places before anything is shared:
+**Commits that skip the hook.** `--no-verify` and `LEFTHOOK=0` both skip the pre-commit scan, and cherry-picks, rebases and merges never run it. *Revision 9:* before anything is pushed, the `pre-push` hook and the explicit AUTOPILOT §6 step scan the full history of every ref, so a skipped commit can't reach GitHub unscanned. Nothing leaves the machine automatically, and a skipped commit is caught in two places before anything is shared:
 - `pnpm lint`, and therefore `pnpm verify`, runs `gitleaks git` over the full local history (§5). Every merge into `milestone/m0a` and `main` needs a green `pnpm verify` (AUTOPILOT §2), so the commit cannot be merged.
-- Once the founder pushes, CI's `security` job runs the same scan (§7).
+- On every session-end push (revision 9; previously "once the founder pushes"), CI's `security` job runs the same scan (§7).
 
-Fixing a finding locally is safe because nothing was pushed. Rotate the secret anyway.
+Fixing a finding locally is safe because the pre-push scan and the AUTOPILOT §6 scan stop a commit with a finding before it leaves the machine (revision 9). Rotate the secret anyway.
 
 ---
 
 ## 7. CI and deploy
 
-> **Local-only mode (founder, 2026-10-11).** Nothing is pushed until the founder says so, so nothing in this section runs during M0a unless that changes. S1 and S3 still write `ci.yml` and the deploy job in full, and these unit tests check them locally:
+> **Push at session end (founder, 2026-10-11, option (b)).** The autopilot pushes `main`, the milestone branch and all tags with plain `git push` at the end of every session, so CI runs for real and M0a's exit gate uses the real CI result. Staging deploys still need H3–H6. The paragraph below is kept from revision 8; "Deferred" items are now owned by M0a CLOSE.
+>
+> *(Revision 8 text.)* Nothing is pushed until the founder says so, so nothing in this section runs during M0a unless that changes. S1 and S3 still write `ci.yml` and the deploy job in full, and these unit tests check them locally:
 > - `check-workflows.mjs`, which checks the workflow file;
 > - `check-staging-secrets.mjs`, which checks the Worker secret allow-list.
 >
 > Everything that needs a real push, CI run or staging is listed once, in §13.1 under "Deferred". Those items run the first time the founder pushes and completes H3–H6. Who owns them depends on the founder's answer (§13.1).
 
 ### 7.1 `ci.yml`: one workflow, so no `workflow_run` trigger exists to abuse
-- **Triggers:** `pull_request` and `push` to `main`.
+- **Triggers:** `pull_request`, and `push` to `main` and to `milestone/**` (revision 9: the milestone branch is pushed at the end of every session and needs a real CI run).
 - **Permissions:** workflow-level `permissions: contents: read`.
 - **Pinning:** every `uses:` is pinned to a full commit SHA, `actions/*` included. `check-workflows.mjs` enforces this, and Dependabot keeps the SHAs current.
 - **Checkout:** always `persist-credentials: false`, with `fetch-depth: 0` in `static` and `security`. `static` sets `MIGRATIONS_BASE=origin/main`, because a PR checkout has no local `main` (§8.4).
@@ -810,7 +825,7 @@ It fails if any of the following holds:
 | AT-24 | `scripts/backup.sh` writes a bundle that `git bundle verify` accepts, holds every branch and tag, and keeps only the newest 10 | Vitest over a temp repo with 12 dummy bundles whose mtimes are set in the past. The test finds `sh` on `PATH`, falling back to Git for Windows' `usr/bin`. It fails, never skips, if `sh` is missing. |
 
 ### 13.1 Exit gate → acceptance tests (build-order M0a, as merged in `b7af663`)
-The third column is the **single list of deferred items**. The owner of every deferred item waits on the founder's answer to the founder-queue item "Local-only mode vs CI exit gates". Proposed owner: M0a CLOSE if the founder pushes first, otherwise the M8 gate.
+The third column is the **single list of deferred items**. **Owner of every deferred item: M0a CLOSE** (founder chose option (b), 2026-10-11). They run on the real CI after the session-end push; the deploy items also need H3–H6.
 
 | Exit-gate item | Covered locally by | Deferred (needs a push, CI or staging) |
 | --- | --- | --- |
@@ -829,6 +844,8 @@ Every deferred item goes in the **Deferred gates** table of `docs/milestones/M0a
 
 **"Done when" lines.** M0a carries part of ABH-80 (observability), and build-order names no other issue for M0a. ABH-80's "Done when" text is not in the repo (see the build-notes paragraph that starts "Build-order makes each ABH issue's 'Done when'"), and Linear isn't connected. Until the founder pastes that line, AT-8, AT-9, AT-10 and AT-22-local stand in for it. §17 item 7 tracks the gap.
 
+*Revision 9:* the founder pasted it on 2026-10-11 (build-notes §0): "RPO ≤ 15 minutes and RTO ≤ 2 hours are proven in a restore drill; the on-call alert reaches the phone in under 2 minutes; no candidate PII is found in logs (scan)." RPO/RTO are resolved by plan-conflicts #16 (RPO ≤ 2 min, RTO ≤ 2 h) and, with the alert, belong to M8. M0a owns **"no candidate PII is found in logs (scan)"**: AT-8 and AT-9 prove the redactor and scrubber, and the M0a REVIEW scans the logs the tests produce.
+
 ---
 
 ## 14. Work plan and streams (parallelism policy: AUTOPILOT §2)
@@ -840,7 +857,7 @@ Every deferred item goes in the **Deferred gates** table of `docs/milestones/M0a
 | **S1.7** | Lead | **Shared code and the database**, before any stream starts:<br>• `packages/shared/src/`: the §9.4 zod contracts, `health.ts`, `version.ts`, the `log/` module (logger, redactor, `serializeError`, `sentry-scrub.ts`) and the package's `index.ts` and exports, with all their tests (AT-8, AT-9 unit part)<br>• all of `supabase/`: `config.toml`, the baseline migration, catalog checks, manifest and fixtures, `tests/`, floors<br>• `scripts/test-rls.mjs` and `scripts/gen-catalog-tests.mjs`, with their tests<br>• all of `packages/db-types/`<br>• adding `test:rls` to `verify`<br>• the §8.2 day-one checks, run on the local stack before the checkpoint | the files listed | S1 |
 | S2 | Stream | **UI and apps** (parallel with S3) | `packages/ui/`, `packages/vendors/` and `apps/*/`, except the lead-only files in each (`package.json`, `tsconfig.json`, Vitest config) | S1.7 merged |
 | S3 | Stream | **Workers, services and deploy** (parallel with S2) | `workers/*/` and `services/*/` (same exclusions), and the `deploy-staging` job in `ci.yml` | S1.7 merged. H3–H6 are needed only to *run* the deploy (§13.1), not to write and unit-test it. |
-| S4 | Lead | **Close-out** (the AUTOPILOT CLOSE phase, after REVIEW passes) | `docs/milestones/M0a-summary.md` | S2 + S3 merged; `pnpm verify` green; AT-1a-local and AT-1b recorded; **the founder's answer to "Local-only mode vs CI exit gates"** |
+| S4 | Lead | **Close-out** (the AUTOPILOT CLOSE phase, after REVIEW passes) | `docs/milestones/M0a-summary.md` | S2 + S3 merged; `pnpm verify` green; AT-1a-local and AT-1b recorded; ~~the founder's answer to "Local-only mode vs CI exit gates"~~ answered 2026-10-11: option (b), so the real CI results (and, for the deploy items, H3–H6) |
 
 **Parallelism.** S1.0, S1 and S1.7 run in the lead session alone. After that, **S2 ∥ S3** run as 2 writers, which is under the default of 3. They share no files and neither needs the other's output: both consume only what S1.7 delivered. Read-only helpers (reviewers, research) may run up to 6 at once. If S2 and S3 hit a merge conflict, the rest of the session drops to 2 writers or fewer.
 
@@ -877,11 +894,11 @@ If a stream needs one of these changed (a new dependency, a contract field, a mi
 - **Docker down:** `test:rls` fails loudly. `verify:fast` never needs Docker, so the Stop hook still works.
 - **No local `main`:** `verify-fast` runs everything. `check-migrations` exits 1 and names the missing ref, so it never passes vacuously. `verify-clean-clone` creates `main` from `origin/main`, and CI uses `origin/main`.
 - **gitleaks missing:** the pre-commit hook and `pnpm lint` both fail with an install hint. Nothing commits cleanly or merges until gitleaks is installed.
-- **Commit made with `--no-verify` or `LEFTHOOK=0`:** nothing pushes automatically, and `pnpm lint`'s full-history scan fails before the next merge (AT-6c).
+- **Commit made with `--no-verify` or `LEFTHOOK=0`:** nothing pushes automatically; `pnpm lint`'s full-history scan fails before the next merge (AT-6c); and the pre-push scan plus the AUTOPILOT §6 scan fail before the next push (revision 9).
 - **The full-history scan finds a secret.**
   - In every case, rotate the secret first.
   - If the commit exists only on an unmerged stream branch, rewrite that branch; nothing else references it.
-  - If it is reachable from `main`, a `cp/*` tag, a `rescue/*` branch, or a bundle in `../trace-backups/`, the autopilot stops and adds a founder-queue item. AUTOPILOT §5 forbids deleting tags, and RESTORE.md forbids deleting rescue branches without the founder, so the founder decides how to purge the refs and bundles.
+  - If it is reachable from `main`, `milestone/m0a` (both are pushed at session end since revision 9), a `cp/*` tag, a `rescue/*` branch, or a bundle in `../trace-backups/`, the autopilot stops and adds a founder-queue item. AUTOPILOT §5 forbids deleting tags, and RESTORE.md forbids deleting rescue branches without the founder, so the founder decides how to purge the refs and bundles.
 - **Two runs of `test:rls` at once** (from two worktrees, or from a worktree and a clean clone): the second waits for the lock in the OS temp dir (§8.3), then runs. It never skips.
 - **A gitleaks finding on another stream's branch:** worktrees share refs, and the full-history scan covers every ref, so a finding in one stream fails the other stream's `pnpm verify` too. The affected stream stops and reports. The lead handles the finding (see the secret edge case above), and the other stream does not chase it.
 - **A stream needs a lead-only file changed:** it stops at a green commit and reports; the lead makes the change (§14). `spec-reviewer` blocks any stream diff that touches a lead-only path.
@@ -892,6 +909,7 @@ If a stream needs one of these changed (a new dependency, a contract field, a mi
 - **A staging migration goes wrong:** fix forward with a new migration. Never roll back past an applied migration (§8.2).
 - **Pages project missing:** it is created idempotently. A token without the needed scope fails with the scope named.
 - **Free-plan limits:** M0a uses only Workers, Pages and Supabase.
+- **No `node_modules` in a checkout (revision 9):** git hooks live in the shared `.git/hooks`, and lefthook's generated hook looks for the lefthook binary in the committing checkout. If it can't find one, it prints "Can't find lefthook in PATH" and **lets the commit through**. Rule: run `pnpm install` in a worktree before committing in it. Backstop: `pnpm lint`'s full-history scan (every ref) and CI `security`.
 - **Migrations and parallel streams:** streams never add migrations; only the lead does (S1.7). `check-migrations` checks ordering, immutability and the frozen set on every `pnpm verify`.
 
 ### 15.1 State machines
@@ -904,7 +922,7 @@ M0a has no domain entities. It has two process flows with states that the tests 
 Rules:
 - `rejected` leaves the staged changes untouched.
 - A commit that skipped `pre_commit_scanned` (`--no-verify`) can't reach `merged`, because `verified` re-scans the full history (AT-6c).
-- Nothing in either flow pushes.
+- Nothing in either flow pushes. *Revision 9:* push is a separate, explicit step at session end: `committed → full-history scan (AUTOPILOT §6, then lefthook pre-push) → (clean) pushed | (finding, or gitleaks missing) push refused`.
 
 **Deploy to staging.** `queued → built → output_scanned → migrated → catalog_checked → workers_deployed → secrets_checked → pages_deployed → smoke_passed`.
 - Any failure goes to terminal `failed`. Steps that already ran are not rolled back.
@@ -941,7 +959,10 @@ Each of these is a row in `docs/progress/FOUNDER-QUEUE.md`, with exact steps:
 4. **H7 / Q56:** deny rules for local deploys. Optional.
 5. **Q55:** separate Supabase org and Cloudflare account for prod at M8 (D5). Not needed before M8.
 6. **D3:** the 150 KB budget for the candidate app stands unless you give another number. Blocks nothing.
-7. **ABH-80's "Done when" line:** paste it, or connect Linear, so §13.1 can cite it exactly. Blocks nothing; AT-8, AT-9, AT-10 and AT-22-local stand in for it.
+7. ~~ABH-80's "Done when" line~~ **Pasted 2026-10-11** (§13.1).
+8. **Branch protection vs the session-end push (revision 9).** §7.4 requires PRs on `main`, but the founder's session-end `git push` of `main` is a direct push. Needs a design before S1.5 / AT-13. The founder queue holds the options; the autopilot waits for an explicit answer.
+
+*Revision 9:* items 1–6 were answered on 2026-10-11 (H1 done; option (b); Q57, Q56, Q55 and D3 approved).
 
 ---
 
@@ -961,5 +982,6 @@ Each of these is a row in `docs/progress/FOUNDER-QUEUE.md`, with exact steps:
   - `database-reviewer`: **APPROVE**, with 3 Low.
   - All of these are applied in revision 8.
 - Revision 8 contains only those Low text fixes.
+- Revision 9 (2026-10-11) applies founder answers and day-one results only; `spec-reviewer` checks it together with the S1.0 diff.
 
 **Spec approved by autopilot reviewers** on 2026-10-11 (AUTOPILOT §2): `spec-reviewer` and `database-reviewer`, after five review rounds (revisions 4–7). Product scope and exit gate are unchanged from the founder-approved revision 3. Open founder decisions are in `docs/progress/FOUNDER-QUEUE.md` (§17).
