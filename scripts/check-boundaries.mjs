@@ -28,6 +28,15 @@ export const CREDENTIAL_NAMES = [
   'DATABASE_URL',
 ];
 
+/**
+ * The one place a credential name may appear in browser-reachable code: the log redactor must
+ * match `sb_secret_…` values to redact them (spec §9.1), which rule 1 would otherwise forbid.
+ * Exactly one token in exactly one file; every other name is still checked there.
+ */
+export const CREDENTIAL_PATTERN_EXEMPTIONS = Object.freeze({
+  'packages/shared/src/log/redact.ts': Object.freeze(['sb_secret_']),
+});
+
 /** Directories whose code must never mention a credential (rule 1). workers/jobs and services/api are server-side. */
 export const CREDENTIAL_SCOPES = ['apps/', 'packages/', 'workers/edge/'];
 
@@ -62,7 +71,12 @@ export function checkCredentialNames(files) {
   for (const { path: p, content } of files) {
     if (!inScope(p, CREDENTIAL_SCOPES) || isMarkdown(p)) continue;
     const lower = content.toLowerCase();
-    const hits = CREDENTIAL_NAMES.filter((n) => lower.includes(n.toLowerCase()));
+    const exempt = Object.hasOwn(CREDENTIAL_PATTERN_EXEMPTIONS, p)
+      ? CREDENTIAL_PATTERN_EXEMPTIONS[p]
+      : [];
+    const hits = CREDENTIAL_NAMES.filter(
+      (n) => !exempt.includes(n) && lower.includes(n.toLowerCase()),
+    );
     if (hits.length > 0) {
       out.push(
         violation(1, p, `mentions credential name(s) ${hits.join(', ')} (server-only, spec §10.2)`),

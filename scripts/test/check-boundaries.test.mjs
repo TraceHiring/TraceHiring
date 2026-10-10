@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CREDENTIAL_NAMES,
+  CREDENTIAL_PATTERN_EXEMPTIONS,
   checkCredentialNames,
   checkCrlf,
   checkEslintDisables,
@@ -63,6 +64,41 @@ describe('rule 1: credential names in apps, packages, workers/edge', () => {
       f('workers/edgeless/src/a.ts', 'service_role'),
     ]);
     expect(v).toEqual([]);
+  });
+});
+
+describe('rule 1: the redactor pattern exemption (spec §9.1 vs §10.2)', () => {
+  const REDACT = 'packages/shared/src/log/redact.ts';
+
+  it('is exactly one token in exactly one file', () => {
+    expect(CREDENTIAL_PATTERN_EXEMPTIONS).toEqual({ [REDACT]: ['sb_secret_'] });
+    expect(Object.isFrozen(CREDENTIAL_PATTERN_EXEMPTIONS)).toBe(true);
+    expect(Object.isFrozen(CREDENTIAL_PATTERN_EXEMPTIONS[REDACT])).toBe(true);
+  });
+
+  it('allows the redactor to match sb_secret_ values', () => {
+    expect(checkCredentialNames([f(REDACT, 'const p = /\bsb_secret_[\w-]*/g;')])).toEqual([]);
+  });
+
+  it('still flags every other credential name in the redactor', () => {
+    for (const name of CREDENTIAL_NAMES.filter((n) => n !== 'sb_secret_')) {
+      const v = checkCredentialNames([f(REDACT, `const p = /\bsb_secret_/; const q = '${name}';`)]);
+      expect(v, name).toHaveLength(1);
+      expect(v[0].message).toContain(name);
+      expect(v[0].message).not.toContain('sb_secret_');
+    }
+  });
+
+  it('does not extend to any other file, including the redactor tests and look-alike paths', () => {
+    for (const p of [
+      'packages/shared/src/log/redact.test.ts',
+      'packages/shared/src/log/logger.ts',
+      'packages/shared/src/redact.ts',
+      'apps/candidate/src/log/redact.ts',
+      'packages/shared/src/log/redact.ts.bak',
+    ]) {
+      expect(checkCredentialNames([f(p, "const s = 'sb_secret_';")]), p).toHaveLength(1);
+    }
   });
 });
 
