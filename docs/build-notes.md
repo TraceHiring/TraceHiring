@@ -2,7 +2,34 @@
 
 Written 2026-10-10 against commit `3e344bf`, after reading CLAUDE.md, `docs/build-order.md`, `docs/plan.md` (rev 39, all), `docs/plan-conflicts.md`, `docs/adr/` (README + ADR-001…026), `docs/design/README.md`, `docs/design/tokens.json` and all 7 PNGs in `docs/design/screens/`. Supporting reads: `docs/founder-steps.md`, `docs/setup-checklist.md`, `docs/kickoff-prompt.md`, `.claude/settings.json`, `.claude/agents/*`, `.claude/skills/*`, `scripts/*`.
 
-Precedence I apply: **CLAUDE.md rules 1–9 > plan-conflicts.md resolutions (its header: "Build the Resolution column") > plan.md > ADRs > design PNGs** (design README: "Behaviour always comes from `docs/plan.md`, not from the pictures"). Where this file proposes a default, it is a proposal until you confirm it; answers will be logged in §2 against each question number.
+Precedence I apply: **CLAUDE.md rules 1–9 > plan-conflicts.md resolutions (its header: "Build the Resolution column") > plan.md > ADRs > design PNGs** (design README: "Behaviour always comes from `docs/plan.md`, not from the pictures").
+
+---
+
+## 0. Founder decisions — 2026-10-10
+
+These answers override anything below that disagrees with them. Each affected question in §2 carries an **Answer** line.
+
+| Q | Decision |
+| --- | --- |
+| Q1 | **Cloudflare Workers + Queues** for the API and background jobs in Phase 0. AWS only for Bedrock, SES and KMS/Secrets Manager. Recorded in [ADR-027](adr/ADR-027-phase0-compute-on-workers.md), which supersedes the ECS row of plan §8.1; CLAUDE.md Stack line updated. A job moves to ECS only if it hits a Workers limit, with a new ADR. |
+| Q2 | Proposal accepted: one person can hold several roles; assignment per workspace, job, drive or candidate; Client Viewer is an expiring link, not a login. |
+| Q2b | **CLAUDE.md wins.** An Owner who also holds Reviewer still needs an assignment to see evidence. Plan-conflict row ready to paste: see §2 Q2b. |
+| Q4 | Supabase: 2 projects now (`trace-dev`, `trace-staging`, Mumbai); prod at M8. Cloudflare Workers **free plan** until a free limit blocks us. AWS: single account, no Organizations, Free plan. Domain: not needed for M0; staging uses `*.pages.dev` / `*.workers.dev`. Domain deferral = deviation 6. |
+| Q5 | Founder fixes the machine: **Node 22** via nvm, pnpm via Corepack, Docker Desktop running, gitleaks installed. Commands in §2 Q5. M0 does not start until the founder confirms. |
+| Q20 | **A test version — its items, settings and ruleset — becomes immutable when it is published**, not at first start. Editing a published test creates a new draft version. Invitations keep the version they were sent with. This removes the ruleset race the reviewer found. |
+| Q21 | Milestones may close on automated proxy tests. Every real-world check (e.g. 5 real recruiters for ABH-5; M3 lines that need M4/M6) goes in a **"Deferred gates" table in that milestone's summary**, and each must pass by M8 at the latest. |
+| Q36 | Order: **OTP → age check → consent → device check.** No camera or mic access before consent. |
+| Q37 | Block if **either** the invite file or the candidate says under 18. Store only an 18+-confirmed flag and its source, never a date of birth. Enforced server-side. |
+| Q38 | Server measures outages; the question is hidden while paused; credit limits stay 30 min / 3 resumes. Patterns that look like gaming are shown to reviewers as **context only, never a flag**. |
+| Q39 | Withdrawal is an explicit action with a confirmation step. Closing the tab or losing power is a disconnect, never a withdrawal. Screen 03 copy changes to match. |
+| Can-default | **All 43 Can-default answers accepted as written** (Q3, Q6–Q19, Q22–Q35, Q40–Q53). |
+| plan-conflicts #13 | Wedge first: BPO Voice + Customer Support. |
+| plan-conflicts #14 | M4 does not start until one design-partner LOI is signed. |
+| plan-conflicts #9 | Face-absent tiered rule is the default **M4 ruleset config** (not code): log ≥3 s; flag ≥20 s continuous, or ≥10 s followed by a typing burst, or ≥60 s total per question. |
+| Design conflicts | Follow the plan in every case (Q33, Q34). |
+| Risks | Split M0 → **M0a / M0b** and M3 → **M3a / M3b** (now in `docs/build-order.md`); cap parallel writers at **3**. No fixed beta date: beta starts when the M8 gate passes. |
+| Still open | **Q54** (auto-push hook; blocks the start of M0a), **Q55** (prod isolation), **Q56** (local deploy deny rules), **Q57** (review-skill rows for M0a/M0b/M3a/M3b), **Q58** (deferred gates the plan itself places after M8) — all in §2. Also stale, not edited by me: `docs/setup-checklist.md` line 9 ("separate dev account (Organizations) … ECS/ECR … in M5") contradicts Q4 and ADR-027. plan-conflicts #4 (explain probe) stays "founder to confirm" until M4. |
 
 ---
 
@@ -11,7 +38,7 @@ Precedence I apply: **CLAUDE.md rules 1–9 > plan-conflicts.md resolutions (its
 1. **What Trace is.** An India-first online assessment platform for high-volume hiring (wedge: mid-size staffing firms hiring for BPO / customer support / freshers — ADR-003). Recruiters build tests (written, MCQ/aptitude, typing, voice now; code in Phase 1; video Phase 2), schedule drives of up to 20k concurrent candidates, and get two separate results per candidate, each backed by timestamped evidence. Lead formats are written + voice (ADR-002). One line: *hire the person who did the work*.
 2. **Rule 1 — Two results, never blended.** Answer Quality is a 0–100 number; Integrity Signals is a band (Clear / Review / Strong concern / Insufficient evidence) plus evidence strength. They live in separate tables (I'll use separate Postgres schemas), are computed by separate code that cannot import or write the other, and are shown as two equal cards. A confirmed integrity outcome is a separate decision record; it never edits a score.
 3. **Rule 2 — No automatic rejection, anywhere.** No API, job, webhook or bulk action can reject on integrity. Bulk reject takes a quality cutoff and nothing else. Machine-raised flags stay "pending review"; only human-confirmed flags appear on a decision screen.
-4. **Rule 3 — Deterministic, versioned band engine.** Same inputs → same band, always. The ruleset freezes when the first real candidate starts; retuning ships as a new version. Client-reported (T3) signals can push a candidate to Review but no further — except untrusted-input events and raw media a reviewer can actually view. Detectors that haven't passed the accuracy study (precision ≥90%, honest-session FPR <5%) are context only and can never raise the band.
+4. **Rule 3 — Deterministic, versioned band engine.** Same inputs → same band, always. The ruleset is frozen before any candidate can start — in practice at publish, together with the rest of the test version (Q20); retuning ships as a new version. Client-reported (T3) signals can push a candidate to Review but no further — except untrusted-input events and raw media a reviewer can actually view. Detectors that haven't passed the accuracy study (precision ≥90%, honest-session FPR <5%) are context only and can never raise the band.
 5. **Rule 4 — Notice, 72 hours, different reviewer.** Before any integrity-based rejection the candidate gets a notice with the confirmed flag and 72 h to respond; the final call is made by a reviewer other than the one who confirmed. This is enforced by database constraints, not just UI.
 6. **Rule 5 — Same report on both sides.** The candidate reads the same report through a separate projection (`report_candidate_view`) that strips everyone else's data. A candidate never sees another candidate's answer, identity, device or IP — similarity flags say only "matched another submission in this drive".
 7. **Rule 6 — Score-first triage.** Integrity is reviewed only for candidates shortlisted on quality. Flags on everyone below the cutoff are `not_used`, need no review and are not appealable. This is what makes a 2,000-candidate drive reviewable by one person.
@@ -25,14 +52,15 @@ Precedence I apply: **CLAUDE.md rules 1–9 > plan-conflicts.md resolutions (its
 
 **Blocking** = I will not start the affected milestone (or the affected part) without your answer, usually because it touches rules 1–9, tenancy, consent or an exit gate. **Can-default** = I will build the stated default and log it here; override any time before that milestone's spec is approved.
 
-### Answer these first (all Blocking)
-Q1 (compute), Q2 (roles/assignment), Q2b (Owner+Reviewer evidence), Q4 (accounts), Q5 (dev machine) block **M0**. Q20 (freeze scope) and Q21 (human-measured gates) block **M1**. Q36 (consent ordering), Q37 (age gate), Q38 (disconnect rules), Q39 (consent withdrawal) block **M3**.
+### Blocking questions (all answered 2026-10-10 except Q54 — see §0)
+Q1 (compute), Q2 (roles/assignment), Q2b (Owner+Reviewer evidence), Q4 (accounts), Q5 (dev machine) block **M0**. Q20 (freeze scope) and Q21 (human-measured gates) block **M1**. Q36 (consent ordering), Q37 (age gate), Q38 (disconnect rules), Q39 (consent withdrawal) block **M3**. **Q54** (auto-push hook) blocks the start of M0a (step S1.0).
 
 ### M0 · Foundations
 
 **Q1. Where do API and workers run — ECS Fargate or Cloudflare Workers? — Blocking (M0)**
 CLAUDE.md (Stack) and plan §8.1 say "Node TS modular monolith on ECS Fargate (Mumbai)". `plan-conflicts.md` #15 says Phase 0 runs API + workers on Workers + Queue consumers, AWS only for Bedrock/SES/KMS/Secrets Manager, "record that as a new ADR". `setup-checklist.md` says ECS "later in M5". M0 must deploy `services/api` to staging from CI, so the runtime, IaC and secret boundaries depend on this.
 *Recommendation:* accept #15. I draft ADR-027 ("Phase 0 compute on Workers; move a job to ECS only when it breaks a Workers limit") and a one-line CLAUDE.md Stack edit for your approval. `services/api` stays runtime-agnostic TypeScript (no Node-only APIs) so moving to ECS later is a new entrypoint, not a rewrite. The service-role key lives only in a separate `workers/jobs` script, never in `workers/edge` (candidate-facing DOs). Caveat to accept: Workers compute is not Mumbai-pinned, so plan §8.2 rule 6 ("compute in Mumbai") must be restated honestly.
+**Answer:** Workers + Queues; ADR-027 written; CLAUDE.md Stack line edited.
 
 **Q2. Role model, "assigned", and the odd roles — Blocking (M0: the ≥50 RLS tests need a fixed matrix)**
 Plan §2 defines 8 roles and says evidence is scoped to candidates a person is "assigned" to, but never defines assignment. Also open: can one person hold several roles (§2 implies yes: "can be the same person as Recruiter", "unless they also hold Reviewer")? Does Owner include Admin powers? Is Client Viewer a login or a link? Does Trace Trust & Safety access exist before Phase 2 (the T&S appeals desk is Phase 2; break-glass support is not phased)? Does a team grant access?
@@ -45,9 +73,15 @@ Plan §2 defines 8 roles and says evidence is scoped to candidates a person is "
 - Trust & Safety: schema + break-glass grant table in M0 (ticket required, ≤4 h, visible to tenant); no staff UI until needed.
 - Teams are organisational only (no access grant) in Phase 0.
 
+**Answer:** accepted as proposed.
+
 **Q2b. Does Owner + Reviewer see unassigned evidence? — Blocking (M0 RLS matrix)**
 Plan §2 (plan.md:65): Owner cannot read evidence for unassigned candidates "(unless they also hold Reviewer)" — which reads as Owner+Reviewer seeing *all* evidence. CLAUDE.md Tenancy: "Evidence access is scoped to assigned candidates", with no exception.
-*Recommendation:* CLAUDE.md wins — holding Reviewer gives an Owner the same access as any Reviewer, i.e. **assigned candidates only**; an Owner who needs more assigns themselves (audited). If you agree, I'll add it to `docs/plan-conflicts.md` as #16 when you approve the M0 spec.
+*Recommendation:* CLAUDE.md wins — holding Reviewer gives an Owner the same access as any Reviewer, i.e. **assigned candidates only**; an Owner who needs more assigns themselves (audited). **Answer:** CLAUDE.md wins. Row for you to add to `docs/plan-conflicts.md`:
+
+```
+| 16 | Owner "cannot read evidence for candidates they are not assigned to (unless they also hold Reviewer)" vs CLAUDE.md "Evidence access is scoped to assigned candidates" | §2 vs CLAUDE.md Tenancy | CLAUDE.md wins: holding Reviewer gives an Owner the same access as any Reviewer — assigned candidates only. An Owner who needs more access assigns themselves; the assignment is audited. |
+```
 
 **Q3. Authorise org users from the `memberships` table, not JWT role claims — Can-default**
 Plan §10.1 says "claims carry org, role and team". Trusting role claims means a removed recruiter keeps evidence access until the JWT expires (up to 1 h), and per-candidate assignments don't fit in a token.
@@ -57,10 +91,40 @@ Plan §10.1 says "claims carry org, role and team". Trusting role claims means a
 M0's exit gate needs "staging deploys from CI". Needed: GitHub repo with branch protection + `staging` environment secrets; Cloudflare account (Pages, Workers, Durable Objects, R2); Supabase `trace-dev` + `trace-staging` in Mumbai; a Sentry project (choose its data region at creation). Build-order M0 also lists "AWS dev account … domain" as prerequisites; if Q1 = Workers, nothing in M0 uses them, so I propose deferring both to M2 (SES) — deviation 6 in §3.
 Conflicts to resolve: `setup-checklist.md` says **three** Supabase projects, `founder-steps.md` says the free plan allows **two** and prod comes at M8; checklist says **Workers Paid**, founder-steps says **start free**; checklist says a **separate AWS dev account (Organizations)**, founder-steps says **don't join Organizations**.
 *Recommendation:* two Supabase projects now, prod at M8; Cloudflare free for M0, Workers Paid before M2 (Queues for invite fan-out; Durable Objects at scale); no AWS Organizations; staging on `*.pages.dev` / `*.workers.dev` until the domain exists. Free Supabase projects pause when idle — CI deploys keep staging awake.
+**Answer:** 2 Supabase projects (dev, staging; Mumbai), prod at M8. Workers free plan until a free limit blocks us — I check Queues/Durable Objects free-plan availability at the start of M2/M3a and report before upgrading. AWS: single account, no Organizations, Free plan. Domain deferred (deviation 6).
 
 **Q5. This dev machine can't run the M0 exit gate yet — Blocking (founder action, ~30 min)**
 Checked in this session: Node **v20.20.0** (end of life since April 2026; docs ask for 22); `pnpm -v` **fails** (Corepack can't find its pnpm binary); Docker 29.5.2 is installed but was reported stopped; Supabase CLI 2.109.1 and gh 2.101.0 present; gitleaks not installed. `founder-steps.md` says to work in WSL2 Ubuntu, but the repo is on NTFS under a path with spaces. As soon as M0 adds `verify:fast`, the Stop hook will fail every turn until pnpm works.
 *Recommendation:* install Node 24 LTS (22 enters end of life in April 2027, mid-build) and repair pnpm (`corepack enable` + `corepack install`, or a standalone install of the version we pin); start Docker Desktop; install gitleaks. Optional but better: clone into WSL2 ext4 at a path without spaces (faster pnpm/Docker, matches Linux CI). I'll make the repo work on native Windows either way (see §3).
+**Answer:** founder fixes the machine with **Node 22**. Checked on 2026-10-10: nvm-windows 1.2.2 is already installed with Node 18.20.8, 20.20.0 (active), 24.11.0 and 25.3.0 — not 22; the latest 22.x is **v22.23.3**; the latest pnpm is **12.11.2** (engines `node >=18`); the Corepack cache at `%LOCALAPPDATA%\node\corepack` exists and is where the broken pnpm 12.8.1 entry lives; Docker Desktop is installed but its engine is not running; winget has `Gitleaks.Gitleaks` 8.30.1. Commands (PowerShell; run the `nvm` lines in an **Administrator** PowerShell, because nvm-windows switches versions with a symlink):
+
+```powershell
+# 1. Node 22
+nvm install 22.23.3
+nvm use 22.23.3
+node -v                                   # expect v22.23.3
+
+# 2. pnpm via Corepack (clears the broken pnpm 12.8.1 cache entry first)
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\node\corepack"
+corepack enable
+corepack install --global pnpm@12.11.2
+pnpm -v                                   # expect 12.11.2
+# Only if the previous step fails with a signature/keyid error:
+#   npm install --global corepack@latest ; then repeat the last two commands
+
+# 3. Docker Desktop engine
+Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+# wait until Docker Desktop shows "Engine running", then:
+docker info --format "{{.ServerVersion}}" # expect a version number, not an error
+
+# 4. gitleaks
+winget install --id Gitleaks.Gitleaks --exact --accept-source-agreements --accept-package-agreements
+
+# 5. Open a NEW terminal (PATH refresh), then check everything
+node -v; pnpm -v; docker info --format "{{.ServerVersion}}"; gitleaks version; supabase --version
+```
+
+Then restart the Claude desktop app (or open a new session) so my shell picks up the new PATH. Node 22 leaves maintenance on 2027-04-30; the upgrade to 24 is logged as risk 18.
 
 **Q6. Candidate token: who signs it and how RLS "understands" it — Can-default (spec in M0, built in M3)**
 Plan §8.1 / ADR-017: invite + OTP → Trace-issued token that RLS understands. If it's signed with the Supabase project JWT secret, that secret can also mint `service_role` tokens, so it can't sit in candidate-facing Workers (CLAUDE.md Tenancy).
@@ -118,12 +182,14 @@ Plan §3.1 step 3 and screen 04 name Strict / Standard / Open-book, but per-sign
 **Q20. What exactly freezes at "first candidate start", and at what scope? — Blocking (rule 3)**
 CLAUDE.md: "Rulesets freeze when the first candidate starts". Plan §5 D: "frozen per test". §9.1: "Settings lock when the first candidate starts". Screen 04: "later changes create a new version". Open: only the ruleset, or the whole test (items, pools, timers, notice, rubric)? Per test or per drive? Does a practice start count? Can an open-window drive switch versions mid-way (mixed cohort)? The Postgres mirror is asynchronous, so a recruiter edit can race the DO's first start.
 *Recommendation:* freeze the **whole test version** (content, pool snapshot, timers, ruleset, notice template) at the first real (non-practice) start; any later edit clones a new test version; a drive pins one test version and never switches mid-drive; to avoid the race the drive's version pointer locks at the earliest of lobby open, `opens_at`, or first start; the DO records the freeze and the Postgres mirror applies it idempotently.
+**Answer (supersedes the recommendation):** a test version — items, settings, ruleset — is **immutable from publish**. Editing a published test creates a new draft version. **Each invitation pins the test version it was sent with**, so one drive can hold invitations on different versions; reports already record the versions used. The R2 test package is written at publish, so the DO and Postgres can never disagree. Screen 04's copy ("Settings freeze as ruleset v1 when the first candidate starts") changes to "Settings freeze when you publish; later changes create a new version". This is stricter than CLAUDE.md rule 3 (frozen before any candidate can start), so CLAUDE.md needs no change.
 
 **Q21. "Done when" lines that only humans or real data can satisfy — Blocking (to close M1; affects M2/M3 gates)**
 ABH-5: "5 recruiters each publish a test from a template in a median of ≤5 min". ABH-7: "difficulty within ±0.1 of the parent item" (no difficulty scale is defined, and empirical difficulty needs responses). M2 ABH-14: "20k candidates start within 60 s". M3 ABH-25: "External audit … (Phase 2)", TalkBack (phone mode is Phase 2).
 *Recommendation:* ABH-5 — automated Playwright timed-publish proxy closes M1; you run the 5-recruiter measurement before M8 and it's recorded. ABH-7 — difficulty is an expert-tagged 0–1 value; M1 tests the generator constraint; empirical check after calibration (M10). ABH-14 — mechanism tested in M2/M3 at small scale; 20k measured in the M8 load test. ABH-25 — axe + keyboard-only automated in M3; NVDA as a recorded manual checklist; TalkBack and external audit deferred with phone mode.
 M3 lines that depend on later milestones: ABH-24 "The candidate can see every stored image and clip" (images arrive in M4, the report view in M6); ABH-22 "Diary entries appear on the reviewer timeline" (console is M6); ABH-23 "A nudge the candidate corrects is never a flag" and ABH-20 "Signal suppression is instant" (signals/flags arrive in M4). For each: an M3 proxy test (the data is stored, scoped and exposed to the right API), and the final "Done when" test is owned by M4 or M6 and listed in that milestone's spec.
 I need you to accept that M1 can close on the ABH-5 proxy and that M3 closes on these proxies.
+**Answer:** yes. Each milestone summary gets a **Deferred gates** table (check, proxy test that closed the milestone, owner milestone, due ≤ M8). The M8 exit gate now includes "every deferred gate passes" (build-order updated).
 
 **Q22. AI drafting needs Bedrock, which is a prerequisite only at M5 — Can-default**
 Build-order routes ABH-8 "via `LlmGrader`/Bedrock interface", but drafting isn't grading, and Bedrock India access (ABH-87) is due at M5.
@@ -187,18 +253,22 @@ Trace is the processor; the employer is the data fiduciary (§10.3). Screen 03 s
 **Q36. Device check runs before consent and before the age check — Blocking (DPDP, rule 9)**
 Plan §3.2 order: lobby/OTP → **device check (camera, mic, CPU, input method)** → age check → transparency/consent. Screen 03's stepper agrees. That opens camera and mic and collects device data before consent, and before an under-18 is stopped.
 *Recommendation:* reorder to OTP → age gate → transparency & consent → device check → rules & accommodations → test (start photo and warm-up slot in before the test in M4, where ABH-65/ABH-32 are built; M3 leaves placeholders). If you want the device check first (better UX, fewer drop-offs after consent), it must run purely on the device, send and store nothing, and its result is discarded unless consent follows. Your call (or counsel's).
+**Answer:** OTP → age check → consent → device check. No camera or mic access before consent — M3b has an automated test that no `getUserMedia` call happens before the consent record exists.
 
 **Q37. How the under-18 block works — Blocking (rule 9)**
 §3.2 step 4: "Date of birth from the invite file or the candidate". Open: is self-declaration enough? What if the file and the candidate disagree? Age on which date, which time zone? What do we keep about a blocked person? Can they take the practice test? Also, §7.2 lists "age" as an Insufficient-evidence reason, which can't happen if under-18s never get a session.
 *Recommendation:* age computed on the test date in IST; block if **either** source shows under 18; a conflict blocks the start and goes to the recruiter; no session, consent or media is created for a blocked person; store only `age_status` (adult / minor / unknown) + source + as-of date — never a DOB (a catalog test fails on any `%dob%`/`%birth%` column); neutral message; practice test stays open (it stores nothing server-side); "age" removed from Insufficient-evidence reasons until the Phase 2 parental-consent flow.
+**Answer:** agreed — block if either source says under 18; store only the 18+-confirmed flag and its source, never a DOB; enforced server-side (DO check + DB constraint; client UI is not the gate).
 
 **Q38. Disconnect and pause rules can be gamed — Blocking (M3 chaos-test gate)**
 §3.2 step 10: under 2 min the timer runs; over 2 min it pauses; up to 30 min and 3 resumes credited. Open: who decides when offline began (a client report is forgeable T3)? Is the first 2 min of a long outage credited? Does the question stay visible while paused — if so, pulling the cable buys 29 free thinking minutes? What happens at minute 31 or the 4th resume? What counts as an "unbroken sequence" for the deadline + 60 s grace (§12)?
 *Recommendation:* the DO measures outage from the last acknowledged heartbeat (every 10 s) to reconnection, and client clocks are ignored. If an outage exceeds 2 min, the whole outage is credited, within totals of 30 min and 3 resumes. Once offline passes 2 min the client hides the item and locks input; edits stamped during the pause are refused and logged as connectivity context (never a flag). Past the limits the session becomes `suspended_awaiting_reschedule` (not auto-submitted, work kept). "Unbroken" = no gaps in sequence numbers up to the deadline. All of these become versioned config.
+**Answer:** agreed; limits stay 30 min / 3 resumes. Gaming-like patterns (e.g. repeated outages just past 2 min) are surfaced to reviewers as **context only, never a flag**, and never change the band.
 
 **Q39. "I can withdraw by closing the test; my data will then be deleted" (screen 03) — Blocking (consent / DPDP)**
 Closing the tab is indistinguishable from a power cut, and the plan lets candidates resume from any device. Treating it as withdrawal would delete honest candidates' work.
 *Recommendation:* withdrawal is an explicit action ("Withdraw and delete my data", confirmed twice), available during and after the test; closing the tab is a disconnect. Withdrawal during the test ends the session as `withdrawn`, with no score and no report, and queues deletion (pipeline built in M7; until then a recorded request). Withdrawal after submit becomes a deletion request. Copy on screen 03 changes accordingly.
+**Answer:** agreed — explicit action with a confirmation step; tab close or power loss is always a disconnect; screen 03 copy fixed in M3b.
 
 **Q40. Offline buffer encrypted with an in-memory key vs no loss in a power cut — Can-default**
 §10.1: buffer "encrypted with an in-memory session key; wiped on submit". After a power cut the key is gone, so the IndexedDB buffer can't be decrypted. plan-conflicts #5 says nothing buffered is lost.
@@ -248,6 +318,45 @@ Screen 02 shows a reviewer matching scratchpad text ("Draft found at 24:10 · 18
 **Q53. Small schema details — Can-default**
 Receipt reference: the plan's example `TR-8F2K` collides at scale → ≥8 characters, unique per org. Consent IP (§9.1) is personal data and rule 7 bans IP flags → stored encrypted, never readable by integrity code. Naming: §9.1 `responses` = answers; the candidate's reply to a notice becomes `notice_replies` in M6 to avoid confusion.
 
+### Raised after the founder's answers
+
+**Q54. The auto-push `post-commit` hook — Open (blocks the start of M0a: S1.0 installs the secret-scan gate on the push path)**
+Facts checked 2026-10-10:
+- The hook is `.git/hooks/post-commit` (lines 1–12) in the main checkout's git directory. It is **not tracked** by git, is not part of the kit commits on `main`, and no script in the repo installs it — it exists only on this machine. A fresh clone does not have it.
+- CLAUDE.md line 41 describes it ("Every commit is backed up to GitHub by a local `post-commit` hook…"); that line came in commit `3e344bf`.
+- `.claude/settings.json` line 34 puts `Bash(git push:*)` under **ask**, but that only governs commands Claude runs through the Bash tool. The hook runs as a child of `git commit`, so it **pushes without any prompt** — that is how commit `62d7e56` reached `trace/claude/trace-lead-engineer-onboarding-783e49`.
+- Git hooks are shared by all worktrees, so every branch any session or agent commits on is pushed.
+- In a worktree the hook writes its log to `.git/worktrees/<name>/autopush.log`, not the `.git/autopush.log` path CLAUDE.md tells me to read.
+- `lefthook install` (M0a) renames existing hooks to `*.old`, which would **silently disable** this hook.
+
+Options: (a) keep auto-push — M0a moves it into a versioned `scripts/git-autopush.sh` run from lefthook's `post-commit`, fixes the log path, and CLAUDE.md line 41 is corrected; (b) drop auto-push — M0a removes the hook and CLAUDE.md line 41, and pushes happen explicitly (each one prompts under settings.json). *Recommendation:* (a), because CLAUDE.md's usage-limit protocol relies on every commit being backed up, but you decide. Nothing changes until you answer.
+Since the security review: today's hook pushes commits that no secret scan has seen, and a pre-commit hook alone is bypassed by `git commit --no-verify`. With (a), `scripts/git-autopush.sh` therefore runs gitleaks over every unpushed commit and refuses to push on a finding (spec §6). That is why Q54 now blocks the **start** of M0a: S1.0 is the first commit.
+
+**Q55. Prod isolation at M8 — Can-default (confirm before M8)**
+A staging CI credential must never be able to reach prod. The CLAUDE.md rule "Never connect to production" relies on that, and so does the security review (#9).
+*Default:* prod gets a **separate Supabase organisation** and a **separate Cloudflare account**, each with its own CI environment and approval rule. Staging CI uses the staging DB connection string, not a personal access token that spans every project. Recorded in ADR-027 as proposed.
+
+**Q56. Stop local sessions from deploying to staging — Can-default (needs your OK because it edits `.claude/settings.json`)**
+The M0a gate says "staging deploys from CI only". Today `.claude/settings.json` puts `wrangler deploy` and `supabase db push` under **ask**, so one approval in a local session could deploy to staging.
+*Default:* add these to **deny**:
+- `Bash(wrangler deploy --env staging:*)`, `Bash(wrangler deploy -e staging:*)`
+- `Bash(pnpm exec wrangler deploy:*)`, `Bash(npx wrangler deploy:*)`
+- `Bash(wrangler pages deploy:*)`
+- `Bash(supabase db push:*)`, `Bash(pnpm exec supabase db push:*)`
+
+Local `wrangler dev` stays allowed. This lands in S1.0 if you approve.
+
+**Q57. The milestone-review skill doesn't know about the sub-milestones — Open (needs your OK because it edits `.claude/skills/trace-milestone-review/SKILL.md`)**
+The skill's milestone checkpoints (SKILL.md around lines 150–153) check "M0" against the whole old M0 gate (≥50 RLS tests, append-only audit log) and "M3" against voice upload and axe. Run as-is, it would BLOCK M0a and M3a for items that now belong to M0b and M3b. Its list of sibling milestones (around line 30) also lacks M3a/M3b.
+*Proposal:* add M0a, M0b, M3a and M3b rows that copy the split exit gates from `docs/build-order.md` word for word, and add M3a/M3b to the sibling list. One small PR, made before the M0a review runs.
+
+**Q58. Deferred gates that the plan itself puts after M8 — Open**
+Your Q21 answer says every deferred gate must pass by M8. Two checks can't, by the plan's own wording:
+- ABH-25: "External audit before launch (Phase 2)", plus TalkBack, which needs phone mode (Phase 2).
+- ABH-7: empirical difficulty within ±0.1 of the parent, which needs response data (M10).
+
+*Proposal:* these two keep their later owners and are named explicitly in build-order rule 6 (worded there as pending your confirmation). Everything else must pass by M8.
+
 ---
 
 ## 3. Repository layout and toolchain for M0
@@ -273,19 +382,20 @@ Matches `docs/build-order.md` M0 exactly; additions are marked **+** with the re
 ├─ workers/
 │  ├─ edge/               Candidate session API, ingest/upload Workers, SessionAuthority Durable Object (M3). M0: /health.
 │  │                      Never bound to the service-role key.
-│  └─ jobs/           +   Queue consumers + server-side jobs that hold the service role (only if Q1 = Workers).
+│  └─ jobs/           +   Queue consumers + server-side jobs; the only Worker besides services/api that may hold the service role (ADR-027).
 ├─ services/
-│  └─ api/                Modular monolith: src/modules/<module>/. Runtime-agnostic TS; Workers entrypoint now, Node entrypoint if ECS later.
+│  └─ api/                Modular monolith: src/modules/<module>/, deployed as a Worker (ADR-027). Runtime-agnostic TS, so a Node
+│                         entrypoint for ECS is a new file, not a rewrite.
 ├─ supabase/
 │  ├─ config.toml
 │  ├─ migrations/         Forward-only SQL; never edit a merged migration.
 │  ├─ seed.sql            Synthetic data only.
 │  └─ tests/              pgTAP: helpers (authenticate_as role/org/user|candidate), <table>.rls.test.sql, catalog meta-tests.
 ├─ e2e/                   Added in M3: Playwright + axe-core, throttled-network and chaos runs.
-├─ infra/             +   OpenTofu (Terraform-compatible) for Cloudflare (R2, Queues, DNS), Supabase project settings, GitHub branch
-│                         protection, and later AWS (KMS, Secrets Manager, SES, Bedrock IAM, GitHub OIDC). One tool for all three
-│                         providers. Needs your OK (no ADR names an IaC tool); M0 can start with wrangler + dashboard if you prefer.
-├─ scripts/               Existing Claude hooks + verify-fast.mjs, test-rls.mjs, check-migrations.mjs, git-autopush.sh (moved from .git/hooks).
+├─ infra/             +   Not created in M0a: M0a configures Cloudflare through `wrangler.jsonc` files and GitHub through a recorded
+│                         `gh api` command. IaC (OpenTofu proposed) is proposed by ADR when AWS resources arrive (KMS/SES, M2).
+├─ scripts/               Existing Claude hooks + verify-fast.mjs, test-rls.mjs, check-migrations.mjs, check-boundaries.mjs;
+│                         git-autopush.sh only if Q54 = keep.
 ├─ specs/                 Per-module specs (CLAUDE.md "How to work").
 └─ .github/workflows/     ci.yml, deploy-staging.yml
 ```
@@ -297,16 +407,16 @@ Root files: `pnpm-workspace.yaml` (apps/*, packages/*, workers/*, services/* + a
 | --- | --- |
 | `pnpm verify` | `typecheck && lint && test && test:rls && build` — exactly the CLAUDE.md list |
 | `pnpm verify:fast` | `scripts/verify-fast.mjs`: typecheck + lint + unit for packages changed since `merge-base HEAD main` (plus untracked files); any root config/lockfile change runs everything; no DB; target <2 min (Stop hook timeout is 600 s) |
-| `pnpm test:rls` | `supabase start` (minimal services) → `db reset` → `supabase test db` → **fails if Docker is down (never skips)** and fails if the pgTAP test count is <50 |
+| `pnpm test:rls` | `supabase start` (minimal services) → `db reset` → `supabase test db` → **fails if Docker is down (never skips)** and fails if the pgTAP test count is below the floor in `supabase/tests/min-count` (M0a: the catalog meta-tests; M0b raises it to 50; it may only ever go up) |
 | CI only | `pnpm audit --prod --audit-level=high`, osv-scanner, gitleaks full history, migration-name/order check, db-types drift, candidate bundle-size budget |
 
 ### Toolchain
-Majors chosen below; **exact versions are pinned and re-verified against the registry on day one of M0** (the subagent's registry snapshot is not something I've verified myself).
+Exact pins were checked against the npm registry on 2026-10-10 and are listed in `specs/m0-foundations.md` §4.
 
 | Tool | Choice | Why |
 | --- | --- | --- |
-| Node | 24 LTS (`.node-version`, `engines`) | 20 is end of life (installed here); 22 reaches end of life April 2027, mid-build. Deviation from docs' "22" — justified by support window |
-| pnpm | exact `packageManager` pin; catalog for shared versions | workspace standard per build-order |
+| Node | **22** (22.23.3; `.node-version`, `engines`) — founder decision Q5 | matches docs; maintenance ends 2027-04-30, so the move to 24 is risk 18 |
+| pnpm | 12.11.2 exact `packageManager` pin via Corepack; catalog for shared versions | workspace standard per build-order |
 | TypeScript | strict + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`; project refs | CLAUDE.md "strict". Major chosen to satisfy typescript-eslint's supported range |
 | Frontend | React + Vite, CSS Modules on generated CSS variables (no CSS-in-JS runtime) | CLAUDE.md stack; light candidate bundle. Tailwind (mentioned in design README) only with an ADR |
 | Routing/HTTP | React Router (client), Hono (server, Workers + Node) | ADR-028 per Q13 |
@@ -315,7 +425,7 @@ Majors chosen below; **exact versions are pinned and re-verified against the reg
 | DB tests | pgTAP via `supabase test db`, own `authenticate_as()` helper | runs inside Postgres; sets `request.jwt.claims` to impersonate every role incl. the candidate token; each test rolls back; matches the review skill's G5 gate. A supabase-js layer with real JWTs is added in M3/M6 ("via any view or API") |
 | E2E / a11y | Playwright + @axe-core/playwright, from M3 | M3 exit gate (axe clean, keyboard-only, 512 kbps throttle) |
 | Lint/format | ESLint flat config (typescript-eslint strict-type-checked, jsx-a11y, react-hooks, boundaries) + Prettier | chosen over Biome: type-aware `no-floating-promises` (DO/queue correctness) and import-boundary rules for rule 1 and band-engine purity |
-| Git hooks | **lefthook** (not husky) | husky sets `core.hooksPath`, which would silently disable the existing auto-push hook; lefthook keeps `.git/hooks` and lets the auto-push become a versioned script |
+| Git hooks | **lefthook** (not husky) | husky sets `core.hooksPath`, which would silently disable the existing auto-push hook. lefthook also renames existing hooks to `*.old`, so **Q54 must be answered before `lefthook install`** (S1.0, the first M0a step) |
 | Commits | commitlint conventional + `wip` type | the trace-handoff skill writes `wip(...)` commits |
 | Secrets scan | gitleaks pre-commit (staged) + CI full history | auto-push means CI-only scanning is too late |
 | Supabase CLI | pinned as a root devDependency | same version locally and in CI; needs Docker Desktop on Windows |
@@ -331,12 +441,13 @@ Majors chosen below; **exact versions are pinned and re-verified against the reg
 - The path contains spaces; Supabase CLI Docker bind mounts with spaced Windows paths are unverified → tested on day one of M0 (WSL clone avoids it).
 
 ### Deviations from CLAUDE.md / build-order, summarised
-1. Compute on Workers instead of ECS (only if you accept Q1; ADR-027 + CLAUDE.md edit).
+1. Compute on Workers instead of ECS — **accepted** (Q1; ADR-027; CLAUDE.md Stack line edited).
 2. Extra packages `vendors`, `db-types`, `config` and `workers/jobs` (reasons above; no new frameworks).
-3. Node 24 instead of 22 (support window).
-4. Auto-push hook moves into lefthook + a versioned script (same behaviour, no longer lost on fresh clones).
-5. Org-user roles resolved from tables, not JWT claims (Q3; ADR).
-6. AWS dev account and domain deferred from M0 prerequisites to M2 (only if Q1 = Workers; nothing in M0 would use them).
+3. ~~Node 24 instead of 22~~ — withdrawn; Node 22 per founder decision.
+4. Auto-push hook moves into lefthook + a versioned script — **pending Q54**.
+5. Org-user roles resolved from tables, not JWT claims (Q3, accepted; recorded in the M0b ADR).
+6. **Domain deferred** from the M0 prerequisites (founder decision Q4): staging runs on `*.pages.dev` / `*.workers.dev`; the domain is needed by M2 (SES sender domain). AWS: one account on the Free plan, unused in M0.
+7. M0 split into M0a/M0b and M3 into M3a/M3b; parallel writers capped at 3 (founder decision; `docs/build-order.md` updated).
 
 ---
 
@@ -378,8 +489,8 @@ Also M0: enums, `private` schema helpers (`my_org_ids(roles)`, `my_scope_ids(kin
 | `role_templates` | BPO Voice, Support, … (ABH-5) | id, org_id (own or library), key, version, name, blueprint jsonb, status | S: OW AD RC RV (own + library) · I/U: AD RC own org · D: ✗ |
 | `jobs` | job from JD or template | id, org_id, workspace_id, title, jd_text (<50k), role_template_id/version, status, created_by | S: OW AD RC RV · I/U: AD RC · D: ✗ |
 | `tests` | test identity | id, org_id, workspace_id, job_id, name, current_version_id, archived_at | as `jobs` |
-| `test_versions` | immutable once published (Q20) | id, org_id, test_id, version_no, status (draft/published/retired), blueprint, total_time_seconds, allow_phone, ruleset_version_id, notice_template_version, content_sha256 (R2 package hash), published_at/by, locked_at | S: OW AD RC RV · I: AD RC · U: AD RC while draft; after publish immutable (trigger fires for SW too); `locked_at` set once · D: drafts only |
-| `ruleset_versions` | frozen integrity settings | id, org_id, test_id, version_no, preset_key/version, signal_settings jsonb (validated vs catalog + locks by trigger), paste_rules jsonb, band_rule_table_version_id (FK added M4), published_at, locked_at | S: OW AD RC RV · I: AD RC · U: AD RC only while no **published** test version references it (trigger sets `published_at` at publish; immutable from then, since the R2 package already contains it — Q43); `locked_at` marks first start · D: ✗ once referenced |
+| `test_versions` | immutable once published (Q20) | id, org_id, test_id, version_no, status (draft/published/retired), blueprint, total_time_seconds, allow_phone, ruleset_version_id, notice_template_version, content_sha256 (R2 package hash), published_at/by | S: OW AD RC RV · I: AD RC · U: AD RC while draft; **immutable from publish** (trigger fires for SW too; founder decision Q20) — editing a published test inserts a new draft version · D: drafts only |
+| `ruleset_versions` | frozen integrity settings | id, org_id, test_id, version_no, preset_key/version, signal_settings jsonb (validated vs catalog + locks by trigger), paste_rules jsonb, band_rule_table_version_id (FK added M4), published_at | S: OW AD RC RV · I: AD RC · U: AD RC only while no **published** test version references it (publish sets `published_at`; immutable from then, and the R2 package already contains it — Q20, Q43) · D: ✗ once referenced |
 | `sections` | sections, timers, draws (ABH-10) | id, org_id, test_version_id, position, name, format (written/mcq/typing/voice; code/video rejected by CHECK for now), time_limit_seconds, draw_count, pool_id, shuffle_items, shuffle_options, weight, prep_seconds | as parent test version (lock checked by trigger) |
 | `section_pool_snapshot` | pool membership frozen at publish | org_id, test_version_id, section_id, item_version_id | S: OW AD RC RV · I: publish function · U/D: ✗ |
 | `items` / `item_versions` | item identity / immutable versioned content | versions: id, org_id, item_id, version_no, status (draft/in_review/approved/live/rejected/retired), origin (human/import/ai_draft), stem jsonb (R2 image keys), options, language, read_aloud, is_parameterised, rubric_version_id, difficulty, discrimination/solvability/exposure_count (filled later), ai_draft_job_id, content_sha256, approved_by/at, created_by. **CHECK: ai_draft can't be approved/live without approved_by** | S: AD RC RV own org (library per Q27) · **no grant at all to `trace_candidate`** · I: AD RC · U: AD RC while draft/in_review; approval requires `approved_by = auth.uid()`; content immutable after · D: drafts |
@@ -390,19 +501,19 @@ Also M0: enums, `private` schema helpers (`my_org_ids(roles)`, `my_scope_ids(kin
 | `import_jobs` / `import_row_errors` | Excel/Word import (ABH-9) | jobs: id, org_id, source_kind, file_r2_key, status, totals, created_by, file_purged_at · errors: org_id, import_job_id, row_no, field, error_code, message | S: AD RC · I: AD RC (jobs), SW (errors) · U: SW status, RC cancel |
 | `ai_draft_jobs` | AI drafting runs (ABH-8) | id, org_id, requested_by, slot_spec, provider, model_id, prompt_version, status | S/I: AD RC · U: SW |
 
-Functions: `publish_test_version()` (hash + R2 package + pool snapshot), `private.lock_test_version()` (called on first start; directly by M1 tests).
+Functions: `publish_test_version()` — validates, writes the pool snapshot, freezes the version and its ruleset, records the R2 package hash, all in one transaction. `create_draft_from(version_id)` — clones a published version into a new draft. There is no first-start lock any more (Q20).
 
 ### M2 — Scheduling & invites
 | Table | Purpose | Key columns | RLS |
 | --- | --- | --- | --- |
 | `org_keys` | envelope-encryption key versions (KMS) and per-org blind-index key refs | org_id, purpose, key_version, kms_key_arn, wrapped_dek | ✗ all app roles; SW/API only |
-| `candidates` | person record, org-level | id, org_id, full_name_ct (encrypted), key_version, contact_fingerprint (HMAC), age_status (adult/minor/unknown), age_status_source, age_status_as_of — **no DOB** | S: AD RC RV via asg invitations; OW only if assigned · CA own (column grant: id, age_status) · I: AD RC (API), SW (bulk) · U: AD RC asg · D: ✗ |
+| `candidates` | person record, org-level | id, org_id, full_name_ct (encrypted), key_version, contact_fingerprint (HMAC), adult_confirmed (boolean, only ever set true), adult_confirmed_source (invite_file / self_declared / both) — **no DOB, no age, no as-of date** (Q37 answer). A candidate who is under 18 by either source is never marked; their invitation goes to `blocked_age` (or the upload row is rejected with reason `minor`) | S: AD RC RV via asg invitations; OW only if assigned · CA own (column grant: id, adult_confirmed) · I: AD RC (API), SW (bulk) · U: AD RC asg · D: ✗ |
 | `candidate_contacts` | contacts split out for masking | candidate_id, org_id, email_ct, phone_ct, email_bidx, phone_bidx, key_version, whatsapp_opt_in_at | S/U: AD RC asg · RV HM CV OW TS CA ✗ · I: SW / API |
-| `drives` | open window or scheduled drive | id, org_id, workspace_id, job_id, test_id, test_version_id (pinned), mode, opens_at, deadline_at, timezone, lab_mode, bandwidth_budget_kbps, expected_candidates, reminder_offsets interval[], self_reschedule_allowed, status, version_frozen_at | S: OW AD RC RV; HM asg; TS · I: AD RC (creator auto-assigned) · U: AD RC asg; pinned version immutable after freeze · D: drafts |
+| `drives` | open window or scheduled drive | id, org_id, workspace_id, job_id, test_id, default_test_version_id (published version used for **new** invites; may move forward), mode, opens_at, deadline_at, timezone, lab_mode, bandwidth_budget_kbps, expected_candidates, reminder_offsets interval[], self_reschedule_allowed, status | S: OW AD RC RV; HM asg; TS · I: AD RC (creator auto-assigned) · U: AD RC asg; `default_test_version_id` must reference a published version of the same test (trigger) · D: drafts |
 | `slots` | capacity / windows | id, org_id, drive_id, starts_at, capacity, booked (CHECK 0 ≤ booked ≤ capacity), start_window_minutes (15), lobby_opens_minutes (30), status | as drives |
 | `assignments` | defines "assigned" (Q2) | id, org_id, membership_id, scope (workspace/job/drive/candidate), one matching id column (CHECK), as_role, created_by | S: AD all, assignee own, RC within own scopes · I/D: AD; RC within own scopes (audited) · U: ✗ |
 | `invite_uploads` / `invite_upload_errors` | bulk upload + per-row reason | uploads: id, org_id, drive_id, file_r2_key (short TTL), file_sha256, status, counts · errors: org_id, upload_id, row_no, reason enum (duplicate_*, already_invited, invalid_*, missing_name, minor, bad_dob) — **cell values never echoed** | S: AD RC asg · I: AD RC (upload), SW (errors) |
-| `invitations` | candidate × drive | id, org_id, workspace_id, job_id, drive_id, slot_id, test_id, candidate_id, upload_id, dedupe_scope (= drive), phone_bidx, email_bidx, link_token_hash (unique), channels, language (en/hi), status (created…otp_verified/started/submitted/expired/revoked/blocked_age — **no rejected**), expires_at, self_reschedules_used (0–1) | S: AD RC RV asg; CA own via `v_candidate_portal` (no hash/bidx columns) · I: AD RC asg, SW · U: AD RC asg (revoke/reschedule), SW (status) · D: ✗ — partial unique on (dedupe_scope, email_bidx) where not revoked; phone duplicates via trigger requiring `phone_dup_confirmed_by` (Q30) |
+| `invitations` | candidate × drive | id, org_id, workspace_id, job_id, drive_id, slot_id, test_id, **test_version_id (pinned when sent; never changes — Q20)**, candidate_id, upload_id, dedupe_scope (= drive), phone_bidx, email_bidx, link_token_hash (unique), channels, language (en/hi), status (created…otp_verified/started/submitted/expired/revoked/blocked_age — **no rejected**), expires_at, self_reschedules_used (0–1) | S: AD RC RV asg; CA own via `v_candidate_portal` (no hash/bidx columns) · I: AD RC asg, SW · U: AD RC asg (revoke/reschedule), SW (status) · D: ✗ — partial unique on (dedupe_scope, email_bidx) where not revoked; phone duplicates via trigger requiring `phone_dup_confirmed_by` (Q30) |
 | `message_templates` | versioned per purpose × channel × language (incl. DLT/WhatsApp ids) | id, org_id (library), purpose, channel, language, version, provider_template_ref, body_sha256 | S: AD RC · writes: SW/migration |
 | `outbound_messages` | planned/sent message = delivery status | id, org_id, invitation_id, template_version_id, channel, purpose, idempotency_key (unique per org), scheduled_for, status, provider_message_id, attempts, last_error_code — **no body, recipient or OTP stored** | S: AD RC asg · I/U: SW |
 | `message_events` | provider callbacks, append-only | id, org_id, outbound_message_id, provider, provider_event_id (unique), event, occurred_at | S: AD RC asg · I: SW · U/D: revoked |
@@ -416,7 +527,7 @@ Functions: `publish_test_version()` (hash + R2 package + pool snapshot), `privat
 | `consents` | append-only consent ledger | id, org_id, invitation_id, candidate_id, notice_version_id, ruleset_version_id, rendered_sha256 not null, language, event (granted/withdrawn), occurred_at, ip_ct (encrypted, Q53), source_seq | S: CA own; AD RC RV asg · I: SW · U/D: revoked |
 | `accommodations` | self-declared, encrypted | id, org_id, invitation_id, candidate_id, payload_ct (type + suppressed signals + alternative control), key_version, declared_at | S: CA own · **every org role ✗** (they see `sessions.accommodation_applied` only) · I: SW |
 | `extra_time_requests` | +% requests (Q45) | id, org_id, invitation_id, candidate_id, requested_pct, status (auto_approved/pending/approved/denied/expired), granted_pct, decision_due_at, decided_by/at — CHECK auto_approved ⇒ ≤25 | S: CA own via column grant excluding `decided_by` (role only); AD RC asg (no reason stored) · U: AD RC asg pending → decided, `decided_by = auth.uid()` · I: SW |
-| `sessions` | mirror of the DO | id (minted by DO), org_id, workspace/job/drive/slot/invitation/candidate ids (denormalised for RLS), attempt_no, previous_session_id, test_version_id, ruleset_version_id, consent_id not null, state (in_progress/paused/suspended_awaiting_reschedule/submitted/auto_submitted/withdrawn — **no outcome state**), age_gate_result CHECK = 'adult', started_at, server_deadline_at, submitted_at, submit_kind, extra_time_seconds, credited_seconds, disconnect_seconds_total, resume_count, device_change_count, device_tier, input_method, monitoring_level, accommodation_applied, evidence_coverage (M4), chain_head, last_event_seq, mirror_seq, receipt_ref (≥8 chars, unique per org), report_release_due_at | S: AD RC RV asg; CA own via `v_candidate_status`; TS (status, via API) · I/U: SW only — forward-only `mirror_seq`, started_at/submitted_at set once · D: ✗ |
+| `sessions` | mirror of the DO | id (minted by DO), org_id, workspace/job/drive/slot/invitation/candidate ids (denormalised for RLS), attempt_no, previous_session_id, test_version_id (trigger: = the invitation's pinned version), ruleset_version_id (= that version's ruleset), consent_id not null, state (in_progress/paused/suspended_awaiting_reschedule/submitted/auto_submitted/withdrawn — **no outcome state**), adult_confirmed_at_start CHECK = true (copied from the DO's age check), started_at, server_deadline_at, submitted_at, submit_kind, extra_time_seconds, credited_seconds, disconnect_seconds_total, resume_count, device_change_count, device_tier, input_method, monitoring_level, accommodation_applied, evidence_coverage (M4), chain_head, last_event_seq, mirror_seq, receipt_ref (≥8 chars, unique per org), report_release_due_at | S: AD RC RV asg; CA own via `v_candidate_status`; TS (status, via API) · I/U: SW only — forward-only `mirror_seq`, started_at/submitted_at set once · D: ✗ |
 | `session_transitions` | state-change log | pk (session_id, seq), org_id, kind (start/section_enter/section_exit/pause/resume/device_change/submit/auto_submit/withdraw), section_id, occurred_at, payload | S: AD RC RV asg · I: SW · U/D: revoked |
 | `session_items` | items actually served | id, org_id, session_id, section_id, position, item_version_id, item_variant_id, option_order, served_at, nonce_hash, retake_of (unique), retake_reason (technical_failure) | S: AD RC RV asg (metadata) · CA ✗ · I: SW — trigger blocks unapproved AI items and a retake on the same variant |
 | `responses` | final answer rebuilt server-side | id, org_id, session_id, session_item_id (unique), answer_kind, final_text, final_choice, audio_media_id, answer_sha256, submitted_at, final_seq, event_log_r2_key, replay_status (pending; filled M4) — **no score columns** | **all app roles ✗ in M3** (audited RPC access in M6) · I/U: SW, forward-only |
@@ -437,12 +548,12 @@ Views in scope: `v_org_directory` (M0), `v_invitation_delivery` (M2), `v_candida
 1. `audit_log` append-only for every role (revokes + triggers on all partitions).
 2. No self-elevation; only owners grant `org_owner`; last owner can't be removed.
 3. Break-glass: ticket required, ≤4 h, every staff read audited with `staff_grant_id`.
-4. Published test versions, pool snapshots and rulesets referenced by a published version are immutable (triggers that also bind workers); admin locks validated on every write.
+4. A test version, its sections, pool snapshot and ruleset are immutable from publish (triggers that also bind workers); admin locks validated on every write.
 5. AI-drafted items can't be approved or served without an approver (CHECK + serving trigger) — M1 exit gate.
 6. Dedupe per drive; self-reschedule ≤1; `booked ≤ capacity`; pool ≥10× draw at scheduling; message idempotency keys unique.
-7. Under-18: `age_gate_result = 'adult'` CHECK + trigger refusing sessions for `minor` candidates; no DOB column anywhere (meta-test).
+7. Under-18: `sessions.adult_confirmed_at_start` CHECK = true + trigger refusing a session unless `candidates.adult_confirmed` is true and the invitation isn't `blocked_age`; no DOB or age column anywhere (catalog check MT-3).
 8. Session requires a granted consent with a stored hash for the same invitation and ruleset.
-9. First session insert locks the test version and ruleset.
+9. Invitations pin a published test version when sent; a session must use its invitation's pinned version and that version's ruleset.
 10. Forward-only mirroring (`mirror_seq`), exactly-once logs via `(session_id, seq)` keys, unique job keys `(session, job, ruleset)`.
 11. Media `kind` allow-list CHECK (rule 8).
 12. **Room left for M4–M6:** no score, band, outcome or "rejected" column/enum exists in M0–M3 (meta-test); `quality` vs `integrity` schemas already separated with non-overlapping worker grants (rule 1); membership/user ids never deleted or reused so M6 can enforce "decider ≠ confirmer" (rule 4); `org_policies.response_window_hours` CHECK ≥72 reserved (rule 4); flag state will include `not_used` and appeals on it will be refused (rule 6).
@@ -456,24 +567,26 @@ M4: band rule versions (with `validated` flag), signals, flags, integrity result
 
 | # | Risk | Likelihood / Impact | Mitigation | Hits |
 | --- | --- | --- | --- | --- |
-| 1 | **Compute topology undecided** (Q1). Changes `services/api` runtime, IaC, CI deploy, secret boundaries and the "compute in Mumbai" claim | High / High | Decide before the M0 spec; ADR-027; runtime-agnostic API modules | M0, M5, M7 |
-| 2 | **Scope vs. one developer under usage limits vs. date.** Plan §10 says beta Nov 2026; today is 10 Oct 2026; 9 milestones precede beta, M0 and M3 are each large. Up to 4 parallel writers burns the 5-hour window fast | High / High | plan-conflicts #12 (beta only after M8) and #13 (wedge first). Cap at 2–3 parallel writers. Split M0 into M0a (toolchain, CI, hooks, gitleaks) and M0b (schema, RLS, auth, staging); split M3 into M3a (DO, timer, resume, ingest) and M3b (consent, age gate, voice, a11y) with separate reviews. Keep `verify:fast` <2 min | All |
-| 3 | **M3 is the critical path and almost entirely undesigned.** Only screen 03 exists, and it conflicts with the plan in 5 places (Q33); four Blocking questions (Q36–Q39) sit there | High / High | Answer Q36–Q39 before M1/M2 finish; build M3 UI from plan + components; founder demos on staging | M3 |
+| 1 | ~~Compute topology undecided~~ — **resolved** (Q1 → Workers, ADR-027). Residual risk: a job that breaks a Workers CPU/memory/duration limit (most likely LLM grading orchestration or bulk import) needs ECS and a new ADR; and Workers/DO compute isn't Mumbai-pinned, so the residency statement must say so | Medium / Medium | Keep `services/api` runtime-agnostic; measure CPU per job in each milestone's harness | M1, M5, M7 |
+| 2 | **Scope vs. one developer under usage limits.** M0 and M3 are each large; parallel writers burn the 5-hour window fast | High / High | **Decided:** M0 → M0a/M0b, M3 → M3a/M3b, each with its own review and tag; max 3 parallel writers; no fixed beta date (beta when M8 passes); wedge first. Keep `verify:fast` <2 min | All |
+| 3 | **M3 is the critical path and almost entirely undesigned.** Only screen 03 exists, and it conflicts with the plan in 5 places (Q33) | High / High | Q36–Q39 answered; build M3 UI from plan + components; founder demos on staging after M3a and M3b | M3 |
 | 4 | **Exit gates a mock or sandbox can't satisfy:** M2 "2,000 delivered" vs SES sandbox; M5 speaking-level ≥0.8 and LLM ±10 need real STT (ABH-86), Bedrock (ABH-87) and the 300-answer set; ABH-5 needs 5 real recruiters | High / High | Q21 + Q28 defaults; split M5 into code-complete and a calibration sub-gate due before M8; founder starts ABH-86/87, the calibration set and SES production access now | M1, M2, M5, M8 |
 | 5 | **Candidate token ↔ RLS mechanism unproven** (Q6). If Supabase can't evaluate Trace-issued tokens the way assumed, candidate RLS and the DO → Postgres path are reworked in M3 | Medium / High | Fix claim shapes in `packages/shared` in M0; write candidate-role pgTAP tests in M0; spike token minting against the local stack in M0b | M0, M3 |
 | 6 | **Durable Object design:** 20k starts in 60 s; alarm-driven deadlines; offline credit rules; dedupe across devices; DO storage not India-pinned | Medium / High | Short DO design ADR at the start of M3; per-session DO with sharded drive counters; a 1–2k-session load test on staging in M3 instead of waiting for M8; residency statement updated | M3, M8 |
-| 7 | **Dev environment not ready** (verified: Node 20 EOL, pnpm broken; reported: Docker stopped, gitleaks missing; CRLF vs Prettier; spaced path; no WSL distro). The Stop hook will fail every turn once `verify:fast` exists | High / Medium | Q5 day-zero checklist before any M0 code; `test:rls` fails loudly when Docker is down; `.gitattributes` | M0 |
-| 8 | **Secrets and hooks:** every commit is pushed instantly and history may not be rewritten; husky would silently disable the auto-push | Medium / High | lefthook + pre-commit gitleaks + versioned auto-push script (Q15) before the first code commit | M0 |
+| 7 | **Dev environment not ready** (verified 2026-10-10: Node 20 active and no Node 22 installed, pnpm broken, Docker engine not running, gitleaks missing; plus CRLF vs Prettier and a spaced path). The Stop hook will fail every turn once `verify:fast` exists | High / Medium | Founder runs the Q5 commands and confirms before M0a starts; `test:rls` fails loudly when Docker is down; `.gitattributes` | M0a |
+| 8 | **Secrets and hooks:** every commit is pushed instantly, without the settings.json prompt, and history may not be rewritten; `lefthook install` would silently disable the auto-push hook | Medium / High | Answer Q54; S1.0 (first M0a commit) installs pre-commit gitleaks and, if auto-push is kept, a gitleaks scan of every unpushed commit inside the push script (catches `--no-verify`); GitHub push protection if your plan has it | M0a |
 | 9 | **Consent/age ordering and DPDP readiness** (Q35–Q39): notice text, fiduciary block, Hindi copy and withdrawal semantics all need counsel (ABH-89) before real data; counsel is an M8 prerequisite but the build depends on the answers in M3 | Medium / High | Build to the recommended defaults, mark copy "pending counsel"; book counsel review during M3 rather than at M8 | M3, M8 |
 | 10 | **Measurements that can't be produced early:** M1 500-item import timing, M3 512 kbps upload + chaos, M4 capture p99 on a real 4 GB laptop (CDP throttling ≠ real hardware), M8 20k load test (Cloudflare/Supabase/load-generator cost vs. small AWS budget) | High / Medium | Build each harness in the milestone that introduces the feature, record small-scale numbers; buy or borrow one real low-end laptop; budget and approve the M8 load-test spend before M7 | M1–M8 |
 | 11 | **Band-engine validation data** (500-session study, founder-only): without it every T3 detector is context-only at beta, so the integrity output is thin | High / Medium | M4 gates on property tests (as build-order says); start consented study recordings during M4 under a study notice | M4, beta value |
 | 12 | **PII leaving India via tooling** (Sentry, PostHog — no India region) and the M11 fairness breakdown needing sensitive attributes | Medium / High | Scrubbing + tests from M0; no candidate identifiers in telemetry; fairness-attribute consent spec before M11 | M0, M7, M11 |
 | 13 | **Low-bandwidth India constraints:** p95 <3 s on 4G, 512 kbps uploads, candidate bundle creeping with every feature | Medium / Medium | Separate candidate app; CI bundle budget from M0; throttled Playwright runs from M3; resumable chunked uploads | M3, M4 |
 | 14 | **Migration collisions in parallel milestones** (M1∥M2, M4∥M5) | Medium / Medium | One migration owner per stream; CI ordering check; rebase + regenerate timestamps | M1, M2, M4, M5 |
-| 15 | **Version skew in "latest" tooling** (newest TypeScript/Vitest/ESLint majors break typescript-eslint, vitest-pool-workers, jsx-a11y respectively, per the toolchain review) | High if unpinned / Medium | Exact pins + catalog; grouped dependency-update PRs | M0+ |
+| 15 | **Version skew in "latest" tooling.** Verified on npm 2026-10-10: TypeScript latest is 7.0.2 but typescript-eslint 8.71.1 needs `<6.1.0`; Vitest latest is 5.0.3 but `@cloudflare/vitest-pool-workers` 0.23.0 needs `^4.1.0`; ESLint latest is 10.12.0 but `eslint-plugin-jsx-a11y` 6.10.2 allows only up to `^9` | High if unpinned / Medium | Exact pins + catalog (spec §4); grouped dependency-update PRs | M0+ |
 | 16 | **Supabase free tier:** 2 projects, idle pause, no PITR (plan needs RPO ≤2 min) | Medium / Medium | CI deploys keep staging awake; Pro + PITR budgeted for M8 | M0, M8 |
 | 17 | **Vendor lead times:** DLT/WhatsApp (weeks, M2 flags), code runner (ABH-88, M9), GSTIN for invoices (M7), design-partner LOI gating M4, external VAPT (M13) | Medium / Medium–High | Interfaces + mocks first (build-order rule 4); founder starts ABH-83/88/89/91 now | M2, M4, M7, M9, M13 |
+| 18 | **Node 22 leaves maintenance on 2027-04-30**, likely before the paid-pilot gate | Medium / Low | Planned upgrade to Node 24 LTS as its own small PR before M8; CI matrix can test 24 early | M8 |
+| 19 | **Workers free plan limits** (Q4): Queues and Durable Object availability/limits on the free plan are unverified; M2 (invite fan-out) and M3a (session DOs) depend on them | Medium / Medium | Check the current Cloudflare plan limits at the start of M2 and M3a and report before upgrading | M2, M3a |
 
 ---
 
-*Status:* waiting for your answers. Nothing else in the repo has been changed.
+*Status (2026-10-10):* founder answers recorded in §0. Waiting for approval of `specs/m0-foundations.md` (M0a), ADR-027, the build-order split and the answer to Q54 — and for the founder's confirmation that the Q5 machine fixes are done.

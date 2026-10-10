@@ -21,7 +21,7 @@ Trace is an India-first online assessment platform for high-volume hiring where 
 - **Vendors behind interfaces** (`SttProvider`, `CodeRunner`, `LlmGrader`, `Messaging`, `Payments`) with a mock implementation. Sarvam is the planned first STT adapter but stays behind ABH-86; the code-execution vendor is not chosen (ABH-88).
 - **Everything is versioned:** rulesets, rubrics, notices, items, models. Reports record the versions used.
 - **Secrets:** never commit them; read from environment / secrets manager. Never read `.env*` files with real values. Never connect to production; use dev/staging projects only.
-- **Stack:** TypeScript everywhere (strict). React + Vite on Cloudflare Pages; Workers + Durable Objects + R2 + Queues; Supabase Postgres (Mumbai) with SQL migrations in `supabase/migrations`; Node TS modular monolith on ECS Fargate (Mumbai); Claude via Bedrock India; AWS Secrets Manager + KMS envelope encryption for sensitive fields; Razorpay. Do not add a framework, database or vendor without a new ADR.
+- **Stack:** TypeScript everywhere (strict). React + Vite on Cloudflare Pages; Workers + Durable Objects + R2 + Queues; Supabase Postgres (Mumbai) with SQL migrations in `supabase/migrations`; API and background jobs as a TS modular monolith on Workers + Queues (ADR-027; a job moves to ECS Fargate only via a new ADR when it hits a Workers limit; AWS only for Bedrock, SES, KMS/Secrets Manager); Claude via Bedrock India; AWS Secrets Manager + KMS envelope encryption for sensitive fields; Razorpay. Do not add a framework, database or vendor without a new ADR.
 
 ## How to work
 - Before coding a module: read its plan section, write/refresh `specs/<module>.md` (scope, data, API, states, edge cases, acceptance tests), then implement in a fresh session.
