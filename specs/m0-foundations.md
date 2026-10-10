@@ -773,7 +773,7 @@ It fails if any of the following holds:
 - recruiter: self and the Supabase staging origin (M0b); the Sentry ingest host is added with the adapter before D1 (revision 10)
 
 **`Permissions-Policy` per app:**
-- candidate: `camera=(self), microphone=(self)`. M3b's consent-gating test enforces the "no access before consent" rule.
+- candidate: `camera=(self), microphone=(self), geolocation=()`. M3b's consent-gating test enforces the "no access before consent" rule. *(Autopilot, 2026-10-11, S1 security review: geolocation is denied, since the product never needs it and the candidate page handles DPDP-covered PII.)*
 - recruiter: `camera=(), microphone=(), geolocation=()`
 
 ---
