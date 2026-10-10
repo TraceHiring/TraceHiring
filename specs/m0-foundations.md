@@ -1,7 +1,11 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** revision 9 (autopilot, 2026-10-11). Revision 8 was **approved by the autopilot reviewers**; revision 9 only applies founder answers and day-one results (see below and the end of this file). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
+- **Status:** revision 10 (autopilot, 2026-10-11). Revision 8 was **approved by the autopilot reviewers**; revisions 9 and 10 only apply founder answers and day-one results (see below and the end of this file). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
 - **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a`, created from `main` at `b7af663`, with `main` at `4863db2` merged in. Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
+- **Revision 10 changes (2026-10-11, infra-setup session).** Founder instructions for the one-time infra setup. No product scope change.
+  - **Repo moved:** the GitHub home is now **`TraceHiring/TraceHiring`** (private), not `AbhayRajGit/Tracehiring` (founder, 2026-10-11). H3 and the §7.2 deploy gate use the new name.
+  - **Sentry deferred until before D1** (founder, 2026-10-11). M0a ships an `ErrorReporter` interface with a **no-op** implementation instead of the Sentry SDK (§9.2). The Sentry adapter, `scrubSentryEvent`, H6, the `SENTRY_DSN_*` variables and the Sentry CSP host move to a deferred item owned by "before D1". Sentry is **not** an M0a exit-gate blocker; it **is** a blocker before D1. Which milestone "D1" is, is not defined in the repo and is a founder-queue item.
+  - **Staging names recorded:** every staging/dev resource name, region and plan is in `docs/infra/environments.md`. D5's names are unchanged.
 - **Revision 9 changes (2026-10-11).** Founder answers (build-notes §0, 2026-10-11) and the S1.0 day-one results. No product scope change.
   - **H1 done.** Node 22.23.3, pnpm 12.11.2, gitleaks 8.30.1, Docker 29.5.2, verified by the autopilot.
   - **CI exit gates: option (b).** At the end of every session the autopilot pushes `main`, the milestone branch and all tags to `trace` with plain `git push` (AUTOPILOT §6). CI runs on push, and M0a's exit gate uses the real CI result. Every item in the §13.1 "Deferred" column is now owned by **M0a CLOSE**. The repo is private.
@@ -84,7 +88,7 @@
   - **Lead session (S1.7) now owns:**
     - the whole `supabase/` skeleton and harness;
     - `packages/db-types`;
-    - the logger, redactor and Sentry scrubber.
+    - the logger, redactor and Sentry scrubber (revision 10: the `ErrorReporter` interface and no-op reporter instead; the scrubber moves to before D1).
   - **Streams:** S2 (`ui`, `vendors`, apps) and S3 (Workers, services, deploy job) need nothing from each other.
   - **Green sub-step** means a full `pnpm verify` before any `cp/*` tag.
   - **Secrets:** the edge cases cover a secret that is reachable from a tag, a rescue branch or a bundle.
@@ -147,7 +151,7 @@
 5. **CI (GitHub Actions):** static, RLS-harness, security and migration jobs, then **deploy to staging from CI only**. Staging gets Pages ×2, Workers ×3 and Supabase migrations, and the catalog checks are re-run against the staging database.
 6. **Observability skeleton:**
    - a PII-redacting JSON logger
-   - Sentry on the recruiter app, `workers/jobs` and `services/api` only, scrubbed — **not on `workers/edge` and not on the candidate app** (build-notes Q17)
+   - an `ErrorReporter` interface used by the recruiter app, `workers/jobs` and `services/api`, with a **no-op** implementation in M0a (revision 10; the Sentry adapter comes before D1, §9.2) — **never on `workers/edge` or the candidate app** (build-notes Q17)
    - a health-check contract
 7. **Design tokens pipeline:** `docs/design/tokens.json` is turned into CSS variables and TS constants, with a contrast test.
 8. **Boundary enforcement:**
@@ -159,6 +163,7 @@
 
 ### Out of scope (later)
 - Any table, RLS policy, auth or audit log → **M0b**.
+- The Sentry SDK and adapter for the recruiter app, jobs and api → **before D1** (revision 10, §9.2). Not an M0a blocker.
 - A Sentry SDK on the candidate app or edge → only after counsel approves (build-notes Q17). Until then, edge logs to Workers Logs and the candidate app logs to the console.
 - PostHog (M6); Playwright and axe (M3a/M3b).
 - Queues, R2 and Durable Object bindings → each arrives with the milestone that first needs it, after the free-plan check (build-notes risk 19).
@@ -171,10 +176,10 @@ Every open H item is a row in `docs/progress/FOUNDER-QUEUE.md`. The "Blocks" col
 | --- | --- | --- | --- |
 | H1 | ~~Machine fixed per build-notes Q5~~ **Done 2026-10-11:** Node 22.23.3, pnpm 12.11.2 via Corepack, Docker 29.5.2 running, gitleaks 8.30.1 (verified by the autopilot) | Recorded | — |
 | H2 | ~~Answer Q54~~ **Done 2026-10-11: drop auto-push, work locally only** (build-notes §0) | Recorded | — |
-| H3 | *(needed: the founder chose option (b), 2026-10-11; the repo is private)* GitHub, on `AbhayRajGit/Tracehiring`:<br>• create environment `staging` with **deployment branches limited to `main`**<br>• add the secrets and variables in §7.3<br>• set the repo's default `GITHUB_TOKEN` permission to **read-only**<br>• enable **secret scanning and push protection** if your plan offers them for this repo<br>• tell me whether the repo is public or private | `gh api repos/AbhayRajGit/Tracehiring/environments/staging` shows the branch policy | Running CI and the staging deploy (AT-1a-CI, AT-11, AT-13, AT-18, AT-22-staging) |
+| H3 | *(needed: the founder chose option (b), 2026-10-11; the repo is private)* GitHub, on **`TraceHiring/TraceHiring`** (revision 10; was `AbhayRajGit/Tracehiring`):<br>• create environment `staging` with **deployment branches limited to `main`**<br>• add the secrets and variables in §7.3 (names and owners: `docs/infra/environments.md`)<br>• set the repo's default `GITHUB_TOKEN` permission to **read-only**<br>• enable **secret scanning and push protection** if your plan offers them for this repo<br>• ~~tell me whether the repo is public or private~~ private | `gh api repos/TraceHiring/TraceHiring/environments/staging` shows the branch policy | Running CI and the staging deploy (AT-1a-CI, AT-11, AT-13, AT-18, AT-22-staging) |
 | H4 | Cloudflare:<br>• account with a registered `*.workers.dev` subdomain<br>• an API token limited to this account with Workers Scripts: Edit, Cloudflare Pages: Edit, Account Settings: Read | Token stored as a `staging` secret | Running the staging deploy (AT-11) |
 | H5 | Supabase:<br>• `trace-dev` and `trace-staging` in Mumbai (`ap-south-1`)<br>• the **staging session-pooler connection string** (with password), stored as a secret. CI needs no Supabase personal access token (security review #9).<br>• in `trace-staging` API settings, exposed schemas = `public` only; tell me the Postgres major version (for `[db] major_version`, §8.1) | Stored as a `staging` secret | Staging migrations (AT-18) |
-| H6 | Sentry:<br>• projects `trace-recruiter` and `trace-workers`<br>• pick the **data region** (there is no India region; tell me which)<br>• turn on **"Prevent storing of IP addresses"** and **server-side data scrubbing** in both projects | DSNs stored as `staging` variables; region recorded in ADR-027 | Sentry on staging only. The code and AT-9 go ahead without a DSN (§9.2). |
+| H6 | **Deferred until before D1** (founder, 2026-10-11; revision 10). Sentry:<br>• projects `trace-recruiter` and `trace-workers`<br>• pick the **data region** (there is no India region; tell me which)<br>• turn on **"Prevent storing of IP addresses"** and **server-side data scrubbing** in both projects | DSNs stored as `staging` variables; region recorded in ADR-027 | **Nothing in M0a.** Blocks the pre-D1 Sentry adapter (AT-9-sentry, §9.2). |
 | H7 | ~~Approve the Q56 deny rules~~ **Approved 2026-10-11:** staging deploys only from CI, never from a local session | Rules added in S1.0 | — |
 
 ---
@@ -195,7 +200,7 @@ Every open H item is a row in `docs/progress/FOUNDER-QUEUE.md`. The "Blocks" col
 │  └─ dependabot.yml            ecosystems: github-actions, npm (grouped by catalog)
 ├─ apps/
 │  ├─ candidate/                Vite + React shell ("/" shows product name + version); public/_headers; no Sentry, no analytics
-│  └─ recruiter/                Vite + React + React Router shell ("/", "/health"); public/_headers; Sentry (scrubbed)
+│  └─ recruiter/                Vite + React + React Router shell ("/", "/health"); public/_headers; ErrorReporter (no-op until D1)
 ├─ packages/
 │  ├─ config/                   tsconfig.base.json, eslint/ (flat config + boundaries + log-message rule), vitest presets; rule fixture tests
 │  ├─ shared/                   src/log/ (logger, redactor, error serialiser), src/health.ts (zod), src/version.ts; tests
@@ -204,8 +209,8 @@ Every open H item is a row in `docs/progress/FOUNDER-QUEUE.md`. The "Blocks" col
 │  └─ db-types/                 src/database.ts from `pnpm exec supabase gen types typescript --local`; drift-checked
 ├─ workers/
 │  ├─ edge/                     Hono: GET /health. wrangler.jsonc (envs dev, staging). No secrets, no Sentry
-│  └─ jobs/                     Hono: GET /health. Sentry (scrubbed). No queue/cron bindings yet
-├─ services/api/                Hono: GET /health; src/modules/ (empty + README on module rules); Sentry (scrubbed)
+│  └─ jobs/                     Hono: GET /health. ErrorReporter (no-op until D1). No queue/cron bindings yet
+├─ services/api/                Hono: GET /health; src/modules/ (empty + README on module rules); ErrorReporter (no-op until D1)
 ├─ supabase/
 │  ├─ config.toml
 │  ├─ migrations/<ts>_m0a_baseline.sql
@@ -271,7 +276,7 @@ Shared versions live in the `catalog:` of `pnpm-workspace.yaml`. Dependabot grou
 | React Router | 8.4.0 | — |
 | Hono | 4.13.13 | — |
 | zod | 4.6.5 | — |
-| @sentry/react / @sentry/cloudflare | 11.6.0 | @sentry/react supports React Router 8.x and Node 22.12+ |
+| ~~@sentry/react / @sentry/cloudflare~~ | ~~11.6.0~~ | **Not installed in M0a** (revision 10). Re-checked and pinned when the Sentry adapter lands before D1. |
 | Supabase CLI (`supabase` devDependency) | 2.120.0 | D7 |
 | lefthook | 2.2.1 | — |
 | @commitlint/cli + config-conventional | 21.2.3 | — |
@@ -357,7 +362,7 @@ Fixing a finding locally is safe because the pre-push scan and the AUTOPILOT §6
 
 ## 7. CI and deploy
 
-> **Push at session end (founder, 2026-10-11, option (b)).** The autopilot pushes `main`, the milestone branch and all tags with plain `git push` at the end of every session, so CI runs for real and M0a's exit gate uses the real CI result. Staging deploys still need H3–H6. The paragraph below is kept from revision 8; "Deferred" items are now owned by M0a CLOSE.
+> **Push at session end (founder, 2026-10-11, option (b)).** The autopilot pushes `main`, the milestone branch and all tags with plain `git push` at the end of every session, so CI runs for real and M0a's exit gate uses the real CI result. Staging deploys still need H3–H5 (H6 Sentry deferred until before D1, revision 10). The paragraph below is kept from revision 8; "Deferred" items are now owned by M0a CLOSE.
 >
 > *(Revision 8 text.)* Nothing is pushed until the founder says so, so nothing in this section runs during M0a unless that changes. S1 and S3 still write `ci.yml` and the deploy job in full, and these unit tests check them locally:
 > - `check-workflows.mjs`, which checks the workflow file;
@@ -381,7 +386,7 @@ Fixing a finding locally is safe because the pre-push scan and the AUTOPILOT §6
 | `deploy-staging` | Gated and step-scoped; see §7.2. |
 
 ### 7.2 `deploy-staging` job
-- **Gate:** `needs: [static, rls, security, migrations]` and `if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'AbhayRajGit/Tracehiring'`.
+- **Gate:** `needs: [static, rls, security, migrations]` and `if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'` (revision 10).
 - **Environment:** `environment: staging`. Its branch policy allows only `main` (H3).
 - **Concurrency:** `concurrency: deploy-staging`, without cancel-in-progress.
 - **Pull requests, including fork PRs, can never reach this job or its secrets.**
@@ -413,9 +418,10 @@ Fixing a finding locally is safe because the pre-push scan and the AUTOPILOT §6
 | Kind | Names |
 | --- | --- |
 | Secrets | `CLOUDFLARE_API_TOKEN`, `SUPABASE_STAGING_DB_URL` |
-| Variables | `CLOUDFLARE_ACCOUNT_ID`, `SENTRY_DSN_RECRUITER`, `SENTRY_DSN_WORKERS` |
+| Variables | `CLOUDFLARE_ACCOUNT_ID`, `SUPABASE_STAGING_PROJECT_REF`, `SUPABASE_STAGING_URL`, `SUPABASE_STAGING_PUBLISHABLE_KEY` (revision 10; public values, used from M0b) |
+| Variables before D1 | `SENTRY_DSN_RECRUITER`, `SENTRY_DSN_WORKERS` (deferred with H6) |
 
-**No secret ever reaches an app build.** The recruiter build gets only `VITE_SENTRY_DSN`, which is a public value.
+**No secret ever reaches an app build.** From D1 the recruiter build gets `VITE_SENTRY_DSN`, which is a public value; in M0a it gets no `VITE_*` value at all. Where each value lives: `docs/infra/environments.md`.
 
 ### 7.4 Repository settings and the first push (you run these; I give the exact commands after the first CI run, when the check names exist)
 **First push.** The local `main` holds `--no-ff` merge commits. Push it **before** branch protection is turned on: `git push trace main`, plus the milestone branches if you want them on GitHub. Then apply the protection below. From then on, changes reach `main` by PR.
@@ -667,8 +673,18 @@ There is an allow-list of safe exact keys that contain a stem, such as `orgId`, 
 - unit tests for every rule, using **values synthesised at test time** (no literal PII-like fixtures, so gitleaks stays clean);
 - property tests that redaction never throws, is idempotent, and never outputs input beyond the caps.
 
-### 9.2 Sentry (recruiter app, `workers/jobs`, `services/api` only)
-The scrubber is `scrubSentryEvent()` in `packages/shared/src/log/sentry-scrub.ts`. It is written in S1.7, together with the logger, the redactor and `serializeError`, and the three consumers share it.
+### 9.2 Error reporting (recruiter app, `workers/jobs`, `services/api` only)
+
+**M0a (revision 10): `ErrorReporter` with a no-op implementation.** Sentry is deferred until before D1 (founder, 2026-10-11).
+- `packages/shared/src/log/error-reporter.ts` exports the interface `ErrorReporter { capture(err: SerializedError, ctx?: { release: string }): void }` and `noopErrorReporter`, which does nothing. It is written in S1.7 with the logger, the redactor and `serializeError`.
+- The three consumers report errors **only** through an injected `ErrorReporter`, and only with `serializeError(err)` output that has passed the redactor. No raw `Error`, message text, request, user or query data reaches a reporter.
+- M0a installs no Sentry package, sets no DSN and adds no Sentry host to the CSP.
+- AT-9 tests this contract (§13). The Sentry adapter must keep the same interface, so swapping it in changes no call site.
+- `workers/edge` and the candidate app have no reporter at all; they log only through the redacting logger.
+
+**Before D1: the Sentry adapter** (deferred item; owner "before D1"; needs H6). Everything below is kept from revision 9 as the adapter's spec. It is not built in M0a.
+
+The scrubber is `scrubSentryEvent()` in `packages/shared/src/log/sentry-scrub.ts`. The Sentry adapter implements `ErrorReporter`, and the three consumers share it.
 
 - `sendDefaultPii: false`; no Session Replay; `tracesSampleRate: 0`; `release` = the commit SHA.
 - **`beforeSend` and `beforeBreadcrumb`:**
@@ -677,7 +693,7 @@ The scrubber is `scrubSentryEvent()` in `packages/shared/src/log/sentry-scrub.ts
   - replace `exception.values[].value` with `serializeError`'s `code`, or `"[REDACTED]"`;
   - run the redactor over everything that remains.
 - **Server side** (H6): "Prevent storing IP addresses" and data scrubbing are on, and the region is recorded in ADR-027 as a processor outside India.
-- **No DSN:** the SDK is not initialised. That is allowed locally and in tests; staging always has a DSN.
+- **No DSN:** the SDK is not initialised. That is allowed locally and in tests; from D1, staging always has a DSN.
 - **Not on `workers/edge` or the candidate app.** They log only through the redacting logger, to Workers Logs (edge) and the console (candidate app). Workers Logs is also recorded in ADR-027 as a processor outside India.
 
 ### 9.3 Health contract (`@trace/shared/health`)
@@ -754,7 +770,7 @@ It fails if any of the following holds:
 
 **`connect-src` per app:**
 - candidate: self plus the staging edge origin
-- recruiter: self, the Supabase staging origin (M0b) and the Sentry ingest host
+- recruiter: self and the Supabase staging origin (M0b); the Sentry ingest host is added with the adapter before D1 (revision 10)
 
 **`Permissions-Policy` per app:**
 - candidate: `camera=(self), microphone=(self)`. M3b's consent-gating test enforces the "no access before consent" rule.
@@ -806,7 +822,8 @@ It fails if any of the following holds:
 | AT-6c | A commit made with `--no-verify` that holds a secret makes `pnpm lint` fail | Temp repo with a fake key shape generated at runtime. The test runs the gitleaks command read from `scripts.lint` in the root `package.json`. Expects a non-zero exit. |
 | AT-7 | commitlint rejects `update stuff` and accepts `feat(api): x` and `wip(api): x` | Unit test |
 | AT-8 | Redactor: key stems, Indian ID and value patterns, caps → `[TRUNCATED]`, idempotence, error messages dropped | Vitest + property tests in `@trace/shared` |
-| AT-9 | Sentry `beforeSend` strips request, user and query data and exception values | Vitest of `scrubSentryEvent` with synthetic events, plus one wiring test each in the recruiter app, jobs and api |
+| AT-9 | *(revision 10)* Errors reach an `ErrorReporter` only as redacted `serializeError` output (no message text, request, user or query data); the M0a reporter is `noopErrorReporter`; no Sentry package is installed | Vitest with a spy reporter and an error built from values synthesised at test time, plus one wiring test each in the recruiter app, jobs and api; a test that no `@sentry/*` package is in any lockfile importer |
+| AT-9-sentry | *(deferred, owner "before D1", needs H6)* Sentry `beforeSend` strips request, user and query data and exception values | Vitest of `scrubSentryEvent` with synthetic events, plus one wiring test each in the recruiter app, jobs and api |
 | AT-10 | Every Worker's `/health` returns a schema-valid body that carries the injected `VERSION` | Vitest (pool-workers) |
 | AT-11 | Staging deploys from CI, and every endpoint reports the deployed SHA | `deploy-staging` smoke step; run URL recorded. **Deferred.** |
 | AT-12 | **Deploys run from CI only**: the deploy job runs only on push to `main` in this repo; secrets are step-scoped; every action is SHA-pinned; workflow permissions are read-only; required jobs have no `continue-on-error` | Local: `check-workflows.mjs` unit tests + lint. **Deferred part:** the H3 environment branch policy is recorded. Q56 deny rules are recorded if approved. |
@@ -825,7 +842,9 @@ It fails if any of the following holds:
 | AT-24 | `scripts/backup.sh` writes a bundle that `git bundle verify` accepts, holds every branch and tag, and keeps only the newest 10 | Vitest over a temp repo with 12 dummy bundles whose mtimes are set in the past. The test finds `sh` on `PATH`, falling back to Git for Windows' `usr/bin`. It fails, never skips, if `sh` is missing. |
 
 ### 13.1 Exit gate → acceptance tests (build-order M0a, as merged in `b7af663`)
-The third column is the **single list of deferred items**. **Owner of every deferred item: M0a CLOSE** (founder chose option (b), 2026-10-11). They run on the real CI after the session-end push; the deploy items also need H3–H6.
+The third column is the **single list of deferred items**. **Owner of every deferred item: M0a CLOSE** (founder chose option (b), 2026-10-11). They run on the real CI after the session-end push; the deploy items also need H3–H5.
+
+*Revision 10:* **Sentry is not an M0a exit-gate item.** H6 and AT-9-sentry are deferred with owner **"before D1"** (founder, 2026-10-11). They go in the M0a summary's Deferred gates table with that owner, and they block D1.
 
 | Exit-gate item | Covered locally by | Deferred (needs a push, CI or staging) |
 | --- | --- | --- |
@@ -837,14 +856,14 @@ The third column is the **single list of deferred items**. **Owner of every defe
 | Every health endpoint responds with the deployed commit | AT-10 | AT-11 |
 | No secret in repo history (gitleaks clean) | AT-5 | the CI `security` re-run |
 | The pre-commit scan blocks a staged secret | AT-6, AT-6c | — |
-| PII-redaction tests pass | AT-8, AT-9 | — |
+| PII-redaction tests pass | AT-8, AT-9 (`ErrorReporter` contract) | AT-9-sentry, owner "before D1" (not M0a CLOSE) |
 | CI blocks merge on red | AT-12 local part. The local rule that nothing merges into `milestone/m0a` or `main` without a green `pnpm verify` (AUTOPILOT §2) also covers it. | AT-13 |
 
 Every deferred item goes in the **Deferred gates** table of `docs/milestones/M0a-summary.md` (build-order rule 6), with its proxy test and owner.
 
 **"Done when" lines.** M0a carries part of ABH-80 (observability), and build-order names no other issue for M0a. ABH-80's "Done when" text is not in the repo (see the build-notes paragraph that starts "Build-order makes each ABH issue's 'Done when'"), and Linear isn't connected. Until the founder pastes that line, AT-8, AT-9, AT-10 and AT-22-local stand in for it. §17 item 7 tracks the gap.
 
-*Revision 9:* the founder pasted it on 2026-10-11 (build-notes §0): "RPO ≤ 15 minutes and RTO ≤ 2 hours are proven in a restore drill; the on-call alert reaches the phone in under 2 minutes; no candidate PII is found in logs (scan)." RPO/RTO are resolved by plan-conflicts #16 (RPO ≤ 2 min, RTO ≤ 2 h) and, with the alert, belong to M8. M0a owns **"no candidate PII is found in logs (scan)"**: AT-8 and AT-9 prove the redactor and scrubber, and the M0a REVIEW scans the logs the tests produce.
+*Revision 9:* the founder pasted it on 2026-10-11 (build-notes §0): "RPO ≤ 15 minutes and RTO ≤ 2 hours are proven in a restore drill; the on-call alert reaches the phone in under 2 minutes; no candidate PII is found in logs (scan)." RPO/RTO are resolved by plan-conflicts #16 (RPO ≤ 2 min, RTO ≤ 2 h) and, with the alert, belong to M8. M0a owns **"no candidate PII is found in logs (scan)"**: AT-8 and AT-9 prove the redactor and the `ErrorReporter` contract (revision 10), and the M0a REVIEW scans the logs the tests produce.
 
 ---
 
@@ -854,10 +873,10 @@ Every deferred item goes in the **Deferred gates** table of `docs/milestones/M0a
 | --- | --- | --- | --- | --- |
 | **S1.0** | Lead | **Commit-path safety**, the first commit of M0a | root `package.json` (minimal), `lefthook.yml`, `.gitleaks.toml`, and the `.claude/settings.json` deny rules if Q56 is approved | H1, (H7) |
 | S1 | Lead | **Foundation** (checkpoints as in §5):<br>• **S1.1–S1.3**, one checkpoint:<br>&nbsp;&nbsp;– ADR-028<br>&nbsp;&nbsp;– the workspace, catalog, `.npmrc`, `.node-version`, and `.gitattributes` + renormalise<br>&nbsp;&nbsp;– `@trace/config` + rule fixture tests<br>&nbsp;&nbsp;– for **every workspace**: its `package.json` with its final M0a dependencies, `tsconfig.json` and Vitest config, then `pnpm i`, so the lockfile is complete<br>&nbsp;&nbsp;– a **placeholder** per workspace that typechecks, builds and has one real smoke test:<br>&nbsp;&nbsp;&nbsp;&nbsp;· libraries: `src/index.ts`, and the test imports it<br>&nbsp;&nbsp;&nbsp;&nbsp;· Workers and the service: `wrangler.jsonc`, the committed `wrangler types` output, and a fetch handler that returns 404, which the test asserts<br>&nbsp;&nbsp;&nbsp;&nbsp;· apps: `index.html`, `src/main.tsx` rendering the product name, asserted with `react-dom/server` `renderToString` in Node (no DOM library), and `public/_headers` with the §10.3 headers<br>&nbsp;&nbsp;– no `passWithNoTests` anywhere. The streams replace the placeholders.<br>• **S1.4**:<br>&nbsp;&nbsp;– the `verify-fast`, `check-*` (including `check-migrations` and `check-workflows`), `scan-dist` and `verify-clean-clone` scripts + tests<br>&nbsp;&nbsp;– `scripts/lib/` (git, workspace map, TAP parser) + tests<br>&nbsp;&nbsp;– the automated AT-6 and AT-6c, and the `backup.sh` test (AT-24)<br>• **S1.5** `ci.yml` (no deploy job yet) and `dependabot.yml`; `check-workflows` joins `lint`<br>• **S1.6** commitlint + AT-7 | root files; every workspace's `package.json`, `tsconfig.json`, Vitest config and placeholder; `pnpm-lock.yaml`; `packages/config/`; `scripts/` except `test-rls.mjs` and `gen-catalog-tests.mjs`; `.github/`; `docs/adr/ADR-028*` | S1.0 |
-| **S1.7** | Lead | **Shared code and the database**, before any stream starts:<br>• `packages/shared/src/`: the §9.4 zod contracts, `health.ts`, `version.ts`, the `log/` module (logger, redactor, `serializeError`, `sentry-scrub.ts`) and the package's `index.ts` and exports, with all their tests (AT-8, AT-9 unit part)<br>• all of `supabase/`: `config.toml`, the baseline migration, catalog checks, manifest and fixtures, `tests/`, floors<br>• `scripts/test-rls.mjs` and `scripts/gen-catalog-tests.mjs`, with their tests<br>• all of `packages/db-types/`<br>• adding `test:rls` to `verify`<br>• the §8.2 day-one checks, run on the local stack before the checkpoint | the files listed | S1 |
+| **S1.7** | Lead | **Shared code and the database**, before any stream starts:<br>• `packages/shared/src/`: the §9.4 zod contracts, `health.ts`, `version.ts`, the `log/` module (logger, redactor, `serializeError`, `error-reporter.ts` with `noopErrorReporter`; revision 10) and the package's `index.ts` and exports, with all their tests (AT-8, AT-9 unit part)<br>• all of `supabase/`: `config.toml`, the baseline migration, catalog checks, manifest and fixtures, `tests/`, floors<br>• `scripts/test-rls.mjs` and `scripts/gen-catalog-tests.mjs`, with their tests<br>• all of `packages/db-types/`<br>• adding `test:rls` to `verify`<br>• the §8.2 day-one checks, run on the local stack before the checkpoint | the files listed | S1 |
 | S2 | Stream | **UI and apps** (parallel with S3) | `packages/ui/`, `packages/vendors/` and `apps/*/`, except the lead-only files in each (`package.json`, `tsconfig.json`, Vitest config) | S1.7 merged |
-| S3 | Stream | **Workers, services and deploy** (parallel with S2) | `workers/*/` and `services/*/` (same exclusions), and the `deploy-staging` job in `ci.yml` | S1.7 merged. H3–H6 are needed only to *run* the deploy (§13.1), not to write and unit-test it. |
-| S4 | Lead | **Close-out** (the AUTOPILOT CLOSE phase, after REVIEW passes) | `docs/milestones/M0a-summary.md` | S2 + S3 merged; `pnpm verify` green; AT-1a-local and AT-1b recorded; ~~the founder's answer to "Local-only mode vs CI exit gates"~~ answered 2026-10-11: option (b), so the real CI results (and, for the deploy items, H3–H6) |
+| S3 | Stream | **Workers, services and deploy** (parallel with S2) | `workers/*/` and `services/*/` (same exclusions), and the `deploy-staging` job in `ci.yml` | S1.7 merged. H3–H5 are needed only to *run* the deploy (H6 deferred, revision 10) (§13.1), not to write and unit-test it. |
+| S4 | Lead | **Close-out** (the AUTOPILOT CLOSE phase, after REVIEW passes) | `docs/milestones/M0a-summary.md` | S2 + S3 merged; `pnpm verify` green; AT-1a-local and AT-1b recorded; ~~the founder's answer to "Local-only mode vs CI exit gates"~~ answered 2026-10-11: option (b), so the real CI results (and, for the deploy items, H3–H5; H6 is deferred until before D1, revision 10) |
 
 **Parallelism.** S1.0, S1 and S1.7 run in the lead session alone. After that, **S2 ∥ S3** run as 2 writers, which is under the default of 3. They share no files and neither needs the other's output: both consume only what S1.7 delivered. Read-only helpers (reviewers, research) may run up to 6 at once. If S2 and S3 hit a merge conflict, the rest of the session drops to 2 writers or fewer.
 
@@ -883,7 +902,7 @@ If a stream needs one of these changed (a new dependency, a contract field, a mi
 - TDD for script, logger, redactor and harness logic. Then `pnpm verify` before the checkpoint or merge.
 - A fresh `spec-reviewer` runs on the diff.
 - `database-reviewer` reviews the S1.7 database work (baseline migration, catalog checks, fixtures and harness).
-- `security-reviewer` reviews the hooks (S1.0), CI and deploy (S1.5, S3), boundaries and the `check-*` scripts (S1.4), the redactor and Sentry scrubber (S1.7), and the headers (S2).
+- `security-reviewer` reviews the hooks (S1.0), CI and deploy (S1.5, S3), boundaries and the `check-*` scripts (S1.4), the redactor and `ErrorReporter` (S1.7; the Sentry scrubber before D1), and the headers (S2).
 
 **Then:** the M0a REVIEW phase runs in a fresh session that did not write the code (AUTOPILOT §2). It needs build-notes Q57 (the review skill's sub-milestone rows), which is in the founder queue.
 
@@ -931,8 +950,8 @@ Rules:
 
 ### 15.2 Plan §11 rows that touch M0a
 Most rows in the register belong to later milestones. M0a lays groundwork for three of them:
-- **#13 and #14 (privacy):** the PII redactor, error-message dropping and Sentry scrubbing (AT-8, AT-9) keep candidate data out of logs from day one.
-- **#43 (residency stated precisely):** every processor outside India is recorded in ADR-027 (§9.2: the Sentry region and Workers Logs).
+- **#13 and #14 (privacy):** the PII redactor, error-message dropping and the `ErrorReporter` contract (AT-8, AT-9; Sentry scrubbing AT-9-sentry before D1) keep candidate data out of logs from day one.
+- **#43 (residency stated precisely):** every processor outside India is recorded in ADR-027 (§9.2: Workers Logs now; the Sentry region when the adapter lands before D1).
 - **#39 (database outage mid-drive):** not M0a. The edge Worker gets no database credential (D6), which keeps the Durable Object path independent of Postgres in M3.
 
 ---
@@ -964,6 +983,8 @@ Each of these is a row in `docs/progress/FOUNDER-QUEUE.md`, with exact steps:
 
 *Revision 9:* items 1–6 were answered on 2026-10-11 (H1 done; option (b); Q57, Q56, Q55 and D3 approved).
 
+9. **What "D1" is (revision 10).** The founder deferred Sentry "until before D1". D1 is not defined in the plan, build-order or build-notes. The deferred Sentry items (H6, AT-9-sentry) need a concrete milestone as owner. Blocks nothing in M0a.
+
 ---
 
 ## Approval
@@ -983,5 +1004,6 @@ Each of these is a row in `docs/progress/FOUNDER-QUEUE.md`, with exact steps:
   - All of these are applied in revision 8.
 - Revision 8 contains only those Low text fixes.
 - Revision 9 (2026-10-11) applies founder answers and day-one results only; `spec-reviewer` checks it together with the S1.0 diff.
+- Revision 10 (2026-10-11) applies the infra-setup instructions only (repo move, Sentry deferral, staging names); `spec-reviewer` checks it.
 
 **Spec approved by autopilot reviewers** on 2026-10-11 (AUTOPILOT §2): `spec-reviewer` and `database-reviewer`, after five review rounds (revisions 4–7). Product scope and exit gate are unchanged from the founder-approved revision 3. Open founder decisions are in `docs/progress/FOUNDER-QUEUE.md` (§17).
