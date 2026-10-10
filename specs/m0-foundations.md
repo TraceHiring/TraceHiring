@@ -1,7 +1,16 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** revision 7 (autopilot, 2026-10-11). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). For approval of revisions 4–7, see the end of this file.
+- **Status:** revision 8 (autopilot, 2026-10-11). **Approved by the autopilot reviewers**; see the end of this file.Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
 - **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a`, created from `main` at `b7af663`, with `main` at `4863db2` merged in. Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
+- **Revision 8 changes (2026-10-11).** These are the Low notes from the approving reviews of revision 7.
+  - **App smoke tests** use `react-dom/server` `renderToString` in Node, so no DOM library is needed.
+  - **MT-12 branches redefined:**
+    - (a) the global function entry is missing;
+    - (b1) a global entry grants to PUBLIC;
+    - (b2) a per-schema entry grants to a listed role.
+  - **Day-one ADMIN check:** confirm that `postgres` holds ADMIN OPTION on `pg_read_all_data` and `pg_write_all_data` (MT-5c fixture).
+  - **MT-11 fixture:** the "SELECT or DELETE without USING" fixture uses whichever command PostgreSQL accepts.
+  - **`unreachable` branches:** allowed only for the named MT-11 branches, and only with the recorded PostgreSQL error. A branch that is reachable at the base can never become unreachable later.
 - **Revision 7 changes (2026-10-11).** This revision fixes the findings on revision 6. `spec-reviewer` found 1 Blocking, 2 Medium and 1 Low. `database-reviewer` approved, with 7 Low.
   - **Every checkpoint can now go green:**
     - S1.1–S1.3 form one checkpoint, so `@trace/config` exists before any workspace config uses it.
@@ -470,7 +479,7 @@ alter default privileges for role postgres in schema public, private, quality, i
   - In that case, each test file grants EXECUTE on the pgTAP functions to the test roles inside its own rolled-back transaction.
   - The result goes into §8.3 and the M0a summary.
 - Revoking the `service_role` defaults doesn't break any Supabase service that M0b needs.
-- List the objects in `extensions` that are not extension members, with their owners. They are expected to be Supabase's own helpers, owned by `supabase_admin` (MT-9). Also record whether `postgres` has CREATE on `extensions`, which the MT-9 fixture needs. Record the members of `pg_read_all_data` and `pg_write_all_data` for MT-5c's list.
+- List the objects in `extensions` that are not extension members, with their owners. They are expected to be Supabase's own helpers, owned by `supabase_admin` (MT-9). Also record whether `postgres` has CREATE on `extensions`, which the MT-9 fixture needs. Record the members of `pg_read_all_data` and `pg_write_all_data` for MT-5c's list. Also check that `postgres` holds ADMIN OPTION on both roles, which the MT-5c fixture needs. If it doesn't, record the fallback path the fixture uses.
 - The list of system schemas in §8.5 matches `select nspname from pg_namespace` on the local stack. Any extra Supabase schema is added to the list with a note.
 
 MT-4b proves the default ACLs **non-vacuously**, even in M0a, and every other catalog check has a positive control (§8.5).
@@ -570,7 +579,7 @@ In CI, the harness runs with `--stop`.
 | MT-9 | an in-scope relation or function not owned by `postgres`; a `pg_extension` whose `extnamespace` is in scope; or a relation or function in `extensions` that is **owned by `postgres`** and is not an extension member, meaning our own migrations made it. Supabase's own non-member helpers in `extensions` (such as `grant_pg_net_access` and `pgrst_ddl_watch`) are owned by `supabase_admin`, so they are excluded. A day-one check lists them (§8.2). | Default-ACL integrity (database review F2) |
 | MT-10 | a view (`relkind = 'v'`) whose `reloptions` lacks the literal `security_invoker=true` (migrations must write exactly that; `on`, `1` and `yes` count as violations); a materialized view in `public`; or a materialized view with any privilege for `anon` or `authenticated` (M0b adds the candidate roles) | Views can't bypass RLS (rule 5) |
 | MT-11 | a policy with `polcmd = '*'` (FOR ALL); an INSERT policy without `polwithcheck`; an UPDATE policy without both `polqual` and `polwithcheck`; a SELECT or DELETE policy without `polqual`; a policy whose `polroles` contains `0` (PUBLIC); a policy whose qual or with-check is literally `true` on a table that isn't on the reference-table list inside `MT-11.sql` (empty in M0a); or a policy calling `auth.uid()` or `auth.jwt()` outside a scalar sub-select (`(select auth.uid())`) | Separate per-operation policies (CLAUDE.md) |
-| MT-12 | in `pg_default_acl` for `defaclrole = 'postgres'::regrole`: (a) the global (`defaclnamespace = 0`) function entry is missing, or `aclexplode` shows EXECUTE for PUBLIC (grantee 0); (b) any global entry, or any per-schema entry for an in-scope schema, grants anything, of any `objtype`, to PUBLIC (grantee 0), `anon`, `authenticated` or `service_role`. One exception: USAGE on types (`objtype 'T'`) to PUBLIC is PostgreSQL's built-in type default, so it is not flagged. | Default ACLs stay locked, on staging too |
+| MT-12 | in `pg_default_acl` for `defaclrole = 'postgres'::regrole`: (a) the global (`defaclnamespace = 0`) function entry is missing (the row is deleted when it equals the built-in default, which includes EXECUTE for PUBLIC); (b) any global entry, or any per-schema entry for an in-scope schema, grants anything, of any `objtype`, to PUBLIC (grantee 0), `anon`, `authenticated` or `service_role`. One exception: USAGE on types (`objtype 'T'`) to PUBLIC is PostgreSQL's built-in type default, so it is not flagged. Branches: (a), (b1) global entry, (b2) per-schema entry. | Default ACLs stay locked, on staging too |
 
 **Positive controls.** There is one fixture per branch, as listed in the `manifest.json` (§8.5); MT-4b is its own probe. Examples:
 - MT-1: a compliant partitioned parent (RLS on, `org_id uuid not null`) with a partition in a non-scope schema that has RLS off. Partitions don't inherit `relrowsecurity`, so this proves the `pg_partition_tree` path.
@@ -580,14 +589,15 @@ In CI, the harness runs with `--stop`.
 - MT-7: a SECURITY DEFINER function without `search_path`.
 - MT-11: a FOR ALL policy. MT-6: an `integrity` enum with `auto_reject`.
 - MT-10: a view without `security_invoker`. MT-8b: `create schema reports`.
-- MT-12(b): `alter default privileges … grant select on tables to anon`, inside the savepoint.
-- MT-12(a), the PUBLIC branch: PostgreSQL deletes a `pg_default_acl` row that equals the built-in default. Granting EXECUTE to PUBLIC on its own would therefore fire only the "entry missing" branch. The fixture keeps the row different from the default:
+- MT-12(b2): `alter default privileges for role postgres in schema public grant select on tables to anon`, inside the savepoint.
+- MT-12(a): `alter default privileges for role postgres grant execute on functions to public`. That makes the global row equal the default, so PostgreSQL deletes it.
+- MT-12(b1), a global entry granting to PUBLIC: PostgreSQL deletes a `pg_default_acl` row that equals the built-in default. The fixture therefore keeps the row different from the default:
   ```sql
   alter default privileges for role postgres grant execute on functions to public;
   alter default privileges for role postgres revoke execute on functions from postgres;
   ```
   The row becomes `{=X/postgres}`.
-- MT-11: check on day one that PostgreSQL accepts `CREATE POLICY` without `WITH CHECK` (INSERT) and without `USING` (SELECT, DELETE). If it rejects one, that branch is marked unreachable in the manifest. It then gets no fixture, and the floor drops by one with a note, the only allowed exception to "floors only go up", made once in S1.7.
+- MT-11: check on day one that PostgreSQL accepts `CREATE POLICY` without `WITH CHECK` (INSERT) and without `USING` (SELECT, DELETE). The "SELECT or DELETE without USING" fixture uses whichever of the two commands PostgreSQL accepts. If PostgreSQL rejects every form of a branch, that branch is marked `unreachable` in the manifest, with the recorded PostgreSQL error text, and gets no fixture. `gen-catalog-tests --check` accepts `unreachable` only on the named MT-11 branches, only with that error text, and never for a branch that is reachable at the base. S1.7 sets the floor to the real count after this check.
 
 **Thresholds:**
 - `catalog-min-count` is set to the exact number of assertions written in S1.7. The expected number is **71**: 16 clean checks, 51 branch controls and 4 MT-4b probes. The 51 branch controls are:
@@ -826,7 +836,7 @@ Every deferred item goes in the **Deferred gates** table of `docs/milestones/M0a
 | Step | Who | Scope | Owns | Depends on |
 | --- | --- | --- | --- | --- |
 | **S1.0** | Lead | **Commit-path safety**, the first commit of M0a | root `package.json` (minimal), `lefthook.yml`, `.gitleaks.toml`, and the `.claude/settings.json` deny rules if Q56 is approved | H1, (H7) |
-| S1 | Lead | **Foundation** (checkpoints as in §5):<br>• **S1.1–S1.3**, one checkpoint:<br>&nbsp;&nbsp;– ADR-028<br>&nbsp;&nbsp;– the workspace, catalog, `.npmrc`, `.node-version`, and `.gitattributes` + renormalise<br>&nbsp;&nbsp;– `@trace/config` + rule fixture tests<br>&nbsp;&nbsp;– for **every workspace**: its `package.json` with its final M0a dependencies, `tsconfig.json` and Vitest config, then `pnpm i`, so the lockfile is complete<br>&nbsp;&nbsp;– a **placeholder** per workspace that typechecks, builds and has one real smoke test:<br>&nbsp;&nbsp;&nbsp;&nbsp;· libraries: `src/index.ts`, and the test imports it<br>&nbsp;&nbsp;&nbsp;&nbsp;· Workers and the service: `wrangler.jsonc`, the committed `wrangler types` output, and a fetch handler that returns 404, which the test asserts<br>&nbsp;&nbsp;&nbsp;&nbsp;· apps: `index.html`, `src/main.tsx` rendering the product name (asserted), and `public/_headers` with the §10.3 headers<br>&nbsp;&nbsp;– no `passWithNoTests` anywhere. The streams replace the placeholders.<br>• **S1.4**:<br>&nbsp;&nbsp;– the `verify-fast`, `check-*` (including `check-migrations` and `check-workflows`), `scan-dist` and `verify-clean-clone` scripts + tests<br>&nbsp;&nbsp;– `scripts/lib/` (git, workspace map, TAP parser) + tests<br>&nbsp;&nbsp;– the automated AT-6 and AT-6c, and the `backup.sh` test (AT-24)<br>• **S1.5** `ci.yml` (no deploy job yet) and `dependabot.yml`; `check-workflows` joins `lint`<br>• **S1.6** commitlint + AT-7 | root files; every workspace's `package.json`, `tsconfig.json`, Vitest config and placeholder; `pnpm-lock.yaml`; `packages/config/`; `scripts/` except `test-rls.mjs` and `gen-catalog-tests.mjs`; `.github/`; `docs/adr/ADR-028*` | S1.0 |
+| S1 | Lead | **Foundation** (checkpoints as in §5):<br>• **S1.1–S1.3**, one checkpoint:<br>&nbsp;&nbsp;– ADR-028<br>&nbsp;&nbsp;– the workspace, catalog, `.npmrc`, `.node-version`, and `.gitattributes` + renormalise<br>&nbsp;&nbsp;– `@trace/config` + rule fixture tests<br>&nbsp;&nbsp;– for **every workspace**: its `package.json` with its final M0a dependencies, `tsconfig.json` and Vitest config, then `pnpm i`, so the lockfile is complete<br>&nbsp;&nbsp;– a **placeholder** per workspace that typechecks, builds and has one real smoke test:<br>&nbsp;&nbsp;&nbsp;&nbsp;· libraries: `src/index.ts`, and the test imports it<br>&nbsp;&nbsp;&nbsp;&nbsp;· Workers and the service: `wrangler.jsonc`, the committed `wrangler types` output, and a fetch handler that returns 404, which the test asserts<br>&nbsp;&nbsp;&nbsp;&nbsp;· apps: `index.html`, `src/main.tsx` rendering the product name, asserted with `react-dom/server` `renderToString` in Node (no DOM library), and `public/_headers` with the §10.3 headers<br>&nbsp;&nbsp;– no `passWithNoTests` anywhere. The streams replace the placeholders.<br>• **S1.4**:<br>&nbsp;&nbsp;– the `verify-fast`, `check-*` (including `check-migrations` and `check-workflows`), `scan-dist` and `verify-clean-clone` scripts + tests<br>&nbsp;&nbsp;– `scripts/lib/` (git, workspace map, TAP parser) + tests<br>&nbsp;&nbsp;– the automated AT-6 and AT-6c, and the `backup.sh` test (AT-24)<br>• **S1.5** `ci.yml` (no deploy job yet) and `dependabot.yml`; `check-workflows` joins `lint`<br>• **S1.6** commitlint + AT-7 | root files; every workspace's `package.json`, `tsconfig.json`, Vitest config and placeholder; `pnpm-lock.yaml`; `packages/config/`; `scripts/` except `test-rls.mjs` and `gen-catalog-tests.mjs`; `.github/`; `docs/adr/ADR-028*` | S1.0 |
 | **S1.7** | Lead | **Shared code and the database**, before any stream starts:<br>• `packages/shared/src/`: the §9.4 zod contracts, `health.ts`, `version.ts`, the `log/` module (logger, redactor, `serializeError`, `sentry-scrub.ts`) and the package's `index.ts` and exports, with all their tests (AT-8, AT-9 unit part)<br>• all of `supabase/`: `config.toml`, the baseline migration, catalog checks, manifest and fixtures, `tests/`, floors<br>• `scripts/test-rls.mjs` and `scripts/gen-catalog-tests.mjs`, with their tests<br>• all of `packages/db-types/`<br>• adding `test:rls` to `verify`<br>• the §8.2 day-one checks, run on the local stack before the checkpoint | the files listed | S1 |
 | S2 | Stream | **UI and apps** (parallel with S3) | `packages/ui/`, `packages/vendors/` and `apps/*/`, except the lead-only files in each (`package.json`, `tsconfig.json`, Vitest config) | S1.7 merged |
 | S3 | Stream | **Workers, services and deploy** (parallel with S2) | `workers/*/` and `services/*/` (same exclusions), and the `deploy-staging` job in `ci.yml` | S1.7 merged. H3–H6 are needed only to *run* the deploy (§13.1), not to write and unit-test it. |
@@ -946,4 +956,10 @@ Each of these is a row in `docs/progress/FOUNDER-QUEUE.md`, with exact steps:
   - `database-reviewer`: **APPROVE**, with 7 Low.
   - `spec-reviewer`: CHANGES REQUIRED (1 Blocking, 2 Medium, 1 Low).
   - Every finding is fixed in revision 7.
-- Revision 7: *pending re-review.*
+- Revision 7: re-reviewed 2026-10-11.
+  - `spec-reviewer`: **APPROVE**, with 1 optional Low.
+  - `database-reviewer`: **APPROVE**, with 3 Low.
+  - All of these are applied in revision 8.
+- Revision 8 contains only those Low text fixes.
+
+**Spec approved by autopilot reviewers** on 2026-10-11 (AUTOPILOT §2): `spec-reviewer` and `database-reviewer`, after five review rounds (revisions 4–7). Product scope and exit gate are unchanged from the founder-approved revision 3. Open founder decisions are in `docs/progress/FOUNDER-QUEUE.md` (§17).
