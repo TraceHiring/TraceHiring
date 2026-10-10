@@ -27,6 +27,10 @@ Reason for stopping: usage guard (5-hour window at 71% when this was written; Pr
 - Failing tests: none.
 
 ## Next step (one precise action)
+0. **Check the parallel session first.** Steps 1 (the security re-review only) and 3 were handed to a second Claude Code account via `docs/progress/PARALLEL-SESSION.md`. Run `git fetch trace` and look for branch `m0a/s17-redactor` and `docs/reviews/M0a-S1.4-security-rereview.md` on it. If its Result section shows PASS/green:
+   - merge it into the integration branch with `git merge --no-ff` (message `chore: merge m0a/s17-redactor`);
+   - skip the parts of steps 1 and 3 it already did.
+   If it doesn't exist yet, do steps 1–3 yourself, but never commit on `m0a/s17-redactor`.
 1. Run a fresh `security-reviewer` on `git diff 0d8b511~4..0d8b511 -- scripts .gitleaks.toml` (the S1.4 security fixes). If it passes:
    - `pnpm verify`;
    - fast-forward `milestone/m0a` to the integration branch, from its worktree `milestone-m0-spec-e4db77`: `git merge --ff-only claude/trace-autopilot-continue-8d4785`;
