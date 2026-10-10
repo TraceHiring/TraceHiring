@@ -1,0 +1,24 @@
+// Placeholder Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
+// No secrets, no credential vars and no Queue, R2, Durable Object or cron bindings in M0a.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "trace-jobs",
+  "main": "src/index.ts",
+  // Newest date the test runtime supports: @cloudflare/vitest-pool-workers 0.23.0 runs
+  // workerd 1.20260815.1, so tests and deploys use the same date. From 2026-08-04 on,
+  // nodejs_compat is on by default, which the test pool needs; no extra flags are set.
+  "compatibility_date": "2026-08-15",
+  "workers_dev": false,
+  // No usage telemetry or npm dependency metadata leaves this machine or CI.
+  "send_metrics": false,
+  "dependencies_instrumentation": { "enabled": false },
+  "env": {
+    "dev": {
+      "name": "trace-jobs-dev",
+    },
+    "staging": {
+      "name": "trace-jobs-staging",
+      "workers_dev": true,
+    },
+  },
+}
