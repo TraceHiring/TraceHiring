@@ -128,3 +128,19 @@ describe('ErrorReporter (AT-9)', () => {
     expect(lock).not.toMatch(/@sentry\//);
   });
 });
+
+describe('security review regressions (S1.7)', () => {
+  it('drops message lines that look like frames from the stack', () => {
+    const err = new Error('dup\n    at Some Person, 12 Main Road');
+    const out = serializeError(err);
+    expect(JSON.stringify(out)).not.toContain('Main Road');
+    for (const frame of out.stack ?? []) expect(frame).toMatch(/:\d+:\d+\)?$/);
+  });
+
+  it('redacts and caps the event, falling back to log.invalid_event', () => {
+    const { log, parsed } = capture();
+    log.info(`otp.sent.${synth.mobile()}` as 'x');
+    log.info('a'.repeat(100) as 'x');
+    expect(parsed().map((l) => l.event)).toEqual(['log.invalid_event', 'log.invalid_event']);
+  });
+});
