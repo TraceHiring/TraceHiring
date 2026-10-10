@@ -5,7 +5,7 @@ Issue IDs (ABH-n) refer to the Linear project "Trace v1 — Launch". Each issue 
 
 **Rules for every milestone**
 1. Start in plan mode. Write or refresh `specs/<module>.md` for each module touched, get the founder's OK, then implement.
-2. Each milestone runs on branch `milestone/m<N>` and merges to `main` by PR. Parallel work only where marked ∥, each stream in its own git worktree, each owning separate directories. Max 3 parallel writers (founder decision 2026-10-10).
+2. Each milestone runs on branch `milestone/m<N>` and merges to `main` by PR. Parallel work only where marked ∥, each stream in its own git worktree, each owning separate directories. Parallel writers: default 3, max 4; read-only helpers up to 6 (founder decision 2026-10-11, superseding the cap of 3 from 2026-10-10; full policy in `docs/AUTOPILOT.md` §2).
 3. A milestone closes only when: all its issues meet "Done when", `pnpm verify` is green in CI, the exit gate passes, and the `trace-milestone-review` skill returns PASS — or PASS WITH CONDITIONS, where every Medium finding has an owner milestone and is fixed before that milestone's review. Then tag `m<N>-reviewed`. M8 and M13 require a clean PASS.
 4. Human prerequisites (H) must be done by the founder before the milestone starts. Where a vendor is not chosen, build the interface + mock and leave the real adapter for later.
 5. **Split milestones.** M0 and M3 are split into M0a/M0b and M3a/M3b (founder decision 2026-10-10). Each part is a milestone in its own right: branch `milestone/m0a` etc., its own spec approval, its own `trace-milestone-review`, and its own tag (`m0a-reviewed`). M0b starts after `m0a-reviewed`; M3b starts after M3a's session API contract is merged and may overlap M3a only where directories don't.

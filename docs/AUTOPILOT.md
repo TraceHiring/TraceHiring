@@ -8,7 +8,12 @@ CLAUDE.md rules 1–9 > docs/build-notes.md founder answers > docs/plan-conflict
 Each milestone moves through these phases:
 SPEC → BUILD (may take several sessions) → REVIEW → FIX (repeat REVIEW and FIX until PASS) → CLOSE → next milestone.
 - SPEC: write or refresh specs/<module>.md (scope, data, zod contracts, state machines, §11 edge cases, one automated acceptance test per "Done when" line and exit-gate item, parallel streams with owned directories). Self-approve: run the spec-reviewer agent, plus database-reviewer for any schema or RLS. Fix every finding, then record "Spec approved by autopilot reviewers" in the spec.
-- BUILD: test-driven. Up to 3 parallel implementer subagents, each in its own git worktree and owning only its directories. After each stream: spec-reviewer on the diff, plus security-reviewer and database-reviewer for anything touching auth, RLS, media, payments, webhooks, LLM prompts or deletion. Merge streams into milestone/m<X> locally with `git merge --no-ff` only after the reviewers pass and `pnpm verify` is green.
+- BUILD: test-driven, using the parallelism policy below. After each stream: spec-reviewer on the diff, plus security-reviewer and database-reviewer for anything touching auth, RLS, media, payments, webhooks, LLM prompts or deletion. Merge streams into milestone/m<X> locally with `git merge --no-ff` only after the reviewers pass and `pnpm verify` is green.
+- Parallelism policy (founder, 2026-10-11):
+  - Writers (agents that change code): default 3 at once, max 4, each in its own git worktree with a strictly separate set of directories. Shared files (root package.json, lockfile, migrations, packages/shared types) are changed only by the lead session, before or after the parallel streams, never inside them.
+  - Read-only helpers (research, plan/spec reading, test-case drafting, spec-reviewer, security-reviewer, database-reviewer): up to 6 at once.
+  - If two streams hit a merge conflict, or the usage guard reports 95%+, drop to 2 writers for the rest of the session.
+  - Prefer finishing and merging 3 streams cleanly over starting 6 that half-finish.
 - REVIEW: always a fresh session that did not write the code. Run the trace-milestone-review skill and write docs/reviews/M<X>.md.
 - FIX: fix every Blocking finding, one commit per finding, each with a regression test.
 - CLOSE: requires PASS, or PASS WITH CONDITIONS with an owner milestone for each Medium (M8 and M13 need a clean PASS). Write docs/milestones/M<X>-summary.md (built, deferred and why, Deferred gates table, autopilot decisions, how to demo). Merge milestone/m<X> into main with --no-ff, tag m<X>-reviewed, update Linear if connected (otherwise list the changes in the summary).
