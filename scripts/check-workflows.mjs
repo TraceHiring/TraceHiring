@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 // GitHub Actions hardening checks (spec specs/m0-foundations.md §7.1, §7.2, AT-12 local part).
 // Reads .github/workflows/*.y{a,}ml and .github/actions/**/action.y{a,}ml and fails (exit 1) unless:
-//   - no workflow uses the pull_request_target or workflow_run trigger
+//   - triggers are only pull_request and push (§7.1); pull_request_target / workflow_run are named
 //   - workflow-level permissions are exactly `contents: read`; no job asks for more
 //   - every remote `uses:` is pinned to a full 40-hex commit SHA (docker:// images to a sha256 digest);
 //     local `./` actions must exist and pass the same rules
-//   - every actions/checkout step sets `persist-credentials: false`
+//   - every actions/checkout step sets `persist-credentials: false`; static, security and
+//     migrations check out with `fetch-depth: 0`; static sets MIGRATIONS_BASE=origin/main (§8.4)
+//   - only deploy-staging names an environment (environments hold the staging secrets)
+//   - github.token counts as a secret (GITHUB_TOKEN)
 //   - no job or step sets continue-on-error; the required jobs exist and have no `if:`
 //   - secrets appear only in step-level env:/with: of deploy-staging, never on or before an
 //     install/build step, and each staging secret only on the steps that use it (§7.2, §7.3)
@@ -492,6 +495,10 @@ export const DEPLOY_ENVIRONMENT = 'staging';
 export const DEPLOY_CONCURRENCY = 'deploy-staging';
 export const WORKFLOW_PERMISSIONS = { contents: 'read' };
 export const FORBIDDEN_TRIGGERS = ['pull_request_target', 'workflow_run'];
+export const ALLOWED_TRIGGERS = ['pull_request', 'push'];
+/** Jobs whose checkout needs the full history (§7.1: static and security; §7.1 table: migrations). */
+export const FULL_HISTORY_JOBS = ['static', 'security', 'migrations'];
+export const MIGRATIONS_BASE = 'origin/main';
 
 /** §7.3 staging secrets and the commands a step must run to be allowed to hold each one (§7.2). */
 export const STAGING_SECRET_USERS = {
@@ -526,6 +533,8 @@ export function secretRefs(node, key = null) {
     )) {
       out.add(m[1] ?? m[2] ?? '*');
     }
+    // github.token is the same credential as secrets.GITHUB_TOKEN.
+    if (/\bgithub\s*(?:\.\s*token\b|\[\s*['"]token['"]\s*\])/.test(expr)) out.add('GITHUB_TOKEN');
   };
   const walk = (n, k) => {
     if (typeof n === 'string') {
@@ -608,6 +617,10 @@ export function checkWorkflow(doc, file, ctx = {}) {
   if (doc.on === undefined) out.push(v(file, 'on', 'workflow has no on: triggers'));
   for (const t of triggerNames(doc.on)) {
     if (FORBIDDEN_TRIGGERS.includes(t)) out.push(v(file, 'on', `trigger ${t} is not allowed`));
+    else if (!ALLOWED_TRIGGERS.includes(t))
+      out.push(
+        v(file, 'on', `trigger ${t} is not allowed (§7.1: ${ALLOWED_TRIGGERS.join(', ')} only)`),
+      );
   }
   // Workflow permissions: exactly contents: read.
   const wp = doc.permissions;
@@ -667,6 +680,33 @@ export function checkWorkflow(doc, file, ctx = {}) {
       );
     }
     if (job.uses !== undefined) checkUses(job.uses, file, where, out, ctx);
+    if (job.environment !== undefined && name !== DEPLOY_JOB) {
+      out.push(v(file, where, `only ${DEPLOY_JOB} may use an environment: (it holds secrets)`));
+    }
+    if (FULL_HISTORY_JOBS.includes(name)) {
+      const checkouts = (Array.isArray(job.steps) ? job.steps : []).filter(
+        (s) => isObj(s) && typeof s.uses === 'string' && /^actions\/checkout@/.test(s.uses),
+      );
+      const full = (s) =>
+        isObj(s.with) && (s.with['fetch-depth'] === 0 || s.with['fetch-depth'] === '0');
+      if (checkouts.length === 0 || !checkouts.every(full)) {
+        out.push(v(file, where, 'actions/checkout must set fetch-depth: 0 (full history)'));
+      }
+    }
+    if (name === 'static') {
+      const base =
+        (isObj(job.env) ? job.env.MIGRATIONS_BASE : undefined) ??
+        (isObj(doc.env) ? doc.env.MIGRATIONS_BASE : undefined);
+      if (base !== MIGRATIONS_BASE) {
+        out.push(
+          v(
+            file,
+            where,
+            `static must set MIGRATIONS_BASE: ${MIGRATIONS_BASE} (a PR checkout has no local main)`,
+          ),
+        );
+      }
+    }
     // Secrets anywhere in the job outside its steps (env, secrets:, services, container, if...).
     for (const [k, val] of Object.entries(job)) {
       if (k === 'steps') continue;

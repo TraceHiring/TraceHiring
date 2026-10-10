@@ -1,4 +1,5 @@
 // AT-12 (local part): scripts/check-workflows.mjs and its YAML-subset parser (spec §7.1, §7.2).
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -25,7 +26,9 @@ const ACTION = fixture('setup-action.yml');
 const SHA = '1111111111111111111111111111111111111111';
 const ctx = { installActions: new Set(['.github/actions/setup']) };
 const doc = () => parseYaml(CI);
-const msgs = (v) => v.map((x) => x.message).join('\n');
+// Each violation as the CLI prints it, so tests can match the file and location too.
+const msgs = (v) =>
+  v.map((x) => `${x.file}${x.where ? ` (${x.where})` : ''}: ${x.message}`).join('\n');
 
 describe('parseYaml (the subset GitHub workflows use)', () => {
   it('reads nested mappings, sequences and scalars', () => {
@@ -236,6 +239,48 @@ describe('checkWorkflow', () => {
     expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/pull_request_target|workflow_run/);
   });
 
+  it.each([
+    ['issue_comment', { issue_comment: { types: ['created'] } }],
+    ['schedule', { push: null, schedule: [{ cron: '0 0 * * *' }] }],
+    ['workflow_dispatch', ['pull_request', 'workflow_dispatch']],
+  ])('rejects a trigger outside the §7.1 list (%s)', (label, on) => {
+    const d = doc();
+    d.on = on;
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(new RegExp(`trigger ${label}`));
+  });
+
+  it.each(['static', 'security', 'migrations'])(
+    'requires fetch-depth: 0 on the checkout in %s',
+    (job) => {
+      const d = doc();
+      delete d.jobs[job].steps[0].with['fetch-depth'];
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+        new RegExp(`jobs\\.${job}.*fetch-depth: 0`),
+      );
+      d.jobs[job].steps[0].with['fetch-depth'] = 1;
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/fetch-depth: 0/);
+    },
+  );
+
+  it('requires static to set MIGRATIONS_BASE=origin/main (job or workflow env)', () => {
+    const d = doc();
+    delete d.jobs.static.env;
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/jobs\.static.*MIGRATIONS_BASE/);
+    d.env.MIGRATIONS_BASE = 'origin/main';
+    expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
+    d.env.MIGRATIONS_BASE = 'main';
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/MIGRATIONS_BASE/);
+  });
+
+  it('allows environment: only on deploy-staging, since environments hold the staging secrets', () => {
+    const d = doc();
+    d.jobs.rls.environment = 'staging';
+    d.jobs.security.environment = { name: 'staging' };
+    const m = msgs(checkWorkflow(d, 'ci.yml', ctx));
+    expect(m).toMatch(/jobs\.rls.*environment/);
+    expect(m).toMatch(/jobs\.security.*environment/);
+  });
+
   it('rejects continue-on-error on a job or a step', () => {
     const d = doc();
     d.jobs.static['continue-on-error'] = true;
@@ -309,6 +354,15 @@ describe('checkWorkflow', () => {
       expect(m).toMatch(/steps\[3\].*SUPABASE_STAGING_DB_URL/);
       expect(m).toMatch(/steps\[4\].*CLOUDFLARE_API_TOKEN/);
       expect(m).toMatch(/steps\[6\].*SOME_OTHER_SECRET/);
+    });
+
+    it('treats github.token like secrets.GITHUB_TOKEN', () => {
+      const d = doc();
+      d.jobs.static.steps[2].env = { T: '${{ github.token }}' };
+      d.jobs['deploy-staging'].steps[6].env.GH = "${{ github['token'] }}";
+      const m = msgs(checkWorkflow(d, 'ci.yml', ctx));
+      expect(m).toMatch(/jobs\.static\.steps\[2\].*GITHUB_TOKEN/);
+      expect(m).toMatch(/deploy-staging\.steps\[6\].*GITHUB_TOKEN.*staging list/);
     });
 
     it('treats toJSON(secrets) as a reference to every secret', () => {
@@ -431,6 +485,24 @@ describe('runChecks over a fixture repository', () => {
       '.github/actions/setup/action.yml': ACTION,
     });
     expect(msgs(runChecks(root))).toMatch(/duplicate key "on"/);
+  });
+
+  it('CLI: exits 0 on a clean repo and 1 with the violations on stderr', () => {
+    const script = fileURLToPath(new URL('../check-workflows.mjs', import.meta.url));
+    const good = repo({
+      '.github/workflows/ci.yml': CI,
+      '.github/actions/setup/action.yml': ACTION,
+    });
+    const ok = spawnSync(process.execPath, [script, good], { encoding: 'utf8' });
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toMatch(/check-workflows: OK/);
+    const bad = repo({
+      '.github/workflows/ci.yml': CI.replace('contents: read', 'contents: write'),
+      '.github/actions/setup/action.yml': ACTION,
+    });
+    const fail = spawnSync(process.execPath, [script, bad], { encoding: 'utf8' });
+    expect(fail.status).toBe(1);
+    expect(fail.stderr).toMatch(/ci\.yml \(permissions\).*\n[\s\S]*1 violation/);
   });
 
   it('applies the rules to every workflow file', () => {
