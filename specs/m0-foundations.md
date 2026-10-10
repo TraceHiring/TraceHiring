@@ -1,6 +1,6 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** draft for founder approval (2026-10-10), revision 3. Revision 2 fixed every finding from the spec, security and database reviews of revision 1. Revision 3 is a refresh after the docs merge to `main` (`b7af663`); see "Revision 3 changes" below. No code is written until you approve this spec.
+- **Status:** **approved by the founder 2026-10-10**, revision 3. Revision 2 fixed every finding from the spec, security and database reviews of revision 1. Revision 3 is a refresh after the docs merge to `main` (`b7af663`); see "Revision 3 changes" below. No code is written until you approve this spec.
 - **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a` (created from `main` at `b7af663`). Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
 - **Revision 3 changes:**
   - Added §13.1, which maps each M0a exit-gate item to its acceptance tests.
