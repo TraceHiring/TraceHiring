@@ -1,7 +1,20 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** **approved by the founder 2026-10-10**, revision 3. Revision 2 fixed every finding from the spec, security and database reviews of revision 1. Revision 3 is a refresh after the docs merge to `main` (`b7af663`); see "Revision 3 changes" below. No code is written until you approve this spec.
-- **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a` (created from `main` at `b7af663`). Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
+- **Status:** revision 4 (autopilot refresh, 2026-10-11). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). For approval of revision 4, see the end of this file.
+- **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a`, created from `main` at `b7af663`, with `main` at `4863db2` merged in. Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
+- **Revision 4 changes (2026-10-11):**
+  - **Q54 = drop.** The auto-push hook was disabled on 2026-10-11 (`.git/hooks/post-commit.disabled`), and CLAUDE.md line 41 was replaced in `b4c56a4`. `scripts/git-autopush.sh`, AT-6b and the push-path state machine are gone (§2, §6, §13, §15).
+  - **Local-only mode.** Nothing is pushed until the founder says so:
+    - streams merge into `milestone/m0a` with `git merge --no-ff`, and `milestone/m0a` merges into `main` the same way at CLOSE, not by PR (AUTOPILOT §2);
+    - every green sub-step gets a `cp/m0a-<NN>` tag (AUTOPILOT §5).
+  - **CI and staging stay in scope.** `ci.yml` and the staging deploy are written and unit-tested locally, but they can only run once the founder pushes to GitHub and completes H3–H6. Until then their exit-gate items are **Deferred gates** with local proxy tests (§13.1). Whether M0a may close that way is a founder-queue item.
+  - **New local proxies:**
+    - `lint` runs a full-history gitleaks scan (AT-5, AT-6c);
+    - `scripts/verify-clean-clone.mjs` covers AT-1a-local and AT-1b;
+    - AT-24 tests `scripts/backup.sh`.
+  - `verify:fast` no longer falls back to `trace/main`. `lint` now runs `check-migrations.mjs --base main`, because CI's `migrations` job doesn't run locally.
+  - **Parallelism policy.** Root `package.json`, the lockfile, migrations and the `packages/shared` contracts are changed only by the lead session (§14). S1 therefore now creates every workspace's `package.json` and the lockfile, and a new lead step **S1.7** writes the baseline migration and the shared contracts before S2 ∥ S3 start.
+  - The founder prerequisites H1–H7 are tracked in `docs/progress/FOUNDER-QUEUE.md`, together with what each one blocks.
 - **Revision 3 changes:**
   - Added §13.1, which maps each M0a exit-gate item to its acceptance tests.
   - Added §9.4 (zod contracts), §15.1 (state machines) and §15.2 (plan §11 rows that touch M0a).
@@ -55,16 +68,18 @@
 - Queues, R2 and Durable Object bindings → each arrives with the milestone that first needs it, after the free-plan check (build-notes risk 19).
 - IaC: there is no `infra/` folder. Cloudflare is configured through `wrangler.jsonc` and GitHub through the recorded `gh api` commands in §7.4.
 
-### Founder prerequisites (H) — all before M0a starts
-| # | Item | Done when |
-| --- | --- | --- |
-| H1 | Machine fixed per build-notes Q5: Node 22.23.3, pnpm 12.11.2 via Corepack, Docker engine running, gitleaks | You confirm. I re-run the version check at session start. |
-| H2 | **Answer Q54** (keep or drop the auto-push hook). The first M0a step (S1.0) installs the secret-scan gate and depends on the answer. | Answer recorded in build-notes §0 |
-| H3 | GitHub, on `AbhayRajGit/Tracehiring`:<br>• create environment `staging` with **deployment branches limited to `main`**<br>• add the secrets and variables in §7.3<br>• set the repo's default `GITHUB_TOKEN` permission to **read-only**<br>• enable **secret scanning and push protection** if your plan offers them for this repo<br>• tell me whether the repo is public or private | `gh api repos/AbhayRajGit/Tracehiring/environments/staging` shows the branch policy |
-| H4 | Cloudflare:<br>• account with a registered `*.workers.dev` subdomain<br>• an API token limited to this account with Workers Scripts: Edit, Cloudflare Pages: Edit, Account Settings: Read | Token stored as a `staging` secret |
-| H5 | Supabase:<br>• `trace-dev` and `trace-staging` in Mumbai (`ap-south-1`)<br>• the **staging session-pooler connection string** (with password), stored as a secret. CI needs no Supabase personal access token (security review #9). | Stored as a `staging` secret |
-| H6 | Sentry:<br>• projects `trace-recruiter` and `trace-workers`<br>• pick the **data region** (there is no India region; tell me which)<br>• turn on **"Prevent storing of IP addresses"** and **server-side data scrubbing** in both projects | DSNs stored as `staging` variables; region recorded in ADR-027 |
-| H7 | *(optional, recommended)* Approve the `.claude/settings.json` deny rules in build-notes Q56, so staging deploys can't run from a local session | Rules added in S1.0 |
+### Founder prerequisites (H)
+Every open H item is a row in `docs/progress/FOUNDER-QUEUE.md`. The "Blocks" column below says which step waits for it. Everything else goes ahead (AUTOPILOT §3).
+
+| # | Item | Done when | Blocks |
+| --- | --- | --- | --- |
+| H1 | Machine fixed per build-notes Q5: Node 22.23.3, pnpm 12.11.2 via Corepack, Docker engine running, gitleaks. **Checked 2026-10-11: not done.** Node 22 isn't installed, `pnpm` crashes, the Docker engine is stopped and gitleaks is missing. | You confirm. I re-run the version check at session start. | All of BUILD (S1.0 onward) |
+| H2 | ~~Answer Q54~~ **Done 2026-10-11: drop auto-push, work locally only** (build-notes §0) | Recorded | — |
+| H3 | *(only when you allow pushing to GitHub again)* GitHub, on `AbhayRajGit/Tracehiring`:<br>• create environment `staging` with **deployment branches limited to `main`**<br>• add the secrets and variables in §7.3<br>• set the repo's default `GITHUB_TOKEN` permission to **read-only**<br>• enable **secret scanning and push protection** if your plan offers them for this repo<br>• tell me whether the repo is public or private | `gh api repos/AbhayRajGit/Tracehiring/environments/staging` shows the branch policy | Running CI and the staging deploy (AT-1a-CI, AT-11, AT-13, AT-18, AT-22-staging) |
+| H4 | Cloudflare:<br>• account with a registered `*.workers.dev` subdomain<br>• an API token limited to this account with Workers Scripts: Edit, Cloudflare Pages: Edit, Account Settings: Read | Token stored as a `staging` secret | Running the staging deploy (AT-11) |
+| H5 | Supabase:<br>• `trace-dev` and `trace-staging` in Mumbai (`ap-south-1`)<br>• the **staging session-pooler connection string** (with password), stored as a secret. CI needs no Supabase personal access token (security review #9). | Stored as a `staging` secret | Staging migrations (AT-18) |
+| H6 | Sentry:<br>• projects `trace-recruiter` and `trace-workers`<br>• pick the **data region** (there is no India region; tell me which)<br>• turn on **"Prevent storing of IP addresses"** and **server-side data scrubbing** in both projects | DSNs stored as `staging` variables; region recorded in ADR-027 | Sentry on staging only. The code and AT-9 go ahead without a DSN (§9.2). |
+| H7 | *(optional, recommended)* Approve the `.claude/settings.json` deny rules in build-notes Q56, so staging deploys can't run from a local session | Rules added in S1.0 | Nothing. S1.0 ships without them if you haven't answered. |
 
 ---
 
@@ -75,7 +90,7 @@
 ├─ package.json                 private; scripts §5; "packageManager": "pnpm@12.11.2"; engines node ">=22.22 <23"; "prepare": "lefthook install"
 ├─ pnpm-workspace.yaml          apps/*, packages/*, workers/*, services/*; catalog (§4); build-script allow-list
 ├─ pnpm-lock.yaml   .node-version (22.23.3)   .npmrc (engine-strict=true, shell-emulator=true)
-├─ .gitattributes               * text=auto eol=lf; *.png *.ico *.woff2 binary
+├─ .gitattributes               exists since b4c56a4 (*.sh text eol=lf); S1.2 extends it: * text=auto eol=lf; *.png *.ico *.woff2 binary
 ├─ .gitignore                   + .dev.vars* , .wrangler/, dist/, coverage/, .claude/worktrees/, .claude/.last-green, .claude/.stop-gate-tries
 ├─ .editorconfig  .prettierrc.json  .prettierignore  eslint.config.js  tsconfig.json (solution file)
 ├─ lefthook.yml  commitlint.config.js  .gitleaks.toml
@@ -108,8 +123,9 @@
 ├─ scripts/
 │  ├─ verify-fast.mjs  test-rls.mjs  gen-catalog-tests.mjs  check-migrations.mjs  check-boundaries.mjs
 │  ├─ check-workflows.mjs  check-bundle-size.mjs  check-headers.mjs  check-staging-secrets.mjs
-│  ├─ lib/ (git, workspace map, TAP parser)   test/*.test.mjs (Vitest)
-│  ├─ git-autopush.sh           only if Q54 = keep (§6)
+│  ├─ verify-clean-clone.mjs    clone HEAD into a temp dir, then `pnpm i --frozen-lockfile && pnpm verify` there (AT-1a-local, AT-1b)
+│  ├─ lib/ (git, workspace map, TAP parser)   test/*.test.mjs (Vitest; includes backup.test.mjs for AT-24)
+│  ├─ backup.sh                 existing (autopilot, b4c56a4); gains a test (AT-24), behaviour unchanged
 │  └─ claude-*.mjs, claude-stop-gate.sh       existing, unchanged
 ├─ docs/adr/ADR-028-m0-runtime-libraries.md
 └─ docs/milestones/M0a-summary.md   (end of milestone; includes the Deferred gates table)
@@ -181,7 +197,7 @@ TypeScript base config:
 | Script | Command |
 | --- | --- |
 | `typecheck` | `pnpm -r --if-present typecheck` (each package: `tsc --noEmit -p .`; Workers also check that `wrangler types` output is current) |
-| `lint` | `pnpm -r --if-present lint && prettier --check . && node scripts/check-boundaries.mjs && node scripts/check-workflows.mjs && node scripts/gen-catalog-tests.mjs --check` (each package: `eslint . --max-warnings=0`; `@trace/ui` also runs `tokens:check`) |
+| `lint` | `pnpm -r --if-present lint && prettier --check . && node scripts/check-boundaries.mjs && node scripts/check-workflows.mjs && node scripts/gen-catalog-tests.mjs --check && node scripts/check-migrations.mjs --base main && gitleaks git --redact --no-banner` (each package: `eslint . --max-warnings=0`; `@trace/ui` also runs `tokens:check`). The last command scans the **full local history** for secrets (the local proxy for AT-5) and fails if gitleaks is missing. |
 | `test` | `pnpm -r --if-present test && vitest run --root scripts` |
 | `test:rls` | `node scripts/test-rls.mjs` (§8.3) |
 | `build` | `pnpm -r --if-present build && node scripts/check-bundle-size.mjs && node scripts/check-headers.mjs` |
@@ -191,8 +207,7 @@ TypeScript base config:
 ### `verify:fast` algorithm
 1. **Pick the base:**
    - `git merge-base HEAD main`
-   - if that fails, `git merge-base HEAD trace/main`
-   - if that also fails, treat everything as changed.
+   - if that fails, treat everything as changed. There is no remote fallback: we work locally, so a remote-tracking ref may be stale.
 2. **Collect changed files:** `git diff --name-only <base>` (working tree versus base) plus `git ls-files -o --exclude-standard`.
 3. **Run everything** if any changed path is a global file:
    - root `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig.json`, `eslint.config.js`, `.prettierrc.json`
@@ -204,36 +219,34 @@ TypeScript base config:
 
 ---
 
-## 6. Git hooks and the push path (`lefthook.yml`)
+## 6. Git hooks (`lefthook.yml`)
 
-> **Depends on Q54 (H2).** `lefthook install` renames existing hooks to `*.old`, which would silently disable today's auto-push hook. The auto-push hook also pushes commits that no secret scan has seen. **S1.0 (§14) is therefore the first commit of M0a.** It closes that gap before any other M0a commit is made.
+> **Q54 = drop (founder, 2026-10-11).** There is no push path. The old auto-push hook was renamed to `.git/hooks/post-commit.disabled` on 2026-10-11, so git no longer runs it. S1.0 is still the first commit of M0a: it puts the secret scan in front of every later commit. Day-one check: confirm that `lefthook install` on 2.2.1 leaves `post-commit.disabled` alone.
 
 | Hook | Command | Behaviour |
 | --- | --- | --- |
 | `pre-commit` | `gitleaks git --pre-commit --staged --redact --no-banner` | **Fails** if gitleaks is missing (prints an install hint). Never skips. |
 | `pre-commit` | `prettier --check {staged_files}` | — |
 | `commit-msg` | `commitlint --edit {1}` | Conventional commits. `wip` is allowed. |
-| `post-commit` (**Q54 = keep**) | `sh scripts/git-autopush.sh` | See below. |
-| `post-commit` (**Q54 = drop**) | — | The CLAUDE.md line 41 edit happens in the same commit. |
-
-What `scripts/git-autopush.sh` does when Q54 = keep:
-1. It runs `gitleaks git --log-opts="<upstream>..HEAD"` over every commit not yet on the remote. If the branch has no upstream, it scans everything not on `trace/main`.
-2. **On any finding it refuses to push.** It prints which commit holds the finding and tells you to rotate the secret and fix the commit locally. That fix is safe because the commit was never pushed.
-3. This scan covers commits made with `--no-verify`, `LEFTHOOK=0` or before the hooks existed, because the scan runs on what is about to be pushed, not only on the staged files.
-4. It logs to `$(git rev-parse --git-common-dir)/autopush.log`, so every worktree writes to the `.git/autopush.log` that CLAUDE.md line 41 names.
-5. It never force-pushes.
+| `post-commit` | — | None. Nothing pushes automatically. |
 
 `lefthook install` runs from the root `prepare` script, so a fresh clone gets the hooks on `pnpm i`.
 
-**Today's hook, checked 2026-10-10.** The hook is `.git/hooks/post-commit`. It is untracked and shared by every worktree.
-- **Line 6:** `git push -u trace "$branch"`. There is no scan.
-- **Line 5:** logs to `$(git rev-parse --git-dir)/autopush.log`. In a linked worktree that path resolves to `.git/worktrees/<name>/autopush.log`, not the `.git/autopush.log` that CLAUDE.md line 41 names. A failed push from a worktree is therefore logged where nobody looks.
+**Commits that skip the hook.** `--no-verify` and `LEFTHOOK=0` both skip the pre-commit scan. Nothing leaves the machine automatically, and a skipped commit is caught in two places before anything is shared:
+- `pnpm lint`, and therefore `pnpm verify`, runs `gitleaks git` over the full local history (§5). Every merge into `milestone/m0a` and `main` needs a green `pnpm verify` (AUTOPILOT §2), so the commit cannot be merged.
+- Once the founder pushes, CI's `security` job runs the same scan (§7).
 
-Point 4 above fixes the log path. Until S1.0 lands, the hook stays as it is (founder instruction: don't change it).
+Fixing a finding locally is safe because nothing was pushed. Rotate the secret anyway.
 
 ---
 
 ## 7. CI and deploy
+
+> **Local-only mode (founder, 2026-10-11).** Nothing is pushed until the founder says so, so nothing in this section runs during M0a unless that changes. S1 and S3 still write `ci.yml` and the deploy job in full, and these unit tests check them locally:
+> - `check-workflows.mjs`, which checks the workflow file;
+> - `check-staging-secrets.mjs`, which checks the Worker secret allow-list.
+>
+> Some items need a real CI run: AT-1a-CI, AT-11, AT-13, AT-18 and the staging half of AT-22. They are Deferred gates (§13.1). They run the first time the founder pushes and completes H3–H6, and no later than the M8 gate.
 
 ### 7.1 `ci.yml`: one workflow, so no `workflow_run` trigger exists to abuse
 - **Triggers:** `pull_request` and `push` to `main`.
@@ -283,7 +296,7 @@ Point 4 above fixes the log path. Until S1.0 lands, the hook stays as it is (fou
 
 **No secret ever reaches an app build.** The recruiter build gets only `VITE_SENTRY_DSN`, which is a public value.
 
-### 7.4 Repository settings (you run these; I give the exact commands after the first CI run, when the check names exist)
+### 7.4 Repository settings (you run these after the first push; I give the exact commands after the first CI run, when the check names exist)
 **Branch protection on `main`:**
 - required checks `static`, `rls`, `security`, `migrations`, **strict** (the branch must be up to date with `main` before merging, so `migrations` re-runs on the latest base)
 - PR required to merge
@@ -550,10 +563,10 @@ It fails if any of the following holds:
 ## 12. Windows specifics (this machine)
 
 - **Line endings:** add `.gitattributes`, then make a one-off `git add --renormalize .` commit. After that, Prettier passes identically on Windows and on Linux CI.
-- **Shell:** `.npmrc` sets `shell-emulator=true`. Script logic is Node `.mjs`; `git-autopush.sh` is the only sh script, and git runs it through its own shell.
+- **Shell:** `.npmrc` sets `shell-emulator=true`. Script logic is Node `.mjs`. The only sh scripts are `scripts/backup.sh` (run as `sh scripts/backup.sh`) and the existing `claude-stop-gate.sh`; `.gitattributes` keeps `*.sh` at LF.
 - **Path with spaces:** on day one I run `pnpm test:rls` from this spaced path. If Supabase's Docker bind mounts fail, I report it to you before trying any workaround.
 - **Ignores:** `.claude/worktrees/` is added to the ignores for git, Prettier, ESLint and Vitest.
-- **AT-1b:** you run `pnpm i && pnpm verify` once on this machine, and the output is recorded in the M0a summary.
+- **AT-1b:** `node scripts/verify-clean-clone.mjs` runs on this machine and its output is recorded in the M0a summary. The clone goes into a temp directory under the repo's parent folder, so the run also uses a path with spaces. Once H1 is done, the autopilot runs it; you don't have to.
 
 ---
 
@@ -561,14 +574,15 @@ It fails if any of the following holds:
 
 | AT | Exit-gate item / behaviour | How |
 | --- | --- | --- |
-| AT-1a | Clean clone → `pnpm i && pnpm verify` green | CI `static` + `rls` on a fresh checkout with `--frozen-lockfile` |
-| AT-1b | Same on the founder's Windows machine | Recorded run (manual, once) |
+| AT-1a-CI | Clean clone → `pnpm i && pnpm verify` green on Linux | CI `static` + `rls` on a fresh checkout with `--frozen-lockfile`. **Deferred gate** until the first push (§7). |
+| AT-1a-local | Clean clone → `pnpm i --frozen-lockfile && pnpm verify` green on Linux | `verify-clean-clone.mjs --linux` runs `typecheck`, `lint`, `test` and `build` over a fresh clone in a `node:22.23.3` container. `test:rls` runs on the host, because it needs the host's Docker engine. The output is recorded in the summary. |
+| AT-1b | The same on the founder's Windows machine | `verify-clean-clone.mjs` on the host; the output is recorded in the summary |
 | AT-2 | `supabase db reset` from zero; the catalog checks pass, including the MT-4b probes | `pnpm test:rls` in CI |
 | AT-3 | `test:rls` fails, and never skips, when Docker is down, a floor is missed, or a file has 0 tests; catalog assertions never count toward `rls-min-count` | Unit tests with a stubbed `docker info` and TAP fixtures |
 | AT-4 | `verify:fast` selects the changed packages and their dependents; global files → full run; docs-only → Prettier only | Unit tests over fixture git repos |
-| AT-5 | No secret in repo history | CI `security`: full-history gitleaks |
+| AT-5 | No secret in repo history | `pnpm lint` runs gitleaks over the full local history (§5). CI `security` repeats it after the first push. |
 | AT-6 | The pre-commit hook blocks a staged secret | Temp repo + a runtime-generated fake key shape → non-zero exit (gitleaks is in the shared CI setup) |
-| AT-6b | *(Q54 = keep)* `git-autopush.sh` refuses to push an unpushed commit that contains a secret, including one made with `--no-verify` | Temp repo with a local bare remote; assert the remote is unchanged |
+| AT-6c | A commit made with `--no-verify` that holds a secret makes `pnpm lint` fail | Temp repo with a fake key shape generated at runtime. Run the lint's gitleaks command and assert a non-zero exit. |
 | AT-7 | commitlint rejects `update stuff`; accepts `feat(api): x` and `wip(api): x` | Unit test |
 | AT-8 | Redactor: key stems, Indian ID and value patterns, caps → `[TRUNCATED]`, idempotence, error messages dropped | Vitest + property tests in `@trace/shared` |
 | AT-9 | Sentry `beforeSend` strips request, user and query data and exception values | Vitest with synthetic events (recruiter, jobs, api) |
@@ -585,81 +599,99 @@ It fails if any of the following holds:
 | AT-20 | Token files are current; contrast pairs pass | `@trace/ui` tests |
 | AT-21 | Candidate app initial JS ≤ 150 KB gzip | `check-bundle-size.mjs` |
 | AT-22 | Security headers are present in both `dist/` outputs and on staging | `check-headers.mjs` + smoke step |
-| AT-23 | db-types are current | CI `rls` drift check |
+| AT-23 | db-types are current | Locally, `test:rls` runs `supabase gen types` and then `git diff --exit-code packages/db-types`. CI repeats this. |
+| AT-24 | `scripts/backup.sh` writes a bundle that `git bundle verify` accepts, includes every branch and tag, and keeps only the newest 10 | Vitest over a temp repo that already holds 12 dummy bundles |
 
 ### 13.1 Exit gate → acceptance tests (build-order M0a, as merged in `b7af663`)
-| Exit-gate item | Covered by |
-| --- | --- |
-| Clean clone → `pnpm i && pnpm verify` green on Linux CI | AT-1a |
-| …and once on the founder's Windows machine | AT-1b |
-| `supabase db reset` rebuilds from zero and the pgTAP harness runs; catalog meta-tests pass | AT-2, AT-19, AT-23 |
-| `test:rls` fails if Docker is down | AT-3 |
-| Staging deploys from CI only | AT-11, AT-12, AT-15, AT-16, AT-18 |
-| Every health endpoint responds with the deployed commit | AT-10, AT-11 |
-| No secret in repo history (gitleaks clean) | AT-5 |
-| The pre-commit scan blocks a staged secret | AT-6, AT-6b |
-| PII-redaction tests pass | AT-8, AT-9 |
-| CI blocks merge on red | AT-13 |
+The third column lists the checks that need a real push. Their owner is M0a CLOSE if the founder pushes before then, and otherwise the M8 gate.
+
+| Exit-gate item | Covered by (local) | Deferred until the first push |
+| --- | --- | --- |
+| Clean clone → `pnpm i && pnpm verify` green on Linux CI | AT-1a-local | AT-1a-CI |
+| …and once on the founder's Windows machine | AT-1b | — |
+| `supabase db reset` rebuilds from zero and the pgTAP harness runs; catalog meta-tests pass | AT-2, AT-19, AT-23 | — |
+| `test:rls` fails if Docker is down | AT-3 | — |
+| Staging deploys from CI only | AT-12, AT-15, AT-16 (workflow and script unit tests) | AT-11, AT-18 |
+| Every health endpoint responds with the deployed commit | AT-10 (`VERSION` injected in the test) | AT-11 |
+| No secret in repo history (gitleaks clean) | AT-5 | CI `security` |
+| The pre-commit scan blocks a staged secret | AT-6, AT-6c | — |
+| PII-redaction tests pass | AT-8, AT-9 | — |
+| CI blocks merge on red | AT-12 (`check-workflows.mjs` checks the required jobs and that none uses `continue-on-error`), plus the local rule that nothing merges into `milestone/m0a` or `main` without a green `pnpm verify` (AUTOPILOT §2) | AT-13 |
+
+Every item in the third column goes in the **Deferred gates** table of `docs/milestones/M0a-summary.md` (build-order rule 6). Whether M0a may close with them deferred is the founder-queue item "Local-only mode vs CI exit gates".
 
 **"Done when" lines.** M0a carries part of ABH-80 (observability). The build-order gives no other issue for M0a. ABH-80's "Done when" text is not in the repo (build-notes line 167), and Linear isn't connected in this session. Until you paste that line, AT-8, AT-9, AT-10 and AT-22 stand in for it, and §17 item 6 tracks the gap.
 
-**Deferred gates from M0a:** none expected. Any that appear go in `docs/milestones/M0a-summary.md` (build-order rule 6).
+**Deferred gates from M0a:** the third column of the table above, plus any that appear during BUILD.
 
 ---
 
-## 14. Work plan and streams (max 3 writers; in practice 1 writer, then 2 in parallel)
+## 14. Work plan and streams (parallelism policy: AUTOPILOT §2)
 
-| Step | Stream | Owns | Depends on |
+| Step | Who | Owns | Depends on |
 | --- | --- | --- | --- |
-| **S1.0** | **Push-path safety** (first commit of M0a) | root `package.json` (minimal), `lefthook.yml`, `.gitleaks.toml`, `scripts/git-autopush.sh` (if kept), `.claude/settings.json` deny rules (if Q56 is approved) | H1, H2, (H7) |
-| S1 | **Foundation**:<br>S1.1 ADR-028<br>S1.2 workspace, catalog, `.npmrc`, `.node-version`, `.gitattributes` + renormalise<br>S1.3 `@trace/config` + rule fixture tests<br>S1.4 `verify-fast`, `check-*` and `gen-catalog-tests` scripts + tests<br>S1.5 `ci.yml` (no deploy job yet), `dependabot.yml`<br>S1.6 commitlint | root files, `packages/config/`, `scripts/`, `.github/`, `docs/adr/ADR-028*` | S1.0 |
-| S2 | **Libraries + apps** (parallel with S3) | `packages/shared/`, `packages/ui/`, `packages/vendors/`, `apps/` | S1 merged |
-| S3 | **Workers + database + deploy** (parallel with S2) | `workers/`, `services/`, `supabase/`, `packages/db-types/`, `scripts/test-rls.mjs`, the `deploy-staging` job in `ci.yml` | S1 merged; H3–H6 |
-| S4 | **Close-out** | `docs/milestones/M0a-summary.md` | S2 + S3 merged; `pnpm verify` green; AT-1b recorded |
+| **S1.0** | Lead | **Commit-path safety** (first commit of M0a): root `package.json` (minimal), `lefthook.yml`, `.gitleaks.toml`, `.claude/settings.json` deny rules (if Q56 is approved) | H1, (H7) |
+| S1 | Lead | **Foundation:**<br>S1.1 ADR-028<br>S1.2 workspace, catalog, `.npmrc`, `.node-version`, `.gitattributes` + renormalise; **every workspace's `package.json` with its final M0a dependencies**, then `pnpm i`, so the lockfile is complete<br>S1.3 `@trace/config` + rule fixture tests<br>S1.4 the `verify-fast`, `check-*`, `gen-catalog-tests` and `verify-clean-clone` scripts + tests; the `backup.sh` test (AT-24)<br>S1.5 `ci.yml` (no deploy job yet), `dependabot.yml`<br>S1.6 commitlint | root files, every `*/package.json`, `pnpm-lock.yaml`, `packages/config/`, `scripts/`, `.github/`, `docs/adr/ADR-028*` | S1.0 |
+| **S1.7** | Lead | **Shared contracts and schema** (before any stream): `packages/shared/src/{contracts.ts,health.ts,version.ts,index.ts}` with the §9.4 zod contracts and their tests; `supabase/migrations/<ts>_m0a_baseline.sql` (§8.2), reviewed by `database-reviewer` | S1 |
+| S2 | Stream | **Libraries + apps** (parallel with S3): `packages/shared/src/log/`, `packages/ui/`, `packages/vendors/`, `apps/` (except their `package.json`) | S1.7 merged |
+| S3 | Stream | **Workers + database + deploy** (parallel with S2): `workers/`, `services/`, `supabase/` except `migrations/`, `packages/db-types/src/`, `scripts/test-rls.mjs`, and the `deploy-staging` job in `ci.yml` (all except `package.json` files) | S1.7 merged. H3–H6 are needed only to *run* the deploy (Deferred gates, §13.1), not to write and unit-test it. |
+| S4 | Lead | **Close-out** (AUTOPILOT CLOSE phase, after REVIEW passes): `docs/milestones/M0a-summary.md` | S2 + S3 merged; `pnpm verify` green; AT-1a-local and AT-1b recorded |
 
-**Parallelism and ownership.** S1.0 and S1 run alone. After that, only **S2 ∥ S3** run in parallel, so there are 2 writers. That fits both the build-order cap of 3 and your cap of 4. Each stream:
-- runs in its own worktree under `.claude/worktrees/m0a-<stream>`, on branch `m0a/<stream>`;
-- merges into `milestone/m0a` by PR, and `milestone/m0a` merges to `main` by PR at the end.
+**Parallelism.** S1.0, S1 and S1.7 run in the lead session alone. After that, **S2 ∥ S3** run as 2 writers, which is under the default of 3. Read-only helpers (reviewers, research) may run up to 6 at once. If S2 and S3 hit a merge conflict, the rest of the session stays at 2 writers or fewer.
 
-**Shared files neither parallel stream may edit:**
-- root `package.json` scripts
-- `ci.yml` jobs other than `deploy-staging`
+**Each stream:**
+- runs in its own worktree under `.claude/worktrees/m0a-<stream>`, on branch `m0a/<stream>` cut from `milestone/m0a`;
+- merges into `milestone/m0a` locally with `git merge --no-ff`, only after its reviewers pass and `pnpm verify` is green (AUTOPILOT §2).
+
+At CLOSE, `milestone/m0a` merges into `main` the same way and gets the tag `m0a-reviewed`.
+
+**Checkpoints.** After every green sub-step (S1.0, each of S1.1–S1.7, and each stream merge), commit on `milestone/m0a` and tag `cp/m0a-<NN>`, numbered from `01` in order (AUTOPILOT §5).
+
+**Lead-only files.** Neither stream may edit these:
+- root `package.json`, any workspace `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`
+- `supabase/migrations/`
+- `packages/shared/src/` outside `log/`
 - `packages/config/`
+- `ci.yml` jobs other than `deploy-staging`
 
-If S2 or S3 needs a change there, it goes back through a small S1 follow-up PR.
-
-**The one shared file that is unavoidable is `pnpm-lock.yaml`.** S1 pins every M0a dependency in the catalog up front. The stream that merges second rebases and regenerates the lockfile with `pnpm i`; it never hand-merges it.
+If a stream needs a change in one of these files (a new dependency, a contract field, a migration), it stops at a green commit and reports the need. The lead makes the change on `milestone/m0a` after the stream merges, or before the stream restarts from an updated `milestone/m0a`. A stream never runs `pnpm add`, and it never regenerates or hand-merges the lockfile. `spec-reviewer` fails any stream diff that touches a lead-only path.
 
 **Every stream:**
-- TDD for script, logger and redactor logic, then `pnpm verify` before the PR.
+- TDD for script, logger and redactor logic, then `pnpm verify` before the merge.
 - A fresh `spec-reviewer` runs on the diff.
-- `database-reviewer` reviews the baseline migration and the catalog checks.
-- `security-reviewer` reviews hooks, CI and deploy, boundaries, redactor, Sentry and headers.
+- `database-reviewer` reviews the baseline migration (S1.7) and the catalog checks (S3).
+- `security-reviewer` reviews hooks, CI and deploy, boundaries, the redactor, Sentry and headers.
 
-**Then:** the M0a review runs in a new session (kickoff Prompt 4). See build-notes Q57 for the review skill's sub-milestone rows.
+**Then:** the M0a REVIEW phase runs in a fresh session that did not write the code (AUTOPILOT §2). It needs build-notes Q57 (the review skill's sub-milestone rows), which is in the founder queue.
 
 ---
 
 ## 15. Edge cases and failure modes
 
 - **Docker down:** `test:rls` fails loudly. `verify:fast` never needs Docker, so the Stop hook still works.
-- **No `main` locally:** `verify-fast` falls back to `trace/main`, and failing that runs everything. It never passes vacuously.
-- **gitleaks missing:** the pre-commit hook fails with an install hint. If kept, the auto-push scan also fails, and the commit stays local and unpushed until gitleaks is installed.
-- **Commit made with `--no-verify` or `LEFTHOOK=0`:** the auto-push scan catches it before anything leaves the machine (AT-6b).
+- **No `main` locally:** `verify-fast` runs everything. It never passes vacuously.
+- **gitleaks missing:** the pre-commit hook and `pnpm lint` both fail with an install hint. Nothing commits cleanly or merges until gitleaks is installed.
+- **Commit made with `--no-verify` or `LEFTHOOK=0`:** nothing pushes automatically, and `pnpm lint`'s full-history scan fails before the next merge (AT-6c).
+- **A stream needs a lead-only file changed:** it stops at a green commit and reports; the lead makes the change (§14). `spec-reviewer` blocks any stream diff that touches a lead-only path.
+- **Backups:** `scripts/backup.sh` bundles every branch and tag into `../trace-backups/` at the end of every session and keeps the newest 10 (AT-24). How to restore: `docs/progress/RESTORE.md`.
 - **Fork PR whose branch is named `main`:** the deploy job's `if:` requires `event_name == 'push'` and this repository, so it never runs (AT-12).
 - **A Worker secret added through the dashboard:** deploy step 6 fails (AT-15).
 - **Staging default ACLs differ from local:** deploy step 4 fails (AT-18).
 - **Pages project missing:** it is created idempotently. A token without the needed scope fails with the scope named.
 - **Free-plan limits:** M0a uses only Workers, Pages and Supabase.
-- **Parallel streams adding migrations:** only S3 adds migrations in M0a. `check-migrations` checks ordering, and strict status checks re-run it on the latest `main`.
+- **Parallel streams adding migrations:** streams never add migrations; only the lead does (S1.7). `check-migrations` still checks ordering and immutability on every `pnpm verify`.
 
 ### 15.1 State machines
 M0a has no domain entities. It has two process flows with states that the tests pin down.
 
-**Push path (Q54 = keep).** `committed → scanning → (clean) pushed | (finding) held_local | (gitleaks missing) held_local | (push error) push_failed_logged`.
-- `held_local` and `push_failed_logged` never undo the commit.
-- The next commit retries the push.
-- Nothing in the flow reaches `pushed` without passing through `scanning`. AT-6b tests that.
+**Commit and merge path (Q54 = drop).**
+- Commit: `staged → pre_commit_scanned → (clean) committed | (finding, or gitleaks missing) rejected`.
+- Merge: `committed → verified (pnpm verify, including the full-history scan) → merged --no-ff → checkpoint tagged`.
+
+Rules:
+- `rejected` leaves the staged changes untouched.
+- A commit that skipped `pre_commit_scanned` (`--no-verify`) can't reach `merged`, because `verified` re-scans the full history (AT-6c).
+- Nothing in either flow pushes.
 
 **Deploy to staging.** `queued → built → output_scanned → migrated → catalog_checked → workers_deployed → secrets_checked → pages_deployed → smoke_passed`.
 - Any failure goes to terminal `failed`. Steps that already ran are not rolled back.
@@ -689,11 +721,11 @@ The data model is in `docs/build-notes.md` §4, M0 table.
 ---
 
 ## 17. Open items needing you
-
-1. **Q54:** keep or drop the auto-push hook. This blocks S1.0.
-2. **H1–H6** (§1), and H7 (Q56) if you want it.
-3. **Q55:** separate Supabase org and Cloudflare account for prod at M8 (D5).
-4. **D3:** confirm the 150 KB budget for the candidate app, or give another number.
-5. **Q57:** approve the review-skill update for the sub-milestones before the M0a review runs.
-6. **ABH-80's "Done when" line:** paste it, or connect Linear, so §13.1 can cite it exactly.
-7. **`gh` on this machine is not signed in.** Step 2 merges only through PRs, so the CLI needs `gh auth login` (you run it) before S1.0 opens its first PR.
+Each of these is a row in `docs/progress/FOUNDER-QUEUE.md`, with exact steps:
+1. **H1 (toolchain).** Blocks all of BUILD.
+2. **Local-only mode vs CI exit gates.** Can M0a close with AT-1a-CI, AT-11, AT-13 and AT-18 deferred, or will you push to GitHub before M0a closes? If you push, H3–H6 apply, and you need `gh auth login` for the §7.4 commands.
+3. **Q57:** approve the review-skill update for the sub-milestones. Blocks the M0a REVIEW phase.
+4. **H7 / Q56:** deny rules for local deploys. Optional.
+5. **Q55:** separate Supabase org and Cloudflare account for prod at M8 (D5). Not needed before M8.
+6. **D3:** the candidate app's 150 KB budget stands unless you give another number. Blocks nothing.
+7. **ABH-80's "Done when" line:** paste it, or connect Linear, so §13.1 can cite it exactly. Blocks nothing; AT-8, AT-9, AT-10 and AT-22 stand in for it.
