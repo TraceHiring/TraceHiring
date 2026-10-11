@@ -353,6 +353,9 @@ describe('security review regressions (S1.7)', () => {
     '9\u034f'.repeat(999),
     '\u{e0020}'.repeat(999),
     '9\u2013'.repeat(999),
+    // a quoted value that NFKC makes longer than the scan's bound (redactor lows review F2)
+    'password="' + '\ufdfa'.repeat(1990),
+    'token="\ufdfa '.repeat(222),
   ];
   it.each(adversarial.map((s, i) => [i, s] as const))(
     'redacts adversarial input %i within the time budget',
@@ -553,6 +556,40 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['userinfo windows, no @', fill(`a://${'b/'.repeat(150)} `)],
     ['userinfo windows ending in @', fill('a://b/c@')],
     ['one scheme, then path characters', 'a://' + fill('b?#/')],
+    // the key=value scan resumes inside a non-sensitive value (redactor lows review F1)
+    ['chained non-sensitive pairs', fill('a=')],
+    ['keys inside values', fill('a:b=')],
+    ['one non-sensitive key, then pairs', 'a=' + fill('b:')],
+    ['sensitive key, one long value', 'password=' + fill('b')],
+    ['chained sensitive pairs', fill('token=a=')],
+    ['long values under sensitive keys', fill(`otp=${'x'.repeat(300)}:`)],
+    ['quoted keys, then quoted values', fill('"a":"')],
+    ['escaped quoted keys, then values', fill('\\"a\\":\\"b=')],
+    // invisible characters between two digits are marked, not dropped (redactor lows review F3)
+    ['digits split by zero-width spaces', fill('9\u200b')],
+    ['digit groups split by fillers', fill('98765\u3164')],
+    ['mobile numbers glued to digits', fill(`${synth.mobile()}\u200b1`)],
+    ['digits glued to Aadhaar numbers', fill(`1\u00ad${synth.aadhaar()}`)],
+    // format (Cf) characters are invisible characters too (redactor lows review F4)
+    ['PANs glued to words by U+FFF9', fill(`${synth.pan()}${String.fromCodePoint(0xfff9)}ok`)],
+    ['digits split by U+0600', fill(`9${String.fromCodePoint(0x600)}`)],
+    ['letters split by U+13430', fill(`a${String.fromCodePoint(0x13430)}`)],
+    // a scheme may start anywhere, after any character (redactor lows review F5)
+    [
+      '32 scheme starts, then 256 userinfo characters',
+      fill(`${'a'.repeat(32)}://${'b'.repeat(256)}`),
+    ],
+    ['long scheme runs, no @', fill(`${'a1.'.repeat(20)}://${'c/'.repeat(128)}`)],
+    ['scheme runs between separators', fill('ab://')],
+    ['dotted scheme runs', fill('.a.b-c+d://x')],
+    ['long letter runs before each ://', fill(`${'q'.repeat(40)}://u:p@h `)],
+    // IPv6 runs between word segments (redactor lows review F8)
+    ['hex and word segments alternating', fill('a:x:')],
+    ['runs of hex groups between words', fill('a:b:c:d:x:')],
+    ['addresses between words', fill(`${synth.ipv6Doc()}:closed:`)],
+    ['long hex-like segments', fill('abcde:')],
+    ['long word segments', fill(`${'g'.repeat(50)}:`)],
+    ['addresses between words and dashes', fill(`${synth.ipv6Doc(2)}:up-`)],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -569,6 +606,17 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['long runs between letters and spaces', fill(`a${'\u3164'.repeat(500)} `)],
     ['long runs between digits and letters', fill(`1${'\u200b'.repeat(500)}a`)],
     ['digits split by joiners', fill('9\u034f')],
+    // digit-digit runs are marked too (redactor lows review F3)
+    ['long runs between digits', fill(`1${'\u200b'.repeat(500)}2`)],
+    ['digits split by tags', fill('9\u{e0020}')],
+    // format (Cf) characters (redactor lows review F4)
+    ['letters split by U+0600', fill(`a${String.fromCodePoint(0x600)}`)],
+    ['digits split by U+110BD', fill(`9${String.fromCodePoint(0x110bd)}`)],
+    ['one long run of U+FFF9', fill(String.fromCodePoint(0xfff9))],
+    [
+      'mixed format and ignorable runs',
+      fill(`a${String.fromCodePoint(0x6dd, 0x200b, 0x13430).repeat(100)}9 `),
+    ],
   ])('canonicalises ~100 KB of "%s" well inside 50 ms', (_label, s) => {
     expect(s.length).toBeGreaterThanOrEqual(KB100);
     canonical(s.slice(0, 1000)); // warm-up
@@ -1258,5 +1306,200 @@ describe('serialised errors on a second pass (spec review L4)', () => {
     const once = redact(Object.assign(new Error('x'), { code: 'E_BAD' })) as { code: string };
     expect(once.code).toBe('E_BAD');
     expect(redact(once)).toMatchObject({ name: 'Error', code: REDACTED });
+  });
+});
+
+// Redactor lows review F1: the key=value scan took everything after a non-sensitive key as its
+// value and resumed after it, so a sensitive pair inside that value was never read.
+describe('a sensitive pair inside a non-sensitive value (redactor lows review F1)', () => {
+  const pw = synth.base64(7).slice(0, 10);
+  const otp = synth.mobile(5).slice(0, 6);
+  const R = REDACTED;
+  it.each([
+    ['a JSON string value', `{"event":"password=${pw}"}`, `{"event":"password=${R}"}`],
+    ['a key: prefix', `data:password=${pw}`, `data:password=${R}`],
+    ['a chain of non-sensitive keys', `a=b:c=otp:${otp}`, `a=b:c=otp:${R}`],
+    [
+      'an escaped JSON string value',
+      `{\\"kind\\":\\"token=${pw}\\"}`,
+      `{\\"kind\\":\\"token=${R}\\"}`,
+    ],
+    // the value of a sensitive key is redacted whole, however long it is
+    ['a long value', `data:password=${'x'.repeat(300)}${pw}`, `data:password=${R}`],
+  ])('redacts the pair inside %s', (_label, s, expected) => {
+    const out = redactString(`got ${s} end`);
+    expect(out).toBe(`got ${expected} end`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('still leaves non-sensitive pairs and their values alone', () => {
+    const s = 'a=b:c=d event:login.ok at:12:30:45 x=y=z';
+    expect(redactString(s)).toBe(s);
+  });
+});
+
+// Redactor lows review F2: NFKC can make a quoted value longer than the quoted-value scan's bound
+// (U+FDFA becomes 18 characters). With no closing quote within the bound, the rest of the value
+// after the bound was kept.
+describe('a quoted value longer than the scan bound (redactor lows review F2)', () => {
+  const [w1, w2] = [synth.word(3), synth.word(4)];
+  const long = '\ufdfa'.repeat(112);
+  it.each([
+    ['double-quoted', `password="${long} ${w1} ${w2}" next`, `password="${REDACTED}`],
+    ['single-quoted', `token='${long} ${w1} ${w2}' next`, `token='${REDACTED}`],
+    [
+      'escaped, in JSON inside a JSON string',
+      `{\\"address\\":\\"${long} ${w1} ${w2}\\"} next`,
+      `{\\"address\\":\\"${REDACTED}`,
+    ],
+  ])('redacts a long %s value to the end of the text', (_label, s, expected) => {
+    expect(s.length).toBeLessThanOrEqual(MAX_STRING);
+    expect(canonical(s).length).toBeGreaterThan(MAX_STRING);
+    const out = redactString(`got ${s}`);
+    expect(out).not.toContain(w1);
+    expect(out).not.toContain(w2);
+    expect(out).toBe(`got ${expected}`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('still closes a long quoted value at its quote within the bound', () => {
+    const s = `password="${'\ufdfa'.repeat(100)} ${w1}" ${w2}`;
+    expect(redactString(s)).toBe(`password="${REDACTED}" ${w2}`);
+  });
+});
+
+// Redactor lows review F3: an invisible character between two digits was dropped, not marked, so
+// a value glued to the digits after it became a longer digit run that no digit pattern matches.
+describe('invisible characters between two digits (redactor lows review F3)', () => {
+  const cps: [string, number][] = [0x200b, 0x3164, 0xfe0f, 0xad, 0x34f, 0xe0020].map((cp) => [
+    cp.toString(16).toUpperCase().padStart(4, '0'),
+    cp,
+  ]);
+  const glued: [string, string][] = [
+    [synth.mobile(), '123'],
+    [synth.aadhaar(), '9'],
+    [synth.vid(), '12'],
+  ];
+
+  it.each(cps)('redacts a value glued to the digits after it by U+%s', (_hex, cp) => {
+    const c = String.fromCodePoint(cp);
+    for (const [value, tail] of glued) {
+      const out = redactString(`x ${value}${c}${tail} y`);
+      expect(out).toBe(`x ${REDACTED} y`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it.each(cps)('redacts a value glued to the digits before it by U+%s', (_hex, cp) => {
+    const c = String.fromCodePoint(cp);
+    for (const [value, tail] of glued) {
+      const out = redactString(`x ${tail}${c}${value} y`);
+      expect(out).toBe(`x ${REDACTED} y`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it('still joins a value split between two of its digits', () => {
+    const m = synth.mobile(2);
+    const a = synth.aadhaar(2);
+    for (const s of [`${m.slice(0, 4)}\u200b${m.slice(4)}`, [...a].join('\u00ad')]) {
+      const out = redactString(`x ${s} y`);
+      expect(out).toBe(`x ${REDACTED} y`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it('leaves digits split by an invisible character, with no value in them, unchanged', () => {
+    for (const s of ['1\u200b2', 'v1\u00ad2.3', '12\u200b34:56', '2026\u200b10']) {
+      expect(redactString(s)).toBe(s);
+    }
+  });
+});
+
+// Redactor lows review F4: only Default_Ignorable characters were dropped or marked, so a value
+// split by a format (Cf) character outside that property (number signs, annotation and joiner
+// controls) leaked.
+describe('format characters inside a value (redactor lows review F4)', () => {
+  const cps: [string, number][] = [0xfff9, 0x600, 0x6dd, 0x110bd, 0x13430].map((cp) => [
+    cp.toString(16).toUpperCase().padStart(4, '0'),
+    cp,
+  ]);
+
+  it.each(cps)('redacts a value split at every character by U+%s', (_hex, cp) => {
+    const c = String.fromCodePoint(cp);
+    for (const value of [synth.pan(), synth.mobile(), synth.aadhaar(), synth.email()]) {
+      const out = redactString(`x ${[...value].join(c)} y`);
+      expect(out).toBe(`x ${REDACTED} y`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  // Not a leak before the fix (the value was found), but the character stayed in the output: it
+  // is now handled like any other invisible character next to a value.
+  it.each(cps)('redacts a value glued to the next word by U+%s', (_hex, cp) => {
+    const c = String.fromCodePoint(cp);
+    for (const value of [synth.pan(3), synth.mobile(3)]) {
+      const out = redactString(`x ${value}${c}ok y`);
+      expect(out).toBe(`x ${REDACTED} y`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it.each(cps)('joins a free-text key split by U+%s', (_hex, cp) => {
+    const c = String.fromCodePoint(cp);
+    const secret = synth.base64(8).slice(0, 10);
+    const out = redactString(`x pass${c}word=${secret} y`);
+    expect(out).not.toContain(secret);
+    expect(redactString(out)).toBe(out);
+    expect(redact({ [`to${c}ken`]: 'v' })).toEqual({ [`to${c}ken`]: REDACTED });
+  });
+});
+
+// Redactor lows review F5: the scheme's lookbehind let a scheme start only where no scheme
+// character came before it, so after `.`, `-`, `+`, a digit or a long run of letters the URL's
+// userinfo was kept (`...https://usr:ab7/cd@h.example` became `usr:ab7/[REDACTED]`).
+describe('URL userinfo after scheme characters (redactor lows review F5)', () => {
+  const user = synth.word(11);
+  const pass = `${synth.word(12).slice(0, 2)}7/${synth.word(13).slice(0, 2)}`;
+  const host = `${synth.word(14)}.example`;
+  it.each([
+    ['dots', '...'],
+    ['a digit and a dot', '1.'],
+    ['a dash', '-'],
+    ['a plus', '+'],
+    ['a digit', '7'],
+    ['over 32 letters', 'q'.repeat(40)],
+  ])('redacts the userinfo of a URL after %s', (_label, before) => {
+    const out = redactString(`fetch ${before}https://${user}:${pass}@${host}/v1 failed`);
+    expect(out).toBe(`fetch ${before}https://${REDACTED}@${host}/v1 failed`);
+    expect(redactString(out)).toBe(out);
+  });
+});
+
+// Redactor lows review F8: only an address at the end of a piece (the text between dashes and
+// underscores of a token) was found, so one followed by a `:segment` that is not a hex group
+// (`<address>:closed`) was kept. Documentation-range addresses only, built at run time.
+describe('IPv6 followed by a word segment (redactor lows review F8)', () => {
+  const R = REDACTED;
+  const full = ['2001', 'db8', ...[19, 23, 29, 31, 37, 41].map((n) => (n * 911).toString(16))].join(
+    ':',
+  );
+  const [a, b, c] = [synth.ipv6Doc(21), synth.ipv6Doc(22), synth.ipv6Doc(23)];
+  it.each([
+    ['a full address, then a word', `${full}:closed`, `${R}:closed`],
+    ['a compressed address, then a word', `${a}:refused`, `${R}:refused`],
+    ['an address, then two words', `${a}:conn:closed`, `${R}:conn:closed`],
+    ['a prefix, an address and a word', `from:${b}:closed`, `from:${R}:closed`],
+    ['two addresses between words', `via:${b}:to:${c}:x`, `via:${R}:to:${R}:x`],
+    ['an address before a dash', `${a}:up-${c}:down`, `${R}:up-${R}:down`],
+  ])('redacts %s and keeps the words', (_label, s, expected) => {
+    const out = redactString(`conn ${s} now`);
+    expect(out).toBe(`conn ${expected} now`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('still leaves clock times and word:word chains followed by words alone', () => {
+    const s = 'at:12:30:45:ok cafe:beef:dead:x std::map::at:y a:b:c:z x:12:30:go';
+    expect(redactString(s)).toBe(s);
   });
 });

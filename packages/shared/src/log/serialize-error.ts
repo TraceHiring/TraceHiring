@@ -30,12 +30,19 @@ const FRAME = /^at (?:(?:async |new )?[^\s()]+(?: \[as [^\s\]]+\])? \()?[^\s()]+
 export const isStackFrame = (line: string): boolean =>
   line.length <= MAX_FRAME_LENGTH && FRAME.test(line);
 
-/** The frames among lines (trimmed), at most MAX_FRAMES; a line the message holds is dropped. */
-const framesOf = (lines: readonly string[], message: string): string[] => {
+/**
+ * The frames among lines (trimmed) that pass `keep`, at most MAX_FRAMES; a line the message holds
+ * is dropped.
+ */
+const framesOf = (
+  lines: readonly string[],
+  message: string,
+  keep: (frame: string) => boolean = () => true,
+): string[] => {
   const frames: string[] = [];
   for (const raw of lines) {
     const line = raw.trim();
-    if (!isStackFrame(line)) continue;
+    if (!isStackFrame(line) || !keep(line)) continue;
     if (message !== '' && message.includes(line)) continue;
     frames.push(line);
     if (frames.length === MAX_FRAMES) break;
@@ -47,18 +54,52 @@ const framesOf = (lines: readonly string[], message: string): string[] => {
 const V8_FRAME_LINE = /^ {4}at /;
 
 /**
- * The frames of err.stack: only the trailing run of lines that V8 printed as frames. The header
- * before it (the message, which can span lines and was fixed when the stack was captured, so a
- * message changed later no longer matches it) never counts, even where a line is frame-shaped
- * (spec review L2). A frame-shaped line the current message holds is dropped as well.
+ * The header V8 prints before the frames: the name and message, joined as Error.prototype.toString
+ * joins them (an own toString is not used), as they are when err.stack is first read. Undefined
+ * unless both are strings.
  */
-const errorFrames = (stack: string, message: string): string[] => {
+const v8Header = (name: unknown, message: unknown): string | undefined => {
+  if (typeof name !== 'string' || typeof message !== 'string') return undefined;
+  if (name === '') return message;
+  return message === '' ? name : `${name}: ${message}`;
+};
+
+/**
+ * True for a frame whose location is a path or a URL: it holds '/' or '\' (`/app/a.js:1:2`,
+ * `file:///app/a.js:1:2`, `node:internal/x:1:2`, `C:\app\a.js:1:2`). The location is the text in
+ * the frame's parentheses, or the whole frame when it has none (isStackFrame allows no other).
+ */
+const hasPathLocation = (frame: string): boolean => {
+  const open = frame.lastIndexOf('(');
+  return /[/\\]/.test(open < 0 ? frame : frame.slice(open));
+};
+
+/**
+ * The frames of err.stack: only the trailing run of lines that V8 printed as frames, and never a
+ * line of the header before it (the message, which can span lines), even where one is frame-shaped
+ * (spec review L2). A frame-shaped line the current message holds is dropped as well.
+ *
+ * When the stack starts with the header of the current name and message, its lines are skipped
+ * exactly. Otherwise the header was fixed with an older name or message (the stack was read before
+ * one of them changed) or the stack was set by hand, and an older message's last lines, indented
+ * like frames, cannot be told apart from the frames after them; so a frame must then also have a
+ * path or URL location (redactor lows review F6). Frames of a bundle without one (`index.js:1:2`)
+ * are dropped in that case, which is the safe side.
+ *
+ * Not covered: a message line that is itself a frame with a path location, and a message changed,
+ * after the stack was read, to its own first lines (the stack then starts with the current header,
+ * and the old message's later lines follow it).
+ */
+const errorFrames = (stack: string, header: string | undefined, message: string): string[] => {
   const lines = stack.split('\n');
   let end = lines.length;
   while (end > 0 && (lines[end - 1] ?? '').trim() === '') end--;
   let start = end;
   while (start > 0 && V8_FRAME_LINE.test(lines[start - 1] ?? '')) start--;
-  return framesOf(lines.slice(start, end), message);
+  if (header !== undefined && (stack === header || stack.startsWith(`${header}\n`))) {
+    return framesOf(lines.slice(Math.max(start, header.split('\n').length), end), message);
+  }
+  return framesOf(lines.slice(start, end), message, hasPathLocation);
 };
 
 /**
@@ -78,7 +119,8 @@ export const serializeError = (err: unknown): SerializedError => {
   }
   const message: unknown = err.message;
   if (typeof err.stack === 'string') {
-    out.stack = errorFrames(err.stack, typeof message === 'string' ? message : '');
+    const header = v8Header(name, message);
+    out.stack = errorFrames(err.stack, header, typeof message === 'string' ? message : '');
   }
   return out;
 };

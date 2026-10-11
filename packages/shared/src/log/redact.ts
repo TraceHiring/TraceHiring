@@ -56,9 +56,12 @@ const SAFE_KEYS = new Set([
 
 /**
  * Invisible characters that could split a key or a value: zero-width marks and joiners, bidi
- * controls, variation selectors, Hangul fillers, tags. Every one of them is in this property.
+ * controls, variation selectors, Hangul fillers and tags (all Default_Ignorable_Code_Point), and
+ * every other format character (Cf: number signs such as U+0600 and U+110BD, annotation and
+ * hieroglyph format controls such as U+FFF9 and U+13430; redactor lows review F4).
  */
-const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+const INVISIBLE = String.raw`[\p{Default_Ignorable_Code_Point}\p{Cf}]`;
+const IGNORABLE = new RegExp(INVISIBLE, 'gu');
 /** Keys of ASCII letters, digits, `_` and `-` (most keys) need no Unicode normalisation. */
 const ASCII_KEY = /^[\w-]*$/;
 
@@ -103,22 +106,25 @@ const toAsciiDigit = (ch: string): string => {
 };
 
 /**
- * Stands in for a run of invisible characters between two ASCII letters, or an ASCII letter and a
- * digit (redactor review #3). There the run may sit inside one value (a soft hyphen in a copied
- * PAN or email) or between a value and the next word (`<PAN>\u3164ok`), so applyPatterns reads
- * the text both ways. It is itself an invisible character, so canonical text never has one
- * otherwise, and it is not a word, space or digit character to any pattern.
+ * Stands in for a run of invisible characters between two ASCII letters, an ASCII letter and a
+ * digit (redactor review #3), or two digits (redactor lows review F3). There the run may sit
+ * inside one value (a soft hyphen in a copied PAN or mobile number) or between a value and the
+ * next word or digits (`<PAN>\u3164ok`, `<mobile>\u200b123`), so applyPatterns reads the text
+ * both ways. It is itself an invisible character, so canonical text never has one otherwise, and
+ * it is not a word, space or digit character to any pattern.
  */
 const SPLIT = '\u2063';
 /**
  * A run of invisible characters; the first two alternatives capture a run between an ASCII letter
- * and an ASCII letter or digit, or between a digit and an ASCII letter. Each run is read once:
- * inside a run the lookbehinds fail, and no invisible character is a letter or digit to them.
+ * and an ASCII letter or digit, or between a digit and an ASCII letter or digit. Each run is read
+ * once: inside a run the lookbehinds fail, and no invisible character is a letter or digit to them.
  */
-const IGNORABLE_RUN =
-  /(?<=[A-Za-z])(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z\p{Nd}])|(?<=\p{Nd})(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z])|\p{Default_Ignorable_Code_Point}+/gu;
-const splitOrDrop = (_run: string, letters?: string, digitThenLetter?: string): string =>
-  letters === undefined && digitThenLetter === undefined ? '' : SPLIT;
+const IGNORABLE_RUN = new RegExp(
+  String.raw`(?<=[A-Za-z])(${INVISIBLE}+)(?=[A-Za-z\p{Nd}])|(?<=\p{Nd})(${INVISIBLE}+)(?=[A-Za-z\p{Nd}])|${INVISIBLE}+`,
+  'gu',
+);
+const splitOrDrop = (_run: string, afterLetter?: string, afterDigit?: string): string =>
+  afterLetter === undefined && afterDigit === undefined ? '' : SPLIT;
 
 /**
  * The text the patterns see: compatibility forms folded, invisible characters dropped (or marked
@@ -161,8 +167,11 @@ const isSensitiveTextKey = (key: string): boolean => key.length > MAX_KEY || isS
 const KEY_THEN_QUOTE = new RegExp(String.raw`${KEY}(\\*["']?\s{0,3}[=:]\s{0,3})(\\*["'])`, 'g');
 
 /**
- * Where a quoted value's body ends: the index of its closing quote, or the end of the text, or
- * MAX_STRING characters on (the bound keeps it linear). The opener is a quote after k backslashes
+ * Where a quoted value's body ends: the index of its closing quote, or else the end of the text.
+ * Only MAX_STRING characters are read (the bound keeps it linear); with no closing quote among
+ * them, the value runs to the end of the text. The bound can be hit inside a value, because NFKC
+ * can make text longer than the input cap (U+FDFA becomes 18 characters), and the rest of the
+ * value must not be kept (redactor lows review F2). The opener is a quote after k backslashes
  * (k = 0 for a plain quote, 2^n - 1 for JSON n levels inside JSON strings). A quote after a run
  * of r backslashes closes the value when r = k plus an even number of escapes at the value's own
  * level, each of which is 2k + 2 backslashes: (r - k) % (2k + 2) === 0. Any other quote is
@@ -187,7 +196,7 @@ const quotedEnd = (text: string, from: number, open: string): number => {
       i++;
     }
   }
-  return limit;
+  return text.length;
 };
 
 /**
@@ -215,6 +224,47 @@ const redactQuotedValues = (text: string): string => {
 };
 
 /**
+ * A key, `=` or `:` (the key's closing quote may be escaped: `\"otp\":123456` in nested JSON, review
+ * #4), and an optional opening quote, before a value character. The value is not part of the
+ * match: a non-sensitive key's value is read again for pairs of its own (redactor lows review F1).
+ */
+const KEY_THEN_VALUE = new RegExp(
+  String.raw`${KEY}(\\*["']?\s{0,3}[=:]\s{0,3}"?)(?=[^\s"'&,;)])`,
+  'g',
+);
+/** A free-text value: up to the next space, quote, `&`, `,`, `;` or `)`. */
+const VALUE = /[^\s"'&,;)]+/y;
+
+/**
+ * `key=value` and `key: value` in free text, when the key would be redacted as an object key. The
+ * scan resumes at the start of a non-sensitive key's value, so a pair inside it (`data:password=…`,
+ * `{"event":"otp=…"}`) is still found; a sensitive key's value goes whole and the scan resumes after
+ * it. Each match reads only a key and a separator, and each value is read once (linear time). A
+ * value of only backslashes is the opener of a quoted value (handled by redactQuotedValues), and
+ * backslashes that end a value are the escape of the quote after it, so both are kept.
+ */
+const redactKeyValues = (text: string): string => {
+  let out = '';
+  let last = 0;
+  KEY_THEN_VALUE.lastIndex = 0;
+  for (let m = KEY_THEN_VALUE.exec(text); m !== null; m = KEY_THEN_VALUE.exec(text)) {
+    const [head, bare, quoted] = m;
+    if (!isSensitiveTextKey(bare ?? quoted ?? '')) continue; // lastIndex is at the value
+    const from = m.index + head.length;
+    VALUE.lastIndex = from;
+    const value = VALUE.exec(text)?.[0] ?? '';
+    let end = value.length;
+    while (end > 0 && value[end - 1] === '\\') end--;
+    if (end > 0) {
+      out += text.slice(last, from) + REDACTED;
+      last = from + end;
+    }
+    KEY_THEN_VALUE.lastIndex = from + value.length;
+  }
+  return out + text.slice(last);
+};
+
+/**
  * An IPv6 address: hex groups of at most four digits and two to eight colons, with "::" or at
  * least three colons (so clock times are left alone). Never longer than MAX_IPV6 characters.
  */
@@ -234,19 +284,50 @@ const ipv6Start = (part: string): number => {
   return -1;
 };
 
+/** One group of an IPv6 address: at most four hex digits (none on either side of "::"). */
+const HEX_GROUP = /^[0-9a-f]{0,4}$/i;
+
+/**
+ * The addresses in one piece of a token. Its ':'-separated segments that are not hex groups
+ * (`from`, `closed`) split it into runs of hex groups, and each run loses its longest address
+ * suffix, so an address followed by a word (`<address>:closed`) is found as well as one that ends
+ * the piece (redactor lows review F8). Each segment is tested once, and ipv6Start reads at most
+ * MAX_IPV6 characters of each run, so a piece costs time linear in its length.
+ */
+const redactIpv6Piece = (part: string): string => {
+  if (part.indexOf(':') === part.lastIndexOf(':')) return part; // an address has two colons
+  const out: string[] = [];
+  let run: string[] = [];
+  const flush = (): void => {
+    if (run.length === 0) return;
+    const text = run.join(':');
+    const at = ipv6Start(text);
+    out.push(at < 0 ? text : `${text.slice(0, at)}${REDACTED}`);
+    run = [];
+  };
+  for (const segment of part.split(':')) {
+    if (HEX_GROUP.test(segment)) {
+      run.push(segment);
+    } else {
+      flush();
+      out.push(segment);
+    }
+  }
+  flush();
+  return out.join(':');
+};
+
 /**
  * IPv6 in a token of word characters, dashes and colons with at least two colons (redactor review
- * #6): each piece between dashes and underscores loses its longest address suffix, and keeps the
- * prefix before it (`from:`, `via:from:`, `_src:`, `1st:`, a prefix of any length). A prefix of
- * hex groups (`a:b:`) reads as part of the address and goes with it. The lookbehind starts the
- * token once per run of its characters, and its two first runs exclude ':', so it is linear.
+ * #6): each piece between dashes and underscores loses the addresses in it (redactIpv6Piece), and
+ * keeps the words before and after them (`from:`, `via:from:`, `_src:`, `1st:`, `:closed`, of any
+ * length). A prefix of hex groups (`a:b:`) reads as part of the address and goes with it. The
+ * lookbehind starts the token once per run of its characters, and its two first runs exclude
+ * ':', so it is linear.
  */
 const redactIpv6 = (text: string): string =>
   text.replace(/(?<![\w:-])[\w-]*:[\w-]*:[\w:-]*/g, (token) =>
-    token.replace(/[^_-]+/g, (part) => {
-      const at = ipv6Start(part);
-      return at < 0 ? part : `${part.slice(0, at)}${REDACTED}`;
-    }),
+    token.replace(/[^_-]+/g, redactIpv6Piece),
   );
 
 type Step = (text: string) => string;
@@ -266,30 +347,20 @@ const STEPS: readonly Step[] = [
   sub(/\bpostgres(?:ql)?:\/\/[^\s"']+/gi, REDACTED),
   // userinfo in any other URL (`scheme://user:password@host`): keep the scheme and the host. A
   // password may hold '/', '?', '#' and '@' (redactor review #8), so the userinfo runs to the last
-  // '@' within 256 characters. It stops at the next '://', so no stretch is read twice (linear).
+  // '@' within 256 characters, and stops at the next '://'. The scheme may start anywhere, even
+  // after '.', '-', '+', a digit or more than 32 letters (redactor lows review F5): it is at most
+  // 32 characters, so at most 32 starts reach one '://', and each reads at most 256 characters
+  // after it (linear).
   sub(
-    /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)(?:(?!:\/\/)[^\s"'<>]){0,256}@/gi,
+    /([a-z][a-z0-9+.-]{0,31}:\/\/)(?:(?!:\/\/)[^\s"'<>]){0,256}@/gi,
     (_m, scheme = '') => `${scheme}${REDACTED}@`,
   ),
   // quoted values under sensitive keys, before anything else can take a piece of them
   redactQuotedValues,
   // query strings and fragments that carry parameters: keep the '?' or '#', drop the rest
   sub(/([?#])[^\s?#"'<>]*=[^\s"'<>]*/g, keepPrefix),
-  // `key=value` and `key: value` in free text, when the key would be redacted as an object key.
-  // The key's closing quote may be escaped (`\"otp\":123456` in nested JSON, review #4). A value of
-  // only backslashes is the opener of a quoted value (handled above), and backslashes that end a
-  // value are the escape of the quote after it, so both are kept.
-  sub(
-    new RegExp(String.raw`${KEY}(\\*["']?\s{0,3}[=:]\s{0,3}"?)([^\s"'&,;)]+)`, 'g'),
-    (m, bare = '', quoted = '', sep = '', value = '') => {
-      if (!isSensitiveTextKey(bare || quoted)) return m;
-      let end = value.length;
-      while (end > 0 && value[end - 1] === '\\') end--;
-      // the key as written (a quoted key keeps its opening quote), the separator, then the value
-      const key = m.slice(0, m.length - sep.length - value.length);
-      return end === 0 ? m : `${key}${sep}${REDACTED}${value.slice(end)}`;
-    },
-  ),
+  // `key=value` and `key: value` in free text, including pairs inside a non-sensitive value
+  redactKeyValues,
   // email (also percent-encoded), then UPI (handle@psp without a dot after the psp)
   sub(/(?<![\w.%+-])[\w.%+-]+(?:@|%40)(?:[a-z0-9-]+\.)+[a-z]{2,}/gi, REDACTED),
   // A trailing '.' (end of sentence) or dash ends the psp; only '.' followed by a letter or digit continues it.
