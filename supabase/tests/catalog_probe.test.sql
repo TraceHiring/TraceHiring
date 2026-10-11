@@ -119,9 +119,13 @@ select is_empty(
 --     subLinkType 4), so the call runs per row. (select (auth.jwt() ->> 'org_id')::uuid) is compliant.
 --   qual_without_column: a USING or WITH CHECK that is not literally true (that is literal_true) and, in its node
 --     tree, refers to no column of the policy's table (a VAR whose varlevelsup equals the number of QUERY nodes
---     around it) and calls no function outside the built-ins (a function, operator function, aggregate or window
---     function with an oid of 16384 or more), such as 1 = 1, not false or now() < '2030-01-01', on a table that is
---     not on the reference list below.
+--     around it), calls no function in schema private and none in schema auth (a function, operator function,
+--     aggregate or window function), such as 1 = 1, not false or now() < '2030-01-01', on a table that is not on
+--     the reference list below.
+--   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
+--     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
+--     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
+--     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
 -- In-scope tables: every relation in public, private, quality and integrity, every relation that postgres can SET
 -- ROLE to the owner of in a system-list schema where a migration can still create objects (escape_schema below),
 -- and every pg_inherits descendant of those (INHERITS children and partitions, recursively, wherever they live).
@@ -184,6 +188,14 @@ auth_function as (
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname = 'auth'
     and p.proname in ('uid', 'jwt')
+),
+-- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
+-- would raise an error if the schema were missing).
+helper_function (oid, nspname) as (
+  select p.oid, n.nspname::text
+  from pg_proc as p
+  join pg_namespace as n on n.oid = p.pronamespace
+  where n.nspname in ('private', 'auth')
 ),
 scope_policy as (
   select
@@ -268,6 +280,18 @@ tree_node (oid, clause, ord, piece, end_ord) as (
     where left(p.piece, 1) = '}'
   ) as c on c.oid = o.oid and c.clause = o.clause and c.lvl = o.depth and c.rn = o.rn
 ),
+-- tree_call: each function a clause calls (a function, an operator's function, an aggregate or a window function)
+-- that is in private or auth, with its schema.
+tree_call (oid, clause, nspname) as (
+  select fn.oid, fn.clause, hf.nspname
+  from tree_node as fn
+  join helper_function as hf on hf.oid = coalesce(
+      substring(fn.piece from '^\{FUNCEXPR :funcid ([0-9]+) '),
+      substring(fn.piece from '^\{[A-Z]+ :opno [0-9]+ :opfuncid ([0-9]+) '),
+      substring(fn.piece from '^\{AGGREF :aggfnoid ([0-9]+) '),
+      substring(fn.piece from '^\{WINDOWFUNC :winfnoid ([0-9]+) ')
+    )::oid
+),
 finding (oid, branch, detail) as (
   select
     sp.oid,
@@ -330,11 +354,26 @@ finding (oid, branch, detail) as (
   union all
   select distinct
     pt.oid,
-    'qual_without_column'::text,
-    format('%s refers to no column of its table and calls no function outside the built-ins', pt.clause)::text
+    case when tc.calls_auth then 'auth_only_clause' else 'qual_without_column' end::text,
+    case
+      when tc.calls_auth then format(
+        '%s refers to no column of its table and calls no function in private, only auth functions',
+        pt.clause
+      )
+      else format('%s refers to no column of its table and calls no function in private or auth', pt.clause)
+    end::text
   from policy_tree as pt
   join scope_policy as sp on sp.oid = pt.oid
+  cross join lateral (
+    select
+      coalesce(bool_or(c.nspname = 'auth'), false) as calls_auth,
+      coalesce(bool_or(c.nspname = 'private'), false) as calls_private
+    from tree_call as c
+    where c.oid = pt.oid
+      and c.clause = pt.clause
+  ) as tc
   where case pt.clause when 'USING' then sp.using_text else sp.check_text end <> 'true'
+    and not tc.calls_private
     and not exists (
       select 1
       from tree_node as v
@@ -350,18 +389,6 @@ finding (oid, branch, detail) as (
             and q.ord < v.ord
             and v.ord < q.end_ord
         )
-    )
-    and not exists (
-      select 1
-      from tree_node as fn
-      where fn.oid = pt.oid
-        and fn.clause = pt.clause
-        and coalesce(
-          substring(fn.piece from '^\{FUNCEXPR :funcid ([0-9]+) '),
-          substring(fn.piece from '^\{[A-Z]+ :opno [0-9]+ :opfuncid ([0-9]+) '),
-          substring(fn.piece from '^\{AGGREF :aggfnoid ([0-9]+) '),
-          substring(fn.piece from '^\{WINDOWFUNC :winfnoid ([0-9]+) ')
-        )::oid >= 16384::oid
     )
     and not exists (
       select 1
