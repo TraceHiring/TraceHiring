@@ -26,13 +26,53 @@
         "column_references"
       ]
     },
-    { "id": "MT-5a", "branches": ["direct_join", "nested_view", "via_function"] },
+    {
+      "id": "MT-5a",
+      "branches": [
+        "direct_join",
+        "nested_view",
+        "via_function",
+        "system_schema_view",
+        "via_operator",
+        "via_domain"
+      ]
+    },
     {
       "id": "MT-5b",
-      "branches": ["begin_atomic_depend", "prosrc_reference", "proconfig_search_path"]
+      "branches": [
+        "begin_atomic_depend",
+        "prosrc_reference",
+        "proconfig_search_path",
+        "system_schema_function",
+        "prosrc_call"
+      ]
     },
-    { "id": "MT-5c", "branches": ["direct_grantee", "role_membership", "read_write_all_data"] },
-    { "id": "MT-5d", "branches": ["foreign_key", "trigger_function", "policy_expression"] },
+    {
+      "id": "MT-5c",
+      "branches": [
+        "direct_grantee",
+        "role_membership",
+        "read_write_all_data",
+        "definer_bridge",
+        "admin_membership"
+      ]
+    },
+    {
+      "id": "MT-5d",
+      "branches": [
+        "foreign_key",
+        "trigger_function",
+        "policy_expression",
+        "inheritance_link",
+        "table_rule",
+        "trigger_call_chain",
+        "column_default",
+        "check_constraint",
+        "index_expression",
+        "column_domain",
+        "outside_host_both"
+      ]
+    },
     {
       "id": "MT-6",
       "branches": [
@@ -65,7 +105,12 @@
     },
     {
       "id": "MT-10",
-      "branches": ["view_without_security_invoker", "matview_in_public", "matview_privilege"]
+      "branches": [
+        "view_without_security_invoker",
+        "matview_in_public",
+        "matview_privilege",
+        "system_schema_view"
+      ]
     },
     {
       "id": "MT-11",
@@ -76,7 +121,10 @@
         "select_delete_without_using",
         "public_role",
         "literal_true",
-        "auth_call_unwrapped"
+        "auth_call_unwrapped",
+        "system_schema_policy",
+        "inherited_table_policy",
+        "qual_without_column"
       ]
     },
     {
