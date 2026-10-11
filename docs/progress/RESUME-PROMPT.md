@@ -9,11 +9,11 @@ earlier chats is available or needed. The short "paste prompt" the founder uses 
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
 - **Now: milestone M0a (toolchain, pipeline, skeleton), phase BUILD, step S1.7 (shared code + database).**
-  S1.0–S1.6 are built and reviewed. All S1.7 code and fix passes are written; `m0a/s17-assembly` (integration + catalog
-  fixes + root wiring) passes the full `pnpm verify` including a real `test:rls` (101 catalog assertions). Left before
-  the S1.7 gate: a database review of the catalog fixes, a security review of the redactor Lows branch, a writer for
-  S1.4 Lows N10–N13, the merges, then the spec-reviewer gate. No milestone is closed yet (no `m*-reviewed` tag; last
-  checkpoint `cp/m0a-01`). Spec `specs/m0-foundations.md` is at revision 12.
+  S1.0–S1.6 are built and reviewed. S1.7 is code-complete; as of 2026-10-11 18:20 IST left before the S1.7 gate:
+  catalog fix pass D (E1 Medium, E2) on `m0a/s17-assembly`, redactor G2 on `m0a/redactor-g-lows`, their short
+  re-reviews, the merges, a full `pnpm verify` with a real `test:rls`, then the spec-reviewer gate (HANDOFF "Next step"
+  has the exact list). No milestone is closed yet (no `m*-reviewed` tag; last checkpoint `cp/m0a-01`). Spec
+  `specs/m0-foundations.md` is at revision 13.
 - **Integration branch: `m0a/integration`** (all reviewed lead work + review reports + this file).
   `milestone/m0a` (`adbbb61`) moves only at the S1.7 gate. Older integration names
   (`claude/trace-autopilot-production-87e5e2`, `claude/trace-autopilot-resume-2dac7c`) are retired ancestors.
@@ -53,8 +53,11 @@ STEP 2 — Get onto `m0a/integration` without losing anyone's work
   (absolute paths; `cd` into it for every shell command).
 - **Session in a worktree the app created (branch `claude/...`):** if the tree is clean and every commit in
   `git log --oneline m0a/integration..HEAD` is also on `main` (`git branch --contains <sha>`), run
-  `git switch m0a/integration`. If git says the branch is checked out in another worktree, work in that
-  worktree if your tools allow it; otherwise stop and tell the founder.
+  `git switch m0a/integration`. If git says the branch is checked out in another worktree (as of 2026-10-11 it is
+  `.claude/worktrees/trace-autopilot-resume-4ece3a`), call the `EnterWorktree` tool with `path` = that worktree's
+  absolute path (`git worktree list` shows it; this worked on 2026-10-11). Then keep git commands plain (no `$(…)`,
+  loops, `export GIT_*` or chained `git` calls in one command) or the worktree guard refuses them. If that is
+  impossible, stop and tell the founder.
 - `pnpm install --frozen-lockfile` in your checkout before the first commit (git hooks need node_modules).
 - Never: force-push, delete branches or remote refs, move/delete `cp/*` tags, rewrite pushed history, re-enable
   `.git/hooks/post-commit.disabled`, remove other worktrees (`.claude/worktrees/agent-*` hold the streams),
@@ -66,19 +69,21 @@ STEP 3 — Verify, then report in 5 lines whether the repo matches the handoff (
 - `docker ps`: container `supabase_db_trace` is the shared local stack. If it is down:
   `pnpm exec supabase start -x realtime,storage-api,imgproxy,mailpit,studio,edge-runtime,logflare,vector,supavisor,postgres-meta`
   (write the output to a file; never pipe docker/supabase output into `head` on Windows)
-- Branch tips as in HANDOFF.md "Branches": `m0a/integration` (newest `chore(progress)` commit), `m0a/s17-assembly` @ `79c2903`,
-  `m0a/catalog-fixes` @ `43d5a30`, `m0a/w1-lows` @ `aa99476`, `m0a/s14-lows` @ `64bd4e3`, `milestone/m0a` @ `adbbb61`. All are on the
-  `trace` remote after this wrap-up's push.
+- Branch tips as in HANDOFF.md "Branches": `m0a/integration` (newest `chore(progress)` commit), `m0a/s17-assembly` @ `a014953`,
+  `m0a/catalog-pass-c` @ `471b8b9`, `m0a/redactor-g-lows` @ `b90329b`, `m0a/s2s3-prep` (P1–P4), `milestone/m0a` @ `adbbb61`. All
+  are on the `trace` remote after this wrap-up's push.
 
 STEP 4 — Do the HANDOFF "Next step" list in order. Summary (HANDOFF and the review reports have the details):
-1. Two read-only reviews in parallel: database-reviewer on `9bac676..43d5a30` (catalog fixes, spec rev 12 §8.5) and
-   (done: the redactor security review; `m0a/w1-lows` merged; F1–F8 Lows open). Record reports in `docs/reviews/`; fix findings test-first.
-2. Two Low-fix writers in parallel: redactor F1–F6, F8 (F7 done `cc9fd4d`; `docs/reviews/M0a-S1.7-redactor-lows-security-review.md`) and S1.4 Lows N10–N13 from `64bd4e3` (`docs/reviews/M0a-S1.4-n8-n9-security-review.md`), then a re-review.
-3. Merge into `m0a/integration` with `--no-ff`: the redactor F1–F8 branch, `m0a/s17-assembly` (re-merge catalog fixes first if
-   the review changed them), the N10–N13 branch; full `pnpm verify`.
+1. Two writers in parallel (max 2): catalog pass D (E1, E2; `docs/reviews/M0a-S1.7-catalog-pass-c-database-review.md`)
+   from `m0a/s17-assembly` @ `a014953`, and redactor G2 on `m0a/redactor-g-lows` @ `b90329b`
+   (`docs/reviews/M0a-S1.7-redactor-f-lows-security-rereview.md`). Test-first, one commit per finding.
+2. Short re-reviews: database-reviewer on pass D; security-reviewer on `055eaf6..m0a/redactor-g-lows`.
+3. Merge into `m0a/integration` with `--no-ff`: `m0a/s17-assembly` (with pass D) and `m0a/redactor-g-lows`; full
+   `pnpm verify` incl. a real `pnpm test:rls --stop` from a cold stack.
 4. Gate: spec-reviewer on `adbbb61..m0a/integration`; `git merge --ff-only` in the `milestone/m0a` worktree; tags
    `cp/m0a-02`, `cp/m0a-03`.
-5. S2 ∥ S3 per `docs/progress/S2-S3-PLAN.md` (lead changes P1–P4 first). Do not start M0b or any later milestone.
+5. Merge `m0a/s2s3-prep` (P1–P4), record P5; S2 ∥ S3 per `docs/progress/S2-S3-PLAN.md`. Before CLOSE also: P3 and the
+   gitleaks allowlist fix (HANDOFF "Owed before M0a CLOSE"). Do not start M0b or any later milestone.
 Rules learned the hard way:
 - Usage: check it often. The founder allows work to ~95% of each 5-hour window, with STEP 5 finished by 95–96%; parallel Opus agents can use 70% in 30 minutes, so check `get_usage` after every agent result. Max 2–3 agents at
   once (5 agents used ~50% of a Pro window in 15 minutes; one review agent ≈ 7–9%). Start STEP 5 by 80–85% if
