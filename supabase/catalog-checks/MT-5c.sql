@@ -10,9 +10,10 @@
 -- text in MT-5a, 5b, 5c and 5d), because the function reads with its owner's rights. Likewise any privilege on a
 -- materialized view, or on a view without the literal security_invoker=true, outside quality and integrity (outside
 -- pg_catalog and information_schema too), from its relacl (acldefault when null) and column ACLs, holds every schema
--- its closure reaches. PUBLIC (grantee 0) is expanded to every role. Grantees are expanded recursively to their members through pg_auth_members memberships with
--- inherit, set or ADMIN OPTION (an ADMIN-only member can grant itself inherit and set). An entry naming the object's
--- owner (for a default ACL, defaclrole) is not counted, and the owner is never expanded to its members.
+-- its closure reaches. PUBLIC (grantee 0) is expanded to every role. Grantees are expanded recursively to their
+-- members through pg_auth_members memberships with inherit, set or ADMIN OPTION (an ADMIN-only member can grant
+-- itself inherit and set). An entry naming the object's owner (for a default ACL, defaclrole) is not counted, and
+-- the owner is never expanded to its members.
 -- Branches, first match wins for the two-schema rule: direct_grantee (the role is a grantee in both schemas, by
 -- name or as PUBLIC), role_membership (it needs a membership with inherit or set for at least one schema),
 -- admin_membership (it needs an ADMIN-only membership), definer_bridge (it needs EXECUTE on a SECURITY DEFINER
