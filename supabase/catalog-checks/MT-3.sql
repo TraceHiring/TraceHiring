@@ -2,13 +2,14 @@
 -- partitioned table, view, materialized view or foreign table in scope whose lower-cased name matches a banned
 -- pattern (birth dates, honesty, trust or cheat scores, emotion, voiceprints, face templates, gaze flags). The
 -- pattern reject applies only to relations in schema integrity, because quality-cutoff rejection and item review
--- are legitimate elsewhere. Same scope and skips as MT-1. Underscores are escaped with the default LIKE escape.
-with scope_schema as (
+-- are legitimate elsewhere. Same scope (partitions and INHERITS descendants included) and skips as MT-1. Underscores
+-- are escaped with the default LIKE escape.
+with recursive scope_schema as (
   select n.oid
   from pg_namespace as n
   where n.nspname in ('public', 'private', 'quality', 'integrity')
 ),
-scope_rel as (
+scope_rel (oid) as (
   select c.oid
   from pg_class as c
   where c.relnamespace in (select s.oid from scope_schema as s)
@@ -18,6 +19,10 @@ scope_rel as (
   cross join lateral pg_partition_tree(c.oid) as t
   where c.relkind = 'p'
     and c.relnamespace in (select s.oid from scope_schema as s)
+  union
+  select i.inhrelid
+  from pg_inherits as i
+  join scope_rel as r on r.oid = i.inhparent
 ),
 scope_column as (
   select n.nspname, c.relname, a.attname

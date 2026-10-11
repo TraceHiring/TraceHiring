@@ -3,14 +3,15 @@
 -- for column privileges that the same table-level privilege does not already explain. (b) an aclexplode(relacl)
 -- entry on an in-scope table (relkind r or p) that gives TRUNCATE, TRIGGER or REFERENCES to a grantee other than the
 -- owner. (b) reads ACL entries, not has_table_privilege, so superusers do not show up. TRUNCATE ignores RLS.
--- Same scope and skips as MT-1. Functions are those in the four schemas, prokind f, p, a or w. The CASE around
--- has_sequence_privilege keeps the planner from calling it on a non-sequence, which raises an error.
-with scope_schema as (
+-- Same scope (partitions and INHERITS descendants included) and skips as MT-1. Functions are those in the four
+-- schemas, prokind f, p, a or w. The CASE around has_sequence_privilege keeps the planner from calling it on a
+-- non-sequence, which raises an error.
+with recursive scope_schema as (
   select n.oid
   from pg_namespace as n
   where n.nspname in ('public', 'private', 'quality', 'integrity')
 ),
-scope_rel as (
+scope_rel (oid) as (
   select c.oid
   from pg_class as c
   where c.relnamespace in (select s.oid from scope_schema as s)
@@ -20,6 +21,10 @@ scope_rel as (
   cross join lateral pg_partition_tree(c.oid) as t
   where c.relkind = 'p'
     and c.relnamespace in (select s.oid from scope_schema as s)
+  union
+  select i.inhrelid
+  from pg_inherits as i
+  join scope_rel as r on r.oid = i.inhparent
 ),
 scope_class as (
   select c.oid, c.relkind, c.relowner, c.relacl, format('%I.%I', n.nspname, c.relname) as qualified_name
