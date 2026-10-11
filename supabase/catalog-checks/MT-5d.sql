@@ -319,8 +319,9 @@ closure (seed_classid, seed_oid, classid, objid, lvl, mask) as (
 ),
 -- reach: a node of the walk reaches a target schema. how: dep when the node lives there (a relation through its
 -- inheritance trees too) or is a type, schema or function there, src when a function body without comments
--- (caller.src) names the schema (quality. or "quality"., or 'quality' as a format() argument: after format( in the
--- same statement, case-insensitive), cfg when a function's search_path setting lists it.
+-- (caller.src) names the schema (quality. or "quality"., or 'quality' as an argument of format(), quote_ident() or
+-- set_config(): after the call's open parenthesis in the same statement, case-insensitive), cfg when a function's
+-- search_path setting lists it.
 reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
   select cl.seed_classid, cl.seed_oid, rr.nspname, cl.lvl, cl.mask, 'dep'::text
   from closure as cl
@@ -352,10 +353,11 @@ reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
     and position(t.nspname in f.lsrc) > 0
     and (
       f.src ~* ('(^|[^[:alnum:]_$])("' || t.nspname || '"|' || t.nspname || ')[[:space:]]*\.')
-      -- format( then string literals or anything but a quote or a semicolon (\x3b, the end of the statement), then
-      -- the schema as a literal
+      -- format(, quote_ident( or set_config( then string literals or anything but a quote or a semicolon (\x3b, the
+      -- end of the statement), then the schema as a literal
       or f.src ~* (
-        '(^|[^[:alnum:]_$])format[[:space:]]*\((?:[^''\x3b]|''(?:[^'']|'''')*'')*''' || t.nspname || ''''
+        '(^|[^[:alnum:]_$])(?:format|quote_ident|set_config)[[:space:]]*\('
+        || '(?:[^''\x3b]|''(?:[^'']|'''')*'')*''' || t.nspname || ''''
       )
     )
   union all
