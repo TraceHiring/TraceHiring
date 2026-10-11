@@ -10,6 +10,8 @@
 //     case), or a file containing gitleaks' inline allow marker: `gitleaks dir` honours an ignore
 //     file in the scanned directory and skips marked lines, so either could hide a finding
 //   - a dist/ holds an archive (by name or by magic bytes), whose content cannot be scanned
+//   - a dist/ (or anything in it) is a symlink, junction or other entry that is neither a regular
+//     file nor a directory (by lstat): the scan never follows it, but deploy tools upload the target
 //   - `gitleaks stdin` finds a key in the dist/ content (every file, binary or not, in sorted
 //     order after a fixed ASCII header, in overlapping pieces between blank lines so gitleaks
 //     never cuts a key), which catches files `gitleaks dir` skips by path or type
@@ -21,6 +23,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -93,10 +96,20 @@ const sortedEntries = (abs) =>
   );
 
 /**
+ * A dist/ entry that is a symlink, junction, FIFO, socket or device (S1.4 N8/N9 security review
+ * N12). The scan never follows one, but wrangler's asset and Pages uploads stat each entry and
+ * upload the target, so content no scan read could ship.
+ */
+const NOT_FILE_OR_DIR =
+  'neither a regular file nor a directory (a link or special file: deploy tools follow it and ' +
+  'upload content this scan does not read)';
+
+/**
  * Anything in a dist/ that could make gitleaks skip a finding there (S1.4 security review M5):
- * an ignore, config or baseline file at any depth, an archive (by name or by magic bytes), or a
- * file containing the inline allow marker (in any case). Symlinks are not followed; a symlink
- * with a hider's name still counts.
+ * an ignore, config or baseline file at any depth, an archive (by name or by magic bytes), a
+ * file containing the inline allow marker (in any case), or an entry (the dist/ itself included)
+ * that lstat says is neither a regular file nor a directory (N12). Links are never followed; a
+ * link with a hider's name still counts.
  * @param {string} root repository root
  * @param {string} rel repo-relative POSIX path of the dist/ directory
  * @returns {string[]} problems
@@ -113,11 +126,16 @@ export function findHiders(root, rel) {
         );
         continue;
       }
-      if (e.isDirectory()) {
+      // lstat, not the directory entry's type, so a link is never taken for its target.
+      const st = lstatSync(childAbs);
+      if (st.isDirectory()) {
         walk(childAbs, childRel);
         continue;
       }
-      if (!e.isFile()) continue;
+      if (!st.isFile()) {
+        problems.push(`${childRel}: ${NOT_FILE_OR_DIR}`);
+        continue;
+      }
       const buf = readFileSync(childAbs);
       if (ARCHIVE_RE.test(e.name) || ARCHIVE_MAGIC.some((m) => startsWith(buf, m))) {
         problems.push(
@@ -130,7 +148,12 @@ export function findHiders(root, rel) {
       }
     }
   };
-  walk(path.join(root, ...rel.split('/')), rel);
+  const distAbs = path.join(root, ...rel.split('/'));
+  if (!lstatSync(distAbs).isDirectory()) {
+    problems.push(`${rel}: ${NOT_FILE_OR_DIR}`);
+    return problems;
+  }
+  walk(distAbs, rel);
   return problems;
 }
 

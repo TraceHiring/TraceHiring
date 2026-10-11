@@ -4,7 +4,8 @@
 // bytes, so no secret-shaped string is ever committed.
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, symlinkSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -459,6 +460,66 @@ describe('scanDist (real gitleaks)', () => {
     const r = scanDist({ root });
     expect(r.ok).toBe(false);
     expect(r.problems.join('\n')).toMatch(/assets\/data\.dat: archive in build output/);
+  });
+
+  // S1.4 N8/N9 security review N12: the scan does not follow links, but wrangler's asset and Pages
+  // uploads stat each entry and upload the link's target, so nothing in a dist/ may be a link (or
+  // any other entry that is neither a regular file nor a directory).
+  describe('links in dist/ (N12)', () => {
+    /** A secret outside every dist/, which a link inside dist/ points at. */
+    const outside = () => ({ 'outside/secret/config.js': `x("${sbSecret()}");\n` });
+    const LINK_PROBLEM = 'neither a regular file nor a directory';
+
+    it('fails on a directory junction (a directory symlink on Linux) inside dist/', () => {
+      const root = cleanRepo(outside());
+      symlinkSync(
+        path.join(root, 'outside', 'secret'),
+        path.join(root, 'apps', 'candidate', 'dist', 'assets', 'vendor'),
+        'junction',
+      );
+      const r = scanDist({ root });
+      expect(r.ok).toBe(false);
+      expect(r.problems.join('\n')).toContain(`apps/candidate/dist/assets/vendor: ${LINK_PROBLEM}`);
+      expect(findHiders(root, 'apps/candidate/dist')).toEqual([
+        expect.stringContaining(`apps/candidate/dist/assets/vendor: ${LINK_PROBLEM}`),
+      ]);
+    });
+
+    it('fails on a file symlink inside dist/', (ctx) => {
+      const root = cleanRepo(outside());
+      try {
+        symlinkSync(
+          path.join(root, 'outside', 'secret', 'config.js'),
+          path.join(root, 'workers', 'edge', 'dist', 'config.js'),
+          'file',
+        );
+      } catch (err) {
+        // The only skip in this file: Windows refuses file symlinks without admin rights or
+        // developer mode. Linux CI creates the link, so the case always runs there.
+        if (err.code === 'EPERM' && process.platform === 'win32') {
+          ctx.skip('Windows needs admin rights or developer mode for a file symlink (EPERM)');
+        }
+        throw err;
+      }
+      const r = scanDist({ root });
+      expect(r.ok).toBe(false);
+      expect(r.problems.join('\n')).toContain(`workers/edge/dist/config.js: ${LINK_PROBLEM}`);
+    });
+
+    it('fails when a dist/ itself is a junction', () => {
+      const root = cleanRepo({
+        'apps/docs/package.json': pkg(),
+        'outside/build/index.js': 'console.log("fixture");\n',
+      });
+      symlinkSync(
+        path.join(root, 'outside', 'build'),
+        path.join(root, 'apps', 'docs', 'dist'),
+        'junction',
+      );
+      const r = scanDist({ root });
+      expect(r.ok).toBe(false);
+      expect(r.problems.join('\n')).toContain(`apps/docs/dist: ${LINK_PROBLEM}`);
+    });
   });
 
   it('keeps the default rules in the repository .gitleaks.toml', () => {
