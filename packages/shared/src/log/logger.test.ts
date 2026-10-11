@@ -177,6 +177,22 @@ describe('security review regressions (S1.7)', () => {
     expect(text).not.toContain(synth.mobile());
   });
 
+  // Spec review L2 (and redactor review #1's requested test): a message changed after the stack
+  // was captured is no longer in the stack's header, so it cannot be used to find the message
+  // lines; a frame-shaped one-token line of the old message must still not survive.
+  it('drops frame-shaped message lines when the message changed after the stack was captured', () => {
+    const word = synth.word(3);
+    const err = new Error(`dup ${synth.email()}\nat ${word}.${word}:1:1`);
+    expect(err.stack).toContain(`at ${word}.${word}:1:1`); // the stack is built with the message
+    err.message = 'other';
+    const out = serializeError(err);
+    expect(out.stack?.length).toBeGreaterThan(0);
+    const text = JSON.stringify(out);
+    expect(text).not.toContain(word);
+    expect(text).not.toContain('dup');
+    for (const frame of out.stack ?? []) expect(frame).toMatch(/^at .*:\d+:\d+\)?$/);
+  });
+
   it('keeps only V8 frames ending in line:column, at most 20', () => {
     const err = new Error('x');
     err.stack = ['Error: x', ...Array.from({ length: 30 }, (_, i) => `    at f${i} (m.js:${i}:1)`)]
