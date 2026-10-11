@@ -81,3 +81,17 @@ Diff: `git diff fa147f8 e04446e` (branch `m0a/s3-workers`, 4 commits, 18 files).
   - the S3A-3 boundaries rule: owner M0a, before REVIEW;
   - (d) extraction, owner M0b;
   - the Sentry `waitUntil` note: owner "before D1" with H6.
+
+## Re-review of the fixes (Sonnet, 2026-10-12): **PASS**
+Diff `git diff e04446e 621c545` (`m0a/s3a-fixes`; writer commits `1205dcc`, `621c545`). Tests: edge 24 → 29, jobs 30 → 34, api 30 → 34 (writer's runs; typecheck and lint clean).
+- **S3A-1: fixed.**
+  - A first `app.use('*')` middleware turns any non-Error into `new Error('non_error_thrown')`.
+  - The `onError` body has a try/catch with a static `{"error":"internal"}` fallback (`application/json`, `no-store`).
+  - The tests throw a string, `null` and an object, and also exercise a throwing sink or reporter getter. They would fail without the fix (Hono `compose.js` / `hono-base.js:258-282`).
+- **S3A-2: fixed.** The tests send a query, the authorization, cookie, IP and user-agent headers, and a POST body. They assert that none of it reaches the body, the logs or the reporter, on both the 500 and 404 paths.
+- **S3A-3: fixed.**
+  - A raw-source scan (`import.meta.glob`, `?raw`) covers `src/app.ts` and `src/index.ts`.
+  - It has a negative control and a guard against an empty scan.
+  - The lead also added `check-boundaries` rule 7 (`cf4b139`).
+- **Deviation (b): fixed.** Top-level `observability: { enabled: false }` in all three files. Envs inherit it (wrangler 4.149.0 `cli.js:27257-27263`, `inheritable`).
+- **S3A-R1 (Info, optional):** the name-based pattern would not catch another reporter library such as `toucan-js`. The `AppDeps` / `Env` key checks and rule 7 cover the realistic paths. No action in M0a.
