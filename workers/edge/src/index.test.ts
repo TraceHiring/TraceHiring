@@ -112,6 +112,65 @@ describe('the error path', () => {
   // Built at run time so no PII-shaped literal sits in the repo.
   const synthetic = (): string => ['pat', 'example.test'].join('@');
 
+  // Request data of every kind the error path must never read or echo, also built at run time.
+  const requestData = () => {
+    const token = ['tok', 'live', 'x9y8z7w6v5'].join('_');
+    const session = ['sid', 'q1w2e3r4t5'].join('');
+    const ip = ['192', '0', '2', '77'].join('.');
+    const forwarded = ['192', '0', '2', '78'].join('.');
+    const agent = ['SyntheticAgent', '7.7.7'].join('/');
+    return {
+      query: `?email=${encodeURIComponent(synthetic())}&token=${token}`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        cookie: `sid=${session}`,
+        'cf-connecting-ip': ip,
+        'x-forwarded-for': forwarded,
+        'user-agent': agent,
+      },
+      body: JSON.stringify({ contact: synthetic() }),
+      values: [synthetic(), encodeURIComponent(synthetic()), token, session, ip, forwarded, agent],
+    };
+  };
+
+  it('keeps request data out of the 500 body and the log line', async () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: unknown) => {
+      lines.push(String(line));
+    });
+    const data = requestData();
+
+    const response = await callWorker(`/health${data.query}`, brokenEnv('boom'), {
+      headers: data.headers,
+    });
+
+    expect(response.status).toBe(500);
+    const everything = [await response.text(), ...lines].join(' | ');
+    for (const value of data.values) {
+      expect(everything).not.toContain(value);
+    }
+  });
+
+  it('keeps request data out of the 404 body and the log', async () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: unknown) => {
+      lines.push(String(line));
+    });
+    const data = requestData();
+
+    const response = await callWorker(`/nope${data.query}`, withEnv({}), {
+      method: 'POST',
+      headers: { ...data.headers, 'content-type': 'application/json' },
+      body: data.body,
+    });
+
+    expect(response.status).toBe(404);
+    const everything = [await response.text(), ...lines].join(' | ');
+    for (const value of data.values) {
+      expect(everything).not.toContain(value);
+    }
+  });
+
   it('answers 500 {"error":"internal"} with no message and no stack', async () => {
     const lines: string[] = [];
     vi.spyOn(console, 'log').mockImplementation((line: unknown) => {
