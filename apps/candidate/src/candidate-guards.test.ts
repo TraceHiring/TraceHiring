@@ -4,6 +4,7 @@
 // root, which pulls the zod contracts into the bundle, spec D3). The test reads this app's own
 // production sources as text, so a forbidden name fails here even if a build would tree-shake it.
 import { describe, expect, it } from 'vitest';
+import indexHtml from '../index.html?raw';
 import pkg from '../package.json';
 
 const all = import.meta.glob('./**/*.{ts,tsx}', {
@@ -15,9 +16,12 @@ const all = import.meta.glob('./**/*.{ts,tsx}', {
 /** Production sources: everything under src/ except the tests (which name what is forbidden). */
 const sources = Object.entries(all).filter(([file]) => !/\.test\.tsx?$/.test(file));
 
-/** Media capture (rule 8): none of these may appear in the candidate app in M0a. */
+/**
+ * Media capture (rule 8): none of these may appear in the candidate app in M0a. `capture=` / `capture:`
+ * is HTML Media Capture (an <input capture> or a `capture` prop), which opens the camera or recorder.
+ */
 const MEDIA_CAPTURE =
-  /getUserMedia|getDisplayMedia|mediaDevices|enumerateDevices|MediaRecorder|ImageCapture/i;
+  /getUserMedia|getDisplayMedia|mediaDevices|enumerateDevices|MediaRecorder|ImageCapture|\bcapture\s*[=:]/i;
 
 /** Error reporters, Sentry and analytics or session-replay vendors (spec §9.2, build-notes Q17). */
 const REPORTING_OR_ANALYTICS =
@@ -51,6 +55,12 @@ describe('candidate sources', () => {
     expect(where(REPORTING_OR_ANALYTICS)).toEqual([]);
   });
 
+  it('keep index.html free of media capture, reporters and analytics', () => {
+    expect(indexHtml).toContain('<div id="root">');
+    expect(indexHtml).not.toMatch(MEDIA_CAPTURE);
+    expect(indexHtml).not.toMatch(REPORTING_OR_ANALYTICS);
+  });
+
   it('import @trace/shared only as @trace/shared/log, and no zod', () => {
     const imported = sources.flatMap(([, text]) => specifiers(text));
     const shared = imported.filter((s) => s === '@trace/shared' || s.startsWith('@trace/shared/'));
@@ -73,8 +83,27 @@ describe('guard patterns (negative controls)', () => {
       'new MediaRecorder(stream)',
       'navigator.mediaDevices.enumerateDevices()',
       'new ImageCapture(track)',
+      '<input type="file" accept="video/*" capture="user">',
+      '<input capture = environment>',
+      'createElement("input", { capture: "user" })',
     ])
       expect(MEDIA_CAPTURE.test(bad), bad).toBe(true);
+  });
+
+  it('let ordinary words through the media pattern', () => {
+    for (const ok of ['const captured = 1;', 'onClickCapture', '<div id="root"></div>', 'captures'])
+      expect(MEDIA_CAPTURE.test(ok), ok).toBe(false);
+  });
+
+  it('flag a bad index.html (the same patterns catch markup)', () => {
+    const bad = [
+      '<input type="file" capture="user">',
+      '<script src="https://cdn.example.test/analytics.js"></script>',
+      '<script>window.Sentry = {}</script>',
+    ];
+    expect(MEDIA_CAPTURE.test(bad[0] ?? '')).toBe(true);
+    expect(REPORTING_OR_ANALYTICS.test(bad[1] ?? '')).toBe(true);
+    expect(REPORTING_OR_ANALYTICS.test(bad[2] ?? '')).toBe(true);
   });
 
   it('flag reporters and analytics', () => {
