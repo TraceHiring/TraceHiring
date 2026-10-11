@@ -92,7 +92,8 @@
         "literal_true",
         "auth_call_unwrapped",
         "system_schema_policy",
-        "inherited_table_policy"
+        "inherited_table_policy",
+        "qual_without_column"
       ]
     },
     {

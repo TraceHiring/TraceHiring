@@ -9,6 +9,11 @@
 --   auth_call_unwrapped: USING or WITH CHECK calls auth.uid() or auth.jwt() (a FUNCEXPR node in the stored node
 --     tree, polqual or polwithcheck) that does not sit inside a scalar sub-select (an EXPR_SUBLINK node,
 --     subLinkType 4), so the call runs per row. (select (auth.jwt() ->> 'org_id')::uuid) is compliant.
+--   qual_without_column: a USING or WITH CHECK that is not literally true (that is literal_true) and, in its node
+--     tree, refers to no column of the policy's table (a VAR whose varlevelsup equals the number of QUERY nodes
+--     around it) and calls no function outside the built-ins (a function, operator function, aggregate or window
+--     function with an oid of 16384 or more), such as 1 = 1, not false or now() < '2030-01-01', on a table that is
+--     not on the reference list below.
 -- In-scope tables: every relation in public, private, quality and integrity, every relation that postgres can SET
 -- ROLE to the owner of in a system-list schema where a migration can still create objects (escape_schema below),
 -- and every pg_inherits descendant of those (INHERITS children and partitions, recursively, wherever they live).
@@ -207,6 +212,49 @@ finding (oid, branch, detail) as (
     'USING or WITH CHECK is literally true'::text
   from scope_policy as sp
   where (sp.using_text = 'true' or sp.check_text = 'true')
+    and not exists (
+      select 1
+      from reference_table as rt
+      where rt.schema_name = sp.nspname
+        and rt.table_name = sp.relname
+        and rt.adr ~ '^ADR-[0-9]+'
+    )
+  union all
+  select distinct
+    pt.oid,
+    'qual_without_column'::text,
+    format('%s refers to no column of its table and calls no function outside the built-ins', pt.clause)::text
+  from policy_tree as pt
+  join scope_policy as sp on sp.oid = pt.oid
+  where case pt.clause when 'USING' then sp.using_text else sp.check_text end <> 'true'
+    and not exists (
+      select 1
+      from tree_node as v
+      where v.oid = pt.oid
+        and v.clause = pt.clause
+        and v.piece like '{VAR %'
+        and substring(v.piece from ':varlevelsup ([0-9]+)')::int = (
+          select count(*)
+          from tree_node as q
+          where q.oid = v.oid
+            and q.clause = v.clause
+            and q.piece like '{QUERY %'
+            and q.ord < v.ord
+            and v.ord < q.end_ord
+        )
+    )
+    and not exists (
+      select 1
+      from tree_node as fn
+      where fn.oid = pt.oid
+        and fn.clause = pt.clause
+        and coalesce(
+          substring(fn.piece from '^\{FUNCEXPR :funcid ([0-9]+) '),
+          substring(fn.piece from '^\{[A-Z]+ :opno [0-9]+ :opfuncid ([0-9]+) '),
+          substring(fn.piece from '^\{AGGREF :aggfnoid ([0-9]+) '),
+          substring(fn.piece from '^\{WINDOWFUNC :winfnoid ([0-9]+) ')
+        )::oid >= 16384::oid
+    )
     and not exists (
       select 1
       from reference_table as rt
