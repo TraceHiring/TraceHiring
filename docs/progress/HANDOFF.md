@@ -46,10 +46,10 @@ The next session may be on another account: start from `docs/progress/RESUME-PRO
 | `worktree-agent-*` | writer scratch | contained in named branches; do not use |
 
 ## Next step (in order; max 2 writers; check usage after every agent result)
-1. Small security re-review (Sonnet) of `26855cb..2b81ac4` (`packages/shared/src/log/redact.ts`: H1 + K2): the
-   H1 shapes (`token = v`, `my token = v`, `token = "v"`, `Token  :  v`, `auth.token = v`) and the K2 shapes
-   (`Bearer =v`, `Basic =v`, `Bearer :v`, `Basic :v`) redacted and idempotent; `Token v`/`Bearer v`/`Basic v` still
-   redacted; linear guards untouched. Record in `docs/reviews/`.
+1. **J1 (lead, test-first, Low):** the H1/K2 re-review is done (PASS WITH FINDINGS,
+   `docs/reviews/M0a-S1.7-redactor-h1-k2-security-rereview.md`): `Token` + 4–8 spaces/tabs + `=`/`:` + value leaks
+   (regression from H1). Add the reviewer's tests, then `sub(/\b(Token\s{4,8}[=:]\s{0,3})[^\s"',;]+/gi, keepPrefix)`
+   after the `Token` step in `packages/shared/src/log/redact.ts`; `@trace/shared` suite; note the fix in that review.
 2. **K1 (lead, before S3):** `scripts/check-staging-secrets.mjs` test-first (spec §7.2 step 6, AT-15 local part):
    allow-list `{edge:[],jobs:[],api:[]}`, unit tests over recorded `wrangler secret list` output, fails closed.
 3. Merge `m0a/s2s3-prep` (P1–P4); record P5 decisions (spec §14 + build-notes "Autopilot changes"; no `scripts/`

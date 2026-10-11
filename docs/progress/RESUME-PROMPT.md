@@ -9,7 +9,7 @@ earlier chats is available or needed. The short "paste prompt" the founder uses 
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
 - **Now: milestone M0a (toolchain, pipeline, skeleton), phase BUILD; S1 (S1.0–S1.7) done and through the S1.7 gate
-  (2026-10-11 20:10 IST); next: H1/K2 re-review, K1, then S2 ∥ S3.** `milestone/m0a` was fast-forwarded to the gate
+  (2026-10-11 20:10 IST); next: J1, K1, then S2 ∥ S3.** `milestone/m0a` was fast-forwarded to the gate
   tip; checkpoints `cp/m0a-02`, `cp/m0a-03`. No milestone is closed yet (no `m*-reviewed` tag). Spec
   `specs/m0-foundations.md` is at revision 14. Founder decisions of 2026-10-11 18:55 IST (build-notes §0) apply:
   backstop scope, Sonnet/Opus model policy, CI via draft PR 1, SessionStart hook reads the integration handoff.
@@ -74,7 +74,7 @@ STEP 3 — Verify, then report in 5 lines whether the repo matches the handoff (
   remote after this wrap-up's push. Draft PR 1 (integration → `main`) shows the CI result of the integration tip.
 
 STEP 4 — Do the HANDOFF "Next step" list in order. Summary (HANDOFF and the review reports have the details):
-1. Small security re-review (Sonnet) of `26855cb..2b81ac4` (redactor H1 + gate fix K2); record it in `docs/reviews/`.
+1. J1 (lead, test-first): `Token` + 4–8 spaces + `=`/`:` leak (`docs/reviews/M0a-S1.7-redactor-h1-k2-security-rereview.md`).
 2. K1 (lead, test-first): `scripts/check-staging-secrets.mjs` (spec §7.2 step 6, AT-15 local part).
 3. Merge `m0a/s2s3-prep` (P1–P4), record P5 (no `scripts/` grant); S2 ∥ S3 per `docs/progress/S2-S3-PLAN.md`
    (max 2 writers; Sonnet for mechanical placeholders, Opus for the deploy job). Before CLOSE also: spec revision 15
