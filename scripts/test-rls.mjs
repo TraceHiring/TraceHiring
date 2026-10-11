@@ -7,8 +7,9 @@
 //   2. Lock: every checkout (worktrees, clean clones) shares one local stack, keyed by the
 //      project_id in supabase/config.toml. An exclusive lock file in the OS temp dir records the
 //      PID and checkout path. A live holder is waited for up to 15 minutes, then named in the
-//      failure; a holder whose PID is dead is taken over with a warning. The lock is released on
-//      exit, on failure and on a signal.
+//      failure; a holder whose PID is dead is taken over with a warning (the stale file is moved
+//      aside by an atomic rename and checked, so two runs taking it over at once never delete
+//      each other's fresh lock). The lock is released on exit, on failure and on a signal.
 //   3. `pnpm exec supabase start -x <services M0a does not need>`; auth (gotrue) stays on.
 //   4. `pnpm exec supabase db reset --local` rebuilds the database from zero.
 //   5. `pnpm exec supabase test db --local --debug`: --debug makes pg_prove print every
@@ -33,6 +34,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -336,11 +338,14 @@ export function lockPathFor(lockDir, projectId) {
   return path.join(lockDir, `trace-supabase-${projectId}.lock`);
 }
 
+/** The file operations the lock uses (tests inject an interleaving through them). */
+const NODE_FS = Object.freeze({ readFileSync, writeFileSync, renameSync, unlinkSync });
+
 /** @returns {{ raw: string, holder: {pid: number, checkout: string, token: string} | null } | null} */
-function readLock(file) {
+function readLock(fs, file) {
   let raw;
   try {
-    raw = readFileSync(file, 'utf8');
+    raw = fs.readFileSync(file, 'utf8');
   } catch (e) {
     if (e.code === 'ENOENT') return null;
     throw e;
@@ -361,9 +366,9 @@ function readLock(file) {
 }
 
 /** Creates the lock file only if it does not exist. */
-function tryCreate(file, content) {
+function tryCreate(fs, file, content) {
   try {
-    writeFileSync(file, content, { flag: 'wx' });
+    fs.writeFileSync(file, content, { flag: 'wx' });
     return true;
   } catch (e) {
     if (e.code === 'EEXIST') return false;
@@ -371,15 +376,29 @@ function tryCreate(file, content) {
   }
 }
 
-/** Deletes the lock file only if it still holds exactly `raw` (never another run's fresh lock). */
-function removeIfUnchanged(file, raw) {
-  const now = readLock(file);
-  if (now === null || now.raw !== raw) return;
+/**
+ * Removes the lock file only if it still holds exactly `raw`, never another run's fresh lock
+ * (W2 database review W2-1). The file is first renamed to `aside`, a name only this run uses:
+ * the rename is atomic, so when two runs take over the same stale lock only one moves it. If
+ * what was moved is not `raw` (another run removed the stale lock and created its own first),
+ * it is put back with an exclusive create, never over a lock a third run took meanwhile.
+ * @returns {boolean} false when a moved lock could not be put back
+ */
+function removeIfUnchanged(fs, file, raw, aside) {
   try {
-    unlinkSync(file);
+    fs.renameSync(file, aside);
+  } catch (e) {
+    if (e.code === 'ENOENT') return true;
+    throw e;
+  }
+  const moved = fs.readFileSync(aside, 'utf8');
+  const restored = moved === raw || tryCreate(fs, file, moved);
+  try {
+    fs.unlinkSync(aside);
   } catch (e) {
     if (e.code !== 'ENOENT') throw e;
   }
+  return restored;
 }
 
 const describeHolder = (h) => `PID ${h.pid} (checkout: ${h.checkout})`;
@@ -399,23 +418,25 @@ export async function acquireLock({
   warn,
   timeoutMs = LOCK_TIMEOUT_MS,
   pollMs = LOCK_POLL_MS,
+  fs = NODE_FS,
 }) {
   const token = randomBytes(8).toString('hex');
   const content = `${JSON.stringify({ pid, checkout, token, startedAt: new Date(now()).toISOString() })}\n`;
+  const aside = `${file}.${token}.aside`;
   const started = now();
   let lastSeen = null;
   for (;;) {
-    if (tryCreate(file, content)) {
+    if (tryCreate(fs, file, content)) {
       let released = false;
       const release = () => {
         if (released) return;
         released = true;
-        const cur = readLock(file);
-        if (cur?.holder?.token === token) removeIfUnchanged(file, cur.raw);
+        const cur = readLock(fs, file);
+        if (cur?.holder?.token === token) removeIfUnchanged(fs, file, cur.raw, aside);
       };
       return { ok: true, release };
     }
-    const cur = readLock(file);
+    const cur = readLock(fs, file);
     if (cur === null) continue; // released between our attempt and the read: try again
     const { holder } = cur;
     if (holder && (holder.pid === pid || !isPidAlive(holder.pid))) {
@@ -424,7 +445,12 @@ export async function acquireLock({
           ? `taking over the stale lock ${file}: it records this process's PID ${pid} (checkout: ${holder.checkout}), left by an earlier run`
           : `taking over the stale lock ${file}: ${describeHolder(holder)} is not running`,
       );
-      removeIfUnchanged(file, cur.raw);
+      if (!removeIfUnchanged(fs, file, cur.raw, aside)) {
+        warn(
+          `while taking over the stale lock ${file}, another run's new lock was moved aside and could not be put back ` +
+            `because a third run took the lock meanwhile; those two runs may share the local stack`,
+        );
+      }
       continue;
     }
     const who = holder ? describeHolder(holder) : `an unreadable lock file ${file}`;
