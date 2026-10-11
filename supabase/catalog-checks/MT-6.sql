@@ -1,12 +1,14 @@
 -- MT-6 (spec specs/m0-foundations.md §8.5, rule 2): an enum with a label where lower(enumlabel) like '%reject%', if
 -- the enum type is in schema integrity, or is used by a column of a relation (table, partitioned table, view,
--- materialized view or foreign table) in integrity. Column use is resolved recursively: directly, through an array
--- type (typelem of a true array), or through a domain (typbasetype, nested domains and domains over arrays too).
--- A use that passes through any domain is domain_column, else through an array is array_column, else
--- direct_column. unused_integrity_enum covers an integrity enum that no integrity column uses. Extension members in
--- their extension's own namespace are skipped.
-with recursive integrity_column (relid, attname, typid, via_domain, via_array) as (
-  select a.attrelid, a.attname, a.atttypid, false, false
+-- materialized view or foreign table) in integrity. Column use is resolved recursively, through any mix of: an
+-- array type (typelem of a true array), a domain (typbasetype), a composite type (the types of its attributes,
+-- through typrelid), a range (pg_range.rngsubtype) or a multirange (its range, pg_range.rngmultitypid). A use that
+-- passes through any domain is domain_column, else through an array array_column, else through a composite type
+-- composite_column, else through a range or multirange range_column, else direct_column. The depth guard only stops
+-- runaway recursion. unused_integrity_enum covers an integrity enum that no integrity column uses. Extension members
+-- in their extension's own namespace are skipped.
+with recursive integrity_column (relid, attname, typid, via_domain, via_array, via_composite, via_range, depth) as (
+  select a.attrelid, a.attname, a.atttypid, false, false, false, false, 0
   from pg_attribute as a
   join pg_class as c on c.oid = a.attrelid
   join pg_namespace as n on n.oid = c.relnamespace
@@ -18,13 +20,42 @@ with recursive integrity_column (relid, attname, typid, via_domain, via_array) a
   select
     ic.relid,
     ic.attname,
-    case when t.typtype = 'd' then t.typbasetype else t.typelem end,
-    ic.via_domain or t.typtype = 'd',
-    ic.via_array or t.typtype <> 'd'
+    st.typid,
+    ic.via_domain or st.step = 'domain',
+    ic.via_array or st.step = 'array',
+    ic.via_composite or st.step = 'composite',
+    ic.via_range or st.step = 'range',
+    ic.depth + 1
   from integrity_column as ic
-  join pg_type as t on t.oid = ic.typid
-  where t.typtype = 'd'
-    or (t.typelem <> 0 and t.typsubscript = 'array_subscript_handler'::regproc)
+  cross join lateral (
+    select 'domain'::text as step, t.typbasetype as typid
+    from pg_type as t
+    where t.oid = ic.typid
+      and t.typtype = 'd'
+    union all
+    select 'array'::text, t.typelem
+    from pg_type as t
+    where t.oid = ic.typid
+      and t.typelem <> 0
+      and t.typsubscript = 'array_subscript_handler'::regproc
+    union all
+    select 'composite'::text, a.atttypid
+    from pg_type as t
+    join pg_attribute as a on a.attrelid = t.typrelid
+    where t.oid = ic.typid
+      and t.typtype = 'c'
+      and a.attnum > 0
+      and not a.attisdropped
+    union all
+    select 'range'::text, r.rngsubtype
+    from pg_range as r
+    where r.rngtypid = ic.typid
+    union all
+    select 'range'::text, r.rngtypid
+    from pg_range as r
+    where r.rngmultitypid = ic.typid
+  ) as st
+  where ic.depth < 32
 ),
 reject_enum as (
   select t.oid, n.nspname, t.typname
@@ -49,7 +80,16 @@ reject_enum as (
     )
 ),
 reject_use as (
-  select ic.relid, ic.attname, ic.via_domain, ic.via_array, re.oid as enum_oid, re.nspname, re.typname
+  select
+    ic.relid,
+    ic.attname,
+    ic.via_domain,
+    ic.via_array,
+    ic.via_composite,
+    ic.via_range,
+    re.oid as enum_oid,
+    re.nspname,
+    re.typname
   from integrity_column as ic
   join reject_enum as re on re.oid = ic.typid
 )
@@ -57,6 +97,8 @@ select
   case
     when ru.via_domain then 'domain_column'
     when ru.via_array then 'array_column'
+    when ru.via_composite then 'composite_column'
+    when ru.via_range then 'range_column'
     else 'direct_column'
   end::text as branch,
   format('%I.%I.%I', n.nspname, c.relname, ru.attname)::text as object,

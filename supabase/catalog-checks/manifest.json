@@ -11,7 +11,10 @@
       ]
     },
     { "id": "MT-2", "branches": ["missing_org_id", "org_id_not_uuid", "org_id_nullable"] },
-    { "id": "MT-3", "branches": ["banned_column", "integrity_reject_column"] },
+    {
+      "id": "MT-3",
+      "branches": ["banned_column", "integrity_reject_column", "composite_type_column"]
+    },
     {
       "id": "MT-4",
       "branches": [
@@ -31,7 +34,14 @@
     { "id": "MT-5d", "branches": ["foreign_key", "trigger_function", "policy_expression"] },
     {
       "id": "MT-6",
-      "branches": ["unused_integrity_enum", "direct_column", "array_column", "domain_column"]
+      "branches": [
+        "unused_integrity_enum",
+        "direct_column",
+        "array_column",
+        "domain_column",
+        "composite_column",
+        "range_column"
+      ]
     },
     {
       "id": "MT-7",
