@@ -163,6 +163,21 @@ describe('value patterns', () => {
     expect(out).toContain(REDACTED);
   });
 
+  // Redactor security review #5: other Authorization schemes and every Cookie pair in free text.
+  it.each([
+    ['Authorization: Bot', (t: string) => `Authorization: Bot ${t}`],
+    ['Authorization=ApiKey', (t: string) => `authorization=ApiKey ${t}`],
+    ['Proxy-Authorization', (t: string) => `Proxy-Authorization: Custom ${t}`],
+    ['a later Cookie pair', (t: string) => `Cookie: theme=dark; tc=${t}`],
+    ['Set-Cookie', (t: string) => `Set-Cookie: sid=${t}; Path=/`],
+  ])('redacts the credential in a free-text %s header', (_label, build) => {
+    const token = `${synth.upi(3).split('@')[0]}${synth.upi(4).split('@')[0]}`;
+    const out = redactString(`got ${build(token)}`);
+    expect(out).not.toContain(token);
+    expect(out).toContain(REDACTED);
+    expect(redactString(out)).toBe(out);
+  });
+
   it('still redacts an email whose local part has a dot', () => {
     const email = `${synth.upi().split('@')[0]}.${synth.upi(2).replace('@', '@mail.')}.example`;
     const out = redactString(`mail ${email} now`);

@@ -178,6 +178,9 @@ const STEPS: readonly Step[] = [
   // secrets and tokens first, so later patterns never see their pieces
   sub(/(?<![\w-])eyJ[\w-]*\.[\w-]*\.[\w-]*/g, REDACTED),
   sub(/\b(?:Bearer|Basic|Token)\s{1,8}[^\s"',;]+/gi, REDACTED),
+  // free-text headers: any Authorization scheme, and every Cookie pair, not only the first
+  sub(/\b((?:proxy-)?authorization\s{0,3}[=:]\s{0,3})[^\r\n"',;]+/gi, keepPrefix),
+  sub(/\b((?:set-)?cookie\s{0,3}[=:]\s{0,3})[^\r\n"']+/gi, keepPrefix),
   sub(/\bsb_secret_[\w-]*/g, REDACTED),
   sub(/\bpostgres(?:ql)?:\/\/[^\s"']+/gi, REDACTED),
   // userinfo in any other URL (`scheme://user:password@host`): keep the scheme and the host
