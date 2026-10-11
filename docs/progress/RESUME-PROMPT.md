@@ -1,6 +1,6 @@
 # Resume prompt — the full procedure for the next Claude Code session (any account)
 
-Written 2026-10-11 09:25 IST by the lead session; updated 13:55 IST. Everything the next session needs is in git; nothing from
+Written 2026-10-11 09:25 IST by the lead session; updated 20:10 IST. Everything the next session needs is in git; nothing from
 earlier chats is available or needed. The short "paste prompt" the founder uses points here.
 
 ## 1. What Trace is and where the build stands
@@ -8,12 +8,11 @@ earlier chats is available or needed. The short "paste prompt" the founder uses 
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Now: milestone M0a (toolchain, pipeline, skeleton), phase BUILD, step S1.7 (shared code + database).**
-  S1.0–S1.6 are built and reviewed. S1.7 is code-complete; as of 2026-10-11 18:20 IST left before the S1.7 gate:
-  catalog fix pass D (E1 Medium, E2) on `m0a/s17-assembly`, redactor G2 on `m0a/redactor-g-lows`, their short
-  re-reviews, the merges, a full `pnpm verify` with a real `test:rls`, then the spec-reviewer gate (HANDOFF "Next step"
-  has the exact list). No milestone is closed yet (no `m*-reviewed` tag; last checkpoint `cp/m0a-01`). Spec
-  `specs/m0-foundations.md` is at revision 13.
+- **Now: milestone M0a (toolchain, pipeline, skeleton), phase BUILD; S1 (S1.0–S1.7) done and through the S1.7 gate
+  (2026-10-11 20:10 IST); next: H1/K2 re-review, K1, then S2 ∥ S3.** `milestone/m0a` was fast-forwarded to the gate
+  tip; checkpoints `cp/m0a-02`, `cp/m0a-03`. No milestone is closed yet (no `m*-reviewed` tag). Spec
+  `specs/m0-foundations.md` is at revision 14. Founder decisions of 2026-10-11 18:55 IST (build-notes §0) apply:
+  backstop scope, Sonnet/Opus model policy, CI via draft PR 1, SessionStart hook reads the integration handoff.
 - **Integration branch: `m0a/integration`** (all reviewed lead work + review reports + this file).
   `milestone/m0a` (`adbbb61`) moves only at the S1.7 gate. Older integration names
   (`claude/trace-autopilot-production-87e5e2`, `claude/trace-autopilot-resume-2dac7c`) are retired ancestors.
@@ -28,7 +27,7 @@ earlier chats is available or needed. The short "paste prompt" the founder uses 
 | `docs/progress/FOUNDER-QUEUE.md` | Questions only the founder can answer (AUTOPILOT §3); add new ones here |
 | `docs/progress/RESTORE.md` | Restoring from a bundle, rolling back to a `cp/*` checkpoint |
 | `docs/reviews/*.md` | Review reports with exact repros and fix plans (S1.4 re-review, S1.7 database x2, redactor) |
-| `specs/m0-foundations.md` (rev 11) | The M0a spec: §5 root scripts, §8 Supabase + catalog checks, §9.1 logger/redactor, §13 acceptance tests, §14 streams |
+| `specs/m0-foundations.md` (rev 14) | The M0a spec: §5 root scripts, §8 Supabase + catalog checks, §9.1 logger/redactor, §13 acceptance tests, §14 streams |
 | `docs/plan.md`, `docs/build-order.md`, `docs/plan-conflicts.md`, `docs/build-notes.md`, `docs/adr/` | Product spec, milestone order and exit gates, resolved contradictions, founder answers, settled decisions (precedence: AUTOPILOT §1) |
 | `.claude/skills/trace-handoff`, `.claude/skills/trace-milestone-review` | End-of-session handoff; milestone REVIEW gate |
 | `.claude/agents/{spec,security,database}-reviewer.md` | Read-only reviewer agents used before any merge |
@@ -70,21 +69,17 @@ STEP 3 — Verify, then report in 5 lines whether the repo matches the handoff (
 - `docker ps`: container `supabase_db_trace` is the shared local stack. If it is down:
   `pnpm exec supabase start -x realtime,storage-api,imgproxy,mailpit,studio,edge-runtime,logflare,vector,supavisor,postgres-meta`
   (write the output to a file; never pipe docker/supabase output into `head` on Windows)
-- Branch tips as in HANDOFF.md "Branches": `m0a/integration` (newest `chore(progress)` commit), `m0a/s17-assembly` @ `a014953`,
-  `m0a/catalog-pass-c` @ `471b8b9`, `m0a/redactor-g-lows` @ `b90329b`, `m0a/s2s3-prep` (P1–P4), `milestone/m0a` @ `adbbb61`. All
-  are on the `trace` remote after this wrap-up's push.
+- Branch tips as in HANDOFF.md "Branches": `m0a/integration` (newest `chore(progress)` commit), `milestone/m0a` @ `54bd44d`, the
+  S1.7 gate tip (tag `cp/m0a-03`), `m0a/s2s3-prep` @ `1c7dc63` (P1–P4), `main` @ `fe77a87`. All are on the `trace`
+  remote after this wrap-up's push. Draft PR 1 (integration → `main`) shows the CI result of the integration tip.
 
 STEP 4 — Do the HANDOFF "Next step" list in order. Summary (HANDOFF and the review reports have the details):
-1. Two writers in parallel (max 2): catalog pass D (E1, E2; `docs/reviews/M0a-S1.7-catalog-pass-c-database-review.md`)
-   from `m0a/s17-assembly` @ `a014953`, and redactor G2 on `m0a/redactor-g-lows` @ `b90329b`
-   (`docs/reviews/M0a-S1.7-redactor-f-lows-security-rereview.md`). Test-first, one commit per finding.
-2. Short re-reviews: database-reviewer on pass D; security-reviewer on `055eaf6..m0a/redactor-g-lows`.
-3. Merge into `m0a/integration` with `--no-ff`: `m0a/s17-assembly` (with pass D) and `m0a/redactor-g-lows`; full
-   `pnpm verify` incl. a real `pnpm test:rls --stop` from a cold stack.
-4. Gate: spec-reviewer on `adbbb61..m0a/integration`; `git merge --ff-only` in the `milestone/m0a` worktree; tags
-   `cp/m0a-02`, `cp/m0a-03`.
-5. Merge `m0a/s2s3-prep` (P1–P4), record P5; S2 ∥ S3 per `docs/progress/S2-S3-PLAN.md`. Before CLOSE also: P3 and the
-   gitleaks allowlist fix (HANDOFF "Owed before M0a CLOSE"). Do not start M0b or any later milestone.
+1. Small security re-review (Sonnet) of `26855cb..2b81ac4` (redactor H1 + gate fix K2); record it in `docs/reviews/`.
+2. K1 (lead, test-first): `scripts/check-staging-secrets.mjs` (spec §7.2 step 6, AT-15 local part).
+3. Merge `m0a/s2s3-prep` (P1–P4), record P5 (no `scripts/` grant); S2 ∥ S3 per `docs/progress/S2-S3-PLAN.md`
+   (max 2 writers; Sonnet for mechanical placeholders, Opus for the deploy job). Before CLOSE also: spec revision 15
+   (gate K3), the gitleaks allowlist fix, the M0a summary's Deferred table (HANDOFF "Owed before M0a CLOSE").
+   Do not start M0b or any later milestone.
 Rules learned the hard way:
 - Usage: check it often. The founder allows work to ~95% of each 5-hour window, with STEP 5 finished by 95–96%; parallel Opus agents can use 70% in 30 minutes, so check `get_usage` after every agent result. Max 2–3 agents at
   once (5 agents used ~50% of a Pro window in 15 minutes; one review agent ≈ 7–9%). Start STEP 5 by 80–85% if
@@ -116,9 +111,14 @@ Resume the Trace autopilot from exactly where the last session stopped. You may 
 repo in this folder is the only source of truth. First run:
   git fetch trace
   git show m0a/integration:docs/progress/RESUME-PROMPT.md
-and follow that file exactly, step by step (sections 1–3). Ignore any handoff text injected at session start
-wherever it disagrees with branch m0a/integration. Never commit on main, never force-push, never delete
-branches, tags or worktrees, never deploy to production, and stop to ask me only for the founder gates in
-docs/AUTOPILOT.md §3. Work until about 95% of the 5-hour usage limit, with the STEP 5 wrap-up (log, backup, push) finished by
-95–96%, then print the next prompt. Use parallel agents within docs/AUTOPILOT.md §2.
+(on a fresh clone use trace/m0a/integration) and follow that file exactly, step by step (sections 1–3),
+then read docs/progress/HANDOFF.md and the last rows of docs/progress/LOG.md on m0a/integration.
+If m0a/integration is checked out in another worktree, enter that worktree with the EnterWorktree tool
+(path from `git worktree list`) as RESUME-PROMPT STEP 2 says.
+Ignore any handoff text injected at session start wherever it disagrees with branch m0a/integration.
+Never commit on main, never force-push, never delete branches, tags or worktrees, never deploy to
+production, and stop to ask me only for the founder gates in docs/AUTOPILOT.md §3. Work until about 95% of the
+5-hour usage limit, with the STEP 5 wrap-up (log, backup, push) finished by 95–96%, then print the next
+prompt. Use parallel agents within docs/AUTOPILOT.md §2 (max 2 writers at once), and check usage after
+every agent result.
 ```
