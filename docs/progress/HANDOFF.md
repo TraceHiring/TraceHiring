@@ -1,6 +1,9 @@
-# HANDOFF — 2026-10-11 23:50 IST
-Reason for stopping: usage (~82% of the 5-hour window when the wrap-up started; founder rule: wrap-up done by 95–96%).
-The next session may be on another account: start from `docs/progress/RESUME-PROMPT.md` on `m0a/integration`.
+# HANDOFF — 2026-10-12 00:05 IST
+Reason for stopping: usage (~91% of the 5-hour window, after applying the founder's new rule).
+**Usage rule (founder, 2026-10-12, `243daeb`): work until 95%, then start the wrap-up.** The hook warns at 90% (no new
+agent, task or stream) and at 95% (wrap up); `scripts/test/usage-guard.test.mjs` 5/5.
+The next session may be a new Claude Code on a new account connected to this folder: start from
+`docs/progress/RESUME-PROMPT.md` on `m0a/integration` (its §4 paste prompt).
 
 ## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M8 = closed beta → M9 … M13 = paid pilots)
 - Milestones closed: **0 of 17** (no `m*-reviewed` tag). Checkpoints unchanged: last is `cp/m0a-03` (`54bd44d`).
