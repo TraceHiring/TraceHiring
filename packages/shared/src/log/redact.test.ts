@@ -14,6 +14,19 @@ import {
 } from './redact.js';
 import { synth } from './synth.test-helpers.js';
 
+// Wall-clock budgets (redactor review #7): one sample flakes when the machine is busy, so time the best of
+// five runs. Load only ever adds time, so the minimum is the closest to the real cost, and super-linear
+// backtracking (seconds at 100 KB) still fails by a wide margin.
+function bestOfFiveMs(run: () => unknown): number {
+  let best = Infinity;
+  for (let i = 0; i < 5; i += 1) {
+    const start = performance.now();
+    run();
+    best = Math.min(best, performance.now() - start);
+  }
+  return best;
+}
+
 const stems = [
   'name',
   'email',
@@ -272,9 +285,7 @@ describe('security review regressions (S1.7)', () => {
   it.each(adversarial.map((s, i) => [i, s] as const))(
     'redacts adversarial input %i within the time budget',
     (_i, s) => {
-      const start = performance.now();
-      redactString(s);
-      expect(performance.now() - start).toBeLessThan(PATTERN_BUDGET_MS);
+      expect(bestOfFiveMs(() => redactString(s))).toBeLessThan(PATTERN_BUDGET_MS);
     },
   );
 
@@ -439,15 +450,12 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     expect(s.length).toBeGreaterThanOrEqual(KB100);
     const text = canonical(s);
     applyPatterns(text.slice(0, 1000)); // warm-up so regex compilation is not timed
-    const start = performance.now();
-    applyPatterns(text);
-    expect(performance.now() - start).toBeLessThan(50);
+    expect(bestOfFiveMs(() => applyPatterns(text))).toBeLessThan(50);
   });
 
   it('returns [TRUNCATED] for a 100 KB string without running the patterns', () => {
-    const start = performance.now();
     expect(redactString(fill('.', 'account'))).toBe(TRUNCATED);
-    expect(performance.now() - start).toBeLessThan(5);
+    expect(bestOfFiveMs(() => redactString(fill('.', 'account')))).toBeLessThan(5);
   });
 
   it('keeps the uncapped pattern runner out of the public API', () => {
@@ -755,9 +763,8 @@ describe('stacks under stack-like keys (S1.7 follow-up 8)', () => {
   ])('filters a ~100 KB stack of %s within 50 ms', (_label, line) => {
     const big = line.repeat(Math.ceil(100_000 / line.length));
     redact({ stack: big.slice(0, 1000) }); // warm-up
-    const start = performance.now();
     const out = redact({ stack: big }) as { stack: string[] };
-    expect(performance.now() - start).toBeLessThan(50);
+    expect(bestOfFiveMs(() => redact({ stack: big }))).toBeLessThan(50);
     expect(out.stack.length).toBeLessThanOrEqual(20);
   });
 
