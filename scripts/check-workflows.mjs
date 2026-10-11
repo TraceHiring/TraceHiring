@@ -960,7 +960,11 @@ export function actionInstalls(doc) {
 
 function listFiles(dir, pred, acc = []) {
   if (!existsSync(dir)) return acc;
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
+  // Sorted, so the result never depends on the file system's directory order (N4).
+  const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  );
+  for (const e of entries) {
     const abs = path.join(dir, e.name);
     if (e.isDirectory()) listFiles(abs, pred, acc);
     else if (pred(e.name)) acc.push(abs);
@@ -992,7 +996,14 @@ export function runChecks(root) {
     if (!r) continue;
     const refs = new Set();
     out.push(...checkAction(r.doc, relp(abs), { localActions: refs }));
-    actions.set(relp(path.dirname(abs)), { doc: r.doc, file: relp(abs), refs });
+    const dir = relp(path.dirname(abs));
+    // GitHub prefers action.yml; with both present the Map could keep a decoy action.yaml and
+    // compute installs from the wrong file (S1.4 security re-review N4), so both fail.
+    if (actions.has(dir)) {
+      out.push(v(dir, '', 'an action directory may not hold both action.yml and action.yaml'));
+      continue;
+    }
+    actions.set(dir, { doc: r.doc, file: relp(abs), refs });
   }
   for (const { file, refs } of actions.values()) {
     for (const a of refs) {

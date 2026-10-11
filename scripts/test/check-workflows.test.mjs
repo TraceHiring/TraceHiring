@@ -781,6 +781,16 @@ describe('runChecks over a fixture repository', () => {
       expect(msgs(runChecks(root))).toMatch(/inner\/action\.yml.*not pinned/);
     });
 
+    // S1.4 security re-review N4: GitHub runs action.yml, so a second manifest could be a decoy.
+    it('fails when one action directory holds both action.yml and action.yaml', () => {
+      const root = repo({
+        '.github/workflows/ci.yml': CI,
+        '.github/actions/setup/action.yml': ACTION,
+        '.github/actions/setup/action.yaml': ACTION,
+      });
+      expect(msgs(runChecks(root))).toMatch(/setup.*both action\.yml and action\.yaml/);
+    });
+
     it('fails when a nested local action is missing', () => {
       const root = repo({
         '.github/workflows/ci.yml': CI,
