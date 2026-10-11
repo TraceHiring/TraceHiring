@@ -466,6 +466,32 @@ describe('checkWorkflow', () => {
     expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/may not use container: or services:/);
   });
 
+  // N10–N13 re-review P2: the image of a deploy-staging container (or service) decides which bash
+  // runs the steps that hold the staging secrets, and its env:/options: escape checkEnv.
+  it.each([
+    [
+      'container',
+      (d) =>
+        (d.jobs['deploy-staging'].container = {
+          image: `node@sha256:${'a'.repeat(64)}`,
+          options: '--env BASH_ENV=/x',
+        }),
+    ],
+    [
+      'services',
+      (d) =>
+        (d.jobs['deploy-staging'].services = {
+          s: { image: 'postgres:17', env: { LD_PRELOAD: './x.so' } },
+        }),
+    ],
+  ])('rejects %s on deploy-staging', (_label, mutate) => {
+    const d = doc();
+    mutate(d);
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+      /\(jobs\.deploy-staging\): a required job or deploy-staging may not use container: or services:/,
+    );
+  });
+
   // N10 made env: names fail closed, so CI_FLAG (accepted here before N10) now fails; the
   // ordinary names that pass are the ones on ENV_ALLOW_LIST.
   it('accepts an ordinary env: name such as DO_NOT_TRACK', () => {

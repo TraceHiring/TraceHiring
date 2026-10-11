@@ -947,12 +947,15 @@ export function checkWorkflow(doc, file, ctx = {}) {
       out.push(v(file, where, 'continue-on-error is not allowed on a job'));
     }
     checkEnv(job.env, file, where, out);
-    // A job container (or service) image decides which bash runs the steps (N9).
+    // A job container (or service) image decides which bash runs the steps (N9), and its env: and
+    // options: are not checked by checkEnv; deploy-staging's steps hold the staging secrets (P2).
     if (
-      REQUIRED_JOBS.includes(name) &&
+      (REQUIRED_JOBS.includes(name) || name === DEPLOY_JOB) &&
       (job.container !== undefined || job.services !== undefined)
     ) {
-      out.push(v(file, where, 'a required job may not use container: or services:'));
+      out.push(
+        v(file, where, 'a required job or deploy-staging may not use container: or services:'),
+      );
     }
     if (REQUIRED_JOBS.includes(name) && job.if !== undefined) {
       out.push(
