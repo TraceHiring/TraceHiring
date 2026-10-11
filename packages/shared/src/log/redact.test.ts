@@ -476,6 +476,13 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['deep body of escaped quotes', 'token=\\\\\\"' + fill('\\\\\\\\\\\\\\"')],
     ['deep body of outer quotes', 'token=\\\\\\"' + fill('\\" ')],
     ['numbers under escaped keys', fill('otp\\\\\\":1,')],
+    // IPv6 tokens of any prefix (redactor review #6)
+    ['one long token of hex groups', fill('a1:')],
+    ['one long token of words', fill('xy:')],
+    ['many parts of hex groups', fill('a:b:-')],
+    ['many parts with an address', fill(`_${synth.ipv6Doc()}`)],
+    ['dashes and colons', fill('-:')],
+    ['colon-led words', fill(':a ')],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -830,6 +837,45 @@ describe('IPv6 after a word prefix (S1.7 follow-up 6)', () => {
 
   it('leaves clock times and other word:value pairs after a prefix alone', () => {
     const s = 'at:12:30:45 ts:2026-10-11T12:30:45Z std::vector error:abc:def level:warn';
+    expect(redactString(s)).toBe(s);
+  });
+
+  // Redactor security review #6: any prefix of word characters, dashes and colons (documentation-
+  // range addresses only). A prefix of hex groups reads as part of the address and goes with it.
+  const full = ['2001', 'db8', ...[3, 5, 7, 11, 13, 17].map((n) => (n * 977).toString(16))].join(
+    ':',
+  );
+  it.each([
+    ['a chained prefix', 'via:from:', synth.ipv6Doc(3)],
+    ['a chained prefix, full address', 'via:from:', full],
+    ['an underscore-led prefix', '_src:', synth.ipv6Doc(4)],
+    ['a digit-led prefix', '1st:', synth.ipv6Doc(5)],
+    ['a dash-led prefix', '-peer:', synth.ipv6Doc(6)],
+    ['a prefix over 32 characters', `${'x'.repeat(40)}:`, synth.ipv6Doc(7)],
+    ['a prefix over 128 characters', `${'peer-'.repeat(30)}to:`, full],
+    ['a prefix of words, dashes and underscores', 'peer-addr_v6:', synth.ipv6Doc(8)],
+  ])('redacts the address after %s and keeps the prefix', (_label, prefix, ip) => {
+    const out = redactString(`conn ${prefix}${ip} closed`);
+    expect(out).toBe(`conn ${prefix}${REDACTED} closed`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('redacts a chained prefix of hex groups with the address', () => {
+    const ip = synth.ipv6Doc(9);
+    expect(redactString(`conn a:b:${ip} closed`)).toBe(`conn ${REDACTED} closed`);
+    expect(redactString(`conn via:a:b:${ip} closed`)).toBe(`conn via:${REDACTED} closed`);
+  });
+
+  it('still redacts addresses next to dashes, underscores and colons', () => {
+    const [a, b] = [synth.ipv6Doc(10), synth.ipv6Doc(11)];
+    expect(redactString(`range ${a}-${b} x`)).toBe(`range ${REDACTED}-${REDACTED} x`);
+    expect(redactString(`via_${a}_v6 x`)).toBe(`via_${REDACTED}_v6 x`);
+    expect(redactString(`addr ${a}: refused`)).not.toContain(a);
+    expect(redactString(`[${full}]:443`)).toBe(`[${REDACTED}]:443`);
+  });
+
+  it('leaves word:word chains and two-group hex pairs alone', () => {
+    const s = 'urn:isbn:x Foo::bar cafe:beef:dead a:b:c via:from:to std::map::at x:12:30';
     expect(redactString(s)).toBe(s);
   });
 });

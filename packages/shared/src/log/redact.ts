@@ -200,8 +200,40 @@ const redactQuotedValues = (text: string): string => {
   return out + text.slice(last);
 };
 
-/** An IPv6 candidate is an address only with "::" or at least three colons (not a clock time). */
-const isIpv6 = (m: string): boolean => m.includes('::') || (m.match(/:/g)?.length ?? 0) >= 3;
+/**
+ * An IPv6 address: hex groups of at most four digits and two to eight colons, with "::" or at
+ * least three colons (so clock times are left alone). Never longer than MAX_IPV6 characters.
+ */
+const IPV6_SHAPE = /^(?:[0-9a-f]{0,4}:){2,8}[0-9a-f]{0,4}$/i;
+const MAX_IPV6 = 44;
+const isIpv6 = (s: string): boolean =>
+  IPV6_SHAPE.test(s) && (s.includes('::') || (s.match(/:/g)?.length ?? 0) >= 3);
+
+/**
+ * Where the longest address that ends `part` starts (at 0 or right after a ':'), or -1. Only the
+ * last MAX_IPV6 characters can hold it, so each part costs a bounded amount of work.
+ */
+const ipv6Start = (part: string): number => {
+  for (let i = Math.max(0, part.length - MAX_IPV6); i < part.length - 1; i++) {
+    if ((i === 0 || part[i - 1] === ':') && isIpv6(part.slice(i))) return i;
+  }
+  return -1;
+};
+
+/**
+ * IPv6 in a token of word characters, dashes and colons with at least two colons (redactor review
+ * #6): each piece between dashes and underscores loses its longest address suffix, and keeps the
+ * prefix before it (`from:`, `via:from:`, `_src:`, `1st:`, a prefix of any length). A prefix of
+ * hex groups (`a:b:`) reads as part of the address and goes with it. The lookbehind starts the
+ * token once per run of its characters, and its two first runs exclude ':', so it is linear.
+ */
+const redactIpv6 = (text: string): string =>
+  text.replace(/(?<![\w:-])[\w-]*:[\w-]*:[\w:-]*/g, (token) =>
+    token.replace(/[^_-]+/g, (part) => {
+      const at = ipv6Start(part);
+      return at < 0 ? part : `${part.slice(0, at)}${REDACTED}`;
+    }),
+  );
 
 type Step = (text: string) => string;
 const sub =
@@ -260,16 +292,8 @@ const STEPS: readonly Step[] = [
   sub(/(?<![a-z0-9])[a-z]{3}\d{7}(?![a-z0-9])/gi, REDACTED),
   sub(/(?<![a-z0-9])[a-z]{4}0[a-z0-9]{6}(?![a-z0-9])/gi, REDACTED),
   sub(/(?<![a-z0-9])[a-z]\d{7}(?![a-z0-9])/gi, REDACTED),
-  // IPv6 (needs "::" or at least three colons, so clock times are left alone)
-  sub(/(?<![0-9a-z:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-z:])/gi, (m) =>
-    isIpv6(m) ? REDACTED : m,
-  ),
-  // IPv6 right after a `word:` prefix (`from:fe80::1`), which the lookbehind above skips: keep
-  // the prefix. The prefix starts at most once per run of word characters and is bounded.
-  sub(
-    /(?<![\w:-])([a-z][\w-]{0,31}:)((?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4})(?![0-9a-z:])/gi,
-    (m, prefix = '', ip = '') => (isIpv6(ip) ? `${prefix}${REDACTED}` : m),
-  ),
+  // IPv6, alone or after a `word:` prefix (`from:fe80::1`); clock times are left alone
+  redactIpv6,
   // long hex, and long base64 that mixes upper case, lower case and digits (random tokens)
   sub(/(?<![a-z0-9])[0-9a-f]{32,}(?![a-z0-9])/gi, REDACTED),
   sub(/(?<![\w+/-])[\w+/-]{32,}={0,2}/g, (m) =>
