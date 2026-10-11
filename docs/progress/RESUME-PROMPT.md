@@ -1,6 +1,6 @@
 # Resume prompt — the full procedure for the next Claude Code session (any account)
 
-Written 2026-10-11 09:25 IST by the lead session; updated 20:10 and 23:50 IST. Everything the next session needs is in git; nothing from
+Written 2026-10-11 09:25 IST by the lead session; updated 20:10 and 23:50 IST, and 2026-10-12 01:45 IST. Everything the next session needs is in git; nothing from
 earlier chats is available or needed. The short "paste prompt" the founder uses points here.
 
 ## 1. What Trace is and where the build stands
@@ -8,12 +8,12 @@ earlier chats is available or needed. The short "paste prompt" the founder uses 
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Now: milestone M0a (toolchain, pipeline, skeleton), phase BUILD; S1 (S1.0–S1.7) done and through the S1.7 gate
-  (2026-10-11 20:10 IST); K1, K3, the gitleaks fix, H3 and the deny-rule widening done (23:50 IST); S3a written
-  (`m0a/s3-workers`, not reviewed), S2 mostly written (`m0a/s2-ui`, writer stalled at its last check); next: review
-  and merge S2 and S3a, then W-S3b.** `milestone/m0a` was fast-forwarded to the gate
-  tip; checkpoints `cp/m0a-02`, `cp/m0a-03`. No milestone is closed yet (no `m*-reviewed` tag). Spec
-  `specs/m0-foundations.md` is at revision 15. Founder decisions of 2026-10-11 18:55 IST (build-notes §0) apply:
+- **Now: milestone M0a (toolchain, pipeline, skeleton), phase BUILD, about 95% done. S1, S2 and S3a are reviewed and
+  merged (2026-10-12; `cp/m0a-04` = `a45505d`, `milestone/m0a` fast-forwarded there). W-S3b (the deploy-staging job) is
+  written, reviewed and fixed on `m0a/s3b-fixes` @ `ba3ac88`; its re-review and merge state are in HANDOFF.md "Next step" 1.
+  Then: the check-workflows export gap, the AT-1a-local re-run and AT-1b on the final tip, the summary draft, and stop
+  BUILD (REVIEW is a fresh session).** No milestone is closed yet (no `m*-reviewed` tag). Spec
+  `specs/m0-foundations.md` is at revision 16. Founder decisions of 2026-10-11 18:55 IST (build-notes §0) apply:
   backstop scope, Sonnet/Opus model policy, CI via draft PR 1, SessionStart hook reads the integration handoff.
 - **Integration branch: `m0a/integration`** (all reviewed lead work + review reports + this file).
   `milestone/m0a` (`adbbb61`) moves only at the S1.7 gate. Older integration names
@@ -29,7 +29,7 @@ earlier chats is available or needed. The short "paste prompt" the founder uses 
 | `docs/progress/FOUNDER-QUEUE.md` | Questions only the founder can answer (AUTOPILOT §3); add new ones here |
 | `docs/progress/RESTORE.md` | Restoring from a bundle, rolling back to a `cp/*` checkpoint |
 | `docs/reviews/*.md` | Review reports with exact repros and fix plans (S1.4 re-review, S1.7 database x2, redactor) |
-| `specs/m0-foundations.md` (rev 14) | The M0a spec: §5 root scripts, §8 Supabase + catalog checks, §9.1 logger/redactor, §13 acceptance tests, §14 streams |
+| `specs/m0-foundations.md` (rev 16) | The M0a spec: §5 root scripts, §8 Supabase + catalog checks, §9.1 logger/redactor, §13 acceptance tests, §14 streams |
 | `docs/plan.md`, `docs/build-order.md`, `docs/plan-conflicts.md`, `docs/build-notes.md`, `docs/adr/` | Product spec, milestone order and exit gates, resolved contradictions, founder answers, settled decisions (precedence: AUTOPILOT §1) |
 | `.claude/skills/trace-handoff`, `.claude/skills/trace-milestone-review` | End-of-session handoff; milestone REVIEW gate |
 | `.claude/agents/{spec,security,database}-reviewer.md` | Read-only reviewer agents used before any merge |
@@ -71,18 +71,18 @@ STEP 3 — Verify, then report in 5 lines whether the repo matches the handoff (
 - `docker ps`: container `supabase_db_trace` is the shared local stack. If it is down:
   `pnpm exec supabase start -x realtime,storage-api,imgproxy,mailpit,studio,edge-runtime,logflare,vector,supavisor,postgres-meta`
   (write the output to a file; never pipe docker/supabase output into `head` on Windows)
-- Branch tips as in HANDOFF.md "Branches": `m0a/integration` (newest `chore(progress)` commit), `milestone/m0a` @ `54bd44d`, the
-  S1.7 gate tip (tag `cp/m0a-03`), `m0a/s2-ui` @ `54620e6` (W-S2), `m0a/s3-workers` @ `e04446e` (W-S3a),
-  `m0a/s2s3-prep` @ `1c7dc63` (merged), `main` @ `fe77a87`. All are on the `trace` remote after this wrap-up's push. Draft PR 1 (integration → `main`) shows the CI result of the integration tip.
+- Branch tips as in HANDOFF.md "Branches": `m0a/integration` (newest `chore(progress)` commit), `milestone/m0a` @ `a45505d`
+  (tag `cp/m0a-04`, or `cp/m0a-05` if the S3b merge happened), `m0a/s3b-fixes` @ `ba3ac88` (W-S3b + fixes),
+  `m0a/s2-fixes` @ `ca75411` and `m0a/s3a-fixes` @ `621c545` (merged), `main` @ `fe77a87`. All are on the `trace` remote
+  after this wrap-up's push. Draft PR 1 (integration → `main`) shows the CI result of the integration tip.
 
 STEP 4 — Do the HANDOFF "Next step" list in order. Summary (HANDOFF and the review reports have the details):
-1. (J1, K1, K3, gitleaks fix, P1–P4, H3 and the deny-rule widening are done; skip.)
-2. W-S2 leftovers: `git status` in its worktree, commit any wip, finish its last check (HANDOFF Next step 1).
-3. Opus reviews of S3a (`git diff fa147f8 e04446e`) and S2, fix findings, lead-only follow-ups, then merge each
-   stream `--no-ff` after a full `pnpm verify` with no writer running; `cp/m0a-04`/`-05`.
-4. W-S3b (Opus writer): the `deploy-staging` job per `docs/progress/S2-S3-PLAN.md` (`scripts/` stays lead-only).
-5. Before REVIEW: AT-1a-local, AT-1b; finish `docs/progress/M0a-summary-draft.md`.
-   Do not start M0b or any later milestone.
+1. (Everything up to the S2/S3a merges, `cp/m0a-04`, W-S3b and its fixes is done; skip.)
+2. S3b: if its re-review passed and it is not merged yet, merge `m0a/s3b-fixes` `--no-ff` (subject `chore(ci): merge …`),
+   full `pnpm verify` with no writer running, push, Linux CI green, tag `cp/m0a-05`, fast-forward `milestone/m0a`.
+3. Lead-only: the `check-workflows` export gap (run text may `export` a denied env name), test-first.
+4. Before REVIEW: re-run AT-1a-local and AT-1b on the final tip; finish `docs/progress/M0a-summary-draft.md`.
+   Then stop: the REVIEW phase runs in a fresh session. Do not start M0b or any later milestone.
 Rules learned the hard way:
 - Usage: check it often. **Work until 95% of the 5-hour window, then start STEP 5 (founder, 2026-10-12; was 90%)**,
   even if agents are still running; record any agent result that arrives later before stopping. STEP 5 costs ~3–5%,
