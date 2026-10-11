@@ -36,13 +36,22 @@ const EXPECTED = {
 };
 
 describe('root package.json scripts (spec §5)', () => {
-  it.each(Object.entries(EXPECTED))('%s runs exactly the §5 commands, in order', (name, expected) => {
-    expect(steps(name)).toEqual(expected);
-  });
+  it.each(Object.entries(EXPECTED))(
+    '%s runs exactly the §5 commands, in order',
+    (name, expected) => {
+      expect(steps(name)).toEqual(expected);
+    },
+  );
 
   it('verify runs every gate CLAUDE.md lists: typecheck, lint, unit, RLS tests, build', () => {
     const verify = steps('verify');
-    for (const gate of ['pnpm typecheck', 'pnpm lint', 'pnpm test', 'pnpm test:rls', 'pnpm build']) {
+    for (const gate of [
+      'pnpm typecheck',
+      'pnpm lint',
+      'pnpm test',
+      'pnpm test:rls',
+      'pnpm build',
+    ]) {
       expect(verify).toContain(gate);
     }
   });

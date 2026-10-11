@@ -49,7 +49,7 @@ jobs:
         run: pnpm build
 
   # Required check. Runs the local Supabase stack, pgTAP tests and the db-types drift check
-  # (§8.3). The `test:rls` script arrives in S1.7.
+  # (§8.3). `--stop` stops the stack at the end of the job.
   rls:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -61,7 +61,7 @@ jobs:
       - name: Set up toolchain and install
         uses: ./.github/actions/setup
       - name: RLS and catalog tests
-        run: pnpm test:rls
+        run: pnpm test:rls --stop
 
   # Required check. Full-history secret scan, dependency audit and OSV scan.
   security:
