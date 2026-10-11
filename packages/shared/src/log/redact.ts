@@ -316,9 +316,12 @@ const STEPS: readonly Step[] = [
   sub(/\bpostgres(?:ql)?:\/\/[^\s"']+/gi, REDACTED),
   // userinfo in any other URL (`scheme://user:password@host`): keep the scheme and the host. A
   // password may hold '/', '?', '#' and '@' (redactor review #8), so the userinfo runs to the last
-  // '@' within 256 characters. It stops at the next '://', so no stretch is read twice (linear).
+  // '@' within 256 characters, and stops at the next '://'. The scheme may start anywhere, even
+  // after '.', '-', '+', a digit or more than 32 letters (redactor lows review F5): it is at most
+  // 32 characters, so at most 32 starts reach one '://', and each reads at most 256 characters
+  // after it (linear).
   sub(
-    /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)(?:(?!:\/\/)[^\s"'<>]){0,256}@/gi,
+    /([a-z][a-z0-9+.-]{0,31}:\/\/)(?:(?!:\/\/)[^\s"'<>]){0,256}@/gi,
     (_m, scheme = '') => `${scheme}${REDACTED}@`,
   ),
   // quoted values under sensitive keys, before anything else can take a piece of them

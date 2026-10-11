@@ -574,6 +574,15 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['PANs glued to words by U+FFF9', fill(`${synth.pan()}${String.fromCodePoint(0xfff9)}ok`)],
     ['digits split by U+0600', fill(`9${String.fromCodePoint(0x600)}`)],
     ['letters split by U+13430', fill(`a${String.fromCodePoint(0x13430)}`)],
+    // a scheme may start anywhere, after any character (redactor lows review F5)
+    [
+      '32 scheme starts, then 256 userinfo characters',
+      fill(`${'a'.repeat(32)}://${'b'.repeat(256)}`),
+    ],
+    ['long scheme runs, no @', fill(`${'a1.'.repeat(20)}://${'c/'.repeat(128)}`)],
+    ['scheme runs between separators', fill('ab://')],
+    ['dotted scheme runs', fill('.a.b-c+d://x')],
+    ['long letter runs before each ://', fill(`${'q'.repeat(40)}://u:p@h `)],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -1436,5 +1445,26 @@ describe('format characters inside a value (redactor lows review F4)', () => {
     expect(out).not.toContain(secret);
     expect(redactString(out)).toBe(out);
     expect(redact({ [`to${c}ken`]: 'v' })).toEqual({ [`to${c}ken`]: REDACTED });
+  });
+});
+
+// Redactor lows review F5: the scheme's lookbehind let a scheme start only where no scheme
+// character came before it, so after `.`, `-`, `+`, a digit or a long run of letters the URL's
+// userinfo was kept (`...https://usr:ab7/cd@h.example` became `usr:ab7/[REDACTED]`).
+describe('URL userinfo after scheme characters (redactor lows review F5)', () => {
+  const user = synth.word(11);
+  const pass = `${synth.word(12).slice(0, 2)}7/${synth.word(13).slice(0, 2)}`;
+  const host = `${synth.word(14)}.example`;
+  it.each([
+    ['dots', '...'],
+    ['a digit and a dot', '1.'],
+    ['a dash', '-'],
+    ['a plus', '+'],
+    ['a digit', '7'],
+    ['over 32 letters', 'q'.repeat(40)],
+  ])('redacts the userinfo of a URL after %s', (_label, before) => {
+    const out = redactString(`fetch ${before}https://${user}:${pass}@${host}/v1 failed`);
+    expect(out).toBe(`fetch ${before}https://${REDACTED}@${host}/v1 failed`);
+    expect(redactString(out)).toBe(out);
   });
 });
