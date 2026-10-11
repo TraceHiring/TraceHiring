@@ -284,19 +284,50 @@ const ipv6Start = (part: string): number => {
   return -1;
 };
 
+/** One group of an IPv6 address: at most four hex digits (none on either side of "::"). */
+const HEX_GROUP = /^[0-9a-f]{0,4}$/i;
+
+/**
+ * The addresses in one piece of a token. Its ':'-separated segments that are not hex groups
+ * (`from`, `closed`) split it into runs of hex groups, and each run loses its longest address
+ * suffix, so an address followed by a word (`<address>:closed`) is found as well as one that ends
+ * the piece (redactor lows review F8). Each segment is tested once, and ipv6Start reads at most
+ * MAX_IPV6 characters of each run, so a piece costs time linear in its length.
+ */
+const redactIpv6Piece = (part: string): string => {
+  if (part.indexOf(':') === part.lastIndexOf(':')) return part; // an address has two colons
+  const out: string[] = [];
+  let run: string[] = [];
+  const flush = (): void => {
+    if (run.length === 0) return;
+    const text = run.join(':');
+    const at = ipv6Start(text);
+    out.push(at < 0 ? text : `${text.slice(0, at)}${REDACTED}`);
+    run = [];
+  };
+  for (const segment of part.split(':')) {
+    if (HEX_GROUP.test(segment)) {
+      run.push(segment);
+    } else {
+      flush();
+      out.push(segment);
+    }
+  }
+  flush();
+  return out.join(':');
+};
+
 /**
  * IPv6 in a token of word characters, dashes and colons with at least two colons (redactor review
- * #6): each piece between dashes and underscores loses its longest address suffix, and keeps the
- * prefix before it (`from:`, `via:from:`, `_src:`, `1st:`, a prefix of any length). A prefix of
- * hex groups (`a:b:`) reads as part of the address and goes with it. The lookbehind starts the
- * token once per run of its characters, and its two first runs exclude ':', so it is linear.
+ * #6): each piece between dashes and underscores loses the addresses in it (redactIpv6Piece), and
+ * keeps the words before and after them (`from:`, `via:from:`, `_src:`, `1st:`, `:closed`, of any
+ * length). A prefix of hex groups (`a:b:`) reads as part of the address and goes with it. The
+ * lookbehind starts the token once per run of its characters, and its two first runs exclude
+ * ':', so it is linear.
  */
 const redactIpv6 = (text: string): string =>
   text.replace(/(?<![\w:-])[\w-]*:[\w-]*:[\w:-]*/g, (token) =>
-    token.replace(/[^_-]+/g, (part) => {
-      const at = ipv6Start(part);
-      return at < 0 ? part : `${part.slice(0, at)}${REDACTED}`;
-    }),
+    token.replace(/[^_-]+/g, redactIpv6Piece),
   );
 
 type Step = (text: string) => string;

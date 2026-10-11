@@ -583,6 +583,13 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['scheme runs between separators', fill('ab://')],
     ['dotted scheme runs', fill('.a.b-c+d://x')],
     ['long letter runs before each ://', fill(`${'q'.repeat(40)}://u:p@h `)],
+    // IPv6 runs between word segments (redactor lows review F8)
+    ['hex and word segments alternating', fill('a:x:')],
+    ['runs of hex groups between words', fill('a:b:c:d:x:')],
+    ['addresses between words', fill(`${synth.ipv6Doc()}:closed:`)],
+    ['long hex-like segments', fill('abcde:')],
+    ['long word segments', fill(`${'g'.repeat(50)}:`)],
+    ['addresses between words and dashes', fill(`${synth.ipv6Doc(2)}:up-`)],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -1466,5 +1473,33 @@ describe('URL userinfo after scheme characters (redactor lows review F5)', () =>
     const out = redactString(`fetch ${before}https://${user}:${pass}@${host}/v1 failed`);
     expect(out).toBe(`fetch ${before}https://${REDACTED}@${host}/v1 failed`);
     expect(redactString(out)).toBe(out);
+  });
+});
+
+// Redactor lows review F8: only an address at the end of a piece (the text between dashes and
+// underscores of a token) was found, so one followed by a `:segment` that is not a hex group
+// (`<address>:closed`) was kept. Documentation-range addresses only, built at run time.
+describe('IPv6 followed by a word segment (redactor lows review F8)', () => {
+  const R = REDACTED;
+  const full = ['2001', 'db8', ...[19, 23, 29, 31, 37, 41].map((n) => (n * 911).toString(16))].join(
+    ':',
+  );
+  const [a, b, c] = [synth.ipv6Doc(21), synth.ipv6Doc(22), synth.ipv6Doc(23)];
+  it.each([
+    ['a full address, then a word', `${full}:closed`, `${R}:closed`],
+    ['a compressed address, then a word', `${a}:refused`, `${R}:refused`],
+    ['an address, then two words', `${a}:conn:closed`, `${R}:conn:closed`],
+    ['a prefix, an address and a word', `from:${b}:closed`, `from:${R}:closed`],
+    ['two addresses between words', `via:${b}:to:${c}:x`, `via:${R}:to:${R}:x`],
+    ['an address before a dash', `${a}:up-${c}:down`, `${R}:up-${R}:down`],
+  ])('redacts %s and keeps the words', (_label, s, expected) => {
+    const out = redactString(`conn ${s} now`);
+    expect(out).toBe(`conn ${expected} now`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('still leaves clock times and word:word chains followed by words alone', () => {
+    const s = 'at:12:30:45:ok cafe:beef:dead:x std::map::at:y a:b:c:z x:12:30:go';
+    expect(redactString(s)).toBe(s);
   });
 });
