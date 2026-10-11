@@ -659,6 +659,7 @@ function checkStepCommon(step, file, where, out, ctx) {
     out.push(v(file, where, SHELL_MESSAGE));
   }
   checkEnv(step.env, file, where, out);
+  checkRun(step.run, file, where, out);
 }
 
 /**
@@ -696,21 +697,36 @@ export const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 const ENV_ALLOWED = new Set(ENV_ALLOW_LIST);
 
 /**
- * Why a name off the allow-list is dangerous, matched in any case (only used for the message;
- * every name off the allow-list fails, whatever its case).
+ * Why a name off the allow-list is dangerous: [env: key pattern, run: text pattern, reason].
+ * The env: pattern matches in any case (only used for the message; every name off the allow-list
+ * fails, whatever its case). The run: pattern is the deny rule for run text (checkRun), where
+ * names are case-sensitive like bash's, except npm and pnpm config, which they read in any case.
  */
 const ENV_DENY_REASONS = [
   // SHELLOPTS=noexec or a BASH_ENV/ENV script skips every run: step, like a shell template (N9).
   [
     /^(?:shellopts|bashopts|bash_env|env)$/i,
+    /^(?:SHELLOPTS|BASHOPTS|BASH_ENV|ENV)$/,
     'bash reads it at startup and can skip every run: step',
   ],
-  [/^bash_func_/i, 'bash imports it as a function, which can replace any command'],
-  [/^node_/i, 'node reads it at startup (NODE_OPTIONS can preload code or exit before running)'],
-  [/^(?:npm|pnpm|yarn)_config_/i, 'pnpm and npm read it as config (script-shell can skip scripts)'],
-  [/^(?:ld|dyld)_/i, 'the dynamic loader reads it (LD_PRELOAD loads code into every program)'],
-  [/^path$/i, 'it decides which program every command runs'],
-  [/^(?:actions|github|runner)_/i, 'the runner reads it'],
+  [/^bash_func_/i, /^BASH_FUNC_/, 'bash imports it as a function, which can replace any command'],
+  [
+    /^node_/i,
+    /^NODE_/,
+    'node reads it at startup (NODE_OPTIONS can preload code or exit before running)',
+  ],
+  [
+    /^(?:npm|pnpm|yarn)_config_/i,
+    /^(?:npm|pnpm|yarn)_config_/i,
+    'pnpm and npm read it as config (script-shell can skip scripts)',
+  ],
+  [
+    /^(?:ld|dyld)_/i,
+    /^(?:LD|DYLD)_/,
+    'the dynamic loader reads it (LD_PRELOAD loads code into every program)',
+  ],
+  [/^path$/i, /^PATH$/, 'it decides which program every command runs'],
+  [/^(?:actions|github|runner)_/i, /^(?:ACTIONS|GITHUB|RUNNER)_/, 'the runner reads it'],
 ];
 
 /** null when an env: key may be set, else the reason it may not. */
@@ -718,7 +734,7 @@ function envKeyProblem(key) {
   if (ENV_NAME_RE.test(key) && ENV_ALLOWED.has(key)) return null;
   if (key.includes('${{')) return 'a key built from an expression can name any variable';
   const deny = ENV_DENY_REASONS.find(([re]) => re.test(key));
-  if (deny) return deny[1];
+  if (deny) return deny[2];
   if (!ENV_NAME_RE.test(key)) return 'a name must be upper-case letters, digits and _';
   return 'it is not on the allow-list';
 }
@@ -753,6 +769,65 @@ function checkEnv(env, file, where, out) {
         ),
       );
     }
+  }
+}
+
+// The one GITHUB_PATH write run text may make: a single directory directly under $RUNNER_TEMP
+// (the setup action's checksum-verified gitleaks), on a line of its own.
+const GITHUB_PATH_LINE_RE = /^\s*echo "\$RUNNER_TEMP\/[A-Za-z0-9_-]+" >> "\$GITHUB_PATH"\s*$/;
+
+/**
+ * run: text may only read the names ENV_DENY_REASONS covers ($NAME, ${NAME}, ${#NAME}, ${!NAME},
+ * ${NAME:-x}); any other use (an assignment, export, declare, read, unset, printf -v, a
+ * GITHUB_ENV line or a workflow command) sets what env: may not (S3b security review). Every
+ * GITHUB_ENV use is rejected: a line written to it sets any variable, named however the text
+ * builds it, for every later step. GITHUB_PATH only takes GITHUB_PATH_LINE_RE. This is a deny
+ * rule, unlike env:'s allow-list, because run text sets ordinary shell variables; what run text
+ * does beyond that is for the protected-branch review of .github/.
+ */
+function checkRun(run, file, where, out) {
+  if (typeof run !== 'string') return;
+  const named = new Set();
+  for (const m of run.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
+    const name = m[0];
+    const before = run.slice(Math.max(0, m.index - 3), m.index);
+    const after = run.slice(m.index + name.length);
+    // The whole identifier only (no match inside MY_PATH or PATH_X).
+    if (/[A-Za-z0-9_]$/.test(before)) continue;
+    const braced = /\$\{[#!]?$/.test(before);
+    if (/\$$/.test(before) || (braced && !/^:?=/.test(after))) continue;
+    const deny = ENV_DENY_REASONS.find(([, re]) => re.test(name));
+    if (deny && !named.has(name)) {
+      named.add(name);
+      out.push(
+        v(
+          file,
+          where,
+          `run: may not set or export ${name}: ${deny[2]} (run text may only read it, as $${name})`,
+        ),
+      );
+    }
+  }
+  if (/(?<![A-Za-z0-9_])GITHUB_ENV(?![A-Za-z0-9_])/.test(run)) {
+    out.push(
+      v(
+        file,
+        where,
+        'run: may not use GITHUB_ENV (a line written to it sets any variable for every later step; set ENV_ALLOW_LIST names in env:)',
+      ),
+    );
+  }
+  const pathLines = run
+    .split('\n')
+    .filter((line) => /(?<![A-Za-z0-9_])GITHUB_PATH(?![A-Za-z0-9_])/.test(line));
+  if (pathLines.some((line) => !GITHUB_PATH_LINE_RE.test(line))) {
+    out.push(
+      v(
+        file,
+        where,
+        'run: may only add a $RUNNER_TEMP directory to GITHUB_PATH, as one line: echo "$RUNNER_TEMP/<dir>" >> "$GITHUB_PATH"',
+      ),
+    );
   }
 }
 

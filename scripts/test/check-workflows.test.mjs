@@ -672,6 +672,142 @@ describe('checkWorkflow', () => {
     expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/jobs\.Static.*required/);
   });
 
+  // S3b security review, lead follow-up: run: text could set or export the names env: may not
+  // set, and GITHUB_ENV / GITHUB_PATH carry a variable or a PATH entry into every later step.
+  describe('run: text may not set denied names (S3b review gap)', () => {
+    const esc = (s) => s.replace(/[$%]/g, '\\$&');
+    const typecheck = (d) => d.jobs.static.steps[2];
+
+    it.each([
+      [
+        'export',
+        'export NODE_OPTIONS=--import=./x.mjs\npnpm typecheck',
+        'NODE_OPTIONS',
+        /node reads/,
+      ],
+      ['a command prefix', 'NODE_OPTIONS=--import=./x.mjs pnpm typecheck', 'NODE_OPTIONS', null],
+      [
+        'declare -x',
+        'declare -x LD_PRELOAD=./x.so\npnpm typecheck',
+        'LD_PRELOAD',
+        /dynamic loader/,
+      ],
+      ['a quoted export', 'export "PATH=./bin:$PATH"\npnpm typecheck', 'PATH', /which program/],
+      ['export of a read value', 'read -r BASH_ENV < x\nexport BASH_ENV', 'BASH_ENV', /bash reads/],
+      ['a := expansion', ': "${NODE_OPTIONS:=--import=./x.mjs}"', 'NODE_OPTIONS', null],
+      ['a = expansion', ': "${SHELLOPTS=noexec}"', 'SHELLOPTS', null],
+      [
+        'npm config',
+        'npm_config_script_shell=true pnpm typecheck',
+        'npm_config_script_shell',
+        /pnpm and npm/,
+      ],
+      [
+        'upper-case pnpm config',
+        'PNPM_CONFIG_SCRIPT_SHELL=true pnpm test',
+        'PNPM_CONFIG_SCRIPT_SHELL',
+        null,
+      ],
+      [
+        'a function import',
+        "export BASH_FUNC_pnpm%%='() { :; }'",
+        'BASH_FUNC_pnpm',
+        /bash imports/,
+      ],
+      ['unset', 'unset PATH\npnpm typecheck', 'PATH', null],
+      ['printf -v', 'printf -v ENV %s ./x.sh', 'ENV', null],
+      [
+        'a runner name',
+        'ACTIONS_ALLOW_UNSECURE_COMMANDS=true pnpm test',
+        'ACTIONS_ALLOW_UNSECURE_COMMANDS',
+        /runner reads/,
+      ],
+      ['a workflow command', 'echo "::set-env name=NODE_OPTIONS::x"', 'NODE_OPTIONS', null],
+    ])('rejects %s', (_label, run, name, reason) => {
+      const d = doc();
+      typecheck(d).run = run;
+      const m = msgs(checkWorkflow(d, 'ci.yml', ctx));
+      expect(m).toMatch(
+        new RegExp(`\\(jobs\\.static\\.steps\\[2\\]\\): run: may not set or export ${esc(name)}:`),
+      );
+      if (reason) expect(m).toMatch(reason);
+    });
+
+    it('reports each name once per step', () => {
+      const d = doc();
+      typecheck(d).run = 'export NODE_OPTIONS=x\nNODE_OPTIONS=y pnpm typecheck\nunset NODE_OPTIONS';
+      const found = checkWorkflow(d, 'ci.yml', ctx).filter((x) => /NODE_OPTIONS/.test(x.message));
+      expect(found).toHaveLength(1);
+    });
+
+    it.each([
+      ['a variable line', 'echo "X=1" >> "$GITHUB_ENV"'],
+      ['the braced form', 'printf "%s\\n" "X=1" >> "${GITHUB_ENV}"'],
+      ['a multi-line value', 'echo "X<<EOF" >> $GITHUB_ENV'],
+    ])('rejects any use of GITHUB_ENV (%s)', (_label, run) => {
+      const d = doc();
+      typecheck(d).run = run;
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+        /\(jobs\.static\.steps\[2\]\): run: may not use GITHUB_ENV/,
+      );
+    });
+
+    it.each([
+      ['a relative directory', 'echo "./bin" >> "$GITHUB_PATH"'],
+      ['a variable', 'echo "$dir" >> "$GITHUB_PATH"'],
+      ['the workspace', 'echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"'],
+      ['a parent directory', 'echo "$RUNNER_TEMP/../bin" >> "$GITHUB_PATH"'],
+      ['a nested directory', 'echo "$RUNNER_TEMP/a/b" >> "$GITHUB_PATH"'],
+      ['tee', 'echo "$RUNNER_TEMP/x" | tee -a "$GITHUB_PATH"'],
+      ['a second command', 'echo "$RUNNER_TEMP/x" >> "$GITHUB_PATH"; echo ./bin >> "$GITHUB_PATH"'],
+    ])('rejects a GITHUB_PATH write of %s', (_label, run) => {
+      const d = doc();
+      typecheck(d).run = run;
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+        /\(jobs\.static\.steps\[2\]\): run: may only add a \$RUNNER_TEMP directory to GITHUB_PATH/,
+      );
+    });
+
+    it('accepts adding one $RUNNER_TEMP directory to GITHUB_PATH', () => {
+      const d = doc();
+      typecheck(d).run = 'set -euo pipefail\n  echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"\n';
+      expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
+    });
+
+    it('accepts reading denied names and setting other names', () => {
+      const d = doc();
+      typecheck(d).run = [
+        'set -euo pipefail',
+        'VITE_APP_VERSION="$GITHUB_SHA" pnpm build',
+        'export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/out.ndjson"',
+        'echo "$PATH" "${PATH}" "${#NODE_OPTIONS}" "${NODE_OPTIONS:-none}" "${!RUNNER_TEMP}"',
+        'MY_PATH=./x node_modules/.bin/tsc --env staging',
+        'node scripts/smoke-staging.mjs --sha "$GITHUB_SHA" ${{ github.sha }}',
+      ].join('\n');
+      expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
+    });
+
+    it('applies to composite-action steps', () => {
+      const a = parseYaml(ACTION);
+      a.runs.steps[2].run = 'export NODE_OPTIONS=x\npnpm install --frozen-lockfile';
+      expect(msgs(checkAction(a, 'action.yml'))).toMatch(
+        /action\.yml \(runs\.steps\[2\]\): run: may not set or export NODE_OPTIONS:/,
+      );
+      const b = parseYaml(ACTION);
+      b.runs.steps[2].run = 'echo "X=1" >> "$GITHUB_ENV"';
+      expect(msgs(checkAction(b, 'action.yml'))).toMatch(/run: may not use GITHUB_ENV/);
+    });
+
+    it('applies to the deploy-staging job too', () => {
+      const d = doc();
+      const s = d.jobs['deploy-staging'].steps[2];
+      s.run = `NODE_OPTIONS=--import=./x.mjs ${s.run}`;
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+        /\(jobs\.deploy-staging\.steps\[2\]\): run: may not set or export NODE_OPTIONS:/,
+      );
+    });
+  });
+
   describe('secrets', () => {
     it('rejects secrets in workflow-level or job-level env', () => {
       const d = doc();
@@ -1105,6 +1241,36 @@ describe('runChecks over a fixture repository', () => {
       });
       expect(msgs(runChecks(root))).toMatch(
         /setup\/action\.yml \(runs\.steps\[2\]\): env: may not set NODE_OPTIONS/,
+      );
+    });
+
+    it('fails when a step of the real ci.yml exports NODE_OPTIONS in its run: text', () => {
+      const step = '      - name: Typecheck\n        run: pnpm typecheck\n';
+      expect(REAL_CI).toContain(step);
+      const root = repo({
+        '.github/workflows/ci.yml': REAL_CI.replace(
+          step,
+          step.replace('run: pnpm', 'run: export NODE_OPTIONS=--import=./x.mjs && pnpm'),
+        ),
+        '.github/actions/setup/action.yml': REAL_ACTION,
+      });
+      expect(msgs(runChecks(root))).toMatch(
+        /ci\.yml \(jobs\.static\.steps\[2\]\): run: may not set or export NODE_OPTIONS:/,
+      );
+    });
+
+    it('fails when the real setup action adds a directory to PATH other than its own', () => {
+      const line = '        echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"\n';
+      expect(REAL_ACTION).toContain(line);
+      const root = repo({
+        '.github/workflows/ci.yml': REAL_CI,
+        '.github/actions/setup/action.yml': REAL_ACTION.replace(
+          line,
+          '        echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"\n',
+        ),
+      });
+      expect(msgs(runChecks(root))).toMatch(
+        /setup\/action\.yml \(runs\.steps\[2\]\): run: may only add a \$RUNNER_TEMP directory/,
       );
     });
   });

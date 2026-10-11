@@ -33,7 +33,7 @@ runs:
           "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
         echo "${GITLEAKS_SHA256}  $dir/$archive" | sha256sum --check --strict -
         tar -xzf "$dir/$archive" -C "$dir" gitleaks
-        echo "$dir" >> "$GITHUB_PATH"
+        echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"
         "$dir/gitleaks" version
 
     - name: Install dependencies
