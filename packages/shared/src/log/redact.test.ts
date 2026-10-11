@@ -1013,6 +1013,22 @@ describe('stacks under stack-like keys (S1.7 follow-up 8)', () => {
     expect(redact({ stack: text })).toEqual({ stack: TRUNCATED });
   });
 
+  // Spec review L3: a marker that a first pass left under a stack key stays on a second pass.
+  it('keeps a [TRUNCATED] or other marker under a stack key on a second pass', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.stack = cyclic;
+    for (const input of [
+      { stack: 'x'.repeat(MAX_STRING + 1) },
+      { stackTrace: (): number => 1 },
+      { errorStack: Symbol('s') },
+      cyclic,
+    ]) {
+      const once = redact(input);
+      expect(Object.values(once as object)[0]).toMatch(/^\[[A-Z]+\]$/);
+      expect(redact(once)).toEqual(once);
+    }
+  });
+
   // Spec review M1: an element of a stack array over the cap is never split and filtered, so no
   // frame-shaped line inside it gets through; it becomes one [TRUNCATED] entry in its place.
   it('truncates an over-cap element of a stack array in place', () => {

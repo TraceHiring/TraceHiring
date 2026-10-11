@@ -457,6 +457,9 @@ const STACK_KEY = /stack(?:trace)?$/;
 const redactFrames = (frames: readonly string[]): string[] =>
   frames.map(redactString).filter(isStackFrame);
 
+/** What redact puts in place of a value; under a stack key a first pass can leave any of them. */
+const MARKERS: ReadonlySet<string> = new Set([REDACTED, TRUNCATED, CIRCULAR, UNSUPPORTED]);
+
 /** At most this many entries in a stack array, as serializeError keeps at most 20 frames. */
 const MAX_STACK_ENTRIES = 20;
 
@@ -492,6 +495,8 @@ const stackArrayFrames = (value: readonly unknown[]): string[] => {
  * keep as frames survive, so no message text does. Any other value is redacted as usual.
  */
 const redactStack = (value: unknown, depth: number, state: State): unknown => {
+  // A marker from an earlier pass stays as it is, so a second pass is stable (spec review L3).
+  if (typeof value === 'string' && MARKERS.has(value)) return value;
   if (typeof value === 'string') {
     // Over the cap, a stack string is truncated like any other string (spec §9.1: never passed through).
     if (value.length > MAX_STRING) return TRUNCATED;
