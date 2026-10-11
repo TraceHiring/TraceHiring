@@ -5,15 +5,32 @@
 -- schemas, every prokind, skipping extension members in their extension's own namespace. definer_in_system_schema
 -- is a SECURITY DEFINER function in any other schema that is not a member of any extension, is not owned by one of
 -- the Supabase service roles below and is not on the list of Supabase's own objects below (the same lists as MT-9).
+-- body_search_path is a function in scope (same scope as the first two, SECURITY DEFINER or not) whose body changes
+-- the search path: SET [LOCAL|SESSION] search_path, or a call of set_config('search_path', ...), case-insensitive.
+-- After it an unqualified table name can mean a quality table without any schema name in the text, which no MT-5
+-- reach rule can see (rule 1). The body is read without SQL comments, by the same single pass as caller in MT-5a to
+-- 5d: a quoted literal is kept, so execute 'set local search_path = ...' counts and so does a message that spells
+-- it out, but a comment that mentions it does not. c and internal functions have a symbol in prosrc, not a body, and
+-- are skipped. An UPDATE that sets a column called search_path matches too: rename the column.
 with scope_function as (
   select
     p.oid,
     p.prosecdef,
     p.proconfig,
     n.nspname,
-    format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as qualified_name
+    format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as qualified_name,
+    case
+      when l.lanname in ('c', 'internal') then ''
+      else regexp_replace(
+        p.prosrc,
+        '(''(?:[^'']|'''')*''|"(?:[^"]|"")*")|--[^\n]*|/\*(?:[^*]|\*+[^*/])*\*+/',
+        '\1 ',
+        'g'
+      )
+    end as src
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
+  join pg_language as l on l.oid = p.prolang
   where n.nspname in ('public', 'private', 'quality', 'integrity')
     and not exists (
       select 1
@@ -106,3 +123,11 @@ where od.proowner not in (select sr.oid from supabase_owner as sr)
       and o.object_name = od.object_name
       and o.owner_name = pg_get_userbyid(od.proowner)
   )
+union all
+select
+  'body_search_path'::text,
+  sf.qualified_name::text,
+  'function body changes the search path (SET search_path or set_config)'::text
+from scope_function as sf
+where sf.src ~* '(^|[^[:alnum:]_$])set[[:space:]]+((local|session)[[:space:]]+)?"?search_path"?([^[:alnum:]_$"]|$)'
+  or sf.src ~* '(^|[^[:alnum:]_$])set_config[[:space:]]*\([[:space:]]*''search_path'''

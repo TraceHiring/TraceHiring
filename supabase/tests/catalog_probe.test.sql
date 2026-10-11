@@ -2,10 +2,11 @@
 -- table appears. Inside this rolled-back transaction a throwaway table, sequence and function is created as
 -- postgres in each of the four in-scope schemas. Each assertion also reports any probe object that is missing,
 -- so it can never pass vacuously. Hand-written; not generated.
--- The fifth assertion is an MT-11 negative control (W3b database review finding 7), see below. The last three
--- prove, one dynamic-SQL shape at a time, what MT-5b counts as naming a schema (catalog pass C review E1).
+-- The fifth assertion is an MT-11 negative control (W3b database review finding 7), see below. The next three
+-- prove, one dynamic-SQL shape at a time, what MT-5b counts as naming a schema, and the last proves what MT-7
+-- counts as changing the search path (catalog pass C review E1).
 begin;
-select plan(8);
+select plan(9);
 
 create table public.mt_4b_t (id int);
 create table private.mt_4b_t (id int);
@@ -862,6 +863,219 @@ select is_empty(
   'MT-5b: format(), quote_ident() and set_config() with other schema literals do not count'
 );
 rollback to savepoint mt_5b_shapes;
+
+-- MT-7 body_search_path shapes (catalog pass C database review E1). The fixture proves SET LOCAL search_path; this
+-- proves the other ways a body changes the search path, and what it must not flag. Flagged: SET SESSION ... TO with
+-- a list, a quoted "search_path", set_config() in mixed case, dynamic SQL that runs SET LOCAL, and a SQL-language
+-- function that calls set_config(). Not flagged: a function whose only mention of the search path is in an SQL
+-- comment (-- or /* */), a set_config() for another setting, a column called search_path_hint, and the function
+-- setting set search_path = '' (that one is in proconfig, not in the body). The query between the "MT-7 copy"
+-- lines is a verbatim copy of supabase/catalog-checks/MT-7.sql (keep the two identical), created as a temporary
+-- view. The savepoint is rolled back right after the assertion.
+savepoint mt_7_shapes;
+create function private.mt_7_session() returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  set session search_path to quality, public;
+end
+$$;
+create function private.mt_7_quoted() returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  set local "search_path" = quality;
+end
+$$;
+create function private.mt_7_config() returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  perform pg_catalog.set_config('SEARCH_PATH', 'quality', true);
+end
+$$;
+create function private.mt_7_dynamic() returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  execute 'set local search_path = quality';
+end
+$$;
+create function private.mt_7_sql() returns text
+language sql
+set search_path = ''
+as $$ select pg_catalog.set_config('search_path', 'quality', true) $$;
+create function private.mt_7_control() returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  -- set search_path = quality would be wrong here: the function setting does it
+  /* perform set_config('search_path', 'quality', true); */
+  perform pg_catalog.set_config('app.mt_7_mode', 'x', true);
+  update public.mt_7_note set search_path_hint = 1;
+end
+$$;
+create temp view mt_7_run as
+-- MT-7 copy begin
+-- MT-7 (spec specs/m0-foundations.md §8.5, database-reviewer standard): missing_search_path is a SECURITY DEFINER
+-- function in scope whose proconfig does not contain exactly search_path="" (what set search_path = '' stores).
+-- outside_private is a SECURITY DEFINER function in public, quality or integrity, because SECURITY DEFINER helpers
+-- live only in private (functions in public are callable as PostgREST RPCs). Scope for both: functions in the four
+-- schemas, every prokind, skipping extension members in their extension's own namespace. definer_in_system_schema
+-- is a SECURITY DEFINER function in any other schema that is not a member of any extension, is not owned by one of
+-- the Supabase service roles below and is not on the list of Supabase's own objects below (the same lists as MT-9).
+-- body_search_path is a function in scope (same scope as the first two, SECURITY DEFINER or not) whose body changes
+-- the search path: SET [LOCAL|SESSION] search_path, or a call of set_config('search_path', ...), case-insensitive.
+-- After it an unqualified table name can mean a quality table without any schema name in the text, which no MT-5
+-- reach rule can see (rule 1). The body is read without SQL comments, by the same single pass as caller in MT-5a to
+-- 5d: a quoted literal is kept, so execute 'set local search_path = ...' counts and so does a message that spells
+-- it out, but a comment that mentions it does not. c and internal functions have a symbol in prosrc, not a body, and
+-- are skipped. An UPDATE that sets a column called search_path matches too: rename the column.
+with scope_function as (
+  select
+    p.oid,
+    p.prosecdef,
+    p.proconfig,
+    n.nspname,
+    format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as qualified_name,
+    case
+      when l.lanname in ('c', 'internal') then ''
+      else regexp_replace(
+        p.prosrc,
+        '(''(?:[^'']|'''')*''|"(?:[^"]|"")*")|--[^\n]*|/\*(?:[^*]|\*+[^*/])*\*+/',
+        '\1 ',
+        'g'
+      )
+    end as src
+  from pg_proc as p
+  join pg_namespace as n on n.oid = p.pronamespace
+  join pg_language as l on l.oid = p.prolang
+  where n.nspname in ('public', 'private', 'quality', 'integrity')
+    and not exists (
+      select 1
+      from pg_depend as d
+      join pg_extension as e on e.oid = d.refobjid
+      where d.classid = 'pg_proc'::regclass
+        and d.objid = p.oid
+        and d.refclassid = 'pg_extension'::regclass
+        and d.deptype = 'e'
+        and e.extnamespace = p.pronamespace
+    )
+),
+supabase_owner as (
+  -- Supabase service roles that own Supabase's own objects. postgres is not a member of any of them and cannot be
+  -- granted one (supautils.reserved_memberships), so no migration can create an object they own. A listed role that
+  -- postgres is a member of is not trusted, and a role that does not exist is ignored.
+  select r.oid
+  from pg_roles as r
+  where r.rolname in (
+    'supabase_admin', 'supabase_auth_admin', 'supabase_storage_admin', 'supabase_realtime_admin',
+    'supabase_replication_admin', 'supabase_etl_admin', 'supabase_read_only_user', 'dashboard_user', 'pgbouncer'
+  )
+    and not pg_has_role('postgres', r.oid, 'MEMBER')
+),
+supabase_object (kind, schema_name, object_name, owner_name) as (
+  -- Supabase's own non-member objects whose owner postgres is or can become (postgres itself, and
+  -- supabase_functions_admin, of which postgres is a member), from the day-one check on the local stack
+  -- (2026-10-11). A relation by relname (indexes and sequences too), a function by name and identity arguments.
+  values
+    ('relation'::text, 'supabase_migrations'::name, 'schema_migrations'::text, 'postgres'::name),
+    ('relation', 'supabase_migrations', 'schema_migrations_pkey', 'postgres'),
+    ('relation', 'supabase_migrations', 'seed_files', 'postgres'),
+    ('relation', 'supabase_migrations', 'seed_files_pkey', 'postgres'),
+    ('relation', 'supabase_functions', 'hooks', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'hooks_pkey', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'hooks_id_seq', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'supabase_functions_hooks_h_table_id_h_name_idx', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'supabase_functions_hooks_request_id_idx', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'migrations', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'migrations_pkey', 'supabase_functions_admin'),
+    ('function', 'supabase_functions', 'http_request()', 'supabase_functions_admin')
+),
+outside_definer as (
+  select
+    n.nspname,
+    format('%s(%s)', p.proname, pg_get_function_identity_arguments(p.oid)) as object_name,
+    format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as qualified_name,
+    p.proowner
+  from pg_proc as p
+  join pg_namespace as n on n.oid = p.pronamespace
+  where p.prosecdef
+    and n.nspname not in ('public', 'private', 'quality', 'integrity')
+    and not exists (
+      select 1
+      from pg_depend as d
+      where d.classid = 'pg_proc'::regclass
+        and d.objid = p.oid
+        and d.refclassid = 'pg_extension'::regclass
+        and d.deptype = 'e'
+    )
+)
+select
+  'missing_search_path'::text as branch,
+  sf.qualified_name::text as object,
+  format('SECURITY DEFINER without search_path="" (proconfig %s)', coalesce(sf.proconfig::text, 'null'))::text
+    as detail
+from scope_function as sf
+where sf.prosecdef
+  and not ('search_path=""' = any(coalesce(sf.proconfig, '{}'::text[])))
+union all
+select
+  'outside_private'::text,
+  sf.qualified_name::text,
+  format('SECURITY DEFINER function in schema %I, not private', sf.nspname)::text
+from scope_function as sf
+where sf.prosecdef
+  and sf.nspname <> 'private'
+union all
+select
+  'definer_in_system_schema'::text,
+  od.qualified_name::text,
+  format('SECURITY DEFINER function in schema %I owned by %s', od.nspname, pg_get_userbyid(od.proowner))::text
+from outside_definer as od
+where od.proowner not in (select sr.oid from supabase_owner as sr)
+  and not exists (
+    select 1
+    from supabase_object as o
+    where o.kind = 'function'
+      and o.schema_name = od.nspname
+      and o.object_name = od.object_name
+      and o.owner_name = pg_get_userbyid(od.proowner)
+  )
+union all
+select
+  'body_search_path'::text,
+  sf.qualified_name::text,
+  'function body changes the search path (SET search_path or set_config)'::text
+from scope_function as sf
+where sf.src ~* '(^|[^[:alnum:]_$])set[[:space:]]+((local|session)[[:space:]]+)?"?search_path"?([^[:alnum:]_$"]|$)'
+  or sf.src ~* '(^|[^[:alnum:]_$])set_config[[:space:]]*\([[:space:]]*''search_path'''
+-- MT-7 copy end
+;
+select results_eq(
+  $q$
+  select v.object::text collate "C"
+  from mt_7_run as v
+  where v.branch = 'body_search_path'
+    and v.object like 'private.mt_7_%'
+  order by 1
+  $q$,
+  $q$
+  values
+    ('private.mt_7_config()'::text collate "C"),
+    ('private.mt_7_dynamic()'),
+    ('private.mt_7_quoted()'),
+    ('private.mt_7_session()'),
+    ('private.mt_7_sql()')
+  $q$,
+  'MT-7: body_search_path flags exactly the five functions that change the search path, not the control'
+);
+rollback to savepoint mt_7_shapes;
 
 select * from finish();
 rollback;

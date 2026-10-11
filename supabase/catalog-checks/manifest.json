@@ -88,7 +88,12 @@
     },
     {
       "id": "MT-7",
-      "branches": ["missing_search_path", "outside_private", "definer_in_system_schema"]
+      "branches": [
+        "missing_search_path",
+        "outside_private",
+        "definer_in_system_schema",
+        "body_search_path"
+      ]
     },
     {
       "id": "MT-8",
