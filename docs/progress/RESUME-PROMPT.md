@@ -41,8 +41,9 @@ with `--no-ff`, tag `m<X>-reviewed`.
 
 ## 3. Steps
 STEP 1 — Read CLAUDE.md and docs/AUTOPILOT.md in full. Then `git fetch trace` and read
-`git show m0a/integration:docs/progress/HANDOFF.md` and the review reports it names. The SessionStart hook may
-inject an OLDER handoff from `main`: ignore it wherever it disagrees with `m0a/integration`.
+`git show m0a/integration:docs/progress/HANDOFF.md` and the review reports it names. Since `d9bf35a` the SessionStart
+hook injects the handoff from the newest `*/integration` branch (older sessions injected a stale copy from `main`);
+the branch still wins over anything injected.
 
 STEP 2 — Get onto `m0a/integration` without losing anyone's work
 - `git worktree list ; git branch --show-current ; git status --porcelain`
@@ -102,9 +103,8 @@ STEP 5 — Wrap-up, always (AUTOPILOT §6; the trace-handoff skill)
 - Commit everything. Overwrite `docs/progress/HANDOFF.md` on `m0a/integration` (<150 lines, exact SHAs, every
   stream branch and state, the exact next action); append a row to `docs/progress/LOG.md`; update this file if a
   branch, SHA or step changed.
-- Mirror HANDOFF.md and RESUME-PROMPT.md onto `main` (one docs-only commit, `chore(progress): handoff mirror on
-  main`) only from a checkout where `main` is checked out and you may write (the root folder); otherwise skip
-  and say so. Never move `main` with plumbing.
+- **No handoff mirror on `main`** (since 2026-10-11): the hook reads the integration branch, and a mirror commit makes
+  draft PR 1 (`m0a/integration` → `main`) conflict, which stops its CI. Never commit on or move `main`.
 - `sh scripts/backup.sh` ; `gitleaks git --redact --no-banner` (must pass) ;
   `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push trace main milestone/m0a m0a/integration <every branch with new commits>` (founder: borrow the gh login per push) ; `git push trace --tags`
   (plain push; if rejected or it asks for credentials, stop and add it to FOUNDER-QUEUE.md).
