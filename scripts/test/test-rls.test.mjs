@@ -39,7 +39,9 @@ import { cleanupTempDirs, makeTempDir, writeFiles } from './fixtures/checks/temp
 import {
   GEN_TYPES,
   PROVE_FAIL_4_OF_4,
+  PROVE_MISLEADING_PLAN_COMMENT,
   PROVE_PASS,
+  PROVE_UNCOUNTED_NOT_OK,
   fakeClock,
   fakeProcess,
   fakeRepo,
@@ -436,6 +438,47 @@ describe('§8.3 step 5: supabase test db --debug', () => {
     const h = harness({ responses: { test: { stdout: PROVE_PASS, stderr: noise } } });
     expect(await h.go()).toBe(0);
     expect(h.out.all()).not.toContain('ghost');
+  });
+
+  // pgTAP's own counters are rolled back by each `rollback to savepoint mt` in catalog_meta, so its
+  // finish()/num_failed() diagnostics are wrong. The harness counts `ok N` / `not ok N` lines itself
+  // against the `1..N` plan and never reads or requires those diagnostics (lead, W3b finding).
+  it('passes when every line matches the plan despite a misleading "# Looks like you planned" comment', async () => {
+    expect(PROVE_MISLEADING_PLAN_COMMENT).toContain('# Looks like you planned 67 tests but ran 64');
+    const h = harness({
+      root: fakeRepo({ tests: { 'catalog_meta.test.sql': '--\n' }, catalogFloor: '67\n' }),
+      responses: { test: { stdout: PROVE_MISLEADING_PLAN_COMMENT } },
+    });
+    expect(await h.go()).toBe(0);
+    expect(h.out.lines.log.join('\n')).toMatch(/catalog_\* 67 assertions \(floor 67\)/);
+    expect(h.out.all()).not.toMatch(/Looks like/);
+  });
+
+  it('fails on a not ok line that the trailing pgTAP diagnostic does not count, even with exit 0', async () => {
+    expect(PROVE_UNCOUNTED_NOT_OK).not.toMatch(/Looks like you failed/);
+    for (const status of [1, 0]) {
+      const h = harness({
+        root: fakeRepo({ tests: { 'catalog_meta.test.sql': '--\n' }, catalogFloor: '5\n' }),
+        responses: { test: { status, stdout: PROVE_UNCOUNTED_NOT_OK } },
+      });
+      expect(await h.go()).toBe(1);
+      expect(h.out.all()).toContain(
+        'catalog_meta.test.sql: not ok 5 - MT-12.global_entry_grants_public: fires',
+      );
+    }
+  });
+
+  it('fails when the counted lines miss the plan, whatever the pgTAP comments claim', async () => {
+    const short = PROVE_MISLEADING_PLAN_COMMENT.replace(/^ok 67 - .*\n/m, '').replace(
+      '# Looks like you planned 67 tests but ran 64',
+      '# all 67 tests ran',
+    );
+    const h = harness({
+      root: fakeRepo({ tests: { 'catalog_meta.test.sql': '--\n' }, catalogFloor: '66\n' }),
+      responses: { test: { stdout: short } },
+    });
+    expect(await h.go()).toBe(1);
+    expect(h.out.all()).toContain('catalog_meta.test.sql: plan says 67 tests but 66 ran');
   });
 
   it('fails on the captured 4-of-4 failure, listing every not ok', async () => {

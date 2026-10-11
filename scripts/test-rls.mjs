@@ -15,7 +15,10 @@
 //      assertion. The TAP is parsed from stdout. It fails on any `not ok` (or TODO/SKIP), a plan
 //      mismatch, a file with zero tests, a file not named catalog_* or rls_*, or a set of files
 //      that differs from the .sql files under supabase/tests/. Passing assertions are counted by
-//      file prefix against supabase/tests/catalog-min-count and rls-min-count.
+//      file prefix against supabase/tests/catalog-min-count and rls-min-count. The `ok N` /
+//      `not ok N` lines are counted here against each file's `1..N` plan; pgTAP's own finish() and
+//      num_failed() diagnostics (`# Looks like …`) are never read: catalog_meta's
+//      `rollback to savepoint` rolls back pgTAP's counters too, so they are wrong there.
 //   6. db-types drift: `supabase gen types typescript --local --schema public` goes to a temp
 //      file, compared byte for byte with packages/db-types/src/database.ts (never overwritten;
 //      `pnpm db:types` regenerates it on purpose).

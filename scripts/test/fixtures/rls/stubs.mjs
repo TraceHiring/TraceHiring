@@ -13,6 +13,19 @@ const read = (name) => readFileSync(new URL(`./${name}`, import.meta.url));
 export const PROVE_PASS = read('prove-pass.stdout.txt').toString('utf8');
 /** Captured stdout of a run where every assertion of `zz_mutation.test.sql` failed. */
 export const PROVE_FAIL_4_OF_4 = read('prove-fail-4-of-4.stdout.txt').toString('utf8');
+/**
+ * Synthetic, modelled on a real catalog_meta run (lead, W3b finding): each `rollback to savepoint mt`
+ * also rolls back pgTAP's own counters, so finish() prints a wrong "# Looks like you planned 67 tests
+ * but ran 64" although all 67 `ok` lines match the plan. Must pass.
+ */
+export const PROVE_MISLEADING_PLAN_COMMENT = read(
+  'prove-misleading-plan-comment.stdout.txt',
+).toString('utf8');
+/**
+ * Synthetic: a `not ok` line that pgTAP's num_failed() did not count (rolled back with the savepoint),
+ * so the trailing diagnostic claims no failure. Must fail.
+ */
+export const PROVE_UNCOUNTED_NOT_OK = read('prove-uncounted-not-ok.stdout.txt').toString('utf8');
 /** Captured `supabase gen types typescript --local --schema public` output for an empty public schema. */
 export const GEN_TYPES = read('gen-types-empty-public.ts.txt');
 
