@@ -1,5 +1,6 @@
 # Trace CI (spec specs/m0-foundations.md §7.1). One workflow, so there is no `workflow_run`
-# trigger to abuse. The deploy-staging job (§7.2) is added in S3, not here.
+# trigger to abuse. The last job, deploy-staging (§7.2), runs only on a push to main in this
+# repository, after the four required jobs pass; pull requests never reach it or its secrets.
 name: ci
 
 on:
@@ -111,3 +112,93 @@ jobs:
         uses: ./.github/actions/setup
       - name: Check migrations
         run: node scripts/check-migrations.mjs --base origin/main
+
+  # Not a required check. Deploys main to staging (§7.2). The steps follow the §15.1 states:
+  # built -> output_scanned -> migrated -> catalog_checked -> workers_deployed -> secrets_checked
+  # -> pages_deployed -> smoke_passed. Any failure stops the job; nothing is rolled back, migrations
+  # are forward-only and a re-run is idempotent. Each secret is set only on the steps that use it
+  # (never at job level, never on or before install/build); CLOUDFLARE_ACCOUNT_ID is a public
+  # environment variable. The wrangler steps append to one output file in RUNNER_TEMP, which the
+  # smoke step reads for the deployed URLs.
+  deploy-staging:
+    needs: [static, rls, security, migrations]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: staging
+    concurrency: deploy-staging
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up toolchain and install
+        uses: ./.github/actions/setup
+      # Includes the bundle budget, header checks and the dist/ secret scan. The apps write
+      # dist/version.json from VITE_APP_VERSION (§9.3). The loop then rebuilds each Worker under
+      # --env staging into the same dist/, so the next step scans, and the Workers step deploys,
+      # the staging bytes (an env.staging define or alias cannot ship unscanned). No secret here.
+      - name: Build
+        run: |
+          set -euo pipefail
+          VITE_APP_VERSION="$GITHUB_SHA" pnpm build
+          for dir in workers/edge workers/jobs services/api; do
+            (cd "$dir" && pnpm exec wrangler deploy --dry-run --env staging --outdir dist)
+          done
+      # §7.2 step 2: gitleaks over every app, Worker and service dist/ (AT-16).
+      - name: Scan the build output
+        run: node scripts/scan-dist.mjs
+      # §7.2 step 3. --yes answers the CLI's "push these migrations?" prompt.
+      - name: Apply migrations to staging
+        env:
+          SUPABASE_STAGING_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
+        run: pnpm exec supabase db push --db-url "$SUPABASE_STAGING_DB_URL" --yes
+      # §7.2 step 4: every catalog check, read-only, through psql (AT-18).
+      - name: Catalog checks against staging
+        timeout-minutes: 10
+        env:
+          SUPABASE_STAGING_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql --version
+          node scripts/staging-catalog-checks.mjs
+      # §7.2 step 5 (AT-11).
+      - name: Deploy the Workers (edge, jobs, api)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
+          for dir in workers/edge workers/jobs services/api; do
+            (cd "$dir" && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA")
+          done
+      # §7.2 step 6: the staging Workers' secrets must be a subset of the allow-list (AT-15).
+      - name: Check Worker secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node scripts/check-staging-secrets.mjs
+      # §7.2 step 7. A missing Pages project is created first (production branch main).
+      - name: Deploy Pages (candidate, recruiter)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
+          projects="$(pnpm exec wrangler pages project list --json)"
+          jq -e 'type == "array"' <<<"$projects" >/dev/null
+          for project in trace-candidate-staging trace-recruiter-staging; do
+            if ! jq -e --arg p "$project" 'any(.[]; .["Project Name"] == $p)' <<<"$projects" >/dev/null; then
+              pnpm exec wrangler pages project create "$project" --production-branch main
+            fi
+          done
+          pnpm exec wrangler pages deploy apps/candidate/dist --project-name trace-candidate-staging --branch main
+          pnpm exec wrangler pages deploy apps/recruiter/dist --project-name trace-recruiter-staging --branch main
+      # §7.2 step 8: /health, /version.json and the §10.3 headers at this commit (AT-11, AT-22).
+      - name: Smoke test
+        timeout-minutes: 8
+        run: node scripts/smoke-staging.mjs --wrangler-output "$RUNNER_TEMP/wrangler-output.ndjson" --sha "$GITHUB_SHA"
