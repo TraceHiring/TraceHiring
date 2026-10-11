@@ -83,7 +83,7 @@ export const isSensitiveKey = (key: string): boolean => {
   return !SAFE_KEYS.has(k) && STEM.test(k);
 };
 
-/** A decimal digit of any script other than ASCII (Devanagari, Arabic-Indic, Ol Chiki, \u2026). */
+/** A decimal digit of any script other than ASCII (Devanagari, Arabic-Indic, Ol Chiki and more). */
 const NON_ASCII_DIGIT = /(?![0-9])\p{Nd}/gu;
 const IS_DIGIT = /^\p{Nd}$/u;
 /** Every dash, and the minus sign, other than '-' itself. */
