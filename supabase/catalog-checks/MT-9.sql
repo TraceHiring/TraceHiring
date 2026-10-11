@@ -8,7 +8,10 @@
 -- extensions and handmade_in_system_schema in the others, and owned by any other role (service_role, a role postgres
 -- created or is a member of) it is handmade_nonadmin_owner. Types skip relation row types (the relation is checked
 -- itself) and true array types (their element type is checked). Same scope and extension-member skip as MT-1 for
--- wrong_owner.
+-- wrong_owner. extension_owner is an extension, in any schema, whose owner postgres is a member of (INHERIT, SET or
+-- ADMIN): its owner can ALTER EXTENSION … ADD objects it owns, and every check skips extension members (the
+-- hand-made branches skip any member). Supabase's extensions are owned by supabase_admin, but a trusted extension
+-- that is not on the supautils privileged list (such as lo) is owned by postgres.
 with recursive scope_schema as (
   select n.oid
   from pg_namespace as n
@@ -171,6 +174,16 @@ select
 from pg_extension as e
 join pg_namespace as n on n.oid = e.extnamespace
 where e.extnamespace in (select s.oid from scope_schema as s)
+union all
+select
+  'extension_owner'::text,
+  e.extname::text,
+  format(
+    'extension owned by %s (postgres or a role it is a member of), so objects can be added to it',
+    pg_get_userbyid(e.extowner)
+  )::text
+from pg_extension as e
+where pg_has_role('postgres', e.extowner, 'MEMBER')
 union all
 select
   case

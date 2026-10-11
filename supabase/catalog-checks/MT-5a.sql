@@ -1,5 +1,5 @@
 -- MT-5a (spec specs/m0-foundations.md §8.5, rule 1): a view or materialized view, in any non-system schema or in a
--- system-list schema where a migration can still create objects (escape_schema below, when postgres can SET ROLE to
+-- system-list schema where a migration can still create objects (escape_schema below, when postgres is a member of
 -- its owner), whose recursive dependency closure reaches both quality and integrity. The closure (shared:graph and
 -- shared:closure below, the same text in MT-5a, 5b, 5c and 5d) starts at the view and follows its rules
 -- (pg_rewrite, skipping a rule's reference to its own relation), the pg_depend rows of functions and operators,
@@ -7,8 +7,8 @@
 -- code of table hosts (triggers, policies, CHECK constraints, column defaults, index expressions), recursively. A
 -- node reaches a schema when it lives there (a relation also reaches the schema of every member of every
 -- inheritance tree it belongs to: INHERITS children and partitions alike, wherever they live), when it is a type
--- or schema ref there, or, for a function, when its prosrc names it (quality. or "quality". or 'quality' as a
--- format() argument, case-insensitive) or its proconfig search_path lists it.
+-- or schema ref there, or, for a function, when its prosrc outside SQL comments names it (quality. or "quality".,
+-- or 'quality' as a format() argument, case-insensitive) or its proconfig search_path lists it.
 -- Branches, first match wins: system_schema_view (the view lives in a system-list schema), direct_join (the view
 -- and the relations it reads directly reach both), nested_view (relations reached through other views, no
 -- function), via_function (a function is needed, calls included), via_operator (an operator is needed),
@@ -44,19 +44,34 @@ rel_reach as (
   join pg_class as gc on gc.oid = g.member_oid
   join target as t on t.oid = gc.relnamespace
 ),
--- caller: a function in any language but c and internal, with its lowercased body and the schemas its search_path
--- setting lists (public and extensions, the database default, when it has none).
+-- caller: a function in any language but c and internal, with its body without SQL comments (src, and lsrc
+-- lowercased) and the schemas its search_path setting lists (public and extensions, the database default, when it
+-- has none). A single pass reads the body left to right: a string literal ('...', '' inside) or a quoted identifier
+-- ("...", "" inside) is kept, so a -- or /* inside one is not a comment, and each -- comment (to the end of its
+-- line) or /* */ comment becomes a space. Each kept literal or identifier gets a space after it, which no pattern
+-- below depends on.
 caller as materialized (
-  select f.oid, f.prosrc, lower(f.prosrc) as lsrc, sp.path
-  from pg_proc as f
-  join pg_language as l on l.oid = f.prolang
-  cross join lateral (
-    select coalesce(array_agg(btrim(s.part, ' "')), array['public', 'extensions']) as path
-    from unnest(f.proconfig) as cfg(setting)
-    cross join lateral regexp_split_to_table(substr(cfg.setting, 13), ',') as s(part)
-    where left(cfg.setting, 12) = 'search_path='
-  ) as sp
-  where l.lanname not in ('c', 'internal')
+  select b.oid, b.src, lower(b.src) as lsrc, b.path
+  from (
+    select
+      f.oid,
+      regexp_replace(
+        f.prosrc,
+        '(''(?:[^'']|'''')*''|"(?:[^"]|"")*")|--[^\n]*|/\*(?:[^*]|\*+[^*/])*\*+/',
+        '\1 ',
+        'g'
+      ) as src,
+      sp.path
+    from pg_proc as f
+    join pg_language as l on l.oid = f.prolang
+    cross join lateral (
+      select coalesce(array_agg(btrim(s.part, ' "')), array['public', 'extensions']) as path
+      from unnest(f.proconfig) as cfg(setting)
+      cross join lateral regexp_split_to_table(substr(cfg.setting, 13), ',') as s(part)
+      where left(cfg.setting, 12) = 'search_path='
+    ) as sp
+    where l.lanname not in ('c', 'internal')
+  ) as b
 ),
 -- callee: a function outside pg_catalog and information_schema, its schema and name escaped for a regex.
 callee as materialized (
@@ -140,12 +155,12 @@ code_edge (classid, objid, refclassid, refobjid, bit) as (
   select 'pg_proc'::regclass::oid, f.oid, 'pg_proc'::regclass::oid, g.oid, 8
   from caller as f
   join callee as g on position(g.lname in f.lsrc) > 0
-  where f.prosrc ~* (
+  where f.src ~* (
       '(^|[^[:alnum:]_$."])"?' || g.nsp || '"?[[:space:]]*\.[[:space:]]*"?' || g.fn || '"?[[:space:]]*\('
     )
     or (
       g.nspname = any(f.path)
-      and f.prosrc ~* ('(^|[^[:alnum:]_$."])"?' || g.fn || '"?[[:space:]]*\(')
+      and f.src ~* ('(^|[^[:alnum:]_$."])"?' || g.fn || '"?[[:space:]]*\(')
     )
 ),
 -- materialized: computed once, not once per step of the recursive walk
@@ -165,8 +180,9 @@ node_edge as materialized (
 -- shared:graph end
 -- shared:escape begin (the same text in MT-5a, MT-5b, MT-5d, MT-10 and MT-11)
 -- escape_schema: system-list schemas where a migration can still create objects (spec §8.5 revision 12): postgres
--- can SET ROLE to the schema owner, or to a role with CREATE on it. Locally: extensions, _realtime,
--- supabase_functions and supabase_migrations, plus any listed schema that a migration creates (cron, net and so on).
+-- is a member (INHERIT, SET or ADMIN) of the schema owner or of a role with CREATE on it. An ADMIN-only member can
+-- grant itself SET. Locally: extensions, _realtime, supabase_functions and supabase_migrations, plus any listed
+-- schema that a migration creates (cron, net and so on).
 escape_schema as (
   select n.oid
   from pg_namespace as n
@@ -175,11 +191,11 @@ escape_schema as (
       'supabase_migrations', 'vault', 'pgsodium', 'pgsodium_masks', 'net', 'cron', 'pgbouncer', '_analytics'
     )
     and (
-      pg_has_role('postgres', n.nspowner, 'SET')
+      pg_has_role('postgres', n.nspowner, 'MEMBER')
       or exists (
         select 1
         from pg_roles as r
-        where pg_has_role('postgres', r.oid, 'SET')
+        where pg_has_role('postgres', r.oid, 'MEMBER')
           and has_schema_privilege(r.oid, n.oid, 'CREATE')
       )
     )
@@ -207,7 +223,7 @@ root as (
       )
       or (
         n.oid in (select es.oid from escape_schema as es)
-        and pg_has_role('postgres', c.relowner, 'SET')
+        and pg_has_role('postgres', c.relowner, 'MEMBER')
       )
     )
     and not exists (
@@ -248,9 +264,9 @@ closure (seed_classid, seed_oid, classid, objid, lvl, mask) as (
   join node_edge as e on e.classid = cl.classid and e.objid = cl.objid
 ),
 -- reach: a node of the walk reaches a target schema. how: dep when the node lives there (a relation through its
--- inheritance trees too) or is a type, schema or function there, src when a function body names the schema
--- (quality. or "quality". or 'quality' as a format() argument, case-insensitive), cfg when a function's
--- search_path setting lists it.
+-- inheritance trees too) or is a type, schema or function there, src when a function body without comments
+-- (caller.src) names the schema (quality. or "quality"., or 'quality' as a format() argument: after format( in the
+-- same statement, case-insensitive), cfg when a function's search_path setting lists it.
 reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
   select cl.seed_classid, cl.seed_oid, rr.nspname, cl.lvl, cl.mask, 'dep'::text
   from closure as cl
@@ -276,13 +292,17 @@ reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
   union all
   select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'src'::text
   from closure as cl
-  join pg_proc as p on p.oid = cl.objid
-  join pg_language as l on l.oid = p.prolang
+  join caller as f on f.oid = cl.objid
   cross join target as t
   where cl.classid = 'pg_proc'::regclass
-    and l.lanname not in ('c', 'internal')
-    and p.prosrc ~* (
-      '(^|[^[:alnum:]_$])("' || t.nspname || '"|' || t.nspname || ')[[:space:]]*\.|''' || t.nspname || ''''
+    and position(t.nspname in f.lsrc) > 0
+    and (
+      f.src ~* ('(^|[^[:alnum:]_$])("' || t.nspname || '"|' || t.nspname || ')[[:space:]]*\.')
+      -- format( then string literals or anything but a quote or a semicolon (\x3b, the end of the statement), then
+      -- the schema as a literal
+      or f.src ~* (
+        '(^|[^[:alnum:]_$])format[[:space:]]*\((?:[^''\x3b]|''(?:[^'']|'''')*'')*''' || t.nspname || ''''
+      )
     )
   union all
   select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'cfg'::text

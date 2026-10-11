@@ -54,7 +54,8 @@
         "role_membership",
         "read_write_all_data",
         "definer_bridge",
-        "admin_membership"
+        "admin_membership",
+        "owner_rights_relation"
       ]
     },
     {
@@ -70,7 +71,8 @@
         "check_constraint",
         "index_expression",
         "column_domain",
-        "outside_host_both"
+        "outside_host_both",
+        "system_table_trigger"
       ]
     },
     {
@@ -100,7 +102,8 @@
         "extension_in_scope",
         "handmade_in_extensions",
         "handmade_in_system_schema",
-        "handmade_nonadmin_owner"
+        "handmade_nonadmin_owner",
+        "extension_owner"
       ]
     },
     {
@@ -124,7 +127,8 @@
         "auth_call_unwrapped",
         "system_schema_policy",
         "inherited_table_policy",
-        "qual_without_column"
+        "qual_without_column",
+        "auth_only_clause"
       ]
     },
     {

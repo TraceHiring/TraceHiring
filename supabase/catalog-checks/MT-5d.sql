@@ -26,6 +26,10 @@
 --     descendant elsewhere), whose code reaches both. Founder decision 2026-10-11: such a table (the plan's reports
 --     table) may hold foreign keys into both schemas and show both results side by side (rule 5), so its foreign
 --     keys are not flagged, but code on it must not combine them (rule 1).
+--   system_table_trigger: a trigger on a relation outside scope_rel (such as auth.users or storage.objects, where
+--     postgres holds TRIGGER), whose code (its WHEN clause and its function) reaches both. Triggers are the one host
+--     a migration can attach to a table it does not own, so trigger hosts are taken from every relation, not only
+--     scope_rel.
 -- The MT-5a rule is the closure in shared:graph and shared:closure below (the same text in MT-5a, 5b, 5c and 5d).
 -- Extension members are not skipped here: an extension installed in quality or integrity is already an MT-9
 -- violation.
@@ -60,19 +64,34 @@ rel_reach as (
   join pg_class as gc on gc.oid = g.member_oid
   join target as t on t.oid = gc.relnamespace
 ),
--- caller: a function in any language but c and internal, with its lowercased body and the schemas its search_path
--- setting lists (public and extensions, the database default, when it has none).
+-- caller: a function in any language but c and internal, with its body without SQL comments (src, and lsrc
+-- lowercased) and the schemas its search_path setting lists (public and extensions, the database default, when it
+-- has none). A single pass reads the body left to right: a string literal ('...', '' inside) or a quoted identifier
+-- ("...", "" inside) is kept, so a -- or /* inside one is not a comment, and each -- comment (to the end of its
+-- line) or /* */ comment becomes a space. Each kept literal or identifier gets a space after it, which no pattern
+-- below depends on.
 caller as materialized (
-  select f.oid, f.prosrc, lower(f.prosrc) as lsrc, sp.path
-  from pg_proc as f
-  join pg_language as l on l.oid = f.prolang
-  cross join lateral (
-    select coalesce(array_agg(btrim(s.part, ' "')), array['public', 'extensions']) as path
-    from unnest(f.proconfig) as cfg(setting)
-    cross join lateral regexp_split_to_table(substr(cfg.setting, 13), ',') as s(part)
-    where left(cfg.setting, 12) = 'search_path='
-  ) as sp
-  where l.lanname not in ('c', 'internal')
+  select b.oid, b.src, lower(b.src) as lsrc, b.path
+  from (
+    select
+      f.oid,
+      regexp_replace(
+        f.prosrc,
+        '(''(?:[^'']|'''')*''|"(?:[^"]|"")*")|--[^\n]*|/\*(?:[^*]|\*+[^*/])*\*+/',
+        '\1 ',
+        'g'
+      ) as src,
+      sp.path
+    from pg_proc as f
+    join pg_language as l on l.oid = f.prolang
+    cross join lateral (
+      select coalesce(array_agg(btrim(s.part, ' "')), array['public', 'extensions']) as path
+      from unnest(f.proconfig) as cfg(setting)
+      cross join lateral regexp_split_to_table(substr(cfg.setting, 13), ',') as s(part)
+      where left(cfg.setting, 12) = 'search_path='
+    ) as sp
+    where l.lanname not in ('c', 'internal')
+  ) as b
 ),
 -- callee: a function outside pg_catalog and information_schema, its schema and name escaped for a regex.
 callee as materialized (
@@ -156,12 +175,12 @@ code_edge (classid, objid, refclassid, refobjid, bit) as (
   select 'pg_proc'::regclass::oid, f.oid, 'pg_proc'::regclass::oid, g.oid, 8
   from caller as f
   join callee as g on position(g.lname in f.lsrc) > 0
-  where f.prosrc ~* (
+  where f.src ~* (
       '(^|[^[:alnum:]_$."])"?' || g.nsp || '"?[[:space:]]*\.[[:space:]]*"?' || g.fn || '"?[[:space:]]*\('
     )
     or (
       g.nspname = any(f.path)
-      and f.prosrc ~* ('(^|[^[:alnum:]_$."])"?' || g.fn || '"?[[:space:]]*\(')
+      and f.src ~* ('(^|[^[:alnum:]_$."])"?' || g.fn || '"?[[:space:]]*\(')
     )
 ),
 -- materialized: computed once, not once per step of the recursive walk
@@ -181,8 +200,9 @@ node_edge as materialized (
 -- shared:graph end
 -- shared:escape begin (the same text in MT-5a, MT-5b, MT-5d, MT-10 and MT-11)
 -- escape_schema: system-list schemas where a migration can still create objects (spec §8.5 revision 12): postgres
--- can SET ROLE to the schema owner, or to a role with CREATE on it. Locally: extensions, _realtime,
--- supabase_functions and supabase_migrations, plus any listed schema that a migration creates (cron, net and so on).
+-- is a member (INHERIT, SET or ADMIN) of the schema owner or of a role with CREATE on it. An ADMIN-only member can
+-- grant itself SET. Locally: extensions, _realtime, supabase_functions and supabase_migrations, plus any listed
+-- schema that a migration creates (cron, net and so on).
 escape_schema as (
   select n.oid
   from pg_namespace as n
@@ -191,18 +211,18 @@ escape_schema as (
       'supabase_migrations', 'vault', 'pgsodium', 'pgsodium_masks', 'net', 'cron', 'pgbouncer', '_analytics'
     )
     and (
-      pg_has_role('postgres', n.nspowner, 'SET')
+      pg_has_role('postgres', n.nspowner, 'MEMBER')
       or exists (
         select 1
         from pg_roles as r
-        where pg_has_role('postgres', r.oid, 'SET')
+        where pg_has_role('postgres', r.oid, 'MEMBER')
           and has_schema_privilege(r.oid, n.oid, 'CREATE')
       )
     )
 ),
 -- shared:escape end
 -- scope_rel: the in-scope relations. Every relation in public, private, quality and integrity, every relation in an
--- escape_schema whose owner postgres can SET ROLE to, every pg_inherits descendant of those, wherever it lives, and
+-- escape_schema whose owner postgres is a member of, every pg_inherits descendant of those, wherever it lives, and
 -- every relation that reaches quality or integrity (rel_reach).
 scope_rel (oid) as (
   select c.oid
@@ -213,7 +233,7 @@ scope_rel (oid) as (
   select c.oid
   from pg_class as c
   where c.relnamespace in (select es.oid from escape_schema as es)
-    and pg_has_role('postgres', c.relowner, 'SET')
+    and pg_has_role('postgres', c.relowner, 'MEMBER')
   union
   select rr.oid
   from rel_reach as rr
@@ -235,12 +255,12 @@ foreign_key as (
     and src.nspname <> ref.nspname
 ),
 -- host: code attached to an in-scope relation, walked from the host itself (its edges are in code_edge). kind
--- names the branch.
+-- names the branch. Triggers are taken on every relation (system_table_trigger): TRIGGER is a privilege, so a
+-- migration can attach one to a table it does not own.
 host (classid, oid, relid, name, kind) as (
   select 'pg_trigger'::regclass::oid, tg.oid, tg.tgrelid, format('%I', tg.tgname), 'trigger'::text
   from pg_trigger as tg
   where not tg.tgisinternal
-    and tg.tgrelid in (select s.oid from scope_rel as s)
   union all
   select 'pg_policy'::regclass::oid, pol.oid, pol.polrelid, format('%I', pol.polname), 'policy'::text
   from pg_policy as pol
@@ -298,9 +318,9 @@ closure (seed_classid, seed_oid, classid, objid, lvl, mask) as (
   join node_edge as e on e.classid = cl.classid and e.objid = cl.objid
 ),
 -- reach: a node of the walk reaches a target schema. how: dep when the node lives there (a relation through its
--- inheritance trees too) or is a type, schema or function there, src when a function body names the schema
--- (quality. or "quality". or 'quality' as a format() argument, case-insensitive), cfg when a function's
--- search_path setting lists it.
+-- inheritance trees too) or is a type, schema or function there, src when a function body without comments
+-- (caller.src) names the schema (quality. or "quality"., or 'quality' as a format() argument: after format( in the
+-- same statement, case-insensitive), cfg when a function's search_path setting lists it.
 reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
   select cl.seed_classid, cl.seed_oid, rr.nspname, cl.lvl, cl.mask, 'dep'::text
   from closure as cl
@@ -326,13 +346,17 @@ reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
   union all
   select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'src'::text
   from closure as cl
-  join pg_proc as p on p.oid = cl.objid
-  join pg_language as l on l.oid = p.prolang
+  join caller as f on f.oid = cl.objid
   cross join target as t
   where cl.classid = 'pg_proc'::regclass
-    and l.lanname not in ('c', 'internal')
-    and p.prosrc ~* (
-      '(^|[^[:alnum:]_$])("' || t.nspname || '"|' || t.nspname || ')[[:space:]]*\.|''' || t.nspname || ''''
+    and position(t.nspname in f.lsrc) > 0
+    and (
+      f.src ~* ('(^|[^[:alnum:]_$])("' || t.nspname || '"|' || t.nspname || ')[[:space:]]*\.')
+      -- format( then string literals or anything but a quote or a semicolon (\x3b, the end of the statement), then
+      -- the schema as a literal
+      or f.src ~* (
+        '(^|[^[:alnum:]_$])format[[:space:]]*\((?:[^''\x3b]|''(?:[^'']|'''')*'')*''' || t.nspname || ''''
+      )
     )
   union all
   select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'cfg'::text
@@ -361,7 +385,8 @@ crossing as (
   where rc.nspname <> hr.nspname
   group by h.kind, h.classid, h.oid, h.relid, h.name, hr.nspname, rc.nspname
 ),
--- outside: a host on a relation that reaches neither schema, whose code reaches both.
+-- outside: a host on a relation that reaches neither schema, whose code reaches both (system_table_trigger when the
+-- host is a trigger on a relation outside scope_rel, outside_host_both otherwise).
 outside as (
   select h.kind, h.relid, h.name
   from host as h
@@ -403,17 +428,23 @@ join pg_class as c on c.oid = x.relid
 join pg_namespace as n on n.oid = c.relnamespace
 union all
 select
-  'outside_host_both'::text,
+  case
+    when o.relid in (select s.oid from scope_rel as s) then 'outside_host_both'
+    else 'system_table_trigger'
+  end::text,
   format('%s on %I.%I', o.name, n.nspname, c.relname)::text,
-  format(
-    '%s on a table outside quality and integrity reaches both',
-    case o.kind
-      when 'default' then 'column default'
-      when 'check' then 'CHECK constraint'
-      when 'domain' then 'column domain'
-      else o.kind
-    end
-  )::text
+  case
+    when o.relid in (select s.oid from scope_rel as s) then format(
+      '%s on a table outside quality and integrity reaches both',
+      case o.kind
+        when 'default' then 'column default'
+        when 'check' then 'CHECK constraint'
+        when 'domain' then 'column domain'
+        else o.kind
+      end
+    )
+    else 'trigger on a relation outside the catalog-check scope reaches quality and integrity'
+  end::text
 from outside as o
 join pg_class as c on c.oid = o.relid
 join pg_namespace as n on n.oid = c.relnamespace
