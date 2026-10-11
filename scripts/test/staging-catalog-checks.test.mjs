@@ -24,7 +24,8 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 
 // A synthetic connection string, assembled so no credential-shaped literal sits in the source.
 const PASSWORD = ['fixture', 'pw', 'Q9z'].join('-');
-const DB_URL = ['postgresql://postgres', `:${PASSWORD}@db.example.invalid:5432/postgres`].join('');
+const DB_BASE = ['postgresql://postgres', `:${PASSWORD}@db.example.invalid:5432/postgres`].join('');
+const DB_URL = `${DB_BASE}?sslmode=require`;
 
 const ok = (stdout = '') => ({ status: 0, signal: null, stdout, stderr: '' });
 
@@ -57,9 +58,9 @@ function tempCatalog(ids = ['MT-1', 'MT-2'], extra = {}) {
 }
 
 describe('wrapCheck', () => {
-  it('wraps one check in a read-only transaction that always rolls back', () => {
+  it('wraps one check in a read-only transaction with a 60 s statement timeout that always rolls back', () => {
     expect(wrapCheck('select 1')).toBe(
-      'begin;\nset transaction read only;\nselect 1\n;\nrollback;\n',
+      "begin;\nset transaction read only;\nset local statement_timeout = '60s';\nselect 1\n;\nrollback;\n",
     );
   });
 });
@@ -338,6 +339,53 @@ describe('main', () => {
     });
     expect(code).toBe(1);
     expect(c.lines.err.join('\n')).toMatch(/MT-12: 1 output line/);
+  });
+
+  it('refuses a connection string whose sslmode is missing or weak, before any psql, naming only the parameter (S3B-6)', () => {
+    const bad = [
+      DB_BASE,
+      `${DB_BASE}?sslmode=prefer`,
+      `${DB_BASE}?sslmode=disable`,
+      `${DB_BASE}?sslmode=allow`,
+      `${DB_BASE}?sslmode=`,
+      `${DB_BASE}?connect_timeout=5`,
+      `${DB_BASE}?sslmode=require&sslmode=disable`,
+      `${DB_BASE}?sslmode=REQUIRE`,
+      `${DB_BASE}?sslmode=prefer&sslmode=require`,
+      `${DB_BASE}?options=sslmode%3Drequire`,
+    ];
+    for (const url of bad) {
+      const c = capture();
+      const { run, calls } = fakeRunner();
+      expect(main({ argv: [], env: { [DB_URL_ENV]: url }, root: REPO, run, ...c }), url).toBe(1);
+      expect(calls).toHaveLength(0);
+      const all = [...c.lines.out, ...c.lines.err].join('\n');
+      expect(all).toMatch(/sslmode must be require, verify-ca or verify-full/);
+      expect(all).not.toContain(PASSWORD);
+      expect(all).not.toContain('example.invalid');
+    }
+  });
+
+  it('accepts require, verify-ca and verify-full (also among other parameters)', () => {
+    for (const q of [
+      '?sslmode=require',
+      '?sslmode=verify-ca',
+      '?sslmode=verify-full',
+      '?connect_timeout=5&sslmode=verify-full',
+      '?sslmode=require&application_name=trace',
+    ]) {
+      const c = capture();
+      const { run, calls } = fakeRunner();
+      const env = { [DB_URL_ENV]: `${DB_BASE}${q}` };
+      expect(main({ argv: [], env, root: REPO, run, ...c }), q).toBe(0);
+      expect(calls).toHaveLength(16);
+    }
+  });
+
+  it('--list needs no connection string, so it also ignores sslmode', () => {
+    const c = capture();
+    const { run } = fakeRunner();
+    expect(main({ argv: ['--list'], env: {}, root: REPO, run, ...c })).toBe(0);
   });
 
   it('rejects unknown arguments', () => {

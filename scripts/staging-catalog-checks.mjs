@@ -3,7 +3,8 @@
 //   node scripts/staging-catalog-checks.mjs          runs every check; needs SUPABASE_STAGING_DB_URL
 //   node scripts/staging-catalog-checks.mjs --list   prints the plan; never connects
 // Every supabase/catalog-checks/MT-*.sql runs through its own `psql -X -v ON_ERROR_STOP=1 -q -At`,
-// with the check sent on stdin inside `begin; set transaction read only; … rollback;`. `-q` keeps
+// with the check sent on stdin inside `begin; set transaction read only; set local
+// statement_timeout = '60s'; … rollback;` (the server stops a runaway query). `-q` keeps
 // psql from printing the BEGIN/SET/ROLLBACK command tags, so the only possible output is a
 // violation row or an error. The positive-control fixtures (fixtures/) never run here.
 // Fails (exit 1) when:
@@ -11,7 +12,9 @@
 //     manifest ID, nothing unlisted, README rule 1: one statement, so no ";" can end the read-only
 //     transaction early), a check holds a psql meta-command (it would run on the runner), or the
 //     number of MT-*.sql files differs from manifest.json (also re-asserted after the run)
-//   - the connection string is missing (outside --list)
+//   - the connection string is missing (outside --list), or does not carry exactly one sslmode
+//     parameter of require, verify-ca or verify-full (checked before any psql starts; the message
+//     names the parameter, never the string)
 //   - any psql prints any line (stdout or stderr), exits non-zero, is killed or cannot start
 // The connection string comes only from env SUPABASE_STAGING_DB_URL. It is passed to psql with -d,
 // removed from psql's environment, and redacted (whole URL, password raw and decoded, any other
@@ -32,8 +35,41 @@ export const PSQL_TIMEOUT_MS = 120_000;
 /** Output lines shown per failing check (the rest are counted). */
 const MAX_LINES_SHOWN = 20;
 
-/** The check wrapped in a read-only transaction that always rolls back. */
-export const wrapCheck = (sql) => `begin;\nset transaction read only;\n${sql}\n;\nrollback;\n`;
+/** Server-side limit per check: a runaway query stops on staging even if psql is killed (S3B-4). */
+export const STATEMENT_TIMEOUT = '60s';
+
+/** The check wrapped in a read-only transaction (with a statement timeout) that always rolls back. */
+export const wrapCheck = (sql) =>
+  `begin;\nset transaction read only;\nset local statement_timeout = '${STATEMENT_TIMEOUT}';\n${sql}\n;\nrollback;\n`;
+
+/** `sslmode` values that encrypt the connection to staging Postgres (S3B-6). */
+export const SSL_MODES = Object.freeze(['require', 'verify-ca', 'verify-full']);
+
+/**
+ * null when the connection string has exactly one `sslmode` query parameter set to one of
+ * SSL_MODES (libpq's default, `prefer`, lets a network attacker strip TLS), else a message that
+ * names the parameter only, never the string.
+ */
+export function sslModeProblem(dbUrl) {
+  const q = String(dbUrl ?? '');
+  const query = q.includes('?') ? q.slice(q.indexOf('?') + 1).split('#')[0] : '';
+  const values = query
+    .split('&')
+    .map((pair) => {
+      const eq = pair.indexOf('=');
+      const name = eq === -1 ? pair : pair.slice(0, eq);
+      try {
+        return decodeURIComponent(name) === 'sslmode'
+          ? decodeURIComponent(eq === -1 ? '' : pair.slice(eq + 1))
+          : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((v) => v !== null);
+  if (values.length === 1 && SSL_MODES.includes(values[0])) return null;
+  return `sslmode must be ${SSL_MODES.slice(0, -1).join(', ')} or ${SSL_MODES.at(-1)} (exactly one sslmode parameter in ${DB_URL_ENV})`;
+}
 
 /**
  * The run plan for `root`.
@@ -183,6 +219,11 @@ export function main({ argv, env, root, run, out = console.log, err = console.er
   const dbUrl = (env[DB_URL_ENV] ?? '').trim();
   if (dbUrl === '') {
     err(`${tag}: ${DB_URL_ENV} is not set (the deploy-staging catalog step sets it)`);
+    return 1;
+  }
+  const ssl = sslModeProblem(dbUrl);
+  if (ssl) {
+    err(`${tag}: ${ssl}`);
     return 1;
   }
   const { violations, report } = runCatalogChecks({ root, dbUrl, run });
