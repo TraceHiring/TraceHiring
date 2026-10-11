@@ -1,0 +1,17 @@
+/work/trace checkout/supabase/tests/catalog_meta.test.sql .. 
+1..6
+ok 1 - MT-8b: clean
+ok 2 - MT-8b.unknown_schema: fires
+ok 3 - MT-12: clean
+ok 4 - MT-12.global_function_entry_missing: fires
+not ok 5 - MT-12.global_entry_grants_public: fires
+ok 6 - MT-12.schema_entry_grants_role: fires
+# Looks like you planned 6 tests but ran 5
+Failed 1/6 subtests 
+
+Test Summary Report
+-------------------
+/work/trace checkout/supabase/tests/catalog_meta.test.sql (Wstat: 0 Tests: 6 Failed: 1)
+  Failed test:  5
+Files=1, Tests=6,  0 wallclock secs ( 0.02 usr  0.01 sys +  0.01 cusr  0.00 csys =  0.04 CPU)
+Result: FAIL
