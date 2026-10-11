@@ -30,9 +30,27 @@ const releaseForErrorPath = (env: Env): string => {
   }
 };
 
+/** The 500 answer that needs nothing from the request, the env or the logger. */
+const staticInternalError = (): Response =>
+  new Response('{"error":"internal"}', {
+    status: 500,
+    headers: { 'content-type': 'application/json', ...NO_STORE },
+  });
+
 export const createApp = (deps: AppDeps): Hono<{ Bindings: Env }> => {
   const now = deps.now ?? (() => new Date());
   const app = new Hono<{ Bindings: Env }>();
+
+  // Hono hands only Error instances to onError and rethrows anything else out of fetch, where the
+  // runtime would answer with its own page and record the thrown value outside the redactor. So a
+  // thrown string, null or object becomes an Error with a constant message first (S3A-1).
+  app.use('*', async (_c, next) => {
+    try {
+      await next();
+    } catch (thrown) {
+      throw thrown instanceof Error ? thrown : new Error('non_error_thrown');
+    }
+  });
 
   app.get('/health', (c) =>
     c.json(healthBody(SERVICE, resolveVersion(c.env.VERSION), now()), 200, NO_STORE),
@@ -41,17 +59,22 @@ export const createApp = (deps: AppDeps): Hono<{ Bindings: Env }> => {
   app.notFound((c) => c.json({ error: 'not_found' }, 404, NO_STORE));
 
   // The body carries no message and no stack (they can echo input). The reporter and the log line
-  // get the serialised error (name, code, frames), never its message. Neither call can throw.
+  // get the serialised error (name, code, frames), never its message. If anything in here throws,
+  // the static response below still goes out.
   app.onError((err, c) => {
-    const release = releaseForErrorPath(c.env);
-    reportError(deps.reporter, err, { release });
-    const log = createLogger({
-      service: SERVICE,
-      version: release,
-      ...(deps.sink === undefined ? {} : { sink: deps.sink }),
-    });
-    log.error('request.failed', undefined, { err });
-    return c.json({ error: 'internal' }, 500, NO_STORE);
+    try {
+      const release = releaseForErrorPath(c.env);
+      reportError(deps.reporter, err, { release });
+      const log = createLogger({
+        service: SERVICE,
+        version: release,
+        ...(deps.sink === undefined ? {} : { sink: deps.sink }),
+      });
+      log.error('request.failed', undefined, { err });
+      return c.json({ error: 'internal' }, 500, NO_STORE);
+    } catch {
+      return staticInternalError();
+    }
   });
 
   return app;
