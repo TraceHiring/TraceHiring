@@ -818,6 +818,29 @@ describe('Authorization schemes (S1.7 follow-up 2)', () => {
     expect(out).toContain(REDACTED);
     expect(redactString(out)).toBe(out);
   });
+
+  // Redactor G-lows re-review H1: the scheme rule swallowed `token =` and left the value, and the
+  // key rule then no longer saw the key. A separator after the word makes it a key, not a scheme.
+  it.each([
+    ['token = v', `token = ${tok}`],
+    ['my token = v', `my token = ${tok}`],
+    ['token = "v"', `token = "${tok}"`],
+    ['Token  :  v', `Token  :  ${tok}`],
+    ['token = v in a settings dump', `auth.token = ${tok}, retries=3`],
+  ])('redacts the value of a spaced %s pair (H1)', (_label, s) => {
+    const out = redactString(s);
+    expect(out).not.toContain(tok);
+    expect(out).toContain(REDACTED);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it.each([
+    ['Token v', `Token ${tok}`],
+    ['Bearer v', `Bearer ${tok}`],
+    ['Basic v', `Basic ${basic}`],
+  ])('still redacts the scheme form %s (H1 control)', (_label, s) => {
+    expect(redactString(s)).toBe(REDACTED);
+  });
 });
 
 describe('number canonicalisation (S1.7 follow-ups 3-5)', () => {

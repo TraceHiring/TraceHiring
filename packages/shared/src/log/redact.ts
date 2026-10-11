@@ -404,7 +404,9 @@ const redactAddresses =
 const STEPS: readonly Step[] = [
   // secrets and tokens first, so later patterns never see their pieces
   sub(/(?<![\w-])eyJ[\w-]*\.[\w-]*\.[\w-]*/g, REDACTED),
-  sub(/\b(?:Bearer|Basic|Token)\s{1,8}[^\s"',;]+/gi, REDACTED),
+  // A scheme word followed by `=` or `:` is a key (`token = v`), left to the key rule (redactor
+  // G-lows re-review H1); the look-ahead also stops `\s{1,8}` from ending inside a longer run.
+  sub(/\b(?:Bearer|Basic|Token)\s{1,8}(?![\s=:])[^\s"',;]+/gi, REDACTED),
   // free-text headers: any Authorization scheme, and every Cookie pair, not only the first
   sub(/\b((?:proxy-)?authorization\s{0,3}[=:]\s{0,3})[^\r\n"',;]+/gi, keepPrefix),
   sub(/\b((?:set-)?cookie\s{0,3}[=:]\s{0,3})[^\r\n"']+/gi, keepPrefix),
