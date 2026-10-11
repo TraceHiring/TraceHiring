@@ -22,7 +22,8 @@
         "anon_column",
         "anon_sequence",
         "anon_function",
-        "acl_truncate_trigger_references"
+        "acl_truncate_trigger_references",
+        "column_references"
       ]
     },
     { "id": "MT-5a", "branches": ["direct_join", "nested_view", "via_function"] },
