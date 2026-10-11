@@ -652,6 +652,25 @@ function checkStepCommon(step, file, where, out, ctx) {
   if (isTruthyFlag(step['continue-on-error'])) {
     out.push(v(file, where, 'continue-on-error is not allowed (a failing step must fail the job)'));
   }
+  if (step.shell !== undefined && step.shell !== 'bash') {
+    out.push(v(file, where, SHELL_MESSAGE));
+  }
+}
+
+// A custom shell template such as 'true {0}' makes every run: step exit 0 without running it
+// (S1.4 security re-review N3), so shell: is always exactly bash.
+const SHELL_MESSAGE = 'shell: must be exactly bash (a shell template can skip every run: step)';
+
+/** Workflow- or job-level `defaults:` may only set `run.shell: bash` (and other run keys). */
+function checkDefaults(defaults, file, where, out) {
+  if (defaults === undefined) return;
+  if (!isObj(defaults) || (defaults.run !== undefined && !isObj(defaults.run))) {
+    out.push(v(file, where, 'defaults: must be a mapping with a run: mapping'));
+    return;
+  }
+  if (defaults.run?.shell !== undefined && defaults.run.shell !== 'bash') {
+    out.push(v(file, where, SHELL_MESSAGE));
+  }
 }
 
 /** Is this step an install or build step (directly, or through a local action that installs)? */
@@ -717,6 +736,7 @@ export function checkWorkflow(doc, file, ctx = {}) {
         v(file, k, 'secrets may only be set at step level (env: or with:) in deploy-staging'),
       );
   }
+  checkDefaults(doc.defaults, file, 'defaults', out);
   if (!isObj(doc.jobs)) {
     out.push(v(file, 'jobs', 'workflow has no jobs mapping'));
     return out;
@@ -727,6 +747,7 @@ export function checkWorkflow(doc, file, ctx = {}) {
       out.push(v(file, where, 'job must be a mapping'));
       continue;
     }
+    checkDefaults(job.defaults, file, `${where}.defaults`, out);
     // Job permissions never broader than the workflow's.
     if (job.permissions !== undefined) {
       const jp = job.permissions;

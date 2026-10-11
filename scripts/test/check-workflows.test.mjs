@@ -393,6 +393,30 @@ describe('checkWorkflow', () => {
     expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/jobs\.static.*needs:/);
   });
 
+  // S1.4 security re-review N3: a shell template such as 'true {0}' makes every run: step exit 0.
+  it.each([
+    [
+      'a step',
+      (d) => (d.jobs.static.steps[2].shell = 'true {0}'),
+      /jobs\.static\.steps\[2\].*shell/,
+    ],
+    ['job defaults', (d) => (d.jobs.rls.defaults = { run: { shell: 'sh' } }), /jobs\.rls.*shell/],
+    ['workflow defaults', (d) => (d.defaults = { run: { shell: 'true {0}' } }), /defaults.*shell/],
+    ['a non-mapping defaults', (d) => (d.defaults = 'bash'), /defaults.*mapping/],
+  ])('rejects a shell other than bash in %s', (_label, mutate, pattern) => {
+    const d = doc();
+    mutate(d);
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(pattern);
+  });
+
+  it('accepts shell: bash on a step and in job and workflow defaults', () => {
+    const d = doc();
+    d.jobs.static.steps[2].shell = 'bash';
+    d.jobs.rls.defaults = { run: { shell: 'bash' } };
+    d.defaults = { run: { shell: 'bash' } };
+    expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
+  });
+
   it('allows a required job to need only other required jobs', () => {
     const d = doc();
     d.jobs.static.needs = 'rls';
