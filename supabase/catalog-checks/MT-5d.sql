@@ -21,6 +21,11 @@
 --   index_expression: an index with expressions or a predicate on such a table that reaches the other.
 --   column_domain: a column of such a table typed by a domain (or an array of one) whose default or CHECK
 --     constraints reach the other.
+--   outside_host_both: any of those hosts (trigger, policy, column default, CHECK constraint, index, domain column)
+--     on an in-scope relation that reaches neither schema (public, private, a system-list schema or an inheritance
+--     descendant elsewhere), whose code reaches both. Founder decision 2026-10-11: such a table (the plan's reports
+--     table) may hold foreign keys into both schemas and show both results side by side (rule 5), so its foreign
+--     keys are not flagged, but code on it must not combine them (rule 1).
 -- The MT-5a rule is the closure in shared:graph and shared:closure below (the same text in MT-5a, 5b, 5c and 5d).
 -- Extension members are not skipped here: an extension installed in quality or integrity is already an MT-9
 -- violation.
@@ -229,32 +234,33 @@ foreign_key as (
   where con.contype = 'f'
     and src.nspname <> ref.nspname
 ),
--- host: code attached to a table, walked from the host itself (its edges are in code_edge). kind names the branch.
+-- host: code attached to an in-scope relation, walked from the host itself (its edges are in code_edge). kind
+-- names the branch.
 host (classid, oid, relid, name, kind) as (
   select 'pg_trigger'::regclass::oid, tg.oid, tg.tgrelid, format('%I', tg.tgname), 'trigger'::text
   from pg_trigger as tg
   where not tg.tgisinternal
-    and tg.tgrelid in (select rr.oid from rel_reach as rr)
+    and tg.tgrelid in (select s.oid from scope_rel as s)
   union all
   select 'pg_policy'::regclass::oid, pol.oid, pol.polrelid, format('%I', pol.polname), 'policy'::text
   from pg_policy as pol
-  where pol.polrelid in (select rr.oid from rel_reach as rr)
+  where pol.polrelid in (select s.oid from scope_rel as s)
   union all
   select 'pg_attrdef'::regclass::oid, ad.oid, ad.adrelid, format('default of %I', a.attname), 'default'::text
   from pg_attrdef as ad
   join pg_attribute as a on a.attrelid = ad.adrelid and a.attnum = ad.adnum
-  where ad.adrelid in (select rr.oid from rel_reach as rr)
+  where ad.adrelid in (select s.oid from scope_rel as s)
   union all
   select 'pg_constraint'::regclass::oid, con.oid, con.conrelid, format('%I', con.conname), 'check'::text
   from pg_constraint as con
   where con.contype = 'c'
-    and con.conrelid in (select rr.oid from rel_reach as rr)
+    and con.conrelid in (select s.oid from scope_rel as s)
   union all
   select 'pg_class'::regclass::oid, ix.indexrelid, ix.indrelid, format('index %I', ic.relname), 'index'::text
   from pg_index as ix
   join pg_class as ic on ic.oid = ix.indexrelid
   where (ix.indexprs is not null or ix.indpred is not null)
-    and ix.indrelid in (select rr.oid from rel_reach as rr)
+    and ix.indrelid in (select s.oid from scope_rel as s)
   union all
   select 'pg_type'::regclass::oid, a.atttypid, a.attrelid, format('column %I', a.attname), 'domain'::text
   from pg_attribute as a
@@ -263,7 +269,7 @@ host (classid, oid, relid, name, kind) as (
   where a.attnum > 0
     and not a.attisdropped
     and (ty.typtype = 'd' or el.typtype = 'd')
-    and a.attrelid in (select rr.oid from rel_reach as rr)
+    and a.attrelid in (select s.oid from scope_rel as s)
 ),
 seed (classid, oid) as (
   select distinct h.classid, h.oid
@@ -354,6 +360,15 @@ crossing as (
   join reach as rc on rc.seed_classid = h.classid and rc.seed_oid = h.oid
   where rc.nspname <> hr.nspname
   group by h.kind, h.classid, h.oid, h.relid, h.name, hr.nspname, rc.nspname
+),
+-- outside: a host on a relation that reaches neither schema, whose code reaches both.
+outside as (
+  select h.kind, h.relid, h.name
+  from host as h
+  join reach as rc on rc.seed_classid = h.classid and rc.seed_oid = h.oid
+  where h.relid not in (select rr.oid from rel_reach as rr)
+  group by h.kind, h.classid, h.oid, h.relid, h.name
+  having count(distinct rc.nspname) = 2
 )
 select
   'foreign_key'::text as branch,
@@ -385,6 +400,22 @@ select
   )::text
 from crossing as x
 join pg_class as c on c.oid = x.relid
+join pg_namespace as n on n.oid = c.relnamespace
+union all
+select
+  'outside_host_both'::text,
+  format('%s on %I.%I', o.name, n.nspname, c.relname)::text,
+  format(
+    '%s on a table outside quality and integrity reaches both',
+    case o.kind
+      when 'default' then 'column default'
+      when 'check' then 'CHECK constraint'
+      when 'domain' then 'column domain'
+      else o.kind
+    end
+  )::text
+from outside as o
+join pg_class as c on c.oid = o.relid
 join pg_namespace as n on n.oid = c.relnamespace
 union all
 select

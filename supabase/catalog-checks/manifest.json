@@ -51,7 +51,8 @@
         "column_default",
         "check_constraint",
         "index_expression",
-        "column_domain"
+        "column_domain",
+        "outside_host_both"
       ]
     },
     {
