@@ -15,7 +15,7 @@ const STEPS = JOB.steps;
 const run = (s) => (typeof s.run === 'string' ? s.run : '');
 const norm = (s) => String(s).replace(/\s+/g, ' ').trim();
 
-const SHA_EXPR = /\$\{\{\s*github\.sha\s*\}\}/;
+const WORKER_DIRS = 'workers/edge workers/jobs services/api';
 const OUTPUT_FILE = '"$RUNNER_TEMP/wrangler-output.ndjson"';
 
 /** Which §15.1 state a step moves the job into (null when unknown). */
@@ -154,8 +154,27 @@ describe('deploy-staging: step-scoped secrets (§7.2, §7.3)', () => {
 });
 
 describe('deploy-staging: commands', () => {
-  it('builds with the app version set to the commit SHA', () => {
-    expect(run(stepIn('built'))).toMatch(/VITE_APP_VERSION="\$\{\{ github\.sha \}\}" pnpm build/);
+  it('builds with the app version set to the commit SHA (runner env, not an expression)', () => {
+    expect(run(stepIn('built'))).toMatch(/^VITE_APP_VERSION="\$GITHUB_SHA" pnpm build$/m);
+  });
+
+  it('never puts a ${{ }} expression in run text (use runner env such as $GITHUB_SHA)', () => {
+    for (const s of STEPS) expect(run(s), String(stateOf(s))).not.toContain('${{');
+  });
+
+  it('builds the staging Worker bundles with no secret, before the scan (S3B-1)', () => {
+    const built = stepIn('built');
+    expect(secretRefs(built)).toEqual([]);
+    expect(built.env).toBeUndefined();
+    const r = run(built);
+    expect(r.split('\n')[0]).toBe('set -euo pipefail');
+    expect(r).toContain(`for dir in ${WORKER_DIRS}; do`);
+    const dry = r.split('\n').filter((l) => /--dry-run/.test(l));
+    expect(dry.map(norm)).toEqual([
+      '(cd "$dir" && pnpm exec wrangler deploy --dry-run --env staging --outdir dist)',
+    ]);
+    expect(r.indexOf('pnpm build')).toBeLessThan(r.indexOf('--dry-run'));
+    expect(STEPS.indexOf(built)).toBeLessThan(STEPS.indexOf(stepIn('output_scanned')));
   });
 
   it('applies migrations with the §7.2 command, non-interactively', () => {
@@ -170,15 +189,14 @@ describe('deploy-staging: commands', () => {
     expect(r).toMatch(/node scripts\/staging-catalog-checks\.mjs$/m);
   });
 
-  it('deploys edge, jobs and api with --env staging and VERSION set to github.sha', () => {
+  it('deploys exactly the scanned staging bundle: dist/index.js, --no-bundle, VERSION from $GITHUB_SHA (S3B-1)', () => {
     const r = run(stepIn('workers_deployed'));
     expect(r).toContain(`export WRANGLER_OUTPUT_FILE_PATH=${OUTPUT_FILE}`);
-    expect(r).toMatch(/for dir in workers\/edge workers\/jobs services\/api; do/);
-    const deploy = r.split('\n').find((l) => /wrangler deploy/.test(l));
-    expect(deploy).toMatch(
-      /pnpm exec wrangler deploy --env staging --var "VERSION:\$\{\{ github\.sha \}\}"/,
-    );
-    expect(deploy).toMatch(SHA_EXPR);
+    expect(r).toContain(`for dir in ${WORKER_DIRS}; do`);
+    const lines = r.split('\n').filter((l) => /wrangler deploy/.test(l));
+    expect(lines.map(norm)).toEqual([
+      '(cd "$dir" && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA")',
+    ]);
   });
 
   it('checks the Worker secrets with check-staging-secrets', () => {
@@ -205,12 +223,18 @@ describe('deploy-staging: commands', () => {
 
   it('smoke-tests from the same wrangler output file against github.sha', () => {
     expect(norm(run(stepIn('smoke_passed')))).toBe(
-      `node scripts/smoke-staging.mjs --wrangler-output ${OUTPUT_FILE} --sha "\${{ github.sha }}"`,
+      `node scripts/smoke-staging.mjs --wrangler-output ${OUTPUT_FILE} --sha "$GITHUB_SHA"`,
     );
   });
 
+  it('bounds the catalog-check and smoke steps below the job timeout (S3B-4)', () => {
+    expect(JOB['timeout-minutes']).toBe(30);
+    expect(stepIn('catalog_checked')['timeout-minutes']).toBe(10);
+    expect(stepIn('smoke_passed')['timeout-minutes']).toBe(8);
+  });
+
   it('runs the shell steps with errexit, nounset and pipefail', () => {
-    for (const state of ['workers_deployed', 'pages_deployed', 'catalog_checked']) {
+    for (const state of ['built', 'workers_deployed', 'pages_deployed', 'catalog_checked']) {
       expect(run(stepIn(state)).split('\n')[0], state).toBe('set -euo pipefail');
     }
   });

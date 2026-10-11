@@ -137,9 +137,16 @@ jobs:
       - name: Set up toolchain and install
         uses: ./.github/actions/setup
       # Includes the bundle budget, header checks and the dist/ secret scan. The apps write
-      # dist/version.json from VITE_APP_VERSION (§9.3).
+      # dist/version.json from VITE_APP_VERSION (§9.3). The loop then rebuilds each Worker under
+      # --env staging into the same dist/, so the next step scans, and the Workers step deploys,
+      # the staging bytes (an env.staging define or alias cannot ship unscanned). No secret here.
       - name: Build
-        run: VITE_APP_VERSION="${{ github.sha }}" pnpm build
+        run: |
+          set -euo pipefail
+          VITE_APP_VERSION="$GITHUB_SHA" pnpm build
+          for dir in workers/edge workers/jobs services/api; do
+            (cd "$dir" && pnpm exec wrangler deploy --dry-run --env staging --outdir dist)
+          done
       # §7.2 step 2: gitleaks over every app, Worker and service dist/ (AT-16).
       - name: Scan the build output
         run: node scripts/scan-dist.mjs
@@ -150,6 +157,7 @@ jobs:
         run: pnpm exec supabase db push --db-url "$SUPABASE_STAGING_DB_URL" --yes
       # §7.2 step 4: every catalog check, read-only, through psql (AT-18).
       - name: Catalog checks against staging
+        timeout-minutes: 10
         env:
           SUPABASE_STAGING_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
         run: |
@@ -165,7 +173,7 @@ jobs:
           set -euo pipefail
           export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
           for dir in workers/edge workers/jobs services/api; do
-            (cd "$dir" && pnpm exec wrangler deploy --env staging --var "VERSION:${{ github.sha }}")
+            (cd "$dir" && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA")
           done
       # §7.2 step 6: the staging Workers' secrets must be a subset of the allow-list (AT-15).
       - name: Check Worker secrets
@@ -192,4 +200,5 @@ jobs:
           pnpm exec wrangler pages deploy apps/recruiter/dist --project-name trace-recruiter-staging --branch main
       # §7.2 step 8: /health, /version.json and the §10.3 headers at this commit (AT-11, AT-22).
       - name: Smoke test
-        run: node scripts/smoke-staging.mjs --wrangler-output "$RUNNER_TEMP/wrangler-output.ndjson" --sha "${{ github.sha }}"
+        timeout-minutes: 8
+        run: node scripts/smoke-staging.mjs --wrangler-output "$RUNNER_TEMP/wrangler-output.ndjson" --sha "$GITHUB_SHA"
