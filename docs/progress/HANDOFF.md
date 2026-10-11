@@ -1,83 +1,76 @@
-# HANDOFF — 2026-10-11 08:15 IST
-Reason for stopping: usage guard (the founder allowed work up to ~93%; stopped at 86-87% of the 5-hour window, Pro plan, resets about 12:20 IST). After the 08:15 handoff the lead fixed S1.4 re-review N1, N2, N3, N4 and N7 (see Next step 1).
+# HANDOFF — 2026-10-11 09:10 IST
+Reason for stopping: usage (founder: work to ~90%, then wrap up and push). The wrap-up started at 76% of the 5-hour window (Pro), because each review agent costs about 7–9%. The window resets about 13:20 IST.
 
 ## Where we are
-- Milestone **M0a**: toolchain, pipeline and skeleton. **Phase: BUILD.** S1.0–S1.6 are built. **S1.7** is in progress: the shared logger is built (its follow-ups are on a stream branch), and the database half is about half done.
-- **Integration branch: `claude/trace-autopilot-production-87e5e2`** (this worktree, `.claude/worktrees/trace-autopilot-production-87e5e2`). It was cut from `da5c5ca`, the last production commit of the old integration branch. The old branch `claude/trace-autopilot-continue-8d4785` ends in a demo WIP commit (`6f53926`) and is **no longer used for production**; the demo lives on `demo/d1-prototype`.
-- `milestone/m0a` has **not moved** (`adbbb61`). Its worktree is `.claude/worktrees/milestone-m0-spec-e4db77` and is clean. It moves only after the reviewers pass (Next step 4).
-- HEAD before this handoff: `10addbe` docs(specs): revision 11 of the M0a spec. `pnpm verify:fast` exit 0 at 08:05 (55 s). The full `pnpm verify` was last green on `0d8b511` (04:07). No new `cp/*` tag; the last is `cp/m0a-01`.
-- Spec `specs/m0-foundations.md` is at **revision 11** (`10addbe`).
+- Milestone **M0a** (toolchain, pipeline and skeleton). **Phase: BUILD.** S1.0–S1.6 are built and reviewed. **S1.7** (shared code + database): every stream is now written, but nothing is merged yet, because the reviews found issues that must be fixed first.
+- **Integration branch: `claude/trace-autopilot-resume-2dac7c`** (NEW), in worktree `.claude/worktrees/trace-autopilot-resume-2dac7c`. It was reset to `97f8a4e`, the tip of the old integration branch `claude/trace-autopilot-production-87e5e2`, which still holds `97f8a4e` and is no longer used. A worktree guard blocks a session from writing into another session's worktree, hence the switch. The 3 commits the session branch held before the reset (`52a4b08`, `0157093`, `fe77a87`) are all on `main`, so nothing was lost.
+- HEAD before this handoff: `d7169b0`. Since `97f8a4e`, only review reports under `docs/reviews/` were added. `pnpm verify:fast` exit 0 at 08:37 on `97f8a4e` and at 09:12 on this handoff. Full `pnpm verify` was last green on `0d8b511`. The last tag is `cp/m0a-01`. **The `main` mirror was skipped** (main is checked out in the root folder, which the worktree guard protects), so `main` still shows the old handoff: use RESUME-PROMPT.md from this branch.
+- `milestone/m0a` has **not moved** (`adbbb61`); it moves only after the Next-step gate. The spec `specs/m0-foundations.md` is at revision 11 (`10addbe`).
 
 ## Done this session (verified)
-- **Repo check:** the parallel session never ran (no `m0a/s17-redactor` on `trace`). Toolchain: Node 22.23.3, pnpm 12.11.2, Docker 29.5.2, gitleaks 8.30.1.
-- **S1.4 security re-review** (fresh `security-reviewer`): **BLOCK**. Two new Mediums: N1, a required job may `needs:` a non-required job; N2, expression mapping keys are never scanned. Lows N3, N4, N5 and N7 are also open; N6 is fixed in spec rev 11. Report: `docs/reviews/M0a-S1.4-security-rereview.md` (in `cf8626d`).
-- **S1.7 foundation, `cf8626d`:**
-  - `supabase/config.toml` (`project_id = "trace"`, Studio off);
-  - baseline migration `supabase/migrations/20261011015904_m0a_baseline.sql`, verbatim from §8.2;
-  - `seed.sql`;
-  - `supabase/catalog-checks/manifest.json` (16 IDs, 51 branches) and `README.md` (check/fixture rules and day-one facts);
-  - floors: `catalog-min-count` 71, `rls-min-count` 0;
-  - `supabase/tests/catalog_probe.test.sql` (MT-4b). Its 4 assertions passed via `supabase test db`, and all 4 failed under a mutation;
-  - `MT-8b.sql` plus its fixture, as the reference check.
-- **`packages/db-types`, `905be8f`:** `database.ts` is the byte-exact CLI output. `index.ts` and 2 tests are green; typecheck and lint pass.
-- **Day-one checks:** all done and recorded in spec rev 11 and the catalog README. pgTAP works for the test roles with no fallback, no MT-11 branch is unreachable, and `supabase test db --debug` gives per-assertion TAP.
+- **S1.4 second security re-review: PASS** (fresh agent). N1–N4, N6 and N7 are verified fixed, and all 18 regression tests fail on 6fadb17. **N5 is partly fixed; the rest is new Low N8** (a `%PDF`-looking first chunk makes gitleaks `stdin` skip the whole stream, NUL files are dropped, archives are detected by name only). New Low **N9**: `SHELLOPTS`/`BASH_ENV` in `env:`, and `container:` on a required job, get past the N3 shell check. Both are owed before S3. Recorded in `docs/reviews/M0a-S1.4-security-rereview.md` (`98c098f`).
+- **S1.7 database review of `cf8626d`, `905be8f` and W3a: BLOCK.** The baseline migration is exact and safe. The catalog checks have gaps:
+  - Blocking: escape through system-list schemas (`cron` etc. can be created; `postgres` has CREATE on `_realtime`, `supabase_migrations` and `supabase_functions`) and through INHERITS children.
+  - High: a `service_role`-owned SECURITY DEFINER function in `extensions`; MT-7 scans only 3 schemas.
+  - Medium: foreign tables.
+  - 4 Lows.
+  The report and a **7-item fix plan** are in `docs/reviews/M0a-S1.7-database-review.md` (`98c098f`).
+- **W1 redactor security review: PASS, with 2 Mediums** to fix before merge:
+  - #1: frame-shaped message lines survive under stack keys, and the 2,000-char cap is skipped.
+  - #2: a UPI ID before `.` or a dash is not redacted.
+  6 Lows (#7, the 50 ms timing flake, is load noise, not ReDoS). Report: `docs/reviews/M0a-S1.7-redactor-security-review.md` (`d7169b0`).
+- **W3b finished** (writer agent): MT-5b, 5c, 5d, 10, 11 and 12 plus 22 fixtures; MT-5a confirmed clean with pgTAP. The runner is all green with no cross-branch firing. Assembled with W3a and run through the real generator, the result was 67/67 ok in a rolled-back run.
+- **W2 finished** (writer agent): `scripts/test-rls.mjs`, `scripts/db-types.mjs`, tests and stubs. The scripts suite went from 542 to 626, all green; `pnpm lint` and `verify:fast` exit 0 on the branch. The TAP parser counts lines itself, so pgTAP's rolled-back counters (see Gotchas) cannot fool it, and 3 tests pin that.
 
-## Stream branches (each in `.claude/worktrees/agent-<id>`, all clean, none merged; pushed to `trace` as a backup at 08:40, since a worktree may be cleaned up when its session is archived)
-| Stream | Branch @ tip | Base | State |
-| --- | --- | --- | --- |
-| W1 redactor follow-ups | `worktree-agent-ae15fb7cd05478040` @ `bcb6d54` | da5c5ca | **DONE.** All 9 items, test-first; shared tests 187 → 306; the worker's full `pnpm verify` exit 0. **Needs its security-reviewer before merge.** Timing risk: two shapes took 107 ms once under heavy machine load (limit 50 ms); six reruns were clean. |
-| W3a catalog checks | `worktree-agent-a66ca65381173c087` @ `37adfd9` | cf8626d | **DONE.** MT-1, 2, 3, 4, 6, 7, 8, 9 with 25 fixtures; runner 33/33 ok; no cross-branch firing; clean with pgTAP present. |
-| W2 harness scripts | `worktree-agent-a9e0bdcc6c2fbd966` @ `8c5ef5f` | cf8626d | **PARTIAL.** `scripts/gen-catalog-tests.mjs` + 93 tests done (`0d35d0b`); real pg_prove/gen-types fixtures in `scripts/test/fixtures/rls/`. **Not started:** `scripts/test-rls.mjs`, `scripts/db-types.mjs` and their tests. `pnpm lint`/`verify` not run there. |
-| W3b catalog checks | `worktree-agent-a4f4047327f9e48e5` @ `f8da8a4` | cf8626d | **PARTIAL.** MT-5a with 3 fixtures (runner green). **Missing:** MT-5b, 5c, 5d, 10, 11, 12 (22 fixtures); MT-5a's pgTAP-present run and its edge cases. |
+## Stream branches (all local, clean, unmerged; pushed to `trace` at this wrap-up)
+| Stream | Branch @ tip | State |
+| --- | --- | --- |
+| W1 redactor | `worktree-agent-ae15fb7cd05478040` @ `bcb6d54` | Review PASS; **fix #1 and #2 (and #7) first** |
+| W3a checks MT-1,2,3,4,6,7,8,9 | `worktree-agent-a66ca65381173c087` @ `37adfd9` | **Blocked by the DB review fix plan** |
+| W3b checks MT-5a–d,10,11,12 | `worktree-agent-a5a761e3d78529f6f` @ `0f62de8` (contains `f8da8a4`) | Done; DB review running at handoff (result below if it came in) |
+| W2 harness | `worktree-agent-a9809baf595fe8b13` @ `aabef91` (contains `0d35d0b`, `8c5ef5f`) | Done; DB review running at handoff |
+| superseded | `worktree-agent-a9e0bdcc6c2fbd966` @ `8c5ef5f`, `worktree-agent-a4f4047327f9e48e5` @ `f8da8a4` | Contained in the two branches above; do not use |
 
-## In progress (exact)
-- **Dev runner:** `docs/progress/tools/catalog-run.mjs`. Run it from a checkout root: `node docs/progress/tools/catalog-run.mjs . MT-5b …`. It runs each check and fixture in rolled-back transactions against container `supabase_db_trace`, the same way the generated pgTAP file does.
-- **Pending test:** `docs/progress/tools/root-scripts.test.mjs.pending` becomes `scripts/test/root-scripts.test.mjs` (§5). It goes in at wiring time; it is red until W2's scripts exist and the root `package.json` is wired.
-- The local Supabase stack (`trace`) is running, with the baseline migration applied. Failing tests: none on the integration branch.
+W3b/W2 database review result: **not received before the push**. Re-run it next session: `git diff f8da8a4..0f62de8` and `git diff 8c5ef5f..aabef91 -- scripts`.
 
-## Next step (in order; one writer per item, max 3 writers, watch usage)
-1. **Resume streams on their own branches**, each in its existing worktree:
-   - **W3b:** write MT-5b, 5c, 5d, 10, 11 and 12 per README and §8.5. Its settled design: MT-11 treats only the deparsed `( SELECT auth.uid() AS …)` / `auth.jwt()` form as wrapped. MT-5c counts relation, column, function, schema and per-schema default ACLs, and expands PUBLIC. MT-5b's BEGIN ATOMIC fixture contains `;`. Then run the runner for all 7 IDs.
-   - **W2:** write `test-rls.mjs` (§8.3, revision 11 steps), then `db-types.mjs`, with stubbed tests. Its design: async `run` stub; injected lock dir, clock, sleep and pid-alive check; `parseFloor` from gen-catalog-tests.
-   - **S1.4 re-review fixes:** N1, N2 (both Medium), N3, N4 and N7 were **fixed by the lead after this handoff** (`5c96e9f`, `0c29585`, `751ca41`, `99d0b5a`, `271018d`), and **N5** (`54d7265`); all 7 resolved, scripts suite 469/469, real `pnpm build` scan OK; Resolution table in the re-review report. Left: a fresh `security-reviewer` on `git diff 6fadb17..54d7265 -- scripts`.
-2. **Run the reviews:** `security-reviewer` on W1's diff (`git diff da5c5ca..bcb6d54 -- packages/shared`), and `database-reviewer` on W3a + W3b + `cf8626d`.
-3. **Lead integration** on the integration branch, merging each with `git merge --no-ff`:
-   - merge W1, W3a, W3b, W2 and W4;
-   - `node scripts/gen-catalog-tests.mjs` to write `catalog_meta.test.sql`;
-   - wire the root `package.json`: `test:rls`, `db:types`, `gen-catalog-tests --check` in `lint`, `pnpm test:rls` in `verify`;
-   - add `root-scripts.test.mjs`;
-   - run `pnpm test:rls` for real (it should give catalog 71 ≥ 71), then the full `pnpm verify`.
-4. **Gate:** `spec-reviewer` on the S1.7 diff. Then fast-forward `milestone/m0a` from its worktree with `git merge --ff-only claude/trace-autopilot-production-87e5e2`, and tag `cp/m0a-02` (S1.4–S1.6, reviewed) and `cp/m0a-03` (S1.7).
-5. Then **S2 ∥ S3** (spec §14), each a stream cut from `milestone/m0a`.
+## Next step (in order; 2–3 writers max; a review agent costs ~8% of a Pro window)
+1. **W1 fixes**, test-first, one commit each, continuing from `bcb6d54`: #1 (tighten the frame regex in `isStackFrame`/`stackFrames`; restore truncation over the cap), #2 (UPI lookahead `(?![\w@]|\.[a-z0-9])`), #7 (min-of-N timing). The exact repros and tests are in the redactor review report.
+2. **Catalog-check fix pass** on one branch cut from W3a `37adfd9` with W3b `0f62de8` merged in (the shared scope CTE fix touches both). Follow the 7-item plan in the DB review, test-first: a fixture per new branch, then the check. Then update `manifest.json`, `supabase/tests/catalog-min-count` (exact new count) and spec §8.5 as **revision 12**. Then run a fresh `database-reviewer` (fixes + W3b) and `spec-reviewer` on rev 12.
+3. Fix any Blocking/High/Medium from the W3b/W2 database review (re-run it if it is missing).
+4. **Lead integration** on the integration branch, each with `git merge --no-ff`:
+   - merge W1 (fixed), the catalog branch (fixed) and W2 `aabef91`;
+   - `node scripts/gen-catalog-tests.mjs`, which writes `supabase/tests/catalog_meta.test.sql`;
+   - wire the root `package.json`: `test:rls`, `db:types`, `gen-catalog-tests --check` in `lint`, `pnpm test:rls` in `verify` (the exact strings are in `docs/progress/tools/root-scripts.test.mjs.pending`);
+   - move that test to `scripts/test/root-scripts.test.mjs`;
+   - CI `rls` job: `node scripts/test-rls.mjs --stop`;
+   - run a real `pnpm test:rls`, confirming W2's `-x` exclude list (it excludes `kong` and `postgrest`) and that TAP comes on stdout;
+   - full `pnpm verify`.
+5. **Gate:** `spec-reviewer` on the whole S1.7 diff. Then in the `milestone/m0a` worktree run `git merge --ff-only <integration tip>`, and tag `cp/m0a-02` (S1.4–S1.6) and `cp/m0a-03` (S1.7).
+6. S1.4 Lows N8 and N9 (before S3). Then **S2 ∥ S3** (spec §14).
 
 ## Decisions made this session
-- **Production integration moves** to `claude/trace-autopilot-production-87e5e2`, from `da5c5ca`. Recorded in spec rev 11.
-- **Catalog checks return `(branch, object, detail)`**, and every positive control filters on its own branch. This is stricter than rev 10; recorded in spec rev 11 §8.5.
-- **`test-rls` uses `supabase test db --debug`**, fails on a test file that isn't `catalog_*`/`rls_*`, and fails when the file count differs from the `.sql` files under `supabase/tests/`. Recorded in spec rev 11 §8.3.
-- **Decisions inside the streams:**
-  - MT-2: a stale exemption entry is reported under `missing_org_id`.
-  - MT-4: `anon_column` fires only when there is no table-level privilege.
-  - MT-6: the `domain_column` > `array_column` > `direct_column` order.
-  - MT-8: `schema_missing` uses a rename.
-  - gen-catalog-tests rejects a BOM, a stray backslash, and a fixture whose last statement has no `;`.
-  - The redactor walks arrays with an index loop instead of `slice.call` (species-safe), and exports `isStackFrame`/`stackFrames`.
+- **Integration branch** is now `claude/trace-autopilot-resume-2dac7c` (see above).
+- **Put off the catalog fixes and the redactor fixes** to the next window instead of starting a third writer at 53–69% usage (AUTOPILOT §2: finish cleanly over half-finishing).
+- **New catalog branches** (planned, pending spec rev 12): MT-1 `inheritance_without_rls` and `foreign_table_in_scope`; MT-8b `system_schema_owner`; MT-9 `handmade_in_system_schema` and `handmade_nonadmin_owner`; MT-7 `definer_in_system_schema`; MT-3 `composite_type_column`; MT-6 `composite_column` and `range_column`; MT-4 `column_references`.
+- **Stream decisions** (W3b/W2 reports, to record in spec rev 12):
+  - MT-5c does not expand members of `postgres` and reads an empty ACL as PUBLIC EXECUTE.
+  - MT-11 detects auth calls via `pg_depend`.
+  - MT-10 raises an error if a listed role is missing.
+  - test-rls adds `--local`, uses a JSON lock with a token, and polls every 2 s.
+  - db-types takes the lock and runs `db reset` before `gen types`.
 
 ## Open questions for the founder (unchanged; docs/progress/FOUNDER-QUEUE.md)
 - **URGENT, from before:** revoke the Cloudflare token that was pasted as a secret *name*, and set `CLOUDFLARE_API_TOKEN` and `SUPABASE_STAGING_DB_URL`. Blocking: any Cloudflare deploy (S3 runs only).
 - The `workers.dev` subdomain (H4); what "D1" means; branch protection vs the session-end push. None of these blocks S1.7.
 
 ## Gotchas / do not touch
-- **Harness worktrees** (`isolation: worktree`) are created at **`main`**, not at the integration branch. Tell every writer to `git reset --hard <integration sha>` first; W1–W3 did.
-- **Usage:** 4–5 parallel agents burned about 75% of a Pro 5-hour window in about 35 minutes. Plan 2–3 writers per window, and keep about 15% for the handoff.
-- **Shared local stack:** only the lead runs `supabase start`/`db reset`/`test db`; writers use rolled-back psql transactions only.
-- **Windows:** never pipe `supabase`/`docker` output into `head` (it hangs); write to a file instead.
-- **commitlint** rejects a subject that starts with a capital letter, e.g. "S1.7 …" or "M0a …".
-- **Pre-commit gitleaks** blocks a literal `sb_secret_` key; build such keys at run time in tests.
-- **CI `rls` job** is red until `test:rls` exists (spec review L2).
+- **Writer worktrees** (`isolation: worktree`) start at `main`: tell every writer to confirm it has no commits of its own, then `git reset --hard <exact SHA>`.
+- **The worktree guard** blocks writing into another session's worktree. Work in your own worktree on the integration branch (see RESUME-PROMPT.md).
+- **pgTAP counters live in a temp table**, so `rollback to savepoint` undoes them: `finish()` misreports, and `num_failed()` misses fires-failures. Only count TAP lines (pg_prove and test-rls do).
+- **Usage:** 5 agents took ~50% of a Pro 5-hour window in 15 minutes; one review agent costs ~7–9%.
+- **Shared local stack:** only the lead runs `supabase start`/`db reset`/`test db`/`gen types`. Writers use rolled-back psql only.
+- **Windows:** never pipe `docker`/`supabase` output into `head`. commitlint rejects a capitalised subject. Pre-commit gitleaks blocks secret-shaped literals.
 - Never re-enable `.git/hooks/post-commit.disabled`; never move `cp/*` tags.
 
-## New session or new account
-Use the prompt in `docs/progress/RESUME-PROMPT.md` (it handles a fresh worktree created from `main`).
-
-## Verify first (the next session runs these before any change)
-git log --oneline -5 claude/trace-autopilot-production-87e5e2 · git status · `git log -1 --format=%h` on each stream branch above · docker ps (supabase_db_trace up?) · pnpm -s verify:fast · node docs/progress/tools/catalog-run.mjs <W3a worktree> MT-1 MT-9
+## Verify first
+git log --oneline -5 claude/trace-autopilot-resume-2dac7c · git status · `git log -1 --format=%h` on each stream branch above · docker ps (supabase_db_trace) · pnpm -s verify:fast
