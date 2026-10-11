@@ -209,6 +209,134 @@ describe('build-tokens: inputs are validated', () => {
   });
 });
 
+/** Characters that would end a declaration, a rule or a string, or open a comment or a url(). */
+const INJECTIONS = [';', '}', '"', '/*', 'url(', '\n', 'x"; } body{color:red', 'a;b', 'a}b'];
+
+describe('build-tokens: CSS-injection guards (S2-1)', () => {
+  type Mutate = (tree: TokenTree) => void;
+  const section = (tree: TokenTree, name: string): TokenTree => tree[name] as TokenTree;
+  /** buildTokens on a copy of the design tokens after `mutate`. */
+  const build = (mutate: Mutate) => {
+    const tree = structuredClone(base);
+    mutate(tree);
+    return buildTokens(tree, {});
+  };
+  const expectRefused = (mutate: Mutate, label: string): void => {
+    expect(() => build(mutate), label).toThrow();
+  };
+
+  it('accepts the unmodified tokens and a value at the MAX_PX boundary', () => {
+    expect(() => build(() => undefined)).not.toThrow();
+    const css = build((t) => {
+      section(t, 'space')['4'] = 10_000;
+    }).css;
+    expect(css).toContain('--space-4: 10000px;');
+  });
+
+  it('refuses out-of-range and non-number lengths everywhere px() is used (MAX_PX)', () => {
+    const targets: [string, Mutate][] = [
+      ['space.4', (t) => void (section(t, 'space')['4'] = 1e6)],
+      ['space.4 just over', (t) => void (section(t, 'space')['4'] = 10_001)],
+      ['space.4 negative', (t) => void (section(t, 'space')['4'] = -1e6)],
+      ['space.4 infinite', (t) => void (section(t, 'space')['4'] = Number.POSITIVE_INFINITY)],
+      ['radius.md', (t) => void (section(t, 'radius')['md'] = 1e6)],
+      ['type.body.size', (t) => void (section(section(t, 'type'), 'body')['size'] = 1e6)],
+      [
+        'type.body.lineHeight',
+        (t) => void (section(section(t, 'type'), 'body')['lineHeight'] = 1e6),
+      ],
+      [
+        'type.display.letterSpacing',
+        (t) => void (section(section(t, 'type'), 'display')['letterSpacing'] = -1e6),
+      ],
+      [
+        'component.touchTarget.min',
+        (t) => void (section(section(t, 'component'), 'touchTarget')['min'] = 1e6),
+      ],
+    ];
+    for (const [label, mutate] of targets) expectRefused(mutate, label);
+    for (const text of ['4px;}', '1e6', 'url(x)', '4px']) {
+      expectRefused((t) => void (section(t, 'space')['4'] = text as unknown as number), text);
+      expectRefused((t) => void (section(t, 'radius')['md'] = text as unknown as number), text);
+    }
+  });
+
+  it('refuses an injected colour token name (color KEY guard)', () => {
+    for (const name of [...INJECTIONS, '1a', 'a-b', 'a b', '', 'a.b']) {
+      expectRefused(
+        (t) => void (section(section(t, 'color'), 'bg')[name] = '#000000'),
+        JSON.stringify(name),
+      );
+      expectRefused((t) => void (section(t, 'color')[name] = { x: '#000000' }), name);
+    }
+  });
+
+  it('refuses an injected component token name (component KEY guard)', () => {
+    for (const name of [...INJECTIONS, '1a', 'a-b', 'a b', '']) {
+      expectRefused(
+        (t) => void (section(section(t, 'component'), 'touchTarget')[name] = 5),
+        JSON.stringify(name),
+      );
+      expectRefused((t) => void (section(t, 'component')[name] = { min: 5 }), name);
+    }
+  });
+
+  it('refuses a space token that is not named by a whole number (space key guard)', () => {
+    for (const name of [...INJECTIONS.map((s) => `4${s}`), 'a', '-1', '4.5', '', '4 ', 'x4']) {
+      expectRefused((t) => void (section(t, 'space')[name] = 4), JSON.stringify(name));
+    }
+  });
+
+  it('refuses an injected radius token name (radius KEY guard)', () => {
+    for (const name of [...INJECTIONS, '1a', 'a-b', 'a b', '']) {
+      expectRefused((t) => void (section(t, 'radius')[name] = 4), JSON.stringify(name));
+    }
+  });
+
+  it('refuses a font family that is not a plain name (font family guard)', () => {
+    const families = [...INJECTIONS, 'a\\b', "a'b", '1Plex', ' Plex', '', 'Plex<', 'a:b'];
+    for (const family of families) {
+      expectRefused((t) => void (section(t, 'font')['sans'] = family), JSON.stringify(family));
+      expectRefused((t) => void (section(t, 'font')['mono'] = family), JSON.stringify(family));
+    }
+    expectRefused((t) => void (section(t, 'font')['sans'] = 5 as unknown as string), 'number');
+    expectRefused(
+      (t) => void (section(t, 'font')['serif'] = 'Plex Serif'),
+      'font without a fallback stack',
+    );
+    expectRefused((t) => void (section(t, 'font')['a;b'] = 'Plex'), 'font key injection');
+  });
+
+  it('refuses an injected type style name (type KEY guard)', () => {
+    for (const name of [...INJECTIONS, '1a', 'a-b', 'a b', '']) {
+      expectRefused((t) => {
+        section(t, 'type')[name] = structuredClone(section(section(t, 'type'), 'body'));
+      }, JSON.stringify(name));
+    }
+    expectRefused((t) => void (section(t, 'type')['broken'] = 'body'), 'style that is not a group');
+  });
+
+  it('refuses a text-transform outside the allow-list (textTransform guard)', () => {
+    const style = (t: TokenTree): TokenTree => section(section(t, 'type'), 'overline');
+    const bad = [...INJECTIONS, 'uppercase;', 'Uppercase', ' none', 'inherit', 'none\n', ''];
+    for (const value of bad) {
+      expectRefused((t) => void (style(t)['textTransform'] = value), JSON.stringify(value));
+    }
+    expectRefused((t) => void (style(t)['textTransform'] = 7 as unknown as string), 'number');
+    for (const ok of ['none', 'uppercase', 'lowercase', 'capitalize']) {
+      const tree = structuredClone(base);
+      style(tree)['textTransform'] = ok;
+      expect(buildTokens(tree, {}).css).toContain(`--type-overline-text-transform: ${ok};`);
+    }
+  });
+
+  it('the committed stylesheet carries no injection-shaped text', () => {
+    const css = buildTokens(base, extensions).css;
+    expect(css).not.toMatch(/url\(|@import|expression\(|<|\\/);
+    expect(css.match(/\/\*/g)?.length).toBe(css.match(/\*\//g)?.length);
+  });
+});
+
 describe('build-tokens --check (CLI)', () => {
   const dirs: string[] = [];
   afterEach(() => {
