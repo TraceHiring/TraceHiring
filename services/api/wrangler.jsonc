@@ -17,13 +17,19 @@
   // No usage telemetry or npm dependency metadata leaves this machine or CI.
   "send_metrics": false,
   "dependencies_instrumentation": { "enabled": false },
+  // The deployed commit, reported by GET /health (spec §9.3). 'dev' locally; CI overrides it with
+  // `--var VERSION:<40-hex sha>` (spec §7.2). vars are not inherited by env blocks, so each env
+  // repeats it. This is a public build identifier, not a secret.
+  "vars": { "VERSION": "dev" },
   "env": {
     "dev": {
       "name": "trace-api-dev",
+      "vars": { "VERSION": "dev" },
     },
     "staging": {
       "name": "trace-api-staging",
       "workers_dev": true,
+      "vars": { "VERSION": "dev" },
     },
   },
 }
