@@ -53,6 +53,8 @@ const SAFE_KEYS = new Set([
  * controls, variation selectors, Hangul fillers, tags. Every one of them is in this property.
  */
 const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+/** Keys of ASCII letters, digits, `_` and `-` (most keys) need no Unicode normalisation. */
+const ASCII_KEY = /^[\w-]*$/;
 
 /**
  * Keys are compared after NFKC (fullwidth and other compatibility forms), dropping invisible
@@ -60,11 +62,13 @@ const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
  * or digit (spaces, `_`, `-`, marks).
  */
 const normaliseKey = (key: string): string =>
-  key
-    .normalize('NFKC')
-    .replace(IGNORABLE, '')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]/gu, '');
+  ASCII_KEY.test(key)
+    ? key.toLowerCase().replace(/[_-]/g, '') // the same result, without the Unicode passes
+    : key
+        .normalize('NFKC')
+        .replace(IGNORABLE, '')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]/gu, '');
 
 /** One alternation of the stems (plain lower-case letters): a single scan instead of one per stem. */
 const STEM = new RegExp(KEY_STEMS.join('|'));
@@ -156,6 +160,9 @@ const redactQuotedValues = (text: string): string => {
   return out + text.slice(last);
 };
 
+/** An IPv6 candidate is an address only with "::" or at least three colons (not a clock time). */
+const isIpv6 = (m: string): boolean => m.includes('::') || (m.match(/:/g)?.length ?? 0) >= 3;
+
 type Step = (text: string) => string;
 const sub =
   (re: RegExp, rep: string | Replacer): Step =>
@@ -168,6 +175,11 @@ const STEPS: readonly Step[] = [
   sub(/\b(?:Bearer|Basic|Token)\s{1,8}[^\s"',;]+/gi, REDACTED),
   sub(/\bsb_secret_[\w-]*/g, REDACTED),
   sub(/\bpostgres(?:ql)?:\/\/[^\s"']+/gi, REDACTED),
+  // userinfo in any other URL (`scheme://user:password@host`): keep the scheme and the host
+  sub(
+    /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/?#"'<>]+@/gi,
+    (_m, scheme = '') => `${scheme}${REDACTED}@`,
+  ),
   // quoted values under sensitive keys, before anything else can take a piece of them
   redactQuotedValues,
   // query strings and fragments that carry parameters: keep the '?' or '#', drop the rest
@@ -197,7 +209,13 @@ const STEPS: readonly Step[] = [
   sub(/(?<![a-z0-9])[a-z]\d{7}(?![a-z0-9])/gi, REDACTED),
   // IPv6 (needs "::" or at least three colons, so clock times are left alone)
   sub(/(?<![0-9a-z:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-z:])/gi, (m) =>
-    m.includes('::') || (m.match(/:/g)?.length ?? 0) >= 3 ? REDACTED : m,
+    isIpv6(m) ? REDACTED : m,
+  ),
+  // IPv6 right after a `word:` prefix (`from:fe80::1`), which the lookbehind above skips: keep
+  // the prefix. The prefix starts at most once per run of word characters and is bounded.
+  sub(
+    /(?<![\w:-])([a-z][\w-]{0,31}:)((?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4})(?![0-9a-z:])/gi,
+    (m, prefix = '', ip = '') => (isIpv6(ip) ? `${prefix}${REDACTED}` : m),
   ),
   // long hex, and long base64 that mixes upper case, lower case and digits (random tokens)
   sub(/(?<![a-z0-9])[0-9a-f]{32,}(?![a-z0-9])/gi, REDACTED),
