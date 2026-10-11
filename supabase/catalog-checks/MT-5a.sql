@@ -2,14 +2,17 @@
 -- system-list schema where a migration can still create objects (escape_schema below, when postgres can SET ROLE to
 -- its owner), whose recursive dependency closure reaches both quality and integrity. The closure (shared:graph and
 -- shared:closure below, the same text in MT-5a, 5b, 5c and 5d) starts at the view and follows its rules
--- (pg_rewrite, skipping a rule's reference to its own relation), the pg_depend rows of functions, and every call a
--- function body names, recursively. A node reaches a schema when it lives there (a relation also reaches the
--- schema of every member of every inheritance tree it belongs to: INHERITS children and partitions alike, wherever
--- they live), when it is a type or schema ref there, or, for a function, when its prosrc names it (quality. or
--- "quality". or 'quality' as a format() argument, case-insensitive) or its proconfig search_path lists it.
+-- (pg_rewrite, skipping a rule's reference to its own relation), the pg_depend rows of functions and operators,
+-- every call a function body names, domains (their defaults and CHECK constraints), array element types, and the
+-- code of table hosts (triggers, policies, CHECK constraints, column defaults, index expressions), recursively. A
+-- node reaches a schema when it lives there (a relation also reaches the schema of every member of every
+-- inheritance tree it belongs to: INHERITS children and partitions alike, wherever they live), when it is a type
+-- or schema ref there, or, for a function, when its prosrc names it (quality. or "quality". or 'quality' as a
+-- format() argument, case-insensitive) or its proconfig search_path lists it.
 -- Branches, first match wins: system_schema_view (the view lives in a system-list schema), direct_join (the view
 -- and the relations it reads directly reach both), nested_view (relations reached through other views, no
--- function), via_function (a function is needed).
+-- function), via_function (a function is needed, calls included), via_operator (an operator is needed),
+-- via_domain (a domain or array type is needed).
 with recursive
 -- shared:graph begin (the same text in MT-5a, MT-5b, MT-5c and MT-5d)
 target as (
@@ -68,7 +71,8 @@ callee as materialized (
   where n.nspname not in ('pg_catalog', 'information_schema')
 ),
 -- code_edge: one step of the walk, from (classid, objid) to (refclassid, refobjid). bit tags the kind of step:
--- 8 a call named in a function body, 0 any other.
+-- 1 into an operator (node_edge), 4 out of a domain or array type, 8 a call named in a function body, 0 any other.
+-- A cast in an expression is recorded in pg_depend as its cast function, so casts need no step of their own.
 code_edge (classid, objid, refclassid, refobjid, bit) as (
   -- the rules of a relation (a view body or a table rule), skipping a rule's reference to its own relation
   select 'pg_class'::regclass::oid, r.ev_class, d.refclassid, d.refobjid, 0
@@ -76,10 +80,48 @@ code_edge (classid, objid, refclassid, refobjid, bit) as (
   join pg_depend as d on d.classid = 'pg_rewrite'::regclass and d.objid = r.oid
   where not (d.refclassid = 'pg_class'::regclass and d.refobjid = r.ev_class)
   union
-  -- the pg_depend rows of a function (all of a BEGIN ATOMIC body, only the signature of any other)
+  -- the pg_depend rows of a function (all of a BEGIN ATOMIC body, only the signature of any other) and of an
+  -- operator (its oprcode)
   select d.classid, d.objid, d.refclassid, d.refobjid, 0
   from pg_depend as d
-  where d.classid = 'pg_proc'::regclass
+  where d.classid in ('pg_proc'::regclass, 'pg_operator'::regclass)
+  union
+  -- a CHECK constraint of a table or a domain, skipping its reference to its own table
+  select 'pg_constraint'::regclass::oid, con.oid, d.refclassid, d.refobjid, 0
+  from pg_constraint as con
+  join pg_depend as d on d.classid = 'pg_constraint'::regclass and d.objid = con.oid
+  where con.contype = 'c'
+    and not (d.refclassid = 'pg_class'::regclass and d.refobjid = con.conrelid)
+  union
+  -- a column default or generated column, skipping its reference to its own table
+  select 'pg_attrdef'::regclass::oid, ad.oid, d.refclassid, d.refobjid, 0
+  from pg_attrdef as ad
+  join pg_depend as d on d.classid = 'pg_attrdef'::regclass and d.objid = ad.oid
+  where not (d.refclassid = 'pg_class'::regclass and d.refobjid = ad.adrelid)
+  union
+  -- an index with expressions or a predicate, skipping its reference to its own table
+  select 'pg_class'::regclass::oid, ix.indexrelid, d.refclassid, d.refobjid, 0
+  from pg_index as ix
+  join pg_depend as d on d.classid = 'pg_class'::regclass and d.objid = ix.indexrelid
+  where (ix.indexprs is not null or ix.indpred is not null)
+    and not (d.refclassid = 'pg_class'::regclass and d.refobjid = ix.indrelid)
+  union
+  -- a domain: its pg_depend rows (such as a default expression) and its CHECK constraints
+  select 'pg_type'::regclass::oid, ty.oid, d.refclassid, d.refobjid, 4
+  from pg_type as ty
+  join pg_depend as d on d.classid = 'pg_type'::regclass and d.objid = ty.oid
+  where ty.typtype = 'd'
+  union
+  select 'pg_type'::regclass::oid, con.contypid, 'pg_constraint'::regclass::oid, con.oid, 4
+  from pg_constraint as con
+  where con.contypid <> 0
+    and con.contype = 'c'
+  union
+  -- an array type: its element type, so an array of a domain reaches the domain
+  select 'pg_type'::regclass::oid, ty.oid, 'pg_type'::regclass::oid, ty.typelem, 4
+  from pg_type as ty
+  where ty.typelem <> 0
+    and ty.typsubscript = 'array_subscript_handler'::regproc
   union
   -- a trigger, skipping its reference to its own table
   select 'pg_trigger'::regclass::oid, tg.oid, d.refclassid, d.refobjid, 0
@@ -108,10 +150,16 @@ code_edge (classid, objid, refclassid, refobjid, bit) as (
 ),
 -- materialized: computed once, not once per step of the recursive walk
 node_edge as materialized (
-  select e.classid, e.objid, e.refclassid, e.refobjid, e.bit
+  select
+    e.classid,
+    e.objid,
+    e.refclassid,
+    e.refobjid,
+    e.bit | case when e.refclassid = 'pg_operator'::regclass then 1 else 0 end as bit
   from code_edge as e
   where e.refclassid in (
-    'pg_class'::regclass, 'pg_proc'::regclass, 'pg_type'::regclass, 'pg_namespace'::regclass
+    'pg_class'::regclass, 'pg_proc'::regclass, 'pg_type'::regclass, 'pg_namespace'::regclass,
+    'pg_operator'::regclass, 'pg_constraint'::regclass
   )
 ),
 -- shared:graph end
@@ -253,7 +301,9 @@ violation as (
   select
     rc.seed_oid,
     count(distinct rc.nspname) filter (where rc.lvl <= 1 and rc.mask = 0) = 2 as direct,
-    count(distinct rc.nspname) filter (where rc.lvl <= 2 and rc.mask = 0) = 2 as nested
+    count(distinct rc.nspname) filter (where rc.lvl <= 2 and rc.mask = 0) = 2 as nested,
+    count(distinct rc.nspname) filter (where rc.mask & 5 = 0) = 2 as by_function,
+    count(distinct rc.nspname) filter (where rc.mask & 4 = 0) = 2 as by_operator
   from reach as rc
   group by rc.seed_oid
   having count(distinct rc.nspname) = 2
@@ -263,7 +313,9 @@ select
     when r.in_system_schema then 'system_schema_view'
     when v.direct then 'direct_join'
     when v.nested then 'nested_view'
-    else 'via_function'
+    when v.by_function then 'via_function'
+    when v.by_operator then 'via_operator'
+    else 'via_domain'
   end::text as branch,
   format('%I.%I', r.nspname, r.relname)::text as object,
   (
@@ -273,7 +325,9 @@ select
     || case
       when v.direct then 'through the relations it reads directly'
       when v.nested then 'through nested views'
-      else 'through a function'
+      when v.by_function then 'through a function'
+      when v.by_operator then 'through an operator'
+      else 'through a domain'
     end
   )::text as detail
 from violation as v

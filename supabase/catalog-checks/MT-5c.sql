@@ -82,7 +82,8 @@ callee as materialized (
   where n.nspname not in ('pg_catalog', 'information_schema')
 ),
 -- code_edge: one step of the walk, from (classid, objid) to (refclassid, refobjid). bit tags the kind of step:
--- 8 a call named in a function body, 0 any other.
+-- 1 into an operator (node_edge), 4 out of a domain or array type, 8 a call named in a function body, 0 any other.
+-- A cast in an expression is recorded in pg_depend as its cast function, so casts need no step of their own.
 code_edge (classid, objid, refclassid, refobjid, bit) as (
   -- the rules of a relation (a view body or a table rule), skipping a rule's reference to its own relation
   select 'pg_class'::regclass::oid, r.ev_class, d.refclassid, d.refobjid, 0
@@ -90,10 +91,48 @@ code_edge (classid, objid, refclassid, refobjid, bit) as (
   join pg_depend as d on d.classid = 'pg_rewrite'::regclass and d.objid = r.oid
   where not (d.refclassid = 'pg_class'::regclass and d.refobjid = r.ev_class)
   union
-  -- the pg_depend rows of a function (all of a BEGIN ATOMIC body, only the signature of any other)
+  -- the pg_depend rows of a function (all of a BEGIN ATOMIC body, only the signature of any other) and of an
+  -- operator (its oprcode)
   select d.classid, d.objid, d.refclassid, d.refobjid, 0
   from pg_depend as d
-  where d.classid = 'pg_proc'::regclass
+  where d.classid in ('pg_proc'::regclass, 'pg_operator'::regclass)
+  union
+  -- a CHECK constraint of a table or a domain, skipping its reference to its own table
+  select 'pg_constraint'::regclass::oid, con.oid, d.refclassid, d.refobjid, 0
+  from pg_constraint as con
+  join pg_depend as d on d.classid = 'pg_constraint'::regclass and d.objid = con.oid
+  where con.contype = 'c'
+    and not (d.refclassid = 'pg_class'::regclass and d.refobjid = con.conrelid)
+  union
+  -- a column default or generated column, skipping its reference to its own table
+  select 'pg_attrdef'::regclass::oid, ad.oid, d.refclassid, d.refobjid, 0
+  from pg_attrdef as ad
+  join pg_depend as d on d.classid = 'pg_attrdef'::regclass and d.objid = ad.oid
+  where not (d.refclassid = 'pg_class'::regclass and d.refobjid = ad.adrelid)
+  union
+  -- an index with expressions or a predicate, skipping its reference to its own table
+  select 'pg_class'::regclass::oid, ix.indexrelid, d.refclassid, d.refobjid, 0
+  from pg_index as ix
+  join pg_depend as d on d.classid = 'pg_class'::regclass and d.objid = ix.indexrelid
+  where (ix.indexprs is not null or ix.indpred is not null)
+    and not (d.refclassid = 'pg_class'::regclass and d.refobjid = ix.indrelid)
+  union
+  -- a domain: its pg_depend rows (such as a default expression) and its CHECK constraints
+  select 'pg_type'::regclass::oid, ty.oid, d.refclassid, d.refobjid, 4
+  from pg_type as ty
+  join pg_depend as d on d.classid = 'pg_type'::regclass and d.objid = ty.oid
+  where ty.typtype = 'd'
+  union
+  select 'pg_type'::regclass::oid, con.contypid, 'pg_constraint'::regclass::oid, con.oid, 4
+  from pg_constraint as con
+  where con.contypid <> 0
+    and con.contype = 'c'
+  union
+  -- an array type: its element type, so an array of a domain reaches the domain
+  select 'pg_type'::regclass::oid, ty.oid, 'pg_type'::regclass::oid, ty.typelem, 4
+  from pg_type as ty
+  where ty.typelem <> 0
+    and ty.typsubscript = 'array_subscript_handler'::regproc
   union
   -- a trigger, skipping its reference to its own table
   select 'pg_trigger'::regclass::oid, tg.oid, d.refclassid, d.refobjid, 0
@@ -122,10 +161,16 @@ code_edge (classid, objid, refclassid, refobjid, bit) as (
 ),
 -- materialized: computed once, not once per step of the recursive walk
 node_edge as materialized (
-  select e.classid, e.objid, e.refclassid, e.refobjid, e.bit
+  select
+    e.classid,
+    e.objid,
+    e.refclassid,
+    e.refobjid,
+    e.bit | case when e.refclassid = 'pg_operator'::regclass then 1 else 0 end as bit
   from code_edge as e
   where e.refclassid in (
-    'pg_class'::regclass, 'pg_proc'::regclass, 'pg_type'::regclass, 'pg_namespace'::regclass
+    'pg_class'::regclass, 'pg_proc'::regclass, 'pg_type'::regclass, 'pg_namespace'::regclass,
+    'pg_operator'::regclass, 'pg_constraint'::regclass
   )
 ),
 -- shared:graph end

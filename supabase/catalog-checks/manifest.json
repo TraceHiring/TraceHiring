@@ -16,7 +16,14 @@
     },
     {
       "id": "MT-5a",
-      "branches": ["direct_join", "nested_view", "via_function", "system_schema_view"]
+      "branches": [
+        "direct_join",
+        "nested_view",
+        "via_function",
+        "system_schema_view",
+        "via_operator",
+        "via_domain"
+      ]
     },
     {
       "id": "MT-5b",
@@ -40,7 +47,11 @@
         "policy_expression",
         "inheritance_link",
         "table_rule",
-        "trigger_call_chain"
+        "trigger_call_chain",
+        "column_default",
+        "check_constraint",
+        "index_expression",
+        "column_domain"
       ]
     },
     {

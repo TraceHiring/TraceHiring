@@ -14,6 +14,13 @@
 --     runs with the table owner's rights, so it can link the two schemas and bypass RLS. Trace never needs one.
 --   trigger_call_chain: as trigger_function, but the other schema is reached only through a call named in a
 --     function body (schema.name(, or an unqualified name( resolved through the caller's search_path setting).
+--   column_default: a column default or generated column (pg_attrdef) on a table that reaches one schema, whose
+--     expression reaches the other.
+--   check_constraint: a CHECK constraint (pg_constraint contype c) on such a table whose expression reaches the
+--     other.
+--   index_expression: an index with expressions or a predicate on such a table that reaches the other.
+--   column_domain: a column of such a table typed by a domain (or an array of one) whose default or CHECK
+--     constraints reach the other.
 -- The MT-5a rule is the closure in shared:graph and shared:closure below (the same text in MT-5a, 5b, 5c and 5d).
 -- Extension members are not skipped here: an extension installed in quality or integrity is already an MT-9
 -- violation.
@@ -75,7 +82,8 @@ callee as materialized (
   where n.nspname not in ('pg_catalog', 'information_schema')
 ),
 -- code_edge: one step of the walk, from (classid, objid) to (refclassid, refobjid). bit tags the kind of step:
--- 8 a call named in a function body, 0 any other.
+-- 1 into an operator (node_edge), 4 out of a domain or array type, 8 a call named in a function body, 0 any other.
+-- A cast in an expression is recorded in pg_depend as its cast function, so casts need no step of their own.
 code_edge (classid, objid, refclassid, refobjid, bit) as (
   -- the rules of a relation (a view body or a table rule), skipping a rule's reference to its own relation
   select 'pg_class'::regclass::oid, r.ev_class, d.refclassid, d.refobjid, 0
@@ -83,10 +91,48 @@ code_edge (classid, objid, refclassid, refobjid, bit) as (
   join pg_depend as d on d.classid = 'pg_rewrite'::regclass and d.objid = r.oid
   where not (d.refclassid = 'pg_class'::regclass and d.refobjid = r.ev_class)
   union
-  -- the pg_depend rows of a function (all of a BEGIN ATOMIC body, only the signature of any other)
+  -- the pg_depend rows of a function (all of a BEGIN ATOMIC body, only the signature of any other) and of an
+  -- operator (its oprcode)
   select d.classid, d.objid, d.refclassid, d.refobjid, 0
   from pg_depend as d
-  where d.classid = 'pg_proc'::regclass
+  where d.classid in ('pg_proc'::regclass, 'pg_operator'::regclass)
+  union
+  -- a CHECK constraint of a table or a domain, skipping its reference to its own table
+  select 'pg_constraint'::regclass::oid, con.oid, d.refclassid, d.refobjid, 0
+  from pg_constraint as con
+  join pg_depend as d on d.classid = 'pg_constraint'::regclass and d.objid = con.oid
+  where con.contype = 'c'
+    and not (d.refclassid = 'pg_class'::regclass and d.refobjid = con.conrelid)
+  union
+  -- a column default or generated column, skipping its reference to its own table
+  select 'pg_attrdef'::regclass::oid, ad.oid, d.refclassid, d.refobjid, 0
+  from pg_attrdef as ad
+  join pg_depend as d on d.classid = 'pg_attrdef'::regclass and d.objid = ad.oid
+  where not (d.refclassid = 'pg_class'::regclass and d.refobjid = ad.adrelid)
+  union
+  -- an index with expressions or a predicate, skipping its reference to its own table
+  select 'pg_class'::regclass::oid, ix.indexrelid, d.refclassid, d.refobjid, 0
+  from pg_index as ix
+  join pg_depend as d on d.classid = 'pg_class'::regclass and d.objid = ix.indexrelid
+  where (ix.indexprs is not null or ix.indpred is not null)
+    and not (d.refclassid = 'pg_class'::regclass and d.refobjid = ix.indrelid)
+  union
+  -- a domain: its pg_depend rows (such as a default expression) and its CHECK constraints
+  select 'pg_type'::regclass::oid, ty.oid, d.refclassid, d.refobjid, 4
+  from pg_type as ty
+  join pg_depend as d on d.classid = 'pg_type'::regclass and d.objid = ty.oid
+  where ty.typtype = 'd'
+  union
+  select 'pg_type'::regclass::oid, con.contypid, 'pg_constraint'::regclass::oid, con.oid, 4
+  from pg_constraint as con
+  where con.contypid <> 0
+    and con.contype = 'c'
+  union
+  -- an array type: its element type, so an array of a domain reaches the domain
+  select 'pg_type'::regclass::oid, ty.oid, 'pg_type'::regclass::oid, ty.typelem, 4
+  from pg_type as ty
+  where ty.typelem <> 0
+    and ty.typsubscript = 'array_subscript_handler'::regproc
   union
   -- a trigger, skipping its reference to its own table
   select 'pg_trigger'::regclass::oid, tg.oid, d.refclassid, d.refobjid, 0
@@ -115,10 +161,16 @@ code_edge (classid, objid, refclassid, refobjid, bit) as (
 ),
 -- materialized: computed once, not once per step of the recursive walk
 node_edge as materialized (
-  select e.classid, e.objid, e.refclassid, e.refobjid, e.bit
+  select
+    e.classid,
+    e.objid,
+    e.refclassid,
+    e.refobjid,
+    e.bit | case when e.refclassid = 'pg_operator'::regclass then 1 else 0 end as bit
   from code_edge as e
   where e.refclassid in (
-    'pg_class'::regclass, 'pg_proc'::regclass, 'pg_type'::regclass, 'pg_namespace'::regclass
+    'pg_class'::regclass, 'pg_proc'::regclass, 'pg_type'::regclass, 'pg_namespace'::regclass,
+    'pg_operator'::regclass, 'pg_constraint'::regclass
   )
 ),
 -- shared:graph end
@@ -177,16 +229,41 @@ foreign_key as (
   where con.contype = 'f'
     and src.nspname <> ref.nspname
 ),
--- host: code attached to a table, walked from the host itself (its edges are in code_edge).
-host (classid, oid, relid, name) as (
-  select 'pg_trigger'::regclass::oid, tg.oid, tg.tgrelid, tg.tgname::text
+-- host: code attached to a table, walked from the host itself (its edges are in code_edge). kind names the branch.
+host (classid, oid, relid, name, kind) as (
+  select 'pg_trigger'::regclass::oid, tg.oid, tg.tgrelid, format('%I', tg.tgname), 'trigger'::text
   from pg_trigger as tg
   where not tg.tgisinternal
     and tg.tgrelid in (select rr.oid from rel_reach as rr)
   union all
-  select 'pg_policy'::regclass::oid, pol.oid, pol.polrelid, pol.polname::text
+  select 'pg_policy'::regclass::oid, pol.oid, pol.polrelid, format('%I', pol.polname), 'policy'::text
   from pg_policy as pol
   where pol.polrelid in (select rr.oid from rel_reach as rr)
+  union all
+  select 'pg_attrdef'::regclass::oid, ad.oid, ad.adrelid, format('default of %I', a.attname), 'default'::text
+  from pg_attrdef as ad
+  join pg_attribute as a on a.attrelid = ad.adrelid and a.attnum = ad.adnum
+  where ad.adrelid in (select rr.oid from rel_reach as rr)
+  union all
+  select 'pg_constraint'::regclass::oid, con.oid, con.conrelid, format('%I', con.conname), 'check'::text
+  from pg_constraint as con
+  where con.contype = 'c'
+    and con.conrelid in (select rr.oid from rel_reach as rr)
+  union all
+  select 'pg_class'::regclass::oid, ix.indexrelid, ix.indrelid, format('index %I', ic.relname), 'index'::text
+  from pg_index as ix
+  join pg_class as ic on ic.oid = ix.indexrelid
+  where (ix.indexprs is not null or ix.indpred is not null)
+    and ix.indrelid in (select rr.oid from rel_reach as rr)
+  union all
+  select 'pg_type'::regclass::oid, a.atttypid, a.attrelid, format('column %I', a.attname), 'domain'::text
+  from pg_attribute as a
+  join pg_type as ty on ty.oid = a.atttypid
+  left join pg_type as el on el.oid = ty.typelem
+  where a.attnum > 0
+    and not a.attisdropped
+    and (ty.typtype = 'd' or el.typtype = 'd')
+    and a.attrelid in (select rr.oid from rel_reach as rr)
 ),
 seed (classid, oid) as (
   select distinct h.classid, h.oid
@@ -266,8 +343,7 @@ reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
 -- shared:closure end
 crossing as (
   select
-    h.classid,
-    h.oid,
+    h.kind,
     h.relid,
     h.name,
     hr.nspname as host_nspname,
@@ -277,7 +353,7 @@ crossing as (
   join rel_reach as hr on hr.oid = h.relid
   join reach as rc on rc.seed_classid = h.classid and rc.seed_oid = h.oid
   where rc.nspname <> hr.nspname
-  group by h.classid, h.oid, h.relid, h.name, hr.nspname, rc.nspname
+  group by h.kind, h.classid, h.oid, h.relid, h.name, hr.nspname, rc.nspname
 )
 select
   'foreign_key'::text as branch,
@@ -286,15 +362,23 @@ select
 from foreign_key as fk
 union all
 select
-  case
-    when x.classid = 'pg_trigger'::regclass and x.without_call then 'trigger_function'
-    when x.classid = 'pg_trigger'::regclass then 'trigger_call_chain'
-    else 'policy_expression'
+  case x.kind
+    when 'trigger' then case when x.without_call then 'trigger_function' else 'trigger_call_chain' end
+    when 'policy' then 'policy_expression'
+    when 'default' then 'column_default'
+    when 'check' then 'check_constraint'
+    when 'index' then 'index_expression'
+    else 'column_domain'
   end::text,
-  format('%I on %I.%I', x.name, n.nspname, c.relname)::text,
+  format('%s on %I.%I', x.name, n.nspname, c.relname)::text,
   format(
     '%s on a table of schema %s reaches %s%s',
-    case when x.classid = 'pg_trigger'::regclass then 'trigger' else 'policy' end,
+    case x.kind
+      when 'default' then 'column default'
+      when 'check' then 'CHECK constraint'
+      when 'domain' then 'column domain'
+      else x.kind
+    end,
     x.host_nspname,
     x.other_nspname,
     case when x.without_call then '' else ' through a call named in a function body' end
