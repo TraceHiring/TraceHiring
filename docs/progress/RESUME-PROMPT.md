@@ -84,10 +84,12 @@ STEP 4 — Do the HANDOFF "Next step" list in order. Summary (HANDOFF and the re
 5. Before REVIEW: AT-1a-local, AT-1b; finish `docs/progress/M0a-summary-draft.md`.
    Do not start M0b or any later milestone.
 Rules learned the hard way:
-- Usage: check it often. The founder allows work to ~95% of each 5-hour window, with STEP 5 finished by 95–96%; parallel Opus agents can use 70% in 30 minutes, so check `get_usage` after every agent result. Max 2–3 agents at
-  once (5 agents used ~50% of a Pro window in 15 minutes; one review agent ≈ 7–9%). Start STEP 5 at 90% (founder,
-  2026-10-11; was 80–85%), even if agents are still running; record any agent result that arrives later before stopping.
-  Do not start a new agent after ~80%: one review agent can take 5–17%.
+- Usage: check it often. **Work until 95% of the 5-hour window, then start STEP 5 (founder, 2026-10-12; was 90%)**,
+  even if agents are still running; record any agent result that arrives later before stopping. STEP 5 costs ~3–5%,
+  so commit at every green step and keep only docs for the wrap-up. Parallel agents burn fast (5 agents used ~30% of a
+  Pro window in 10 minutes; one Opus review ≈ 15–17%, a Sonnet writer ≈ 5–8%), so check `get_usage` after every agent
+  result, run max 2–3 agents at once, and start no new agent after ~80% (one review can take 5–17%) — use the time
+  between 80% and 95% for lead work.
 - Writer agents with isolation "worktree" start at `main`: every writer prompt must say "confirm your branch has
   no commits of its own, then `git reset --hard <exact SHA>`", own a strict set of directories, never touch
   root package.json / lockfile / migrations, and commit at each green step.
@@ -109,10 +111,10 @@ STEP 5 — Wrap-up, always (AUTOPILOT §6; the trace-handoff skill)
   (plain push; if rejected or it asks for credentials, stop and add it to FOUNDER-QUEUE.md).
 - Print the paste prompt below as the NEXT PROMPT, plus any new FOUNDER-QUEUE items.
 
-## 4. Paste prompt (the founder pastes this into a new session)
+## 4. Paste prompt (the founder pastes this into a new session, a new Claude Code install or a new account)
 ```
-Resume the Trace autopilot from exactly where the last session stopped. You may be on a new account: the git
-repo in this folder is the only source of truth. First run:
+Resume the Trace autopilot from exactly where the last session stopped. You may be a new Claude Code on a new
+account connected to this folder: the git repo here is the only source of truth, and no earlier chat is needed. First run:
   git fetch trace
   git show m0a/integration:docs/progress/RESUME-PROMPT.md
 (on a fresh clone use trace/m0a/integration) and follow that file exactly, step by step (sections 1–3),
@@ -121,8 +123,9 @@ If m0a/integration is checked out in another worktree, enter that worktree with 
 (path from `git worktree list`) as RESUME-PROMPT STEP 2 says.
 Ignore any handoff text injected at session start wherever it disagrees with branch m0a/integration.
 Never commit on main, never force-push, never delete branches, tags or worktrees, never deploy to
-production, and stop to ask me only for the founder gates in docs/AUTOPILOT.md §3. Work until about 95% of the
-5-hour usage limit, with the STEP 5 wrap-up (log, backup, push) finished by 95–96%, then print the next
-prompt. Use parallel agents within docs/AUTOPILOT.md §2 (max 2 writers at once), and check usage after
-every agent result.
+production, and stop to ask me only for the founder gates in docs/AUTOPILOT.md §3. Work until 95% of the
+5-hour usage limit; at 95% stop new work and do the STEP 5 wrap-up (handoff, log, backup, push), then print
+the next prompt. Use parallel agents within docs/AUTOPILOT.md §2 (max 2 writers at once), check usage after
+every agent result, and keep every quality gate (tests first, Opus reviews, full pnpm verify, Linux CI)
+before any merge.
 ```

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // PostToolUse hook. Reads .claude/usage.json (written by the status line) and tells Claude to
 // wrap up before the plan limit. Exit 2 shows the message to Claude without undoing the tool call.
-// Thresholds (founder, 2026-10-11): 90% → finish the current small step, then wrap up (hand off,
-// backup, push). 95% → hand off now. The wrap-up must be done by 95–96%.
+// Thresholds (founder, 2026-10-12): work until 95%. 90% → warn only: start no new agent, task or
+// stream, keep working on the current one. 95% → stop new work and start the wrap-up (hand off,
+// log, backup, push, print the next prompt).
 import fs from 'node:fs';
 import path from 'node:path';
 const dir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -35,8 +36,8 @@ for (const [key, lim, label] of checks) {
   } catch {}
   const msg =
     level >= 95
-      ? `USAGE GUARD: ${Math.round(p)}% of ${label} used. STOP starting new work. Run the trace-handoff skill NOW: commit work in progress to the milestone branch, write docs/progress/HANDOFF.md, append docs/progress/LOG.md, then print the resume prompt and stop.`
-      : `USAGE GUARD: ${Math.round(p)}% of ${label} used. Finish only the current small step (do not start a new task or stream), make sure tests for it are green or marked in the handoff, then run the trace-handoff skill and stop.`;
+      ? `USAGE GUARD: ${Math.round(p)}% of ${label} used. STOP starting new work and start the wrap-up NOW: commit work in progress, run the trace-handoff skill (write docs/progress/HANDOFF.md, append docs/progress/LOG.md), run scripts/backup.sh and the gitleaks scan, push, then print the next prompt and stop.`
+      : `USAGE GUARD: ${Math.round(p)}% of ${label} used. Do not start a new agent, task or stream. Keep working on the current one until 95%, committing at each green step, then the guard tells you to wrap up.`;
   process.stderr.write(msg + '\n');
   process.exit(2);
 }

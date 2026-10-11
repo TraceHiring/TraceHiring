@@ -1,6 +1,6 @@
 ---
 name: trace-handoff
-description: Use when the usage guard warns (90%/95% of the 5-hour or weekly limit), when context is getting full, before /clear, or at the end of any work session on Trace — saves verified state to docs/progress/HANDOFF.md so the next session resumes with no loss of quality.
+description: Use when the usage guard reaches 95% of the 5-hour or weekly limit (the founder's wrap-up point since 2026-10-12), when context is getting full, before /clear, or at the end of any work session on Trace — saves verified state to docs/progress/HANDOFF.md so the next session resumes with no loss of quality.
 ---
 
 # Trace session handoff
@@ -22,8 +22,9 @@ Goal: the next session (after a limit reset, a /clear, a compaction, or on a dif
    - If tests are deliberately red, create `.claude/allow-red` and record why in the handoff.
 4. **Overwrite `docs/progress/HANDOFF.md`** using the template below. Every claim must be checkable: commit SHAs, file paths, test names, command exit codes from step 2. Write "unknown" rather than guess.
 5. **Append one entry to `docs/progress/LOG.md`** (date, session summary in 3–5 lines, commits).
-6. Commit: `git add docs/progress && git commit -m "chore(progress): handoff"`.
-7. **Print the resume prompt** (section below) to the founder as the last message, then stop.
+6. Commit: `git add docs/progress && git commit -m "chore(progress): handoff"`. Update `docs/progress/RESUME-PROMPT.md` too if a branch, SHA or step changed.
+7. **Back up and push** (docs/AUTOPILOT.md §6, RESUME-PROMPT STEP 5): `sh scripts/backup.sh`, the full-history gitleaks scan (`pnpm exec lefthook run pre-push --command gitleaks-full-history`), then a plain push of `milestone/m<N>`, the integration branch, every stream branch with new commits, and tags. Never force, never move `main`.
+8. **Print the resume prompt** (section below) to the founder as the last message, then stop.
 
 ## HANDOFF.md template
 ```markdown
@@ -59,11 +60,10 @@ git log --oneline -5 · git status · pnpm -s verify:fast · <specific test>
 ```
 
 ## Resume prompt (print this for the founder)
-```
-Resume the Trace build. Read CLAUDE.md, then docs/progress/HANDOFF.md, then only the spec and plan sections it names. First run the "Verify first" commands and tell me in 5 lines whether the repo matches the handoff. If it does, continue with the "Next step" and follow docs/kickoff-prompt.md Prompt 3 rules for the rest of milestone M<N>. If it does not, stop and tell me what differs. Do not redo finished work and do not start the next milestone.
-```
+Print the paste prompt in `docs/progress/RESUME-PROMPT.md` section 4, exactly as written there (it works for a new
+session, a new Claude Code install and a new account: the repo is the only source of truth).
 
 ## Rules
 - Repo over memory: if git or tests contradict what you remember, the repo wins.
-- No new code after the 95% warning except what is needed to commit cleanly.
+- Work until 95%; no new code after the 95% warning except what is needed to commit cleanly. At 90% start no new agent, task or stream.
 - Keep HANDOFF.md under 150 lines — the SessionStart hook injects the first 150.
