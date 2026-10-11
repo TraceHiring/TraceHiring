@@ -2,11 +2,11 @@
 -- table appears. Inside this rolled-back transaction a throwaway table, sequence and function is created as
 -- postgres in each of the four in-scope schemas. Each assertion also reports any probe object that is missing,
 -- so it can never pass vacuously. Hand-written; not generated.
--- The fifth assertion is an MT-11 negative control (W3b database review finding 7), see below. The next three
--- prove, one dynamic-SQL shape at a time, what MT-5b counts as naming a schema, and the last proves what MT-7
--- counts as changing the search path (catalog pass C review E1).
+-- Assertions 5 to 7 are MT-11 controls (W3b database review finding 7 and catalog pass C review E2), 8 to 10 prove,
+-- one dynamic-SQL shape at a time, what MT-5b counts as naming a schema, and 11 proves what MT-7 counts as
+-- changing the search path (catalog pass C review E1). See below.
 begin;
-select plan(9);
+select plan(11);
 
 create table public.mt_4b_t (id int);
 create table private.mt_4b_t (id int);
@@ -90,12 +90,17 @@ select is_empty(
   'MT-4b: PUBLIC has no EXECUTE on a new function in any in-scope schema'
 );
 
--- MT-11 negative control (W3b database review finding 7): auth.jwt() wrapped in a scalar sub-select together with
--- a cast, (select (auth.jwt() ->> 'org_id')::uuid), is the compliant form, so MT-11 must return no row for the
--- policy below. The generator has no negative-control mechanism, so the query between the "MT-11 copy" lines is a
--- verbatim copy of supabase/catalog-checks/MT-11.sql: keep the two identical. The policy is per-operation, names a
--- role and compares a column of its table, so only the auth.jwt() form is under test. auth.jwt() exists on the
--- local stack and on hosted Supabase. The savepoint is rolled back right after the assertion.
+-- MT-11 negative controls. The generator has no negative-control mechanism, so the query between the "MT-11 copy"
+-- lines is a verbatim copy of supabase/catalog-checks/MT-11.sql: keep the two identical. It is created once, as a
+-- temporary view, and the three assertions below read it. The savepoint is rolled back right after them.
+-- W3b database review finding 7: auth.jwt() wrapped in a scalar sub-select together with a cast,
+-- (select (auth.jwt() ->> 'org_id')::uuid), is the compliant form, so MT-11 must return no row for
+-- mt_11_note_select. That policy is per-operation, names a role and compares a column of its table, so only the
+-- auth.jwt() form is under test. auth.jwt() exists on the local stack and on hosted Supabase.
+-- Catalog pass C review E2: a RESTRICTIVE policy only narrows what the permissive policies allow, so a clause that
+-- only checks the caller's session, here Supabase's MFA pattern (select auth.jwt() ->> 'aal') = 'aal2', gives no row
+-- for mt_11_note_aal2. The same clause in a PERMISSIVE policy (mt_11_note_aal2_open) lets every logged-in user of
+-- every org in, so it still hits auth_only_clause.
 savepoint mt_11_negative;
 create table public.mt_11_note (org_id uuid not null, owner_id uuid, body text);
 alter table public.mt_11_note enable row level security;
@@ -103,10 +108,17 @@ create policy mt_11_note_select on public.mt_11_note
 for select
 to authenticated
 using (org_id = (select (auth.jwt() ->> 'org_id')::uuid));
-select is_empty(
-  $q$
-  select v.branch, v.object, v.detail
-  from (
+create policy mt_11_note_aal2 on public.mt_11_note
+as restrictive
+for select
+to authenticated
+using ((select auth.jwt() ->> 'aal') = 'aal2');
+create policy mt_11_note_aal2_open on public.mt_11_note
+as permissive
+for select
+to authenticated
+using ((select auth.jwt() ->> 'aal') = 'aal2');
+create temp view mt_11_run as
 -- MT-11 copy begin
 -- MT-11 (spec specs/m0-foundations.md §8.5, separate per-operation policies, CLAUDE.md): a policy on an in-scope
 -- table that is:
@@ -128,6 +140,9 @@ select is_empty(
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
 --     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
 --     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
+--     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
+--     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 -- In-scope tables: every relation in public, private, quality and integrity, every relation whose owner postgres
 -- is a member of in a system-list schema where a migration can still create objects (escape_schema below),
 -- and every pg_inherits descendant of those (INHERITS children and partitions, recursively, wherever they live).
@@ -205,6 +220,7 @@ scope_policy as (
     pol.oid,
     pol.polcmd,
     pol.polroles,
+    pol.polpermissive,
     pol.polqual is not null as has_using,
     pol.polwithcheck is not null as has_check,
     coalesce(pg_get_expr(pol.polqual, pol.polrelid), '') as using_text,
@@ -376,6 +392,7 @@ finding (oid, branch, detail) as (
       and c.clause = pt.clause
   ) as tc
   where case pt.clause when 'USING' then sp.using_text else sp.check_text end <> 'true'
+    and sp.polpermissive
     and not tc.calls_private
     and not exists (
       select 1
@@ -432,10 +449,31 @@ select
 from finding as f
 join scope_policy as sp on sp.oid = f.oid
 -- MT-11 copy end
-  ) as v
+;
+select is_empty(
+  $q$
+  select v.branch, v.object, v.detail
+  from mt_11_run as v
   where v.object = 'mt_11_note_select on public.mt_11_note'
   $q$,
   'MT-11: no row for a policy that wraps auth.jwt() and a cast in a scalar sub-select'
+);
+select is_empty(
+  $q$
+  select v.branch, v.object, v.detail
+  from mt_11_run as v
+  where v.object = 'mt_11_note_aal2 on public.mt_11_note'
+  $q$,
+  'MT-11: no row for a RESTRICTIVE policy that requires aal2'
+);
+select isnt_empty(
+  $q$
+  select 1
+  from mt_11_run as v
+  where v.object = 'mt_11_note_aal2_open on public.mt_11_note'
+    and v.branch = 'auth_only_clause'
+  $q$,
+  'MT-11: the same aal2 clause in a PERMISSIVE policy still hits auth_only_clause'
 );
 rollback to savepoint mt_11_negative;
 

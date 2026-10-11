@@ -18,6 +18,9 @@
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
 --     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
 --     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
+--     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
+--     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 -- In-scope tables: every relation in public, private, quality and integrity, every relation whose owner postgres
 -- is a member of in a system-list schema where a migration can still create objects (escape_schema below),
 -- and every pg_inherits descendant of those (INHERITS children and partitions, recursively, wherever they live).
@@ -95,6 +98,7 @@ scope_policy as (
     pol.oid,
     pol.polcmd,
     pol.polroles,
+    pol.polpermissive,
     pol.polqual is not null as has_using,
     pol.polwithcheck is not null as has_check,
     coalesce(pg_get_expr(pol.polqual, pol.polrelid), '') as using_text,
@@ -266,6 +270,7 @@ finding (oid, branch, detail) as (
       and c.clause = pt.clause
   ) as tc
   where case pt.clause when 'USING' then sp.using_text else sp.check_text end <> 'true'
+    and sp.polpermissive
     and not tc.calls_private
     and not exists (
       select 1
