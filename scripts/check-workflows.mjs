@@ -15,6 +15,8 @@
 //     any of its steps, and no other job (in any workflow) reports a required check name; a job
 //     `name:` must equal its id
 //   - no bare CR, U+0085, U+2028 or U+2029 line break anywhere in the file
+//   - every env: (workflow, job, step, composite-action step) is a mapping whose keys are all on
+//     ENV_ALLOW_LIST; a whole-env expression or any other name fails (fail closed)
 //   - secrets appear only in step-level env:/with: of deploy-staging, never on or before an
 //     install/build step, and each staging secret only on the steps that use it (§7.2, §7.3)
 //   - deploy-staging (when present) has the exact needs / if / environment / concurrency of §7.2
@@ -658,25 +660,95 @@ function checkStepCommon(step, file, where, out, ctx) {
   checkEnv(step.env, file, where, out);
 }
 
-// bash reads these from the environment at startup: SHELLOPTS=noexec or a BASH_ENV/ENV script can make
-// every run: step exit 0 without running it, like a shell template (S1.4 second re-review N9).
-const SHELL_STARTUP_ENV = new Set(['shellopts', 'bashopts', 'bash_env', 'env']);
+/**
+ * The only names an env: mapping may set, at workflow, job, step and composite-action-step level.
+ * bash, node, pnpm/npm, the dynamic loader and the runner all read variables at startup
+ * (SHELLOPTS, BASH_ENV, BASH_FUNC_*, NODE_OPTIONS, pnpm_config_*, LD_PRELOAD, PATH, ACTIONS_*), and
+ * several of them make every run: step exit 0 without running it, so a deny-list can never be
+ * complete: the check fails closed (S1.4 N8/N9 security review N10, after N9). Each name must match
+ * ENV_NAME_RE. Add one only in a reviewed change, with a comment naming where it is used (the S3
+ * deploy-staging job extends this list in its own review).
+ */
+export const ENV_ALLOW_LIST = Object.freeze([
+  // .github/workflows/ci.yml, workflow env: (no telemetry from CI).
+  'DO_NOT_TRACK',
+  'WRANGLER_SEND_METRICS',
+  // .github/workflows/ci.yml, jobs.static.env (spec §7.1, §8.4: a PR checkout has no local main).
+  'MIGRATIONS_BASE',
+  // .github/workflows/ci.yml, jobs.security, the osv-scanner step.
+  'OSV_SCANNER_VERSION',
+  'OSV_SCANNER_SHA256',
+  // .github/actions/setup/action.yml, the gitleaks install step.
+  'GITLEAKS_VERSION',
+  'GITLEAKS_SHA256',
+  // The S3 deploy-staging job (specs/m0-foundations.md §7.2 step 3, line 409, and the §7.3
+  // secrets row, line 431): migrations and catalog-check steps only.
+  'SUPABASE_STAGING_DB_URL',
+  // specs/m0-foundations.md §7.2 step 5, line 415, and the §7.3 secrets row, line 431: the
+  // wrangler and check-staging-secrets steps only.
+  'CLOUDFLARE_API_TOKEN',
+  // specs/m0-foundations.md §7.3 variables row, line 432 (a public staging variable; used by the
+  // wrangler steps 5-7 per docs/infra/environments.md).
+  'CLOUDFLARE_ACCOUNT_ID',
+]);
+export const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
+const ENV_ALLOWED = new Set(ENV_ALLOW_LIST);
 
-/** An env: mapping at any level may not set a shell-startup variable or build a key from an expression. */
+/**
+ * Why a name off the allow-list is dangerous, matched in any case (only used for the message;
+ * every name off the allow-list fails, whatever its case).
+ */
+const ENV_DENY_REASONS = [
+  // SHELLOPTS=noexec or a BASH_ENV/ENV script skips every run: step, like a shell template (N9).
+  [
+    /^(?:shellopts|bashopts|bash_env|env)$/i,
+    'bash reads it at startup and can skip every run: step',
+  ],
+  [/^bash_func_/i, 'bash imports it as a function, which can replace any command'],
+  [/^node_/i, 'node reads it at startup (NODE_OPTIONS can preload code or exit before running)'],
+  [/^(?:npm|pnpm|yarn)_config_/i, 'pnpm and npm read it as config (script-shell can skip scripts)'],
+  [/^(?:ld|dyld)_/i, 'the dynamic loader reads it (LD_PRELOAD loads code into every program)'],
+  [/^path$/i, 'it decides which program every command runs'],
+  [/^(?:actions|github|runner)_/i, 'the runner reads it'],
+];
+
+/** null when an env: key may be set, else the reason it may not. */
+function envKeyProblem(key) {
+  if (ENV_NAME_RE.test(key) && ENV_ALLOWED.has(key)) return null;
+  if (key.includes('${{')) return 'a key built from an expression can name any variable';
+  const deny = ENV_DENY_REASONS.find(([re]) => re.test(key));
+  if (deny) return deny[1];
+  if (!ENV_NAME_RE.test(key)) return 'a name must be upper-case letters, digits and _';
+  return 'it is not on the allow-list';
+}
+
+/** An env: name as printed in a violation: as is when plain ASCII, else JSON-quoted. */
+const showKey = (key) => (/^[\x21-\x7e]+$/.test(key) ? key : JSON.stringify(key));
+
+/**
+ * An env: at any level must be a mapping (a whole-env ${{ }} expression could set any variable)
+ * whose every key is on ENV_ALLOW_LIST.
+ */
 function checkEnv(env, file, where, out) {
-  if (!isObj(env)) return;
+  if (env === undefined) return;
+  if (!isObj(env)) {
+    out.push(
+      v(
+        file,
+        where,
+        'env: must be a mapping of listed names (a whole-env expression can set any variable)',
+      ),
+    );
+    return;
+  }
   for (const key of Object.keys(env)) {
-    const bad = key.includes('${{')
-      ? 'a key built from an expression'
-      : SHELL_STARTUP_ENV.has(key.toLowerCase())
-        ? key
-        : null;
-    if (bad !== null) {
+    const why = envKeyProblem(key);
+    if (why !== null) {
       out.push(
         v(
           file,
           where,
-          `env: may not set ${bad} (bash reads it at startup and can skip every run: step)`,
+          `env: may not set ${showKey(key)}: ${why} (only ENV_ALLOW_LIST names in scripts/check-workflows.mjs may be set)`,
         ),
       );
     }
