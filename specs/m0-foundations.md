@@ -1,7 +1,13 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** revision 14 (autopilot, 2026-10-11). Revision 14 applies catalog pass D under the founder's backstop-scope decision (below). Revision 13 applies the catalog re-review fixes (pass C, below). Revision 12 applies the S1.7 review fixes and one founder answer (below). Revision 8 was **approved by the autopilot reviewers**; revisions 9, 10 and 11 only apply founder answers and day-one results (see below and the end of this file). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
+- **Status:** revision 15 (autopilot, 2026-10-11). Revision 15 fixes spec text that went stale during S1.7 and the first Linux CI runs (gate finding K3, below). Revision 14 applies catalog pass D under the founder's backstop-scope decision (below). Revision 13 applies the catalog re-review fixes (pass C, below). Revision 12 applies the S1.7 review fixes and one founder answer (below). Revision 8 was **approved by the autopilot reviewers**; revisions 9, 10 and 11 only apply founder answers and day-one results (see below and the end of this file). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
 - **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a`, created from `main` at `b7af663`, with `main` at `4863db2` merged in. Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
+- **Revision 15 changes (2026-10-11, S1.7 gate finding K3).** Text fixes from `docs/reviews/M0a-S1.7-gate-spec-review.md` (K3 (a)–(e)): lines that went stale while S1.7 and the first Linux CI runs happened. No product scope change, no behaviour change, no new check.
+  - **§2 `claude-*` scripts (K3 a):** they are no longer "unchanged". `claude-session-start.mjs` was rewritten in `d9bf35a`: it shows `docs/progress/HANDOFF.md` from the newest `*/integration` branch, not from the checkout, and keeps its output within 9,000 bytes (9 tests in `scripts/test/session-start.test.mjs`). `claude-usage-guard.mjs` now warns at 90% and 95% of a usage limit (`4a83998`; it was 80% and 90%). `claude-statusline.mjs` and `claude-stop-gate.sh` behave as before.
+  - **§2, §4 and §7.1 dependency advisories (K3 b):** the layout lists `osv-scanner.toml` and describes the `overrides` (handlebars 4.7.10, sharp 0.35.5, undici 7.29.1) and `auditConfig.ignoreGhsas` (braces, GHSA-vfj7-8cjw-p6xm) in `pnpm-workspace.yaml`. §7.1 says how the `security` job uses them. The braces ignore ends on 2027-01-11 in `osv-scanner.toml`. The §4 osv-scanner row records the pin (v2.6.0, SHA-256 checked in `ci.yml`).
+  - **§4 clean-clone image (K3 c):** AT-1a-local says the image digest is recorded in §4, but it was only in `scripts/lib/clean-clone.mjs`. §4 now has the row.
+  - **§8.5 counts (K3 d):** MT-11 has 11 branches (the text said 7). The thresholds list shows the 85 branch controls of the manifest, per ID, in place of the revision 7 list of 51. The floor stays 112.
+  - **§15 accepted residuals (K3 e):** the `scan-dist.mjs` residuals from the N10–N13 security re-review are recorded: compressed or encrypted content it cannot recognise under a neutral file name.
 - **Revision 14 changes (2026-10-11, S1.7 catalog fix pass D).** HOW-level fixes from `docs/reviews/M0a-S1.7-catalog-pass-c-database-review.md` (E1, E2), narrowed by the founder's decision (build-notes §0 "Backstop scope"): the catalog checks, the redactor and `scan-dist` are **backstops for honest mistakes**; adversarially crafted SQL or log text is out of scope and goes on the reviewer checklist; rule 1's real enforcement is the M0b role/grant model. No product scope change.
   - **§8.5 MT-5a–5d reach (E1):** a bare schema literal counts when it is an argument of `format()`, `quote_ident()` or `set_config()` (revision 13: `format()` only).
   - **§8.5 MT-7 `body_search_path` (E1):** a function body that changes the search path is flagged.
@@ -211,7 +217,8 @@ Every open H item is a row in `docs/progress/FOUNDER-QUEUE.md`. The "Blocks" col
 ```
 /
 ├─ package.json                 private; scripts §5; "packageManager": "pnpm@12.11.2"; engines node ">=22.22 <23"; "prepare": "lefthook install"
-├─ pnpm-workspace.yaml          apps/*, packages/*, workers/*, services/*; catalog (§4); build-script allow-list
+├─ pnpm-workspace.yaml          apps/*, packages/*, workers/*, services/*; catalog (§4); build-script allow-list; overrides (patch pins for handlebars, sharp, undici) and auditConfig.ignoreGhsas (braces): §7.1
+├─ osv-scanner.toml             ignored advisories for the CI osv-scanner step: braces (GHSA-vfj7-8cjw-p6xm), with a reason, until 2027-01-11 (§7.1)
 ├─ pnpm-lock.yaml   .node-version (22.23.3)   .npmrc (engine-strict=true, shell-emulator=true)
 ├─ .gitattributes               exists since b4c56a4 (*.sh text eol=lf); S1.2 extends it: * text=auto eol=lf; *.png *.ico *.woff2 binary
 ├─ .gitignore                   + .dev.vars* , .wrangler/, dist/, coverage/, .claude/worktrees/, .claude/.last-green, .claude/.stop-gate-tries
@@ -252,7 +259,9 @@ Every open H item is a row in `docs/progress/FOUNDER-QUEUE.md`. The "Blocks" col
 │  ├─ verify-clean-clone.mjs    clone HEAD into a temp dir, then `pnpm i --frozen-lockfile && pnpm verify` there (AT-1a-local, AT-1b)
 │  ├─ lib/ (git, workspace map, TAP parser)   test/*.test.mjs (Vitest; includes backup.test.mjs for AT-24)
 │  ├─ backup.sh                 existing (autopilot, b4c56a4); gains a test (AT-24), behaviour unchanged
-│  └─ claude-*.mjs, claude-stop-gate.sh       existing, unchanged
+│  ├─ claude-session-start.mjs  SessionStart hook, rewritten in d9bf35a: shows HANDOFF.md from the newest */integration branch, output within 9,000 bytes; tested by test/session-start.test.mjs
+│  ├─ claude-usage-guard.mjs    PostToolUse hook; warns at 90% (finish the step, then wrap up) and 95% (stop now) of a usage limit since 4a83998
+│  └─ claude-statusline.mjs, claude-stop-gate.sh   existing; behaviour unchanged
 ├─ docs/adr/ADR-028-m0-runtime-libraries.md
 └─ docs/milestones/M0a-summary.md   (end of milestone; includes the Deferred gates table)
 ```
@@ -303,7 +312,8 @@ Shared versions live in the `catalog:` of `pnpm-workspace.yaml`. Dependabot grou
 | lefthook | 2.2.1 | — |
 | @commitlint/cli + config-conventional | 21.2.3 | — |
 | gitleaks | 8.30.1 | winget locally. CI downloads the release binary with checksum verification **in the shared setup**, so every job has it (AT-6 runs in `static`). |
-| osv-scanner | pinned by checksum at implementation time | Not on npm |
+| osv-scanner | v2.6.0. The SHA-256 of the `osv-scanner_linux_amd64` release binary is checked in `ci.yml` before the binary runs | Not on npm. Reads `osv-scanner.toml` (§7.1) |
+| Clean-clone container image (AT-1a-local) | `node:22.23.3@sha256:0e5f906573693feaa1e21057ebdcfdb5bd5021f050b2dc7c9deceb629c7da2a8` | The multi-arch image index digest from `docker buildx imagetools inspect node:22.23.3`, read on 2026-10-11 (`scripts/lib/clean-clone.mjs`). Change it together with the Node pin above. |
 
 TypeScript base config:
 - `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`, `noFallthroughCasesInSwitch`
@@ -403,9 +413,15 @@ Fixing a finding locally is safe because the pre-push scan and the AUTOPILOT §6
 | --- | --- |
 | `static` *(required)* | typecheck → lint → test → build (includes bundle budget and header checks) |
 | `rls` *(required)* | `pnpm test:rls`, which includes the db-types drift check (§8.3 step 6) |
-| `security` *(required)* | `gitleaks git --redact` over **full history** (`fetch-depth: 0`) · `pnpm audit --prod --audit-level=high` · `osv-scanner scan -r .` |
+| `security` *(required)* | `gitleaks git --redact` over **full history** (`fetch-depth: 0`) · `pnpm audit --prod --audit-level=high` · `osv-scanner scan -r .` (v2.6.0, binary checksum-verified; §4). Both scanners honour the advisory ignores described after this table. |
 | `migrations` *(required)* | `node scripts/check-migrations.mjs --base origin/main` (§8.4), with `fetch-depth: 0` |
 | `deploy-staging` | Gated and step-scoped; see §7.2. |
+
+**Advisory ignores and overrides (revision 15).** The first Linux CI runs failed on dependency advisories. The fixes are in two root files, and the `docs/build-notes.md` "Autopilot changes" row of 2026-10-11 records the decision.
+- **`overrides` in `pnpm-workspace.yaml`:** three transitive dependencies are pinned to patch releases that fix their advisories: handlebars 4.7.10, sharp 0.35.5, undici 7.29.1. A comment above the key names the package that pins the old version, so each override can be removed when that stops.
+- **One ignore, in both scanners:** braces ≤ 3.0.3 (GHSA-vfj7-8cjw-p6xm, high) has no fixed release. It is reached only through eslint-plugin-boundaries > micromatch at lint time, with patterns from this repository's own ESLint config, and is never shipped. `auditConfig.ignoreGhsas` in `pnpm-workspace.yaml` covers `pnpm audit`, and `[[IgnoredVulns]]` in `osv-scanner.toml` covers osv-scanner. Both carry the reason.
+- **Expiry:** `osv-scanner.toml` sets `ignoreUntil = 2027-01-11`, so osv-scanner stops ignoring braces on that date. The `ignoreGhsas` entry has no date; its comment says it stays until a fix exists and is then removed. Review both by 2027-01-11 and remove them together when braces ships a fix.
+- **Rule:** `osv-scanner.toml` says every entry needs a reason and an expiry, so it is re-checked instead of forgotten. `pnpm-workspace.yaml` is a lead-only file (§14).
 
 ### 7.2 `deploy-staging` job
 - **Gate:** `needs: [static, rls, security, migrations]` and `if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'` (revision 10).
@@ -572,7 +588,7 @@ In CI, the harness runs with `--stop`.
 ### 8.5 Catalog checks
 **Single source of truth.**
 - Each check is a plain SQL file, `supabase/catalog-checks/MT-<id>.sql`. It returns one row per violation, and no rows when clean.
-- `manifest.json` lists the required IDs (MT-1, 2, 3, 4, 5a, 5b, 5c, 5d, 6, 7, 8, 8b, 9, 10, 11 and 12). For each ID it also lists the **branches**, one for each independent predicate in the table below; MT-11, for example, has 7.
+- `manifest.json` lists the required IDs (MT-1, 2, 3, 4, 5a, 5b, 5c, 5d, 6, 7, 8, 8b, 9, 10, 11 and 12). For each ID it also lists the **branches**, one for each independent predicate in the table below; MT-11, for example, has 11.
 - Every branch has a **positive control**, `fixtures/MT-<id>.<branch>.violation.sql`. It creates a minimal object that violates that branch only, so no single predicate can be broken unnoticed.
 
 **Where the checks run:**
@@ -646,11 +662,13 @@ In CI, the harness runs with `--stop`.
 - MT-11: check on day one that PostgreSQL accepts `CREATE POLICY` without `WITH CHECK` (INSERT) and without `USING` (SELECT, DELETE). The "SELECT or DELETE without USING" fixture uses whichever of the two commands PostgreSQL accepts. If PostgreSQL rejects every form of a branch, that branch is marked `unreachable` in the manifest, with the recorded PostgreSQL error text, and gets no fixture. `gen-catalog-tests --check` accepts `unreachable` only on the named MT-11 branches, only with that error text, and never for a branch that is reachable at the base. S1.7 sets the floor to the real count after this check.
 
 **Thresholds:**
-- `catalog-min-count` is set to the exact number of assertions written in S1.7. The expected number is **71**: 16 clean checks, 51 branch controls and 4 MT-4b probes. *Revision 12:* **101**: 16 clean checks, 80 branch controls (counts per ID in the revision 12 header) and 5 probe assertions (the 4 MT-4b probes plus the MT-11 negative control). *Revision 13:* **105**: 16 clean checks, 84 branch controls, 5 probe assertions. *Revision 14:* **112**: 16 clean checks, 85 branch controls (MT-7: 4), 11 probe assertions (the 5 earlier ones plus 6 from pass D: MT-11 restrictive/permissive controls, MT-5b reach shapes and control, MT-7 shapes and control). The 51 branch controls are:
-  - MT-1: 2 (an in-scope table without RLS; the partition path), MT-2: 3 (the column is missing; `org_id text`; a nullable `org_id uuid`), MT-3: 2, MT-4: 5
-  - MT-5a: 3, MT-5b: 3 (`pg_depend` through a `BEGIN ATOMIC` body; `prosrc`; `proconfig`), MT-5c: 3 (a direct grantee on both; membership in two roles that each hold one schema; `pg_read_all_data`/`pg_write_all_data`), MT-5d: 3
-  - MT-6: 4 (an unused `integrity` enum; another schema's enum used directly by an `integrity` column; use through an array; use through a domain), MT-7: 2, MT-8: 4, MT-8b: 1
-  - MT-9: 3, MT-10: 3, MT-11: 7, MT-12: 3
+- `catalog-min-count` is set to the exact number of assertions written in S1.7. The expected number is **71**: 16 clean checks, 51 branch controls and 4 MT-4b probes. *Revision 12:* **101**: 16 clean checks, 80 branch controls (counts per ID in the revision 12 header) and 5 probe assertions (the 4 MT-4b probes plus the MT-11 negative control). *Revision 13:* **105**: 16 clean checks, 84 branch controls, 5 probe assertions. *Revision 14:* **112**: 16 clean checks, 85 branch controls (MT-7: 4), 11 probe assertions (the 5 earlier ones plus 6 from pass D: MT-11 restrictive/permissive controls, MT-5b reach shapes and control, MT-7 shapes and control). The 85 branch controls are, per ID (the length of each `branches` list in `manifest.json`):
+  - MT-1: 4, MT-2: 3, MT-3: 3, MT-4: 6
+  - MT-5a: 6, MT-5b: 5, MT-5c: 6, MT-5d: 12
+  - MT-6: 6, MT-7: 4, MT-8: 4, MT-8b: 2
+  - MT-9: 6, MT-10: 4, MT-11: 11, MT-12: 3
+
+  The generated `catalog_meta.test.sql` plans 101 assertions (16 clean checks and the 85 branch controls), and `catalog_probe.test.sql` plans 11. Together they make the 112 in `catalog-min-count`.
 
   `manifest.json` is the authority on branches.
 - `rls-min-count` is **0** in M0a and **50** from M0b.
@@ -957,6 +975,7 @@ If a stream needs one of these changed (a new dependency, a contract field, a mi
 - **Backups:** `scripts/backup.sh` bundles every branch and tag into `../trace-backups/` at the end of every session and keeps the newest 10 (AT-24). For restoring, see `docs/progress/RESTORE.md`.
 - **Fork PR whose branch is named `main`:** the deploy job's `if:` requires `event_name == 'push'` and this repository, so it never runs (AT-12).
 - **A Worker secret added through the dashboard:** deploy step 6 fails (AT-15).
+- **Build output that `scan-dist.mjs` cannot read (accepted residuals, N10–N13 security re-review; revision 15).** AT-16 fails a `dist/` that holds a file it recognises as compressed (by file name, by leading bytes, as a zlib stream, or by a zip end record), and it scans text stored as UTF-16 or UTF-32. It cannot recognise, and so cannot scan, these shapes under a neutral file name: raw deflate, brotli (found by file name only), lzma-alone, encrypted blobs, and compressed streams inside another container. A key hidden that way passes AT-16. The re-review accepted these residuals. They fall under the backstop scope (build-notes §0, 2026-10-11): `scan-dist` catches honest mistakes, and deliberate packing goes on the reviewer checklist. The M0a summary must list them in its Deferred gates table. The same re-review (N11) records one more declared limit: a key longer than 8,192 bytes (`STDIN_PIECE_OVERLAP`) can still be cut between two stdin pieces.
 - **Staging default ACLs differ from local:** MT-12 in deploy step 4 fails (AT-18).
 - **A staging migration goes wrong:** fix forward with a new migration. Never roll back past an applied migration (§8.2).
 - **Pages project missing:** it is created idempotently. A token without the needed scope fails with the scope named.
@@ -1039,5 +1058,6 @@ Each of these is a row in `docs/progress/FOUNDER-QUEUE.md`, with exact steps:
 - Revision 9 (2026-10-11) applies founder answers and day-one results only; `spec-reviewer` checks it together with the S1.0 diff.
 - Revision 10 (2026-10-11) applies the infra-setup instructions only (repo move, Sentry deferral, staging names); `spec-reviewer` checks it.
 - Revision 14 (2026-10-11) applies catalog pass D (E1 narrowed by the founder's backstop-scope decision, E2) and records E3 → M0b; `database-reviewer` re-reviews pass D (`docs/reviews/M0a-S1.7-catalog-pass-d-database-rereview.md`) and `spec-reviewer` checks it at the S1.7 gate.
+- Revision 15 (2026-10-11) applies the S1.7 gate's finding K3 (spec text only; `docs/reviews/M0a-S1.7-gate-spec-review.md`). It is read by the M0a REVIEW phase (§14).
 
 **Spec approved by autopilot reviewers** on 2026-10-11 (AUTOPILOT §2): `spec-reviewer` and `database-reviewer`, after five review rounds (revisions 4–7). Product scope and exit gate are unchanged from the founder-approved revision 3. Open founder decisions are in `docs/progress/FOUNDER-QUEUE.md` (§17).
