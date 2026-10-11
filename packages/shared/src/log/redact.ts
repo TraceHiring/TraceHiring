@@ -49,12 +49,20 @@ const SAFE_KEYS = new Set([
 ]); // prettier-ignore
 
 /**
- * Keys are compared after NFKC (fullwidth and other compatibility forms), lower-casing, and
- * removing every character that is not a letter or digit (spaces, `_`, `-`, zero-width marks).
+ * Invisible characters that could split a key or a value: zero-width marks and joiners, bidi
+ * controls, variation selectors, Hangul fillers, tags. Every one of them is in this property.
+ */
+const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+
+/**
+ * Keys are compared after NFKC (fullwidth and other compatibility forms), dropping invisible
+ * characters (some are letters), lower-casing, and removing every character that is not a letter
+ * or digit (spaces, `_`, `-`, marks).
  */
 const normaliseKey = (key: string): string =>
   key
     .normalize('NFKC')
+    .replace(IGNORABLE, '')
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]/gu, '');
 
@@ -66,25 +74,36 @@ export const isSensitiveKey = (key: string): boolean => {
   return !SAFE_KEYS.has(k) && STEM.test(k);
 };
 
-/** Indian-script and fullwidth digit blocks: each holds 0-9 at consecutive code points. */
-const DIGIT_ZEROS = [0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66, 0xff10];
-const NON_ASCII_DIGIT =
-  /[\u0966-\u096f\u09e6-\u09ef\u0a66-\u0a6f\u0ae6-\u0aef\u0b66-\u0b6f\u0be6-\u0bef\u0c66-\u0c6f\u0ce6-\u0cef\u0d66-\u0d6f\uff10-\uff19]/g;
-/** Zero-width and other invisible format characters that could split a value. */
-const INVISIBLE = /[\u00ad\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g;
+/** A decimal digit of any script other than ASCII (Devanagari, Arabic-Indic, Ol Chiki, \u2026). */
+const NON_ASCII_DIGIT = /(?![0-9])\p{Nd}/gu;
+const IS_DIGIT = /^\p{Nd}$/u;
+/** Every dash, and the minus sign, other than '-' itself. */
+const DASH = /(?!-)[\p{Pd}\u2212]/gu;
 
+/**
+ * Unicode encodes each script's digits 0-9 at consecutive code points, and digit sets that touch
+ * (the mathematical ones, up to 50 in a row) each start at a 0. So a digit's value is its distance
+ * from the start of its run, mod 10.
+ */
 const toAsciiDigit = (ch: string): string => {
   const cp = ch.codePointAt(0) ?? 0;
-  const zero = DIGIT_ZEROS.find((z) => cp >= z && cp <= z + 9) ?? cp;
-  return String(cp - zero);
+  let start = cp;
+  while (cp - start < 50 && IS_DIGIT.test(String.fromCodePoint(start - 1))) start--;
+  return String((cp - start) % 10);
 };
 
 /**
- * The text the patterns see: compatibility forms folded, invisible marks dropped, ASCII digits.
- * Internal (not exported from index.ts).
+ * The text the patterns see: compatibility forms folded, invisible characters dropped, every
+ * digit ASCII and every dash '-'. NFKC runs again after the drop, because a dropped character can
+ * let marks compose; that also keeps canonical idempotent. Internal (not exported from index.ts).
  */
 export const canonical = (s: string): string =>
-  s.normalize('NFKC').replace(INVISIBLE, '').replace(NON_ASCII_DIGIT, toAsciiDigit);
+  s
+    .normalize('NFKC')
+    .replace(IGNORABLE, '')
+    .normalize('NFKC')
+    .replace(NON_ASCII_DIGIT, toAsciiDigit)
+    .replace(DASH, '-');
 
 type Replacer = (match: string, ...groups: string[]) => string;
 const keepPrefix: Replacer = (_m, prefix = '') => `${prefix}${REDACTED}`;
