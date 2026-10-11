@@ -1,9 +1,9 @@
 # HANDOFF — 2026-10-11 09:10 IST
-Reason for stopping: usage (founder: work to ~90%, then wrap up and push). The wrap-up started at 76% of the 5-hour window (Pro), because each review agent costs about 7–9%. The window resets about 13:20 IST.
+Reason for stopping: usage (founder: work to ~90%, then wrap up and push). Wrap-up began at 76%; the last review was recorded at 83%. The next session may run on a different Claude Code account: start from docs/progress/RESUME-PROMPT.md on `m0a/integration`.
 
 ## Where we are
 - Milestone **M0a** (toolchain, pipeline and skeleton). **Phase: BUILD.** S1.0–S1.6 are built and reviewed. **S1.7** (shared code + database): every stream is now written, but nothing is merged yet, because the reviews found issues that must be fixed first.
-- **Integration branch: `claude/trace-autopilot-resume-2dac7c`** (NEW), in worktree `.claude/worktrees/trace-autopilot-resume-2dac7c`. It was reset to `97f8a4e`, the tip of the old integration branch `claude/trace-autopilot-production-87e5e2`, which still holds `97f8a4e` and is no longer used. A worktree guard blocks a session from writing into another session's worktree, hence the switch. The 3 commits the session branch held before the reset (`52a4b08`, `0157093`, `fe77a87`) are all on `main`, so nothing was lost.
+- **Integration branch: `m0a/integration`** (stable name, not checked out in any worktree, so a new session can `git switch` to it or `git worktree add` it; see RESUME-PROMPT.md §3 STEP 2). It holds all lead work and review reports. Retired ancestors: `claude/trace-autopilot-production-87e5e2` (`97f8a4e`) and `claude/trace-autopilot-resume-2dac7c` (the session branch this handoff was written on; same commits up to this handoff). A worktree guard blocks a session from writing into another session's worktree, hence the stable branch.
 - HEAD before this handoff: `d7169b0`. Since `97f8a4e`, only review reports under `docs/reviews/` were added. `pnpm verify:fast` exit 0 at 08:37 on `97f8a4e` and at 09:12 on this handoff. Full `pnpm verify` was last green on `0d8b511`. The last tag is `cp/m0a-01`. **The `main` mirror was skipped** (main is checked out in the root folder, which the worktree guard protects), so `main` still shows the old handoff: use RESUME-PROMPT.md from this branch.
 - `milestone/m0a` has **not moved** (`adbbb61`); it moves only after the Next-step gate. The spec `specs/m0-foundations.md` is at revision 11 (`10addbe`).
 
@@ -49,7 +49,7 @@ W3b/W2 database review: arrived after the first push and is recorded in `docs/re
 6. S1.4 Lows N8 and N9 (before S3). Then **S2 ∥ S3** (spec §14).
 
 ## Decisions made this session
-- **Integration branch** is now `claude/trace-autopilot-resume-2dac7c` (see above).
+- **Integration branch** is now `m0a/integration` (see above).
 - **Put off the catalog fixes and the redactor fixes** to the next window instead of starting a third writer at 53–69% usage (AUTOPILOT §2: finish cleanly over half-finishing).
 - **New catalog branches** (planned, pending spec rev 12): MT-1 `inheritance_without_rls` and `foreign_table_in_scope`; MT-8b `system_schema_owner`; MT-9 `handmade_in_system_schema` and `handmade_nonadmin_owner`; MT-7 `definer_in_system_schema`; MT-3 `composite_type_column`; MT-6 `composite_column` and `range_column`; MT-4 `column_references`.
 - **Stream decisions** (W3b/W2 reports, to record in spec rev 12):
@@ -73,4 +73,4 @@ W3b/W2 database review: arrived after the first push and is recorded in `docs/re
 - Never re-enable `.git/hooks/post-commit.disabled`; never move `cp/*` tags.
 
 ## Verify first
-git log --oneline -5 claude/trace-autopilot-resume-2dac7c · git status · `git log -1 --format=%h` on each stream branch above · docker ps (supabase_db_trace) · pnpm -s verify:fast
+git log --oneline -5 m0a/integration · git status · `git log -1 --format=%h` on each stream branch above · docker ps (supabase_db_trace) · pnpm -s verify:fast
