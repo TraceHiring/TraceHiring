@@ -27,16 +27,16 @@ Reason for stopping: usage (founder: work to ~90%, then wrap up and push). The w
 | --- | --- | --- |
 | W1 redactor | `worktree-agent-ae15fb7cd05478040` @ `bcb6d54` | Review PASS; **fix #1 and #2 (and #7) first** |
 | W3a checks MT-1,2,3,4,6,7,8,9 | `worktree-agent-a66ca65381173c087` @ `37adfd9` | **Blocked by the DB review fix plan** |
-| W3b checks MT-5a–d,10,11,12 | `worktree-agent-a5a761e3d78529f6f` @ `0f62de8` (contains `f8da8a4`) | Done; DB review running at handoff (result below if it came in) |
-| W2 harness | `worktree-agent-a9809baf595fe8b13` @ `aabef91` (contains `0d35d0b`, `8c5ef5f`) | Done; DB review running at handoff |
+| W3b checks MT-5a–d,10,11,12 | `worktree-agent-a5a761e3d78529f6f` @ `0f62de8` (contains `f8da8a4`) | Done; **DB review BLOCK** (3 High, 3 Medium spec gaps; `docs/reviews/M0a-S1.7-w3b-w2-database-review.md`) |
+| W2 harness | `worktree-agent-a9809baf595fe8b13` @ `aabef91` (contains `0d35d0b`, `8c5ef5f`) | Done; **DB review PASS** (Lows W2-1, W2-2) — ready to merge |
 | superseded | `worktree-agent-a9e0bdcc6c2fbd966` @ `8c5ef5f`, `worktree-agent-a4f4047327f9e48e5` @ `f8da8a4` | Contained in the two branches above; do not use |
 
-W3b/W2 database review result: **not received before the push**. Re-run it next session: `git diff f8da8a4..0f62de8` and `git diff 8c5ef5f..aabef91 -- scripts`.
+W3b/W2 database review: arrived after the first push and is recorded in `docs/reviews/M0a-S1.7-w3b-w2-database-review.md`. Fold its W3b findings (#1–#8; #5 needs a spec decision first) into the step-2 catalog fix pass and spec rev 12.
 
 ## Next step (in order; 2–3 writers max; a review agent costs ~8% of a Pro window)
 1. **W1 fixes**, test-first, one commit each, continuing from `bcb6d54`: #1 (tighten the frame regex in `isStackFrame`/`stackFrames`; restore truncation over the cap), #2 (UPI lookahead `(?![\w@]|\.[a-z0-9])`), #7 (min-of-N timing). The exact repros and tests are in the redactor review report.
 2. **Catalog-check fix pass** on one branch cut from W3a `37adfd9` with W3b `0f62de8` merged in (the shared scope CTE fix touches both). Follow the 7-item plan in the DB review, test-first: a fixture per new branch, then the check. Then update `manifest.json`, `supabase/tests/catalog-min-count` (exact new count) and spec §8.5 as **revision 12**. Then run a fresh `database-reviewer` (fixes + W3b) and `spec-reviewer` on rev 12.
-3. Fix any Blocking/High/Medium from the W3b/W2 database review (re-run it if it is missing).
+3. (Folded into step 2: the W3b findings. W2 passed; its Lows W2-1 and W2-2 are done at integration: run `supabase stop` then `pnpm test:rls --stop` once.)
 4. **Lead integration** on the integration branch, each with `git merge --no-ff`:
    - merge W1 (fixed), the catalog branch (fixed) and W2 `aabef91`;
    - `node scripts/gen-catalog-tests.mjs`, which writes `supabase/tests/catalog_meta.test.sql`;
