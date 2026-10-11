@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import * as publicLog from './index.js';
 import {
   MAX_DEPTH,
+  MAX_ENTRIES,
   MAX_STRING,
   REDACTED,
   TRUNCATED,
@@ -204,6 +205,7 @@ describe('properties', () => {
           withTypedArray: true,
           withSparseArray: true,
           withNullPrototype: true,
+          withBoxedValues: true,
         }),
         (input) => {
           const once = redact(input);
@@ -677,5 +679,116 @@ describe('URL userinfo (S1.7 follow-up 7)', () => {
   it('leaves URLs without userinfo alone', () => {
     const s = `fetch https://${host}/v1/x and mailto:support done`;
     expect(redactString(s)).toBe(s);
+  });
+});
+
+describe('stacks under stack-like keys (S1.7 follow-up 8)', () => {
+  const phrase = synth.phrase();
+  const frames = ['at f (file:///app/a.js:1:2)', 'at g (file:///app/b.js:30:4)'];
+  // The message spans lines and mentions a frame-free sentence; none of it may survive.
+  const stack = [
+    `Error: duplicate ${phrase}`,
+    `detail ${phrase}`,
+    ...frames.map((f) => `    ${f}`),
+  ];
+
+  it.each(['stack', 'stacktrace', 'stack_trace', 'stackTrace', 'errorStack', 'Stack Trace'])(
+    'keeps only the frames of a string under "%s"',
+    (key) => {
+      const once = redact({ [key]: stack.join('\n') });
+      expect(once).toEqual({ [key]: frames });
+      expect(redact(once)).toEqual(once);
+    },
+  );
+
+  it('filters an array of stack lines the same way', () => {
+    const once = redact({ stack: [...stack, 42] });
+    expect(once).toEqual({ stack: frames });
+    expect(redact(once)).toEqual(once);
+  });
+
+  it('drops a frame that stops looking like a frame once redacted, so it stays idempotent', () => {
+    // A line number shaped like a mobile number: redacting it leaves no line:column behind.
+    const odd = `at h (file:///app/c.js:${synth.mobile()}:5)`;
+    const s = ['Error: x', `    ${odd}`, `    ${frames[0]}`].join('\n');
+    const once = redact({ stack: s, err: Object.assign(new Error('x'), { stack: s }) });
+    expect(once).toEqual({ stack: [frames[0]], err: { name: 'Error', stack: [frames[0]] } });
+    // A serialised error's own `name` key is a PII stem, so a second pass is compared on stacks.
+    const twice = redact(once) as { stack: unknown; err: { stack: unknown } };
+    expect(twice.stack).toEqual([frames[0]]);
+    expect(twice.err.stack).toEqual([frames[0]]);
+  });
+
+  it('caps a stack array at the depth cap like any other array', () => {
+    let deep: Record<string, unknown> = { stack: stack.join('\n') };
+    for (let i = 0; i < MAX_DEPTH - 1; i++) deep = { n: deep };
+    expect(depthOf(redact(deep))).toBeLessThanOrEqual(MAX_DEPTH);
+  });
+
+  it.each([
+    ['colon-digit lines', `at x:${'1:'.repeat(140)}\n`],
+    ['long digit runs', `at x:${'1'.repeat(280)}:\n`],
+    ['message lines', `Error: ${'x'.repeat(290)}\n`],
+    ['frames', `${frames[0]}\n`],
+  ])('filters a ~100 KB stack of %s within 50 ms', (_label, line) => {
+    const big = line.repeat(Math.ceil(100_000 / line.length));
+    redact({ stack: big.slice(0, 1000) }); // warm-up
+    const start = performance.now();
+    const out = redact({ stack: big }) as { stack: string[] };
+    expect(performance.now() - start).toBeLessThan(50);
+    expect(out.stack.length).toBeLessThanOrEqual(20);
+  });
+
+  it('leaves other keys that mention a stack alone', () => {
+    expect(redact({ stackSize: 3, stacks: 'a b' })).toEqual({ stackSize: 3, stacks: 'a b' });
+  });
+});
+
+describe('boxed primitives and hostile arrays (S1.7 follow-up 9)', () => {
+  it('unwraps String, Number, Boolean and BigInt objects before redacting', () => {
+    const email = synth.email();
+    const mobile = synth.mobile();
+    expect(
+      redact({
+        s: new String(email),
+        n: new Number(Number(mobile)),
+        b: new Boolean(true),
+        big: Object(BigInt(synth.aadhaar())),
+        ok: new String('fine'),
+      }),
+    ).toEqual({ s: REDACTED, n: REDACTED, b: true, big: REDACTED, ok: 'fine' });
+    expect(redact(new String(email))).toBe(REDACTED);
+  });
+
+  it('unwraps a wrapper whose prototype was changed, and walks a look-alike as an object', () => {
+    const moved = Object.setPrototypeOf(new String(synth.email()), null) as object;
+    expect(redact({ v: moved })).toEqual({ v: REDACTED });
+    const fake = Object.assign(Object.create(String.prototype) as object, { a: 1 });
+    expect(redact({ v: fake })).toEqual({ v: { a: 1 } });
+  });
+
+  it("never runs an array's own slice or map", () => {
+    const leak = (): string[] => ['leak'];
+    const arr = Object.assign([synth.email()], { slice: leak, map: leak });
+    expect(redact({ a: arr })).toEqual({ a: [REDACTED] });
+  });
+
+  it('never runs a species constructor', () => {
+    let called = false;
+    class Spy {
+      constructor() {
+        called = true;
+      }
+    }
+    const arr = [synth.email(), 'x'];
+    Object.defineProperty(arr, 'constructor', { value: { [Symbol.species]: Spy } });
+    expect(redact({ a: arr })).toEqual({ a: [REDACTED, 'x'] });
+    expect(called).toBe(false);
+  });
+
+  it('keeps the entry cap on long arrays', () => {
+    const out = redact(Array.from({ length: MAX_ENTRIES + 5 }, (_, i) => i)) as unknown[];
+    expect(out).toHaveLength(MAX_ENTRIES + 1);
+    expect(out.at(-1)).toBe(TRUNCATED);
   });
 });
