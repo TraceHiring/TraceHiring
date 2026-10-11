@@ -82,8 +82,9 @@ STEP 4 — Do the HANDOFF "Next step" list in order. Summary (HANDOFF and the re
    Do not start M0b or any later milestone.
 Rules learned the hard way:
 - Usage: check it often. The founder allows work to ~95% of each 5-hour window, with STEP 5 finished by 95–96%; parallel Opus agents can use 70% in 30 minutes, so check `get_usage` after every agent result. Max 2–3 agents at
-  once (5 agents used ~50% of a Pro window in 15 minutes; one review agent ≈ 7–9%). Start STEP 5 by 80–85% if
-  agents are still running; record any agent result that arrives later before stopping.
+  once (5 agents used ~50% of a Pro window in 15 minutes; one review agent ≈ 7–9%). Start STEP 5 at 90% (founder,
+  2026-10-11; was 80–85%), even if agents are still running; record any agent result that arrives later before stopping.
+  Do not start a new agent after ~80%: one review agent can take 5–17%.
 - Writer agents with isolation "worktree" start at `main`: every writer prompt must say "confirm your branch has
   no commits of its own, then `git reset --hard <exact SHA>`", own a strict set of directories, never touch
   root package.json / lockfile / migrations, and commit at each green step.

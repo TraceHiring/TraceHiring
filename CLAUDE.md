@@ -36,7 +36,7 @@ Trace is an India-first online assessment platform for high-volume hiring where 
 
 ## Session protocol (usage limits, context, no hallucination)
 - **Start of every session:** the SessionStart hook injects `docs/progress/HANDOFF.md` and git state. Verify it (git log, `pnpm verify:fast`) before changing anything; the repo wins over the handoff and over your memory.
-- **Usage guard:** a hook warns at 80% and 90% of the 5-hour or weekly limit. At 80%: finish only the current small step. At 90%: stop new work immediately. Either way, run the `trace-handoff` skill, print its resume prompt, and stop. Never try to finish "just one more" task past 90%.
+- **Usage guard:** a hook warns at 90% and 95% of the 5-hour or weekly limit (founder, 2026-10-11). At 90%: finish only the current small step, then start the wrap-up. At 95%: stop new work immediately. Either way, run the `trace-handoff` skill, print its resume prompt, and stop; the wrap-up must be done by 95–96%. Never try to finish "just one more" task past 90%.
 - **Context:** one milestone stream per session. Use subagents for broad reading/search so file dumps stay out of this context. When context passes ~60%, run the `trace-handoff` skill, then `/clear` and resume from the handoff — prefer this over long auto-compacted sessions.
 - **No guessing:** never claim a test passes, a file exists or an API behaves a certain way without checking in this session (run it, read it, or check the installed package types / Context7 docs). If something isn't in the repo, the spec or the plan, ask — don't invent it. Cite file paths for every claim in summaries.
 - **Commit often** on the milestone branch (at least every passing sub-step). Never leave work uncommitted at the end of a session.

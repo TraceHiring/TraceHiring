@@ -1,6 +1,6 @@
 ---
 name: trace-handoff
-description: Use when the usage guard warns (80%/90% of the 5-hour or weekly limit), when context is getting full, before /clear, or at the end of any work session on Trace — saves verified state to docs/progress/HANDOFF.md so the next session resumes with no loss of quality.
+description: Use when the usage guard warns (90%/95% of the 5-hour or weekly limit), when context is getting full, before /clear, or at the end of any work session on Trace — saves verified state to docs/progress/HANDOFF.md so the next session resumes with no loss of quality.
 ---
 
 # Trace session handoff
@@ -28,7 +28,7 @@ Goal: the next session (after a limit reset, a /clear, a compaction, or on a dif
 ## HANDOFF.md template
 ```markdown
 # HANDOFF — <YYYY-MM-DD HH:MM IST>
-Reason for stopping: <usage guard 80% | usage guard 90% | context full | end of day | blocked>
+Reason for stopping: <usage guard 90% | usage guard 95% | context full | end of day | blocked>
 
 ## Where we are
 - Milestone: M<N> — <name> · Branch: milestone/m<N> · HEAD: <sha> <subject>
@@ -65,5 +65,5 @@ Resume the Trace build. Read CLAUDE.md, then docs/progress/HANDOFF.md, then only
 
 ## Rules
 - Repo over memory: if git or tests contradict what you remember, the repo wins.
-- No new code after the 90% warning except what is needed to commit cleanly.
+- No new code after the 95% warning except what is needed to commit cleanly.
 - Keep HANDOFF.md under 150 lines — the SessionStart hook injects the first 150.

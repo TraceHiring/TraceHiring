@@ -45,6 +45,7 @@ These answers override anything below that disagrees with them. Each affected qu
 | Agent models (2026-10-11, 18:55 IST) | **Sonnet** for Low/mechanical writers and small re-reviews. **Opus** for the lead, specs, and first reviews of code that touches rules 1–9. |
 | CI on every push (2026-10-11, 18:55 IST) | Open a **draft PR `m0a/integration` → `main`** so GitHub Actions runs on every push. **Fix Linux CI failures first**, before other M0a work. The PR stays a draft (no merge, no auto-merge); `main` still moves only at a milestone CLOSE. |
 | SessionStart hook (2026-10-11, 18:55 IST) | Fix the SessionStart hook so it shows the handoff from **`m0a/integration`** (the live integration branch), not the copy on `main`. |
+| Wrap-up threshold (2026-10-11, 20:30 IST) | **Start the STEP 5 wrap-up at 90%** of the 5-hour window (was 80–85%); it must still be done by 95–96%. The usage-guard hook (`scripts/claude-usage-guard.mjs`) now warns at **90%** (finish the current small step, then wrap up) and **95%** (stop now), not 80%/90%; CLAUDE.md "Usage guard", AUTOPILOT §6, the `trace-handoff` skill and RESUME-PROMPT match. |
 | Still open | **Q58** (deferred gates the plan itself places after M8) — in §2. Also stale, not edited by me: `docs/setup-checklist.md` line 9 ("separate dev account (Organizations) … ECS/ECR … in M5") contradicts Q4 and ADR-027. plan-conflicts #4 (explain probe) stays "founder to confirm" until M4. Q55, Q56 and Q57 were answered 2026-10-11 (rows above). |
 
 ---
