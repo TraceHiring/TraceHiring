@@ -22,7 +22,7 @@ Reason for stopping: usage guard (the founder allowed work up to ~93%; stopped a
 - **`packages/db-types`, `905be8f`:** `database.ts` is the byte-exact CLI output. `index.ts` and 2 tests are green; typecheck and lint pass.
 - **Day-one checks:** all done and recorded in spec rev 11 and the catalog README. pgTAP works for the test roles with no fallback, no MT-11 branch is unreachable, and `supabase test db --debug` gives per-assertion TAP.
 
-## Stream branches (each in `.claude/worktrees/agent-<id>`, all clean, none merged, none pushed)
+## Stream branches (each in `.claude/worktrees/agent-<id>`, all clean, none merged; pushed to `trace` as a backup at 08:40, since a worktree may be cleaned up when its session is archived)
 | Stream | Branch @ tip | Base | State |
 | --- | --- | --- | --- |
 | W1 redactor follow-ups | `worktree-agent-ae15fb7cd05478040` @ `bcb6d54` | da5c5ca | **DONE.** All 9 items, test-first; shared tests 187 → 306; the worker's full `pnpm verify` exit 0. **Needs its security-reviewer before merge.** Timing risk: two shapes took 107 ms once under heavy machine load (limit 50 ms); six reruns were clean. |
@@ -75,6 +75,9 @@ Reason for stopping: usage guard (the founder allowed work up to ~93%; stopped a
 - **Pre-commit gitleaks** blocks a literal `sb_secret_` key; build such keys at run time in tests.
 - **CI `rls` job** is red until `test:rls` exists (spec review L2).
 - Never re-enable `.git/hooks/post-commit.disabled`; never move `cp/*` tags.
+
+## New session or new account
+Use the prompt in `docs/progress/RESUME-PROMPT.md` (it handles a fresh worktree created from `main`).
 
 ## Verify first (the next session runs these before any change)
 git log --oneline -5 claude/trace-autopilot-production-87e5e2 · git status · `git log -1 --format=%h` on each stream branch above · docker ps (supabase_db_trace up?) · pnpm -s verify:fast · node docs/progress/tools/catalog-run.mjs <W3a worktree> MT-1 MT-9
