@@ -212,6 +212,20 @@ describe('distText', () => {
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
   });
+
+  // N10-N13 security re-review P1: gitleaks also cuts at a blank line inside a piece, so a key
+  // with a blank line in it (a PGP armour header, an encrypted PEM's DEK-Info) was split.
+  it('leaves blank lines only between pieces (re-review P1)', () => {
+    const root = makeTempDir();
+    writeFiles(root, { 'd/assets/logo.png': 'head\n\nmid\r\n \t\r\nend\n\n' });
+    const body = distText(root, 'd').subarray(STDIN_HEADER.length).toString('latin1');
+    expect(body).toBe('\nhead\n.\nmid\r\n. \t\r\nend\n.\n\n\n');
+    const pieces = body
+      .slice(1)
+      .split('\n\n\n')
+      .filter((p) => p !== '');
+    for (const p of pieces) expect(p).not.toMatch(/\n[\t\r ]*\n/);
+  });
 });
 
 // S1.4 N8/N9 security review N11: gitleaks 8.30.1 reads its input in chunks (up to 100,000 bytes

@@ -272,8 +272,9 @@ export const STDIN_HEADER = Buffer.from('scan-dist\n'.repeat(12_800), 'latin1');
 export const GITLEAKS_MAX_PEEK = 25_000;
 /**
  * The most bytes of a file between two blank lines in the stdin stream. A blank line follows every
- * piece, so from any offset gitleaks finds one within STDIN_PIECE_MAX + 2 < GITLEAKS_MAX_PEEK
- * bytes and only ever cuts the stream at a blank line, never inside a piece.
+ * piece and blank lines inside a piece are broken (withoutBlankLines, re-review P1), so from any
+ * offset gitleaks finds one within STDIN_PIECE_MAX + 2 < GITLEAKS_MAX_PEEK bytes and only ever cuts
+ * the stream between pieces.
  */
 export const STDIN_PIECE_MAX = 20_000;
 /**
@@ -320,6 +321,18 @@ export function stdinPieces(buf) {
 const BLANK_LINE = Buffer.from('\n\n');
 
 /**
+ * A piece with every blank line inside it broken by a `.` (`\n` + spaces/tabs/CRs + `\n` becomes
+ * `\n.` + …), so the separators are the only blank lines in the stream: gitleaks also cuts at a
+ * blank line inside a piece, which split a key containing one, such as a PGP armour header or an
+ * encrypted PEM's DEK-Info line (N10-N13 security re-review P1).
+ */
+function withoutBlankLines(piece) {
+  const s = piece.toString('latin1');
+  const t = s.replace(/\n(?=[\t\r ]*\n)/g, '\n.');
+  return t === s ? piece : Buffer.from(t, 'latin1');
+}
+
+/**
  * The stream for `gitleaks stdin`: STDIN_HEADER and a newline (which ends it with a blank line),
  * then every file in a dist/ in sorted path order, as its stdinPieces, each followed by a blank
  * line. gitleaks only cuts this stream at a blank line, so every key of up to STDIN_PIECE_OVERLAP
@@ -341,7 +354,9 @@ export function distText(root, rel) {
         // The file's bytes, then the ASCII text of any UTF-16/UTF-32 in it (N13).
         for (const b of [buf, wideText(buf)]) {
           if (b === null) continue;
-          for (const [s, t] of stdinPieces(b)) parts.push(b.subarray(s, t), BLANK_LINE);
+          for (const [s, t] of stdinPieces(b)) {
+            parts.push(withoutBlankLines(b.subarray(s, t)), BLANK_LINE);
+          }
         }
       }
     }
