@@ -23,6 +23,12 @@ import {
   wideText,
 } from '../scan-dist.mjs';
 import { cleanupTempDirs, makeTempDir, writeFiles } from './fixtures/checks/temp-repo.mjs';
+import {
+  REPO_ROOT,
+  copyGitleaksConfig,
+  tokenWith,
+  upstreamAllowlistVictims,
+} from './fixtures/gitleaks-config.mjs';
 
 afterEach(cleanupTempDirs);
 
@@ -54,6 +60,13 @@ const cleanRepo = (extra = {}) => {
     'workers/edge/dist/index.js': 'export default { fetch() { return new Response("ok"); } };\n',
     ...extra,
   });
+  return root;
+};
+
+/** cleanRepo plus the repository's real gitleaks config and the default rules it extends. */
+const repoWithConfig = (extra = {}) => {
+  const root = cleanRepo(extra);
+  copyGitleaksConfig(root);
   return root;
 };
 
@@ -332,16 +345,15 @@ function stdinSecrets(root, rel) {
       '--report-path',
       report,
     ],
-    { input: distText(root, rel), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    { cwd: REPO_ROOT, input: distText(root, rel), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   );
   expect(r.error).toBeUndefined();
   return new Set(JSON.parse(readFileSync(report, 'utf8')).map((f) => f.Secret));
 }
 
 /**
- * A Supabase-secret-shaped key with no vowels. gitleaks' default global allowlist drops any secret
- * containing "false" or ending in "null" (any case), which a few of thousands of random keys
- * would, so keys used by the thousand carry no word at all.
+ * A Supabase-secret-shaped key with no vowels. Keys used by the thousand carry no word at all, so no
+ * allowlist or stopword (gitleaks' default list, before and after it was vendored) can drop one by chance.
  */
 const denseKey = () =>
   [
@@ -476,14 +488,54 @@ describe('scanDist (real gitleaks)', () => {
     const tail = [...randomBytes(40)].map((b) => ALNUM[b % ALNUM.length]).join('');
     const key = ['sb', 'secret', tail].join('_');
     expect(key).toMatch(/^sb_secret_[A-Za-z0-9]{40}$/);
-    const root = cleanRepo({
-      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+    const root = repoWithConfig({
       'workers/edge/dist/index.js': `x("${key}");\n`,
     });
     const r = scanDist({ root });
     expect(r.ok).toBe(false);
     expect(r.problems.join('\n')).toMatch(/workers\/edge\/dist: gitleaks found a secret/);
     expect(r.problems.join('\n')).not.toContain(key);
+  });
+
+  // S1.4 N10-N13 security re-review: gitleaks' default global allowlist regex `(?i)^true|false|null$`
+  // hid any secret that starts with "true", contains "false" or ends in "null". The repository config
+  // and the fallback config extend a vendored default in which it is anchored.
+  describe('secrets the upstream allowlist regex hid', () => {
+    const victims = upstreamAllowlistVictims().map((v) => [v.label, v]);
+    const expectFound = (r, secret) => {
+      const p = r.problems.join('\n');
+      expect(p).not.toMatch(/Failed to load config/); // a config error exits 1 too: not a finding
+      expect(r.ok).toBe(false);
+      expect(p).toMatch(/apps\/candidate\/dist: gitleaks found a secret/);
+      expect(p).not.toContain(secret);
+    };
+
+    it('passes clean build output with the repository config (control: the config loads)', () => {
+      const r = scanDist({ root: repoWithConfig() });
+      expect(r.problems).toEqual([]);
+      expect(r.ok).toBe(true);
+    });
+
+    it.each(victims)('finds %s in dist/assets/index.js', (_label, v) => {
+      const root = repoWithConfig({ 'apps/candidate/dist/assets/index.js': `${v.line}\n` });
+      expectFound(scanDist({ root }), v.secret);
+    });
+
+    it('finds a key containing "false" in a path gitleaks dir skips (the stdin leg)', () => {
+      const secret = tokenWith('false');
+      const root = repoWithConfig({
+        'apps/candidate/dist/node_modules/pkg/index.js': `x("${secret}");\n`,
+      });
+      const r = scanDist({ root });
+      expectFound(r, secret);
+      expect(r.problems.join('\n')).toMatch(/in a file that gitleaks dir skips/);
+    });
+
+    it('the fallback config (no .gitleaks.toml in the repository) hides nothing either', () => {
+      const secret = tokenWith('fAlSe');
+      const root = cleanRepo({ 'apps/candidate/dist/assets/index.js': `const t = "${secret}";\n` });
+      expectFound(scanDist({ root }), secret);
+    });
   });
 
   // S1.4 security re-review N5: `gitleaks dir` skips paths on its built-in allowlist
@@ -497,8 +549,7 @@ describe('scanDist (real gitleaks)', () => {
   ])('finds a key in %s, a path gitleaks dir skips', (file) => {
     const tail = [...randomBytes(40)].map((b) => ALNUM[b % ALNUM.length]).join('');
     const key = ['sb', 'secret', tail].join('_');
-    const root = cleanRepo({
-      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+    const root = repoWithConfig({
       [`apps/candidate/dist/${file}`]: `x("${key}");\n`,
     });
     const r = scanDist({ root });
@@ -525,8 +576,7 @@ describe('scanDist (real gitleaks)', () => {
       `${'a'.repeat(247)}ustar${'a'.repeat(5)}ustar\n`,
     ],
   ])('finds a key in assets/bootstrap-<hash>.js when %s sorts first', (_label, file, content) => {
-    const root = cleanRepo({
-      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+    const root = repoWithConfig({
       [`apps/candidate/dist/${file}`]: content,
       'apps/candidate/dist/assets/bootstrap-4f2a9c1e.js': `x("${sbSecret()}");\n`,
     });
@@ -540,8 +590,7 @@ describe('scanDist (real gitleaks)', () => {
     ['a file after a \\0asm header', 'assets/app-9c1e.wasm', '\0asm\x01\0\0\0\n'],
   ])('finds a key in %s', (_label, file, head) => {
     const key = sbSecret();
-    const root = cleanRepo({
-      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+    const root = repoWithConfig({
       [`apps/candidate/dist/${file}`]: Buffer.from(`${head}x("${key}");\n`, 'latin1'),
     });
     const r = scanDist({ root });
@@ -566,8 +615,7 @@ describe('scanDist (real gitleaks)', () => {
     ],
   ])('finds a key in assets/config.json stored as %s', (_label, encode) => {
     const key = sbSecret();
-    const root = cleanRepo({
-      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+    const root = repoWithConfig({
       'apps/candidate/dist/assets/config.json': encode(`{"service": "${key}"}\n`),
     });
     const r = scanDist({ root });
@@ -578,8 +626,7 @@ describe('scanDist (real gitleaks)', () => {
 
   it('fails on the inline allow marker stored as UTF-16, which would hide that line too', () => {
     const marker = ['gitleaks', 'allow'].join(':');
-    const root = cleanRepo({
-      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+    const root = repoWithConfig({
       'apps/candidate/dist/assets/strings.json': utf16le(`{"k": "${sbSecret()}"} // ${marker}\n`),
     });
     const r = scanDist({ root });
@@ -668,8 +715,7 @@ describe('scanDist (real gitleaks)', () => {
   });
 
   it('keeps the default rules in the repository .gitleaks.toml', () => {
-    const root = cleanRepo({
-      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+    const root = repoWithConfig({
       'apps/candidate/dist/assets/index.js': `const t = "${fakeToken()}";\n`,
     });
     expect(scanDist({ root }).ok).toBe(false);

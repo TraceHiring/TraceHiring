@@ -17,8 +17,9 @@
 //     order after a fixed ASCII header, in overlapping pieces between blank lines so gitleaks
 //     never cuts a key, plus the ASCII text of any UTF-16/UTF-32 in a file), which catches files
 //     `gitleaks dir` skips by path or type and keys stored as UTF-16/UTF-32
-// The repository's .gitleaks.toml is always passed with --config (a built-in default config when
-// it is missing), and GITLEAKS_CONFIG / GITLEAKS_CONFIG_TOML are dropped from gitleaks' environment,
+// The repository's .gitleaks.toml is always passed with --config (a fallback that extends the
+// vendored default rules when it is missing), and GITLEAKS_CONFIG / GITLEAKS_CONFIG_TOML are dropped
+// from gitleaks' environment,
 // so a config that a build copies into dist/ can never change the rules.
 // Output is redacted; this script prints only paths and gitleaks' own redacted summary.
 // No environment variables. Optional argument: the repository root (default: this script's repo).
@@ -42,8 +43,17 @@ export const WORKSPACE_DIRS = ['apps', 'workers', 'services'];
 export const GITLEAKS_ARGS = ['dir', '--redact', '--no-banner'];
 export const INSTALL_HINT =
   'gitleaks is not installed, so the build-output secret scan cannot run. Install gitleaks 8.30.1 (Windows: winget install Gitleaks.Gitleaks; CI: the checksum-verified binary in the shared setup), then build again.';
-const DEFAULT_CONFIG =
-  '# scan-dist fallback: the repository has no .gitleaks.toml.\n[extend]\nuseDefault = true\n';
+/** gitleaks 8.30.1's default config, vendored with its `true|false|null` allowlist regex anchored. */
+export const VENDORED_DEFAULT_CONFIG = 'config/gitleaks-8.30.1/gitleaks.toml';
+// Not `useDefault = true`: that inherits the unanchored `(?i)^true|false|null$` allowlist, which hides
+// secrets containing "false" (S1.4 N10-N13 re-review). An `extend.path` is resolved from gitleaks'
+// working directory (the scanned root, which may be a fixture), so the fallback uses this repo's
+// copy by absolute path; JSON.stringify gives a valid TOML basic string for any path.
+const VENDORED_DEFAULT_PATH = fileURLToPath(
+  new URL(`../${VENDORED_DEFAULT_CONFIG}`, import.meta.url),
+);
+const fallbackConfig = () =>
+  `# scan-dist fallback: the repository has no .gitleaks.toml.\n[extend]\npath = ${JSON.stringify(VENDORED_DEFAULT_PATH)}\n`;
 
 /** Colour codes in gitleaks' log lines. */
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
@@ -393,7 +403,7 @@ export function scanDist({ root, gitleaks = 'gitleaks', env = process.env }) {
   if (!existsSync(rootConfig)) {
     tmp = mkdtempSync(path.join(tmpdir(), 'trace-scan-dist-'));
     config = path.join(tmp, 'gitleaks.toml');
-    writeFileSync(config, DEFAULT_CONFIG);
+    writeFileSync(config, fallbackConfig());
   }
   const scanned = [];
   try {

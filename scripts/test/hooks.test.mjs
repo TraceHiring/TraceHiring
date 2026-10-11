@@ -3,12 +3,13 @@
 // run them in throwaway repositories, and use a fake key whose shape is generated at test time.
 import { spawnSync } from 'node:child_process';
 import { randomInt } from 'node:crypto';
-import { copyFileSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { findSh } from '../lib/sh.mjs';
 import { commitAll, g, makeRepo, removeDir, writeFiles } from './fixtures/verify/temp-repo.mjs';
+import { copyGitleaksConfig } from './fixtures/gitleaks-config.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const LEFTHOOK = readFileSync(join(ROOT, 'lefthook.yml'), 'utf8');
@@ -46,12 +47,16 @@ function lintGitleaksCommand(pkg) {
   return segment;
 }
 
-/** A GitHub-token-shaped string, assembled at runtime so no literal key exists in the repo. */
-function fakeGithubToken() {
+/**
+ * A GitHub-token-shaped string, assembled at runtime so no literal key exists in the repo. `word`
+ * (default none) replaces the middle of the 36-character body.
+ */
+function fakeGithubToken(word = '') {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let body = '';
-  for (let i = 0; i < 36; i++) body += alphabet[randomInt(alphabet.length)];
-  return ['g', 'h', 'p', '_'].join('') + body;
+  for (let i = 0; i < 36 - word.length; i++) body += alphabet[randomInt(alphabet.length)];
+  const mid = Math.floor(body.length / 2);
+  return ['g', 'h', 'p', '_'].join('') + body.slice(0, mid) + word + body.slice(mid);
 }
 
 let SH;
@@ -69,7 +74,7 @@ afterEach(() => {
 function repoWithRealConfig() {
   const { parent, repo } = makeRepo('trace hooks');
   cleanup.push(parent);
-  copyFileSync(join(ROOT, '.gitleaks.toml'), join(repo, '.gitleaks.toml'));
+  copyGitleaksConfig(repo); // .gitleaks.toml and the default rules it extends (path is relative to cwd)
   writeFiles(repo, { 'README.md': '# temp\n' });
   commitAll(repo, 'base');
   return repo;
@@ -124,6 +129,25 @@ describe('AT-6: pre-commit gitleaks command', () => {
     expect(res.out).toMatch(/no leaks found/i);
   });
 
+  it.each(['false', 'fAlSe'])('blocks a staged key that contains "%s"', (word) => {
+    // gitleaks' unanchored default allowlist regex used to drop any secret that contains "false".
+    const repo = repoWithRealConfig();
+    writeFiles(repo, { 'settings.txt': `token=${fakeGithubToken(word)}\n` });
+    g(repo, ['add', 'settings.txt']);
+    const res = runSh(repo, command);
+    expect(res.code, res.out).not.toBe(0);
+    expect(res.out).toMatch(/leaks found/i);
+  });
+
+  it('passes a staged change that only holds the words true, false and null', () => {
+    const repo = repoWithRealConfig();
+    writeFiles(repo, { 'settings.txt': 'enabled=true\nretired=false\nowner=null\n' });
+    g(repo, ['add', 'settings.txt']);
+    const res = runSh(repo, command);
+    expect(res.code, res.out).toBe(0);
+    expect(res.out).toMatch(/no leaks found/i);
+  });
+
   it('fails, never skips, when gitleaks is missing', () => {
     const repo = repoWithRealConfig();
     writeFiles(repo, { 'settings.txt': 'colour=blue\n' });
@@ -141,6 +165,15 @@ describe('AT-6c: a --no-verify commit with a secret fails the lint gitleaks scan
     const repo = repoWithRealConfig();
     writeFiles(repo, { 'deploy/notes.txt': `key: ${fakeGithubToken()}\n` });
     commitAll(repo, 'commit that skipped the hook'); // commitAll uses --no-verify
+    const res = runSh(repo, command);
+    expect(res.code, res.out).not.toBe(0);
+    expect(res.out).toMatch(/leaks found/i);
+  });
+
+  it('finds a committed key that contains "false"', () => {
+    const repo = repoWithRealConfig();
+    writeFiles(repo, { 'deploy/notes.txt': `key: ${fakeGithubToken('false')}\n` });
+    commitAll(repo, 'commit that skipped the hook');
     const res = runSh(repo, command);
     expect(res.code, res.out).not.toBe(0);
     expect(res.out).toMatch(/leaks found/i);
