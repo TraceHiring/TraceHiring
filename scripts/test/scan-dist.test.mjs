@@ -9,12 +9,16 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  GITLEAKS_MAX_PEEK,
   INSTALL_HINT,
   STDIN_HEADER,
+  STDIN_PIECE_MAX,
+  STDIN_PIECE_OVERLAP,
   distText,
   findDists,
   findHiders,
   scanDist,
+  stdinPieces,
 } from '../scan-dist.mjs';
 import { cleanupTempDirs, makeTempDir, writeFiles } from './fixtures/checks/temp-repo.mjs';
 
@@ -123,6 +127,175 @@ describe('distText', () => {
     );
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
+  });
+});
+
+// S1.4 N8/N9 security review N11: gitleaks 8.30.1 reads its input in chunks (up to 100,000 bytes
+// per read, as many as the pipe holds), reads on until a blank line or GITLEAKS_MAX_PEEK more
+// bytes, and scans each chunk on its own, so a key across a cut in a long run without a blank line
+// was missed. The pipe decides the cut offsets, so the stream must give gitleaks a blank line
+// within its read-ahead from every offset, and every key must be whole between two blank lines.
+describe('distText pieces (N11)', () => {
+  /** Synthetic content shapes that once had no blank line for longer than gitleaks reads ahead. */
+  const shapes = () => ({
+    'a 400 KB single line': Buffer.from(
+      Array.from({ length: 7_000 }, (_, i) => `x("k${i}-${'v'.repeat(48)}");`).join(''),
+    ),
+    'a 150 KB file of short lines': Buffer.from(
+      Array.from({ length: 5_000 }, (_, i) => `.c${i}{color:red}`).join('\n'),
+    ),
+    '200 KB of random bytes': randomBytes(200_000),
+    '90 KB of base64 with no safe cut': Buffer.from(randomBytes(67_500).toString('base64')),
+    'a short file': Buffer.from('x\n'),
+    'an empty file': Buffer.alloc(0),
+    'exactly STDIN_PIECE_MAX bytes': Buffer.alloc(STDIN_PIECE_MAX, 0x61),
+    'STDIN_PIECE_MAX + 1 bytes': Buffer.alloc(STDIN_PIECE_MAX + 1, 0x61),
+  });
+
+  it('fits a piece and its blank line inside gitleaks read-ahead', () => {
+    expect(GITLEAKS_MAX_PEEK).toBe(25_000);
+    expect(STDIN_PIECE_MAX + 2).toBeLessThan(GITLEAKS_MAX_PEEK);
+    expect(STDIN_PIECE_OVERLAP).toBeGreaterThanOrEqual(8_192);
+  });
+
+  it.each([
+    'a 400 KB single line',
+    'a 150 KB file of short lines',
+    '200 KB of random bytes',
+    '90 KB of base64 with no safe cut',
+    'a short file',
+    'an empty file',
+    'exactly STDIN_PIECE_MAX bytes',
+    'STDIN_PIECE_MAX + 1 bytes',
+  ])('covers every substring of up to STDIN_PIECE_OVERLAP bytes of %s with one piece', (label) => {
+    const buf = shapes()[label];
+    const pieces = stdinPieces(buf);
+    expect(pieces[0][0]).toBe(0);
+    expect(pieces.at(-1)[1]).toBe(buf.length);
+    for (const [s, e] of pieces) {
+      expect(e - s).toBeLessThanOrEqual(STDIN_PIECE_MAX);
+      expect(e).toBeGreaterThanOrEqual(s);
+    }
+    for (let k = 1; k < pieces.length; k++) {
+      expect(pieces[k][0]).toBeGreaterThan(pieces[k - 1][0]); // progress
+      // The next piece starts at least STDIN_PIECE_OVERLAP before this one ends, so a substring
+      // starting in this piece (and not in the next) ends inside it.
+      expect(pieces[k][0]).toBeLessThanOrEqual(pieces[k - 1][1] - STDIN_PIECE_OVERLAP);
+    }
+  });
+
+  it('cuts a long line after a ; or ) rather than inside a token when it can', () => {
+    const buf = shapes()['a 400 KB single line'];
+    const pieces = stdinPieces(buf);
+    expect(pieces.length).toBeGreaterThan(20);
+    for (const [s, e] of pieces) {
+      if (s > 0) expect(';)').toContain(String.fromCharCode(buf[s - 1]));
+      if (e < buf.length) expect(';)').toContain(String.fromCharCode(buf[e - 1]));
+    }
+  });
+
+  it('leaves no run of the stream without a blank line longer than STDIN_PIECE_MAX', () => {
+    const root = makeTempDir();
+    const files = shapes();
+    writeFiles(
+      root,
+      Object.fromEntries(Object.entries(files).map(([label, b], i) => [`d/${i}-${label}`, b])),
+    );
+    const text = distText(root, 'd');
+    // The header's last line and the next byte make a blank line, so no file joins the header.
+    expect(text.subarray(STDIN_HEADER.length - 1, STDIN_HEADER.length + 1).toString()).toBe('\n\n');
+    let last = STDIN_HEADER.length + 1;
+    let longest = 0;
+    for (let i = text.indexOf('\n\n', last); i >= 0; i = text.indexOf('\n\n', i + 1)) {
+      longest = Math.max(longest, i - last);
+      last = i + 2;
+    }
+    longest = Math.max(longest, text.length - last);
+    expect(longest).toBeLessThanOrEqual(STDIN_PIECE_MAX);
+    // Every byte of every file is in the stream.
+    for (const b of Object.values(files))
+      expect(text.includes(b)).toBe(b.length <= STDIN_PIECE_MAX);
+  });
+});
+
+/** Every secret real gitleaks stdin reports for the distText stream of `rel` (unredacted). */
+function stdinSecrets(root, rel) {
+  const out = makeTempDir('trace-scan-report-');
+  const report = `${out}/report.json`;
+  const r = spawnSync(
+    'gitleaks',
+    [
+      'stdin',
+      '--no-banner',
+      '--config',
+      REPO_CONFIG,
+      '--report-format',
+      'json',
+      '--report-path',
+      report,
+    ],
+    { input: distText(root, rel), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+  );
+  expect(r.error).toBeUndefined();
+  return new Set(JSON.parse(readFileSync(report, 'utf8')).map((f) => f.Secret));
+}
+
+/**
+ * A Supabase-secret-shaped key with no vowels. gitleaks' default global allowlist drops any secret
+ * containing "false" or ending in "null" (any case), which a few of thousands of random keys
+ * would, so keys used by the thousand carry no word at all.
+ */
+const denseKey = () =>
+  [
+    'sb',
+    'secret',
+    [...randomBytes(40)].map((b) => CONSONANTS[b % CONSONANTS.length]).join(''),
+  ].join('_');
+const CONSONANTS = 'BCDFGHJKLMNPQRSTVWXYZbcdfghjklmnpqrstvwxyz0123456789';
+
+describe('distText through real gitleaks stdin (N11)', () => {
+  // A key every 60 bytes: wherever the pipe makes gitleaks cut, the cut falls in or next to a key.
+  it('finds every key in a 400 KB single-line file, across every cut gitleaks makes', () => {
+    const keys = [];
+    let line = '';
+    while (line.length < 400_000) {
+      const k = denseKey();
+      keys.push(k);
+      line += `x("${k}");`;
+    }
+    const root = makeTempDir();
+    writeFiles(root, { 'd/node_modules/pkg/index.js': line });
+    const found = stdinSecrets(root, 'd');
+    expect(keys.filter((k) => !found.has(k)).length, 'keys gitleaks missed').toBe(0);
+  });
+
+  it('finds every key in 3,000 single-line ~1.2 KB files', () => {
+    const keys = [];
+    const files = {};
+    for (let i = 0; i < 3_000; i++) {
+      const k = denseKey();
+      keys.push(k);
+      files[`d/assets/chunk-${String(i).padStart(4, '0')}.js`] =
+        `${'a'.repeat(560)}x("${k}");${'b'.repeat(560)}`;
+    }
+    const root = makeTempDir();
+    writeFiles(root, files);
+    const found = stdinSecrets(root, 'd');
+    expect(keys.filter((k) => !found.has(k)).length, 'keys gitleaks missed').toBe(0);
+  });
+
+  it('finds every key in a 150 KB file of short lines with no blank line', () => {
+    const keys = [];
+    const lines = [];
+    for (let size = 0; size < 150_000; size += lines.at(-1).length + 1) {
+      const k = denseKey();
+      keys.push(k);
+      lines.push(`  x("${k}");`);
+    }
+    const root = makeTempDir();
+    writeFiles(root, { 'd/assets/styles.css': lines.join('\n') });
+    const found = stdinSecrets(root, 'd');
+    expect(keys.filter((k) => !found.has(k)).length, 'keys gitleaks missed').toBe(0);
   });
 });
 
