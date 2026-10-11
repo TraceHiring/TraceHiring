@@ -55,7 +55,7 @@ describe('classifyFile()', () => {
     expect(classifyFile(file, WS)).toEqual({ kind: 'global' });
   });
 
-  it.each(['README.md', 'docs/plan.md', 'docs/design/tokens.json', 'specs/m0-foundations.md'])(
+  it.each(['README.md', 'docs/plan.md', 'docs/design/README.md', 'specs/m0-foundations.md'])(
     '%s is docs',
     (file) => {
       expect(classifyFile(file, WS)).toEqual({ kind: 'docs' });
@@ -64,6 +64,15 @@ describe('classifyFile()', () => {
 
   it('a markdown file inside a non-global workspace is docs', () => {
     expect(classifyFile('packages/ui/README.md', WS)).toEqual({ kind: 'docs' });
+  });
+
+  it('docs/design/tokens.json is an input of packages/ui, not docs (S2 review follow-up 2)', () => {
+    expect(classifyFile('docs/design/tokens.json', WS)).toEqual({ kind: 'package', pkg: '@t/ui' });
+  });
+
+  it('a package input whose workspace is missing counts as global (fails safe)', () => {
+    const noUi = WS.filter((w) => w.dir !== 'packages/ui');
+    expect(classifyFile('docs/design/tokens.json', noUi)).toEqual({ kind: 'global' });
   });
 
   it('a nested package.json is a package change, not a global one', () => {
@@ -75,6 +84,13 @@ describe('classifyFile()', () => {
 });
 
 describe('planVerifyFast()', () => {
+  it('a design-token change checks @trace/ui and every dependent, not only Prettier', () => {
+    const p = plan(['docs/design/tokens.json']);
+    expect(p.mode).toBe('packages');
+    expect(p.packages).toEqual(['@t/ui']);
+    expect(p.affected).toEqual(expect.arrayContaining(['@t/ui', '@t/candidate']));
+  });
+
   it('runs everything when there is no base', () => {
     const p = planVerifyFast({ base: null, changed: [], workspaces: WS });
     expect(p.mode).toBe('full');

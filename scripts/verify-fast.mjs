@@ -26,6 +26,12 @@ export const GLOBAL_ROOT_FILES = Object.freeze([
   '.prettierrc.json',
 ]);
 export const GLOBAL_DIRS = Object.freeze(['packages/config/', 'scripts/']);
+/**
+ * Files outside a workspace that a workspace builds from: a change selects that workspace (and its
+ * dependents) instead of counting as docs. `@trace/ui` generates its token files from
+ * docs/design/tokens.json (spec §11); S2 review follow-up 2.
+ */
+export const PACKAGE_INPUTS = Object.freeze({ 'docs/design/tokens.json': 'packages/ui' });
 export const TAIL_LINES = 60;
 const BASE_REF = 'main';
 const PRETTIER_ARGS = ['--check', '--ignore-unknown'];
@@ -37,12 +43,16 @@ export function isDocsPath(file) {
 
 /**
  * `{ kind: 'global' }`, `{ kind: 'docs' }` or `{ kind: 'package', pkg }` for one repo-relative path.
- * Order matters: the global list wins (so packages/config/README.md is global), then docs, then the
- * owning workspace; a path outside every workspace that is not docs is global.
+ * Order matters: the global list wins (so packages/config/README.md is global), then PACKAGE_INPUTS,
+ * then docs, then the owning workspace; a path outside every workspace that is not docs is global.
  */
 export function classifyFile(file, workspaces) {
   if (GLOBAL_ROOT_FILES.includes(file)) return { kind: 'global' };
   if (GLOBAL_DIRS.some((d) => file.startsWith(d))) return { kind: 'global' };
+  if (Object.hasOwn(PACKAGE_INPUTS, file)) {
+    const owner = workspaces.find((w) => w.dir === PACKAGE_INPUTS[file]);
+    return owner ? { kind: 'package', pkg: owner.name } : { kind: 'global' };
+  }
   if (isDocsPath(file)) return { kind: 'docs' };
   const pkg = packageForFile(workspaces, file);
   return pkg ? { kind: 'package', pkg: pkg.name } : { kind: 'global' };
