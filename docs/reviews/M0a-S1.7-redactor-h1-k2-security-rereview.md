@@ -36,6 +36,6 @@ Improvements: 68,820 product and 66 random strings now redacted that `26855cb` l
 (Node 22.23.3 only); object values and the logger wrapper beyond existing tests; non-ASCII separators beyond U+3000/NBSP.
 
 ## Disposition (lead)
-PASS WITH FINDINGS accepted (H1, K2 closed). **J1** (Low) → lead, first step next session: test-first with the
+PASS WITH FINDINGS accepted (H1, K2 closed). **J1 fixed** by the lead in the same session after the wrap-up (test-first: 5 cases red, then the suggested `keepPrefix` step; `@trace/shared` 618 passed). Original plan: J1 (Low) → lead, test-first with the
 reviewer's tests, then the suggested step, `@trace/shared` suite, and a one-line note in this file. Stopped at 86%
 usage (founder rule), so not fixed this session.

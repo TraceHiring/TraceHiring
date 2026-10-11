@@ -854,6 +854,20 @@ describe('Authorization schemes (S1.7 follow-up 2)', () => {
     expect(out).not.toContain(tok);
     expect(redactString(out)).toBe(out);
   });
+
+  // H1/K2 re-review J1: `Token` + 4–8 blanks + `=`/`:` reached neither the scheme step (look-ahead)
+  // nor the key rule (its gap is at most 3), so the value leaked.
+  it.each([
+    ['4 spaces then =', `Token${' '.repeat(4)}=${tok}`],
+    ['8 spaces then :', `Token${' '.repeat(8)}:${tok}`],
+    ['4 tabs then :', `Token${'\t'.repeat(4)}:${tok}`],
+    ['4 spaces, =, space', `Token${' '.repeat(4)}= ${tok}`],
+    ['4 spaces then ::', `Token${' '.repeat(4)}::${tok}`],
+  ])('redacts the value after Token + %s (J1)', (_label, s) => {
+    const out = redactString(s);
+    expect(out).not.toContain(tok);
+    expect(redactString(out)).toBe(out);
+  });
 });
 
 describe('number canonicalisation (S1.7 follow-ups 3-5)', () => {

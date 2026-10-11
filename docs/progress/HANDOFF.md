@@ -46,7 +46,7 @@ The next session may be on another account: start from `docs/progress/RESUME-PRO
 | `worktree-agent-*` | writer scratch | contained in named branches; do not use |
 
 ## Next step (in order; max 2 writers; check usage after every agent result)
-1. **J1 (lead, test-first, Low):** the H1/K2 re-review is done (PASS WITH FINDINGS,
+1. **J1 is DONE** (`@trace/shared` 618; commit after `4a83998`); start with step 2. Was: the H1/K2 re-review (PASS WITH FINDINGS,
    `docs/reviews/M0a-S1.7-redactor-h1-k2-security-rereview.md`): `Token` + 4–8 spaces/tabs + `=`/`:` + value leaks
    (regression from H1). Add the reviewer's tests, then `sub(/\b(Token\s{4,8}[=:]\s{0,3})[^\s"',;]+/gi, keepPrefix)`
    after the `Token` step in `packages/shared/src/log/redact.ts`; `@trace/shared` suite; note the fix in that review.

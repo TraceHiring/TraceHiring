@@ -410,6 +410,9 @@ const STEPS: readonly Step[] = [
   // `Bearer =v` must stay here (S1.7 gate review K2). The look-ahead also stops `\s{1,8}` from
   // ending inside a longer run of spaces.
   sub(/\bToken\s{1,8}(?![\s=:])[^\s"',;]+/gi, REDACTED),
+  // `Token` + 4–8 blanks + `=`/`:`: too wide a gap for the key rule (≤ 3), so redact the value here
+  // and keep the prefix (H1/K2 re-review J1).
+  sub(/\b(Token\s{4,8}[=:]\s{0,3})[^\s"',;]+/gi, keepPrefix),
   // free-text headers: any Authorization scheme, and every Cookie pair, not only the first
   sub(/\b((?:proxy-)?authorization\s{0,3}[=:]\s{0,3})[^\r\n"',;]+/gi, keepPrefix),
   sub(/\b((?:set-)?cookie\s{0,3}[=:]\s{0,3})[^\r\n"']+/gi, keepPrefix),
