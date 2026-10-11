@@ -599,6 +599,15 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['long runs before each @', fill(`${'a'.repeat(300)}@${synth.upi(10)} `)],
     ['psps between @', fill('ab@cd@')],
     ['encoded @ chains', fill('ab%40cd-')],
+    // a pair inside a quoted key is read from the key's own text (redactor re-review G2)
+    ['quoted keys holding a pair', fill('"otp=1": 1,')],
+    ['escaped quoted keys holding a pair', fill('\\"token=x\\":1,')],
+    ['quoted keys holding a pair, then quoted values', fill('"otp=1": "x", ')],
+    ['quoted keys holding several pairs', fill('"a=b c=d password=e": ')],
+    ['quoted keys holding colons', fill('"a: b: c": 1,')],
+    ['one long quoted key of pairs, no closer', '"' + fill('a=b ')],
+    ['one long quoted key of pairs, then a value', '"' + fill('a=b ') + '": 1'],
+    ['one long quoted key of sensitive pairs', '"' + fill('otp=1 ') + '": "x"'],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -1562,5 +1571,55 @@ describe('an email or UPI id glued to the one before it (redactor re-review G1)'
   it('keeps the text around glued values', () => {
     const out = redactString(`see: ${u1}_${u2}, then ${e1}-${e2}; ok`);
     expect(out).toBe(`see: ${REDACTED}, then ${REDACTED}${REDACTED}; ok`);
+  });
+});
+
+// Redactor re-review G2: a quoted key may hold spaces, so it is read as one key and the scan
+// resumed after it. A `key=value` pair inside the key's own text was never read, and error
+// messages that quote their input (`failed to parse "otp=…"`) are the honest shape.
+describe('a pair inside a quoted key (redactor re-review G2)', () => {
+  const R = REDACTED;
+  const otp = synth.mobile(5).slice(0, 6);
+  const pw = synth.base64(21).slice(0, 10);
+  const tok = synth.base64(22).slice(0, 10);
+
+  it.each([
+    [
+      'an error message quoting its input',
+      `failed to parse "otp=${otp}": invalid`,
+      `failed to parse "otp=${R}": ${R}`,
+    ],
+    ['a JSON key', `{"password=${pw}": true}`, `{"password=${R}": ${R}`],
+    ['an escaped JSON key', `{\\"token=${tok}\\":1}`, `{\\"token=${R}\\":${R}`],
+    ['an escaped JSON key with no value', `{\\"token=${tok}\\"}`, `{\\"token=${R}\\"}`],
+    ['a key: separator', `{"otp: ${otp}": 1}`, `{"otp: ${R}": ${R}`],
+    ['words around the pair', `"x otp=${otp} y": 4 next`, `"x otp=${R} y": ${R} next`],
+    ['two pairs', `"password=${pw} otp=${otp}": 4 next`, `"password=${R} otp=${R}": ${R} next`],
+    ['a double-quoted value', `{"otp=${otp}": "abc def"}`, `{"otp=${R}": "${R}"}`],
+    [
+      'an escaped quoted value',
+      `{\\"otp=${otp}\\": \\"abc def\\"}`,
+      `{\\"otp=${R}\\": \\"${R}\\"}`,
+    ],
+    ['a single-quoted value', `{"otp=${otp}": 'abc def'}`, `{"otp=${R}": '${R}'}`],
+  ])('redacts the value of a pair in a quoted key: %s', (_label, s, expected) => {
+    const out = redactString(`got ${s}`);
+    expect(out).toBe(`got ${expected}`);
+    expect(out).not.toContain(otp);
+    expect(out).not.toContain(pw);
+    expect(out).not.toContain(tok);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('leaves quoted keys with no sensitive pair unchanged', () => {
+    for (const s of [
+      '{"status": "ok"}',
+      '{"status": "ok", "k=v": "fine"}',
+      'failed to parse "a b=c": invalid',
+      '{"level: warn": 1}',
+      '{\\"kind=a\\":\\"b\\"}',
+    ]) {
+      expect(redactString(s)).toBe(s);
+    }
   });
 });

@@ -242,6 +242,14 @@ const VALUE = /[^\s"'&,;)]+/y;
  * it. Each match reads only a key and a separator, and each value is read once (linear time). A
  * value of only backslashes is the opener of a quoted value (handled by redactQuotedValues), and
  * backslashes that end a value are the escape of the quote after it, so both are kept.
+ *
+ * A quoted key is matched whole, and the scan resumes after it, so the key's own text is scanned
+ * for pairs first (redactor re-review G2: `failed to parse "otp=<digits>": …`, an error message
+ * that quotes its input), and the key is judged as redacted. The text holds no quote and no
+ * backslash, so it holds no quoted key (the nesting stops there) and is read once, in its own
+ * length: the quoted keys of one text never overlap. redactQuotedValues needs no such scan: it
+ * leaves the key's text alone, and this step reads it next (after a single-quoted value, as the
+ * pair's own bare key).
  */
 const redactKeyValues = (text: string): string => {
   let out = '';
@@ -249,7 +257,18 @@ const redactKeyValues = (text: string): string => {
   KEY_THEN_VALUE.lastIndex = 0;
   for (let m = KEY_THEN_VALUE.exec(text); m !== null; m = KEY_THEN_VALUE.exec(text)) {
     const [head, bare, quoted] = m;
-    if (!isSensitiveTextKey(bare ?? quoted ?? '')) continue; // lastIndex is at the value
+    let key = bare ?? '';
+    if (quoted !== undefined) {
+      const resume = KEY_THEN_VALUE.lastIndex; // the nested scan uses this regex too
+      key = /[=:]/.test(quoted) ? redactKeyValues(quoted) : quoted;
+      KEY_THEN_VALUE.lastIndex = resume;
+      if (key !== quoted) {
+        const at = m.index + 1; // the key's text follows its opening quote
+        out += text.slice(last, at) + key;
+        last = at + quoted.length;
+      }
+    }
+    if (!isSensitiveTextKey(key)) continue; // lastIndex is at the value
     const from = m.index + head.length;
     VALUE.lastIndex = from;
     const value = VALUE.exec(text)?.[0] ?? '';
