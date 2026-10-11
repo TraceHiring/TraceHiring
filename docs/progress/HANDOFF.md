@@ -39,7 +39,7 @@ Reason for stopping: usage guard (the founder allowed work up to ~93%; stopped a
 1. **Resume streams on their own branches**, each in its existing worktree:
    - **W3b:** write MT-5b, 5c, 5d, 10, 11 and 12 per README and §8.5. Its settled design: MT-11 treats only the deparsed `( SELECT auth.uid() AS …)` / `auth.jwt()` form as wrapped. MT-5c counts relation, column, function, schema and per-schema default ACLs, and expands PUBLIC. MT-5b's BEGIN ATOMIC fixture contains `;`. Then run the runner for all 7 IDs.
    - **W2:** write `test-rls.mjs` (§8.3, revision 11 steps), then `db-types.mjs`, with stubbed tests. Its design: async `run` stub; injected lock dir, clock, sleep and pid-alive check; `parseFloor` from gen-catalog-tests.
-   - **S1.4 re-review fixes:** N1, N2 (both Medium), N3, N4 and N7 were **fixed by the lead after this handoff** (`5c96e9f`, `0c29585`, `751ca41`, `99d0b5a`, `271018d`; scripts suite 464/464; Resolution table in the re-review report). Left: **N5** (Low, `scan-dist.mjs`), then a fresh `security-reviewer` on `git diff 6fadb17..271018d -- scripts`.
+   - **S1.4 re-review fixes:** N1, N2 (both Medium), N3, N4 and N7 were **fixed by the lead after this handoff** (`5c96e9f`, `0c29585`, `751ca41`, `99d0b5a`, `271018d`), and **N5** (`54d7265`); all 7 resolved, scripts suite 469/469, real `pnpm build` scan OK; Resolution table in the re-review report. Left: a fresh `security-reviewer` on `git diff 6fadb17..54d7265 -- scripts`.
 2. **Run the reviews:** `security-reviewer` on W1's diff (`git diff da5c5ca..bcb6d54 -- packages/shared`), and `database-reviewer` on W3a + W3b + `cf8626d`.
 3. **Lead integration** on the integration branch, merging each with `git merge --no-ff`:
    - merge W1, W3a, W3b, W2 and W4;

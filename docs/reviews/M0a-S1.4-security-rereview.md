@@ -60,9 +60,9 @@ Verdict: BLOCK
 | N2 | Fixed (keys scanned like values) | `0c29585` | "finds a secret in an env: key / a with: key / a nested key"; "rejects a secret in an env: key outside deploy-staging and at job and workflow level" |
 | N3 | Fixed | `751ca41` | "rejects a shell other than bash in a step / job defaults / workflow defaults / a non-mapping defaults"; "accepts shell: bash …" |
 | N4 | Fixed | `99d0b5a` | "fails when one action directory holds both action.yml and action.yaml" (fails on the previous code) |
-| N5 | **Open (Low)** | — | Next session: fail on dist paths matching gitleaks' inherited global path allowlist, or list allowed asset types |
+| N5 | Fixed: dist text content also goes through `gitleaks stdin` (no path allowlist); archives fail | `54d7265` | `scan-dist.test.mjs`: "finds a key in %s, a path gitleaks dir skips" (node_modules, .svg, pnpm-lock.yaml, gitleaks.toml name); "fails on an archive in build output" — all failed before with real gitleaks 8.30.1 |
 | N6 | Fixed (spec text) | `10addbe` | — (docs) |
 | N7 | Fixed; `//host` is no longer read as root-relative | `271018d` | `check-bundle-size.test.mjs`: "reports a cross-origin import from an inline module or a chunk" |
 
-Scripts suite after the fixes: 15 files, 464 tests, all passing; `node scripts/check-workflows.mjs` OK on the real `ci.yml`.
-**Still owed:** a fresh `security-reviewer` pass on `git diff 6fadb17..271018d -- scripts` (both Mediums are closed, so the BLOCK should lift), then the "acknowledged open" items before S3.
+Scripts suite after the fixes: 15 files, 469 tests, all passing; `node scripts/check-workflows.mjs` OK on the real `ci.yml`.
+**Still owed:** a fresh `security-reviewer` pass on `git diff 6fadb17..54d7265 -- scripts` (both Mediums are closed, so the BLOCK should lift), then the "acknowledged open" items before S3.
