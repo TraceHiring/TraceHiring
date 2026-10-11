@@ -6,10 +6,9 @@
 --   select_delete_without_using: a SELECT or DELETE policy without USING.
 --   public_role: applied to PUBLIC (0 in polroles, which is what a policy with no TO clause gets).
 --   literal_true: USING or WITH CHECK is literally true, on a table that is not on the reference list below.
---   auth_call_unwrapped: the policy depends on auth.uid() or auth.jwt() (pg_depend classid pg_policy) and, once
---     every scalar sub-select in exactly the deparsed form ( SELECT auth.uid() AS ...) or ( SELECT auth.jwt() AS ...)
---     is removed, its deparsed USING or WITH CHECK still calls one of them. pg_get_expr omits the auth. prefix when
---     auth is on the search_path, so the prefix is optional in both patterns.
+--   auth_call_unwrapped: USING or WITH CHECK calls auth.uid() or auth.jwt() (a FUNCEXPR node in the stored node
+--     tree, polqual or polwithcheck) that does not sit inside a scalar sub-select (an EXPR_SUBLINK node,
+--     subLinkType 4), so the call runs per row. (select (auth.jwt() ->> 'org_id')::uuid) is compliant.
 -- In-scope tables: every relation in public, private, quality and integrity, every relation that postgres can SET
 -- ROLE to the owner of in a system-list schema where a migration can still create objects (escape_schema below),
 -- and every pg_inherits descendant of those (INHERITS children and partitions, recursively, wherever they live).
@@ -105,6 +104,57 @@ scope_policy as (
       and x.extnamespace = c.relnamespace
   )
 ),
+-- policy_tree: each USING and WITH CHECK of a scope policy as its stored node tree, with every backslash-escaped
+-- character removed, so every brace left opens or closes a node.
+policy_tree (oid, clause, tree) as (
+  select pol.oid, 'USING'::text, regexp_replace(pol.polqual::text, '\\.', '', 'g')
+  from pg_policy as pol
+  where pol.polqual is not null
+    and pol.oid in (select sp.oid from scope_policy as sp)
+  union all
+  select pol.oid, 'WITH CHECK'::text, regexp_replace(pol.polwithcheck::text, '\\.', '', 'g')
+  from pg_policy as pol
+  where pol.polwithcheck is not null
+    and pol.oid in (select sp.oid from scope_policy as sp)
+),
+-- tree_piece: the tree split before every brace, in order. depth is the nesting level after the piece's brace.
+tree_piece (oid, clause, ord, piece, depth) as (
+  select
+    pt.oid,
+    pt.clause,
+    x.ord,
+    x.piece,
+    sum(case left(x.piece, 1) when '{' then 1 when '}' then -1 else 0 end)
+      over (partition by pt.oid, pt.clause order by x.ord)
+  from policy_tree as pt
+  cross join lateral regexp_split_to_table(pt.tree, '(?=[{}])') with ordinality as x(piece, ord)
+),
+-- tree_node: one row per node ({NODE ...), with end_ord, the piece that closes it. Opens at one level and the closes
+-- back from that level alternate, so the n-th of each pair up.
+tree_node (oid, clause, ord, piece, end_ord) as (
+  select o.oid, o.clause, o.ord, o.piece, c.ord
+  from (
+    select
+      p.oid,
+      p.clause,
+      p.ord,
+      p.piece,
+      p.depth,
+      row_number() over (partition by p.oid, p.clause, p.depth order by p.ord) as rn
+    from tree_piece as p
+    where left(p.piece, 1) = '{'
+  ) as o
+  join (
+    select
+      p.oid,
+      p.clause,
+      p.ord,
+      p.depth + 1 as lvl,
+      row_number() over (partition by p.oid, p.clause, p.depth order by p.ord) as rn
+    from tree_piece as p
+    where left(p.piece, 1) = '}'
+  ) as c on c.oid = o.oid and c.clause = o.clause and c.lvl = o.depth and c.rn = o.rn
+),
 finding (oid, branch, detail) as (
   select
     sp.oid,
@@ -165,25 +215,21 @@ finding (oid, branch, detail) as (
         and rt.adr ~ '^ADR-[0-9]+'
     )
   union all
-  select
-    sp.oid,
+  select distinct
+    f.oid,
     'auth_call_unwrapped'::text,
-    'auth.uid() or auth.jwt() is called outside a ( SELECT ... ) sub-select'::text
-  from scope_policy as sp
-  where exists (
+    format('auth.uid() or auth.jwt() is called outside a scalar sub-select in %s', f.clause)::text
+  from tree_node as f
+  where substring(f.piece from '^\{FUNCEXPR :funcid ([0-9]+) ')::oid in (select af.oid from auth_function as af)
+    and not exists (
       select 1
-      from pg_depend as d
-      where d.classid = 'pg_policy'::regclass
-        and d.objid = sp.oid
-        and d.refclassid = 'pg_proc'::regclass
-        and d.refobjid in (select af.oid from auth_function as af)
+      from tree_node as s
+      where s.oid = f.oid
+        and s.clause = f.clause
+        and s.piece like '{SUBLINK :subLinkType 4 %'
+        and s.ord < f.ord
+        and f.ord < s.end_ord
     )
-    and regexp_replace(
-      sp.using_text || ' ' || sp.check_text,
-      '\( SELECT (auth\.)?(uid|jwt)\(\) AS [^)]*\)',
-      '',
-      'g'
-    ) ~ '(^|[^[:alnum:]_$."])(auth\.)?(uid|jwt)\(\)'
 )
 select
   case sp.location
