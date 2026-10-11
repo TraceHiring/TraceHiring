@@ -10,7 +10,7 @@ earlier chats is available or needed. The short "paste prompt" the founder uses 
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
 - **Now: milestone M0a (toolchain, pipeline, skeleton), phase BUILD, about 95% done. S1, S2 and S3a are reviewed and
   merged (2026-10-12; `cp/m0a-04` = `a45505d`, `milestone/m0a` fast-forwarded there). W-S3b (the deploy-staging job) is
-  written, reviewed and fixed on `m0a/s3b-fixes` @ `ba3ac88`; its re-review and merge state are in HANDOFF.md "Next step" 1.
+  reviewed, fixed and merged (`f165fe0`, full verify green); `cp/m0a-05` waits on the CI `rls` re-run (HANDOFF "Next step" 1).
   Then: the check-workflows export gap, the AT-1a-local re-run and AT-1b on the final tip, the summary draft, and stop
   BUILD (REVIEW is a fresh session).** No milestone is closed yet (no `m*-reviewed` tag). Spec
   `specs/m0-foundations.md` is at revision 16. Founder decisions of 2026-10-11 18:55 IST (build-notes §0) apply:
@@ -78,8 +78,8 @@ STEP 3 — Verify, then report in 5 lines whether the repo matches the handoff (
 
 STEP 4 — Do the HANDOFF "Next step" list in order. Summary (HANDOFF and the review reports have the details):
 1. (Everything up to the S2/S3a merges, `cp/m0a-04`, W-S3b and its fixes is done; skip.)
-2. S3b: if its re-review passed and it is not merged yet, merge `m0a/s3b-fixes` `--no-ff` (subject `chore(ci): merge …`),
-   full `pnpm verify` with no writer running, push, Linux CI green, tag `cp/m0a-05`, fast-forward `milestone/m0a`.
+2. `cp/m0a-05`: confirm the CI `rls` re-run (run 38169130226) is green, then tag `cp/m0a-05` and fast-forward
+   `milestone/m0a` (HANDOFF "Next step" 1).
 3. Lead-only: the `check-workflows` export gap (run text may `export` a denied env name), test-first.
 4. Before REVIEW: re-run AT-1a-local and AT-1b on the final tip; finish `docs/progress/M0a-summary-draft.md`.
    Then stop: the REVIEW phase runs in a fresh session. Do not start M0b or any later milestone.

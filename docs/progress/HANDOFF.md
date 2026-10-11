@@ -20,7 +20,11 @@ The next session may be a new Claude Code on another account connected to this f
   - Full `pnpm verify` green on `a45505d`: scripts 1142 passed + 1 skipped (K4 Windows symlink case), `test:rls` 112/112, candidate 72.4 kB gzip, headers OK, `scan-dist` clean on 5 `dist/`.
   - Linux CI green on `146d465` (run 38167417262: static, rls, security, migrations).
   - **AT-1a-local PASSED on `a45505d`:** clean clone in the `node:22.23.3` container, scripts 1143 passed **0 skipped**, host `test:rls` 112/112.
-- **S3b merge state:** see "Next step" 1. If `m0a/integration` already holds the `chore(ci): merge w-s3b …` commit, S3b is merged.
+- **S3b is merged:** `f165fe0` `chore(ci): merge w-s3b …`, after the re-review PASS.
+  - Full `pnpm verify` is green on `f165fe0`: scripts 1229 passed + 1 skipped (K4), `test:rls` 112/112, candidate 72.4 kB, headers and `scan-dist` OK.
+  - Linux CI run 38169130226 on `f165fe0`: `static`, `security` and `migrations` passed; `deploy-staging` was skipped (PR event, as designed).
+  - `rls` failed once on a **runner Docker port-binding error** ("failed to set up container networking … supabase_db_trace", 47 s). That is not a code fault; the job passed on the previous run. The lead re-ran it; the result is in the next bullet.
+  - CI re-run result and `cp/m0a-05`: see "Next step" 1.
 
 ## Done this session (all on `m0a/integration`; reports in `docs/reviews/`)
 - **W-S3a Workers** (`/health`, 404/500 JSON, reporter wiring):
@@ -36,6 +40,7 @@ The next session may be a new Claude Code on another account connected to this f
   - Q2: URLs come from wrangler's ND-JSON output file. Q7: `--yes` and `-q`.
   - Opus review PASS WITH FINDINGS (S3B-1 and S3B-2 Medium, S3B-3..7 Low).
   - Fixed on `m0a/s3b-fixes` @ `ba3ac88` (scripts 1214 passed + 1 skipped).
+  - Re-review PASS. Merged `f165fe0`.
   - S3B-5 (unordered staging deploys) is an accepted residual, owner M8.
 - **Lead:**
   - `57be0cc` Workers `types:gen --strict-vars=false`.
@@ -52,17 +57,18 @@ The next session may be a new Claude Code on another account connected to this f
 | --- | --- |
 | `m0a/integration` @ newest `chore(progress)` | all lead work; pushed; draft PR 1 runs CI |
 | `milestone/m0a` @ `a45505d` (`cp/m0a-04`) | pushed; fast-forward again after the S3b merge |
-| `m0a/s3b-fixes` @ `ba3ac88` (on `m0a/s3b-deploy` @ `91622ee`) | W-S3b + fixes; re-review result below |
+| `m0a/s3b-fixes` @ `ba3ac88` (on `m0a/s3b-deploy` @ `91622ee`) | W-S3b + fixes; re-review PASS; merged `f165fe0` |
 | `m0a/s2-fixes` @ `ca75411`, `m0a/s3a-fixes` @ `621c545` | merged |
 | `m0a/s2-ui` @ `54620e6`, `m0a/s3-workers` @ `e04446e` | merged via their `-fixes` branches |
 | `worktree-agent-*` | writer scratch; do not use |
 
 ## Next step (in order)
-1. **S3b:** if not yet merged, check the re-review verdict in `docs/reviews/M0a-S3b-deploy-security-review.md`. If it is PASS, run `git merge --no-ff m0a/s3b-fixes` into `m0a/integration` (the subject must be `chore(ci): merge …`; commitlint rejects a `merge` type). Then:
-   - run the full `pnpm verify` with no writer running;
-   - push, and wait for Linux CI on PR 1;
-   - tag `cp/m0a-05`;
-   - fast-forward `milestone/m0a`: `EnterWorktree` into `.claude/worktrees/milestone-m0-spec-e4db77`, then `git merge --ff-only cp/m0a-05`, then go back.
+1. **Checkpoint `cp/m0a-05`.** Check whether the tag already exists (`git tag -l "cp/m0a-05"`). If it does not:
+   - Confirm that CI run 38169130226 (the `rls` re-run) is green: `gh run view 38169130226 --repo TraceHiring/TraceHiring`.
+   - If `rls` failed again on the same Docker networking error, re-run it again. If it fails on a test, fix the cause first.
+   - Tag `cp/m0a-05` on the merge `f165fe0`, or on the newest code commit if that is later.
+   - Fast-forward `milestone/m0a`: `EnterWorktree` into `.claude/worktrees/milestone-m0-spec-e4db77`, then `git merge --ff-only cp/m0a-05`, then go back.
+   - Push.
 2. **`check-workflows` gap (S3b review, lead-only):** `run:` text can `export` names that `ENV_DENY_REASONS` denies (for example `NODE_OPTIONS`). Add a rule test-first, or record it as a residual.
 3. **AT-1a-local re-run** (`node scripts/verify-clean-clone.mjs --linux`, ~20 min) and **AT-1b** (`node scripts/verify-clean-clone.mjs`) on the final tip. Record both in `docs/progress/M0a-summary-draft.md` §4.1.
 4. Finish the summary draft:
