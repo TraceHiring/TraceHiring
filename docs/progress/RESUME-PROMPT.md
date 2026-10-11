@@ -65,10 +65,11 @@ STEP 3 — Verify, then report in 5 lines whether the repo matches the handoff (
   (write the output to a file; never pipe docker/supabase output into `head` on Windows)
 - Stream branches at the HANDOFF tips: `worktree-agent-ae15fb7cd05478040` @ `bcb6d54` (W1 redactor),
   `worktree-agent-a66ca65381173c087` @ `37adfd9` (W3a), `worktree-agent-a5a761e3d78529f6f` @ `0f62de8` (W3b),
-  `worktree-agent-a9809baf595fe8b13` @ `aabef91` (W2 harness). All are also on the `trace` remote.
+  `worktree-agent-a9809baf595fe8b13` @ `aabef91` (W2 harness), and `m0a/w1-fixes` @ `ee4a7f4` (W1 fixes; #2 done).
+  All are on the `trace` remote except, until the founder pushes, `m0a/w1-fixes` and the newest `m0a/integration`.
 
 STEP 4 — Do the HANDOFF "Next step" list in order. Summary (HANDOFF and the review reports have the details):
-1. W1 redactor: fix Mediums #1 and #2 (+ #7 timing flake), test-first, one commit each, from `bcb6d54`.
+1. W1 redactor on `m0a/w1-fixes` (#2 is fixed in `ee4a7f4`): fix Medium #1 (+ #7 timing flake), test-first, one commit each.
 2. Catalog-check fix pass on one branch (W3a `37adfd9` + W3b `0f62de8` merged): both database reviews'
    findings, test-first, a fixture per new branch; manifest + `supabase/tests/catalog-min-count`; spec §8.5
    revision 12. Finding #5 of the W3b review needs a spec decision first (check the plan's report data model;

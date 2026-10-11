@@ -25,7 +25,7 @@ Reason for stopping: usage (founder: work to ~90%, then wrap up and push). Wrap-
 ## Stream branches (all local, clean, unmerged; pushed to `trace` at this wrap-up)
 | Stream | Branch @ tip | State |
 | --- | --- | --- |
-| W1 redactor | `worktree-agent-ae15fb7cd05478040` @ `bcb6d54` | Review PASS; **fix #1 and #2 (and #7) first** |
+| W1 redactor | `worktree-agent-ae15fb7cd05478040` @ `bcb6d54`; **fixes continue on `m0a/w1-fixes` @ `ee4a7f4`** (from `bcb6d54`, LOCAL ONLY until the founder pushes) | Review PASS; **#2 FIXED** (`ee4a7f4`, shared 312/312, verify:fast exit 0); #1 and #7 still to fix |
 | W3a checks MT-1,2,3,4,6,7,8,9 | `worktree-agent-a66ca65381173c087` @ `37adfd9` | **Blocked by the DB review fix plan** |
 | W3b checks MT-5a–d,10,11,12 | `worktree-agent-a5a761e3d78529f6f` @ `0f62de8` (contains `f8da8a4`) | Done; **DB review BLOCK** (3 High, 3 Medium spec gaps; `docs/reviews/M0a-S1.7-w3b-w2-database-review.md`) |
 | W2 harness | `worktree-agent-a9809baf595fe8b13` @ `aabef91` (contains `0d35d0b`, `8c5ef5f`) | Done; **DB review PASS** (Lows W2-1, W2-2) — ready to merge |
@@ -34,7 +34,7 @@ Reason for stopping: usage (founder: work to ~90%, then wrap up and push). Wrap-
 W3b/W2 database review: arrived after the first push and is recorded in `docs/reviews/M0a-S1.7-w3b-w2-database-review.md`. Fold its W3b findings (#1–#8; #5 needs a spec decision first) into the step-2 catalog fix pass and spec rev 12.
 
 ## Next step (in order; 2–3 writers max; a review agent costs ~8% of a Pro window)
-1. **W1 fixes**, test-first, one commit each, continuing from `bcb6d54`: #1 (tighten the frame regex in `isStackFrame`/`stackFrames`; restore truncation over the cap), #2 (UPI lookahead `(?![\w@]|\.[a-z0-9])`), #7 (min-of-N timing). The exact repros and tests are in the redactor review report.
+1. **W1 fixes**, test-first, one commit each, on branch `m0a/w1-fixes` (tip `ee4a7f4`; #2 is done there): #1 (tighten the frame regex in `isStackFrame`/`stackFrames`; restore truncation over the cap), #2 (UPI lookahead `(?![\w@]|\.[a-z0-9])`), #7 (min-of-N timing). The exact repros and tests are in the redactor review report.
 2. **Catalog-check fix pass** on one branch cut from W3a `37adfd9` with W3b `0f62de8` merged in (the shared scope CTE fix touches both). Follow the 7-item plan in the DB review, test-first: a fixture per new branch, then the check. Then update `manifest.json`, `supabase/tests/catalog-min-count` (exact new count) and spec §8.5 as **revision 12**. Then run a fresh `database-reviewer` (fixes + W3b) and `spec-reviewer` on rev 12.
 3. (Folded into step 2: the W3b findings. W2 passed; its Lows W2-1 and W2-2 are done at integration: run `supabase stop` then `pnpm test:rls --stop` once.)
 4. **Lead integration** on the integration branch, each with `git merge --no-ff`:
