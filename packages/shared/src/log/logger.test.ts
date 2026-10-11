@@ -141,6 +141,35 @@ describe('ErrorReporter (AT-9)', () => {
     expect(ctx).toEqual({ release: 'dev' });
   });
 
+  // Spec review L5: ctx.release reaches the reporter only in the logger's version shape (a commit
+  // SHA or 'dev'); anything else is dropped, and so is any other field of ctx.
+  it.each([
+    ['text with a UPI id', `user ${synth.upi()}`],
+    ['an email', synth.email()],
+    ['a semver', 'v1.2.3'],
+    ['an empty string', ''],
+    ['a number', 7 as unknown as string],
+  ])('drops a release that is %s', (_label, release) => {
+    const capture = vi.fn();
+    reportError({ capture }, new Error('x'), { release });
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(capture.mock.calls[0]?.[1]).toBeUndefined();
+  });
+
+  it('passes a commit SHA or dev release, and nothing else from ctx', () => {
+    const capture = vi.fn();
+    const sha = synth.hex();
+    reportError({ capture }, new Error('x'), { release: sha });
+    reportError({ capture }, new Error('x'), { release: sha.slice(0, 7) });
+    const ctx = { release: 'dev', user: synth.email() };
+    reportError({ capture }, new Error('x'), ctx);
+    expect(capture.mock.calls.map((call) => call[1])).toEqual([
+      { release: sha },
+      { release: sha.slice(0, 7) },
+      { release: 'dev' },
+    ]);
+  });
+
   it('ships a no-op reporter in M0a', () => {
     expect(() => noopErrorReporter.capture({ name: 'Error' }, { release: 'dev' })).not.toThrow();
   });
