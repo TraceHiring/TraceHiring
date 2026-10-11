@@ -21,7 +21,8 @@
 //      `pnpm db:types` regenerates it on purpose).
 //   7. With --stop, `pnpm exec supabase stop`; then the lock is released.
 // stderr of the Supabase CLI is never echoed raw: with --debug it can hold a connection URL.
-// stderr of `test db` is never printed at all; other failures print a short redacted tail.
+// stderr of `test db` and `gen types` is never printed at all; a failed start, reset or stop
+// prints a short redacted tail of its output.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
