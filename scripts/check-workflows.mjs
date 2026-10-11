@@ -748,6 +748,25 @@ export function checkWorkflow(doc, file, ctx = {}) {
         v(file, where, 'a required job may not have an if: (a skipped job reports success)'),
       );
     }
+    // A required job that needs another job is skipped when that job is skipped or fails, and a
+    // skipped job also reports success (S1.4 re-review N1). It may only need other required jobs.
+    if (REQUIRED_JOBS.includes(name) && job.needs !== undefined) {
+      const needs = typeof job.needs === 'string' ? [job.needs] : job.needs;
+      if (!Array.isArray(needs) || !needs.every((n) => typeof n === 'string')) {
+        out.push(v(file, where, 'needs: must be a job id or a list of job ids'));
+      } else {
+        const others = needs.filter((n) => !REQUIRED_JOBS.includes(n));
+        if (others.length > 0) {
+          out.push(
+            v(
+              file,
+              where,
+              `a required job may only needs: other required jobs, not ${others.join(', ')}`,
+            ),
+          );
+        }
+      }
+    }
     // The check name is the job's name: (or its id). A renamed job, or a second job reporting a
     // required name, could satisfy branch protection without running the real checks (S1.4 M4).
     if (job.name !== undefined && job.name !== name) {

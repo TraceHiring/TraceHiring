@@ -372,6 +372,34 @@ describe('checkWorkflow', () => {
     expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/jobs\.migrations.*if:/);
   });
 
+  // S1.4 security re-review N1: a required job skipped through `needs:` also reports success.
+  it.each([
+    ['a string', 'changes'],
+    ['a list', ['rls', 'changes']],
+  ])('rejects a required job that needs a job that is not required (%s)', (_, needs) => {
+    const d = doc();
+    d.jobs.changes = {
+      'runs-on': 'ubuntu-24.04',
+      if: "github.event_name == 'push'",
+      steps: [{ run: 'true' }],
+    };
+    d.jobs.static.needs = needs;
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/jobs\.static.*needs:.*changes/);
+  });
+
+  it('rejects a required job whose needs: is not a job id or a list of them', () => {
+    const d = doc();
+    d.jobs.static.needs = { job: 'rls' };
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/jobs\.static.*needs:/);
+  });
+
+  it('allows a required job to need only other required jobs', () => {
+    const d = doc();
+    d.jobs.static.needs = 'rls';
+    d.jobs.security.needs = ['rls', 'migrations'];
+    expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
+  });
+
   // S1.4 security review MED 4: a required check must not be emptied.
   it.each(REQUIRED_JOBS)('rejects an if: on any step of the required job %s', (job) => {
     const d = doc();
