@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gzipSync } from 'node:zlib';
+import { deflateSync, gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   GITLEAKS_MAX_PEEK,
@@ -20,6 +20,7 @@ import {
   findHiders,
   scanDist,
   stdinPieces,
+  wideText,
 } from '../scan-dist.mjs';
 import { cleanupTempDirs, makeTempDir, writeFiles } from './fixtures/checks/temp-repo.mjs';
 
@@ -101,6 +102,88 @@ describe('findHiders', () => {
       'apps/candidate/dist/assets/d.txt': '',
     });
     expect(findHiders(root, 'apps/candidate/dist')).toEqual([]);
+  });
+
+  // S1.4 N8/N9 security review N13: more compressed formats, found by their bytes under any name.
+  const ARCHIVE = 'archive in build output (compressed content cannot be scanned)';
+  it.each([
+    ['zlib (default level)', () => deflateSync(Buffer.from('fixture build output\n'))],
+    ['zlib (best compression)', () => deflateSync(Buffer.from('fixture\n'), { level: 9 })],
+    ['zlib (no compression)', () => deflateSync(Buffer.from('fixture\n'), { level: 0 })],
+    [
+      'zlib (fastest, small window)',
+      () => deflateSync(randomBytes(64), { level: 1, windowBits: 9 }),
+    ],
+    ['an lz4 frame', () => Buffer.from('04224d1864400700000080', 'hex')],
+    ['legacy lz4', () => Buffer.from('02214c18000000001f', 'hex')],
+    ['unix compress (.Z)', () => Buffer.from('1f9d906600', 'hex')],
+    ['lzip', () => Buffer.from('4c5a4950010c00', 'hex')],
+    [
+      'a zip appended to a png (end record only)',
+      () => Buffer.concat([Buffer.from('89504e470d0a1a0a0000', 'hex'), zipEndRecord()]),
+    ],
+  ])('reports %s bytes in assets/data.bin as an archive', (_label, bytes) => {
+    const root = cleanRepo({ 'apps/candidate/dist/assets/data.bin': bytes() });
+    expect(findHiders(root, 'apps/candidate/dist')).toEqual([
+      `apps/candidate/dist/assets/data.bin: ${ARCHIVE}`,
+    ]);
+  });
+
+  it.each(['assets/x.lz4', 'assets/x.lz', 'assets/x.Z', 'assets/x.zlib', 'assets/x.brotli'])(
+    'reports %s as an archive by name',
+    (file) => {
+      const root = cleanRepo({ [`apps/candidate/dist/${file}`]: 'plain text\n' });
+      expect(findHiders(root, 'apps/candidate/dist')).toEqual([
+        `apps/candidate/dist/${file}: ${ARCHIVE}`,
+      ]);
+    },
+  );
+
+  it('does not report text that happens to start like a zlib header', () => {
+    // "(r" and "x^" pass zlib's header checksum, but a UTF-8 text file is not compressed.
+    expect(((0x28 << 8) | 0x72) % 31).toBe(0);
+    expect(((0x78 << 8) | 0x5e) % 31).toBe(0);
+    const root = cleanRepo({
+      'apps/candidate/dist/assets/a.js': '(r=globalThis).x=1;\n',
+      'apps/candidate/dist/assets/b.txt': 'x^2 + 1\n',
+    });
+    expect(findHiders(root, 'apps/candidate/dist')).toEqual([]);
+  });
+});
+
+/** The 22-byte end-of-central-directory record of an empty zip, which zip readers look for. */
+const zipEndRecord = () => Buffer.concat([Buffer.from('504b0506', 'hex'), Buffer.alloc(18)]);
+
+/** A PNG signature, so random bytes after it never start like an archive. */
+const PNG_HEAD = Buffer.from('89504e470d0a1a0a0000', 'hex');
+const utf16le = (s) => Buffer.from(s, 'utf16le');
+const utf16be = (s) => Buffer.from(s, 'utf16le').swap16();
+/** `s` (BMP characters only) as UTF-32 code units in the given byte order. */
+const utf32 = (s, order) => {
+  const b = Buffer.alloc(s.length * 4);
+  for (let i = 0; i < s.length; i++) b[`writeUInt32${order}`](s.charCodeAt(i), i * 4);
+  return b;
+};
+
+// S1.4 N8/N9 security review N13.
+describe('wideText', () => {
+  it('is null for content without a NUL byte', () => {
+    expect(wideText(Buffer.from('plain UTF-8 text, no NUL\n'))).toBeNull();
+  });
+
+  it.each([
+    ['UTF-16LE', (s) => utf16le(`﻿${s}`)],
+    ['UTF-16BE', (s) => utf16be(s)],
+    ['UTF-32LE', (s) => utf32(s, 'LE')],
+    ['UTF-32BE', (s) => utf32(`﻿${s}`, 'BE')],
+    ['UTF-16LE between binary bytes', (s) => Buffer.concat([PNG_HEAD, utf16le(s), PNG_HEAD])],
+  ])('returns the ASCII text of %s', (_label, encode) => {
+    const text = 'token: "wide text fixture"\nnext line';
+    expect(wideText(encode(text)).toString('latin1')).toContain(text);
+  });
+
+  it('skips runs shorter than 8 characters', () => {
+    expect(wideText(Buffer.concat([utf16le('short'), Buffer.from([0xff, 0xff])]))).toBeNull();
   });
 });
 
@@ -451,6 +534,54 @@ describe('scanDist (real gitleaks)', () => {
     expect(r.ok).toBe(false);
     expect(r.problems.join('\n')).toMatch(/apps\/candidate\/dist: gitleaks found a secret/);
     expect(r.problems.join('\n')).not.toContain(key);
+  });
+
+  // S1.4 N8/N9 security review N13: gitleaks reads UTF-16 text as bytes with a NUL after every
+  // ASCII character, so a key stored that way never matched. The ASCII text of UTF-16 and UTF-32
+  // code units (either byte order, any offset, with or without a BOM) is streamed as well.
+  it.each([
+    ['UTF-16LE with a BOM', (s) => utf16le(`﻿${s}`)],
+    ['UTF-16LE without a BOM', (s) => utf16le(s)],
+    ['UTF-16BE with a BOM', (s) => utf16be(`﻿${s}`)],
+    ['UTF-16BE without a BOM', (s) => utf16be(s)],
+    ['UTF-32LE', (s) => utf32(s, 'LE')],
+    ['UTF-32BE', (s) => utf32(s, 'BE')],
+    [
+      'UTF-16LE at an odd offset inside binary bytes',
+      (s) => Buffer.concat([PNG_HEAD, randomBytes(991), utf16le(s), randomBytes(999)]),
+    ],
+  ])('finds a key in assets/config.json stored as %s', (_label, encode) => {
+    const key = sbSecret();
+    const root = cleanRepo({
+      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+      'apps/candidate/dist/assets/config.json': encode(`{"service": "${key}"}\n`),
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toMatch(/apps\/candidate\/dist: gitleaks found a secret/);
+    expect(r.problems.join('\n')).not.toContain(key);
+  });
+
+  it('fails on the inline allow marker stored as UTF-16, which would hide that line too', () => {
+    const marker = ['gitleaks', 'allow'].join(':');
+    const root = cleanRepo({
+      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+      'apps/candidate/dist/assets/strings.json': utf16le(`{"k": "${sbSecret()}"} // ${marker}\n`),
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toContain(
+      'apps/candidate/dist/assets/strings.json: contains the inline allow marker',
+    );
+  });
+
+  it('fails on zlib bytes in a file whose name is not an archive name', () => {
+    const root = cleanRepo({
+      'apps/candidate/dist/assets/data.bin': deflateSync(Buffer.from('fixture build output\n')),
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toMatch(/assets\/data\.bin: archive in build output/);
   });
 
   it('fails on gzip bytes in a file whose name is not an archive name', () => {

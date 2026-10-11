@@ -9,17 +9,20 @@
 //   - a dist/ holds, at any depth, a .gitleaksignore, .gitleaks.toml or .gitleaksbaseline (any
 //     case), or a file containing gitleaks' inline allow marker: `gitleaks dir` honours an ignore
 //     file in the scanned directory and skips marked lines, so either could hide a finding
-//   - a dist/ holds an archive (by name or by magic bytes), whose content cannot be scanned
+//   - a dist/ holds an archive (by name or by magic bytes: gzip, zip anywhere, bzip2, xz, zstd, 7z,
+//     rar, zlib, lz4, .Z, lzip; brotli by name), whose content cannot be scanned
 //   - a dist/ (or anything in it) is a symlink, junction or other entry that is neither a regular
 //     file nor a directory (by lstat): the scan never follows it, but deploy tools upload the target
 //   - `gitleaks stdin` finds a key in the dist/ content (every file, binary or not, in sorted
 //     order after a fixed ASCII header, in overlapping pieces between blank lines so gitleaks
-//     never cuts a key), which catches files `gitleaks dir` skips by path or type
+//     never cuts a key, plus the ASCII text of any UTF-16/UTF-32 in a file), which catches files
+//     `gitleaks dir` skips by path or type and keys stored as UTF-16/UTF-32
 // The repository's .gitleaks.toml is always passed with --config (a built-in default config when
 // it is missing), and GITLEAKS_CONFIG / GITLEAKS_CONFIG_TOML are dropped from gitleaks' environment,
 // so a config that a build copies into dist/ can never change the rules.
 // Output is redacted; this script prints only paths and gitleaks' own redacted summary.
 // No environment variables. Optional argument: the repository root (default: this script's repo).
+import { isUtf8 } from 'node:buffer';
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
@@ -137,11 +140,11 @@ export function findHiders(root, rel) {
         continue;
       }
       const buf = readFileSync(childAbs);
-      if (ARCHIVE_RE.test(e.name) || ARCHIVE_MAGIC.some((m) => startsWith(buf, m))) {
+      if (ARCHIVE_RE.test(e.name) || isArchive(buf)) {
         problems.push(
           `${childRel}: archive in build output (compressed content cannot be scanned)`,
         );
-      } else if (buf.toString('latin1').toLowerCase().includes(ALLOW_MARKER)) {
+      } else if (hasAllowMarker(buf) || hasAllowMarker(wideText(buf))) {
         problems.push(
           `${childRel}: contains the inline allow marker, which makes gitleaks skip that line`,
         );
@@ -157,11 +160,20 @@ export function findHiders(root, rel) {
   return problems;
 }
 
-/** Compressed files: gitleaks cannot see inside them, so none may ship (S1.4 re-review N5). */
-const ARCHIVE_RE = /\.(?:gz|br|zst|zip|tgz|tar|bz2|xz|7z|rar)$/i;
+/** Does this content (or null) contain gitleaks' inline allow marker, in any case? */
+const hasAllowMarker = (buf) =>
+  buf !== null && buf.toString('latin1').toLowerCase().includes(ALLOW_MARKER);
+
+/**
+ * Compressed files: gitleaks cannot see inside them, so none may ship (S1.4 re-review N5). Brotli
+ * has no magic bytes, so it is found by name only (S1.4 N8/N9 security review N13).
+ */
+const ARCHIVE_RE =
+  /\.(?:gz|br|brotli|zst|zip|tgz|tar|bz2|xz|7z|rar|lz4|lz|lzma|z|zz|zlib|deflate|tbz2?|txz|tlz|tzst)$/i;
 /**
  * The leading bytes of compressed formats, so an archive under any name fails (S1.4 re-review
- * N8): gzip, zip, bzip2, xz, zstd, 7z, rar (v4 and v5).
+ * N8, N13): gzip, zip, bzip2, xz, zstd, 7z, rar (v4 and v5), lz4 (frame and legacy), unix
+ * compress (.Z), lzip. zlib, which has no fixed magic, is isZlib.
  */
 const ARCHIVE_MAGIC = [
   '1f8b',
@@ -171,9 +183,74 @@ const ARCHIVE_MAGIC = [
   '28b52ffd',
   '377abcaf271c',
   '526172211a07',
+  '04224d18',
+  '02214c18',
+  '1f9d',
+  '4c5a4950',
 ].map((hex) => Buffer.from(hex, 'hex'));
 const startsWith = (buf, prefix) =>
   buf.length >= prefix.length && buf.subarray(0, prefix.length).equals(prefix);
+
+/**
+ * A zlib stream (RFC 1950): compression method 8 (deflate), a window of at most 32 KB and a valid
+ * header checksum. Text such as "(r" or "x^" also passes that check, so content that is valid
+ * UTF-8 is not counted; compressed bytes practically never are (N13).
+ */
+function isZlib(buf) {
+  if (buf.length < 2) return false;
+  const [cmf, flg] = buf;
+  return (cmf & 0x0f) === 8 && cmf >> 4 <= 7 && ((cmf << 8) | flg) % 31 === 0 && !isUtf8(buf);
+}
+
+const ZIP_END = Buffer.from('504b0506', 'hex');
+/**
+ * A zip end-of-central-directory record (single disk: both disk numbers 0) where zip readers look
+ * for it, in the last 22 + 65,535 bytes. A zip appended to another file still opens, so its
+ * leading bytes prove nothing (N13).
+ */
+function hasZipEnd(buf) {
+  const from = Math.max(0, buf.length - 22 - 0xffff);
+  for (let i = buf.indexOf(ZIP_END, from); i >= 0; i = buf.indexOf(ZIP_END, i + 1)) {
+    if (i + 22 <= buf.length && buf.readUInt32LE(i + 4) === 0) return true;
+  }
+  return false;
+}
+
+/** Compressed content under any name: known leading bytes, a zlib stream or a zip end record. */
+const isArchive = (buf) =>
+  ARCHIVE_MAGIC.some((m) => startsWith(buf, m)) || isZlib(buf) || hasZipEnd(buf);
+
+/** The fewest characters a run of wide text needs before wideText keeps it. */
+const WIDE_TEXT_MIN = 8;
+const PRINTABLE = '[\\t\\n\\r\\x20-\\x7e]';
+/** [pattern, code-unit width in bytes, offset of the ASCII byte in a code unit] */
+const WIDE_TEXT = [
+  [`(?:${PRINTABLE}\\x00)`, 2, 0], // UTF-16LE
+  [`(?:\\x00${PRINTABLE})`, 2, 1], // UTF-16BE
+  [`(?:${PRINTABLE}\\x00\\x00\\x00)`, 4, 0], // UTF-32LE
+  [`(?:\\x00\\x00\\x00${PRINTABLE})`, 4, 3], // UTF-32BE
+].map(([unit, width, at]) => [new RegExp(`${unit}{${WIDE_TEXT_MIN},}`, 'g'), width, at]);
+
+/**
+ * The ASCII text stored as UTF-16 or UTF-32 code units in a file (either byte order, at any
+ * offset, with or without a BOM, a whole text file or strings inside a binary): every run of at
+ * least WIDE_TEXT_MIN printable ASCII characters (tab, LF and CR included), one run per line, or
+ * null when there is none. gitleaks reads such text as bytes with NULs between the characters, so
+ * a key in it never matches a rule (S1.4 N8/N9 security review N13); this copy is scanned too.
+ */
+export function wideText(buf) {
+  if (buf === null || !buf.includes(0)) return null;
+  const s = buf.toString('latin1');
+  const runs = [];
+  for (const [re, width, at] of WIDE_TEXT) {
+    for (const m of s.matchAll(re)) {
+      let run = '';
+      for (let i = at; i < m[0].length; i += width) run += m[0][i];
+      runs.push(run);
+    }
+  }
+  return runs.length > 0 ? Buffer.from(runs.join('\n'), 'latin1') : null;
+}
 
 /**
  * The start of every stream sent to `gitleaks stdin`. gitleaks 8.30.1 sniffs the type of the
@@ -261,7 +338,11 @@ export function distText(root, rel) {
       if (e.isDirectory()) walk(childAbs);
       else if (e.isFile()) {
         const buf = readFileSync(childAbs);
-        for (const [s, t] of stdinPieces(buf)) parts.push(buf.subarray(s, t), BLANK_LINE);
+        // The file's bytes, then the ASCII text of any UTF-16/UTF-32 in it (N13).
+        for (const b of [buf, wideText(buf)]) {
+          if (b === null) continue;
+          for (const [s, t] of stdinPieces(b)) parts.push(b.subarray(s, t), BLANK_LINE);
+        }
       }
     }
   };
@@ -341,7 +422,8 @@ export function scanDist({ root, gitleaks = 'gitleaks', env = process.env }) {
       if (s.status !== 0) {
         problems.push(
           `${rel}: gitleaks found a secret or failed (exit ${s.status}) in a file that gitleaks dir ` +
-            `skips by path (node_modules/, images, lockfiles, gitleaks.toml names) or as binary. To find it, ` +
+            `skips by path (node_modules/, images, lockfiles, gitleaks.toml names) or as binary, ` +
+            `or in text stored as UTF-16/UTF-32 (convert such a file to UTF-8 first). To find it, ` +
             `pipe each such file, after a first line of plain text, through: ` +
             `gitleaks stdin --redact --no-banner -v --config .gitleaks.toml`,
         );
