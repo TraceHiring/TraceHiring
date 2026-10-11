@@ -226,6 +226,104 @@ describe('security review regressions (S1.7)', () => {
     for (const frame of out.stack ?? []) expect(frame).toMatch(/^at .*:\d+:\d+\)?$/);
   });
 
+  // Redactor lows review F6: a message line indented like a V8 frame sits right before the real
+  // frames. Once the stack was read and the message (or name) then changed, it is neither in the
+  // current message nor told apart from the frames by position, so it was kept.
+  it.each([
+    ['the message', (err: Error) => Object.assign(err, { message: 'other' })],
+    ['the name', (err: Error) => Object.assign(err, { name: 'ValidationError' })],
+  ])(
+    'drops an indented frame-shaped message line when %s changed after the stack was read',
+    (_label, change) => {
+      const word = synth.word(5);
+      const err = new Error(`dup\n    at ${word}.${word}:1:1`);
+      expect(err.stack).toContain(`\n    at ${word}.${word}:1:1\n`); // read: the header is now fixed
+      change(err);
+      const out = serializeError(err);
+      expect(out.stack?.length).toBeGreaterThan(0);
+      expect(JSON.stringify(out)).not.toContain(word);
+    },
+  );
+
+  it('keeps only frames with a path or URL location when the header is not the current one', () => {
+    const err = new Error('x');
+    err.stack = [
+      'Error: y',
+      '    at f (index.js:1:2)',
+      '    at g (/app/a.js:3:4)',
+      '    at node:internal/x:5:6',
+      '    at h (file:///app/b.js:7:8)',
+      '    at k (C:\\app\\c.js:9:1)',
+    ].join('\n');
+    expect(serializeError(err).stack).toEqual([
+      'at g (/app/a.js:3:4)',
+      'at node:internal/x:5:6',
+      'at h (file:///app/b.js:7:8)',
+      'at k (C:\\app\\c.js:9:1)',
+    ]);
+  });
+
+  it('keeps frames without a path when the header is the current name and message', () => {
+    for (const [name, message, header] of [
+      ['Error', 'x', 'Error: x'],
+      ['TypeError', '', 'TypeError'],
+      ['', 'x', 'x'],
+    ]) {
+      const err = new Error(message);
+      err.name = name ?? '';
+      err.stack = `${header}\n    at f (index.js:1:2)\n    at [eval]:3:4`;
+      expect(serializeError(err).stack).toEqual(['at f (index.js:1:2)', 'at [eval]:3:4']);
+    }
+  });
+
+  it('skips every header line when the header is the current name and message', () => {
+    const word = synth.word(6);
+    const message = `dup\n    at ${word}.${word}:1:1\n    at ${word} (/${word}.js:2:2)`;
+    const err = new Error(message);
+    err.stack = `Error: ${message}\n    at f (index.js:1:2)`;
+    expect(serializeError(err).stack).toEqual(['at f (index.js:1:2)']);
+  });
+
+  // The header check and the path test are linear: ~100 KB stacks, best of five well inside 50 ms.
+  it.each([
+    [
+      'a long matched header of frame-shaped lines',
+      () => {
+        const err = new Error('    at a.b:1:1\n'.repeat(6700));
+        err.stack = `Error: ${err.message}\n    at f (/a.js:1:2)`;
+        return err;
+      },
+    ],
+    [
+      'long frames without a path, header not matched',
+      () => {
+        const err = new Error('x');
+        err.stack = `Error: y\n${`    at f (${'a.'.repeat(140)}b:1:2)\n`.repeat(350)}`;
+        return err;
+      },
+    ],
+    [
+      'long paren-free frames without a path, header not matched',
+      () => {
+        const err = new Error('x');
+        err.stack = `Error: y\n${`    at ${'a.'.repeat(142)}b:1:2\n`.repeat(350)}`;
+        return err;
+      },
+    ],
+  ])('serialises a ~100 KB stack of %s well inside 50 ms', (_label, make) => {
+    const err = make();
+    expect((err.stack ?? '').length).toBeGreaterThanOrEqual(100_000);
+    expect(serializeError(err).stack).toHaveLength(err.message === 'x' ? 0 : 1);
+    serializeError(err); // warm-up
+    let best = Infinity;
+    for (let i = 0; i < 5; i += 1) {
+      const start = performance.now();
+      serializeError(err);
+      best = Math.min(best, performance.now() - start);
+    }
+    expect(best).toBeLessThan(50);
+  });
+
   it('keeps only V8 frames ending in line:column, at most 20', () => {
     const err = new Error('x');
     err.stack = ['Error: x', ...Array.from({ length: 30 }, (_, i) => `    at f${i} (m.js:${i}:1)`)]
