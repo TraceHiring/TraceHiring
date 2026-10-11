@@ -6,7 +6,8 @@
   "exports": {
     "./tsconfig.base.json": "./tsconfig.base.json",
     "./eslint": "./eslint/index.js",
-    "./vitest": "./vitest/index.js"
+    "./vitest": "./vitest/index.js",
+    "./vite": "./vite/forbid-server-imports.js"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
