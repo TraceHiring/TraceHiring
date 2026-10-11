@@ -57,3 +57,18 @@ Reviewer: `security-reviewer` agent (Opus), read-only, 2026-10-12. Diff: `git di
 ## Resolution (lead)
 - **S3B-5:** accepted as a staging residual for M0a and recorded in the M0a summary. Owner: M8, before any production deploy job.
 - **All other findings and the `$GITHUB_SHA` change:** fixed on `m0a/s3b-fixes` by a Sonnet writer; see the re-review below.
+
+## Re-review of the fixes (Sonnet, 2026-10-12): **PASS**
+Diff `git diff 91622ee ba3ac88` (`m0a/s3b-fixes`: `4327ca8`, `8ee02c5`, `ba3ac88`). Scripts: 1214 passed + 1 skipped (K4) in the writer's run.
+- **S3B-1, fixed.** The no-secret Build step writes the `--dry-run --env staging --outdir dist` bundles before `scan-dist`, and the deploy uploads `dist/index.js` with `--no-bundle`. Job tests assert the exact lines and the step order.
+- **S3B-2, fixed.**
+  - One `pages-deploy-detailed` entry per project, with the same deployment, `environment: production` and production branch `main`.
+  - The alias is smoked too.
+  - Preview and wrong-branch fixtures fail.
+- **S3B-3, fixed.** An early `content-length` refusal, a streamed read, and `cancel()` at the cap. Tested with an endless stream.
+- **S3B-4, fixed.** `statement_timeout = '60s'`, a 360 s smoke deadline, and step timeouts of 10 and 8 minutes.
+- **S3B-6, fixed.** `sslmode` must be `require`, `verify-ca` or `verify-full`, checked before any spawn. The URL is never printed.
+- **S3B-7, fixed.** A plain-Node CLI load test.
+- **`$GITHUB_SHA`:** no `${{` remains in run text, and a test asserts it.
+- **S3B-5:** an accepted residual (owner M8).
+- **Info:** `check-bundle-size` and `check-headers` look only at the non-staging build. The staging bundle is covered by `scan-dist`. No action.
