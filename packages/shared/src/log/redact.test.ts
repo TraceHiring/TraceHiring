@@ -366,6 +366,27 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['query pairs', fill('?a=b ')],
     ['IPv4-like', fill('1.1.')],
     ['PAN-like', fill('ABCDE1234')],
+    // quoted key=value (follow-up 1): openers, long bodies with no closer, escapes, nesting
+    ['double-quote openers', fill('a="')],
+    ['single-quote openers', fill("a='")],
+    ['escaped-quote openers', fill('a=\\"')],
+    ['sensitive double-quote openers', fill('token="')],
+    ['sensitive escaped openers', fill('token:\\"')],
+    ['long body, no closer', 'a="' + fill('b')],
+    ['long sensitive body, no closer', 'token="' + fill('b ')],
+    ['long escaped body, no closer', 'a=\\"' + fill('\\\\')],
+    ['long body of escapes', 'a="' + fill('\\"')],
+    ['one quote type inside another', 'a="' + fill("b='")],
+    ['nested escaped openers', 'a="' + fill('b=\\"c ')],
+    ['quotes after separators', fill('a = "')],
+    [
+      'distinct quoted keys',
+      Array.from({ length: 20_000 }, (_, i) => `k${i.toString(36)}="`).join(''),
+    ],
+    ['distinct keys', Array.from({ length: 20_000 }, (_, i) => `k${i.toString(36)}=v `).join('')],
+    // Authorization schemes (follow-up 2)
+    ['Basic spaces', 'Basic' + fill(' ')],
+    ['Token words', fill('Token ')],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -454,5 +475,67 @@ describe('free-text key stems (S1.7 finding 5)', () => {
   it('keeps allow-listed metadata keys', () => {
     const input = { contentType: 'application/json', statusCode: 200, responseStatus: 404 };
     expect(redact(input)).toEqual(input);
+  });
+});
+
+describe('quoted and multi-word key=value secrets (S1.7 follow-up 1)', () => {
+  const secret = synth.base64(5).slice(0, 10);
+  const phrase = synth.phrase();
+  const R = REDACTED;
+  const cases: [string, string, string][] = [
+    ['single-quoted', `password='${secret}'`, `password='${R}'`],
+    ['double-quoted', `password="${secret}"`, `password="${R}"`],
+    ['double-quoted, multi-word', `password="${phrase}"`, `password="${R}"`],
+    ['spaced', `password = "${phrase}"`, `password = "${R}"`],
+    ['Python dict', `{'token': '${secret}'}`, `{'token': '${R}'}`],
+    ['Python dict, multi-word', `{'token': '${phrase}'}`, `{'token': '${R}'}`],
+    ['escaped JSON', `{\\"password\\":\\"${secret}\\"}`, `{\\"password\\":\\"${R}\\"}`],
+    ['escaped JSON, multi-word', `{\\"password\\":\\"${phrase}\\"}`, `{\\"password\\":\\"${R}\\"}`],
+    ['JSON, multi-word address', `{"address":"${phrase}"}`, `{"address":"${R}"}`],
+    ['JSON with an escaped quote', `{"password":"${secret}\\" ${phrase}"}`, `{"password":"${R}"}`],
+    [
+      'escaped JSON inside a JSON string',
+      JSON.stringify({ data: JSON.stringify({ password: phrase }) }),
+      JSON.stringify({ data: JSON.stringify({ password: R }) }),
+    ],
+    [
+      'escaped JSON with an escaped quote, inside a JSON string',
+      JSON.stringify({ data: JSON.stringify({ password: `${secret}" ${phrase}`, n: 1 }) }),
+      JSON.stringify({ data: JSON.stringify({ password: R, n: 1 }) }),
+    ],
+    [
+      'quoted secret inside a non-sensitive quoted value',
+      `{"data":"token='${phrase}'"}`,
+      `{"data":"token='${R}'"}`,
+    ],
+    ['unclosed quote', `password="${phrase}`, `password="${R}`],
+  ];
+
+  it.each(cases)('redacts the whole quoted value: %s', (_label, s, expected) => {
+    const out = redactString(`login failed ${s}`);
+    expect(out).toBe(`login failed ${expected}`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('leaves quoted values under non-sensitive keys and empty values alone', () => {
+    const s = `status="all good" level='warn' {"kind":"a b"} password=""`;
+    expect(redactString(s)).toBe(s);
+  });
+});
+
+describe('Authorization schemes (S1.7 follow-up 2)', () => {
+  const basic = synth.basic();
+  const tok = synth.base64(9).slice(0, 20);
+  it.each([
+    ['Basic', `Authorization: Basic ${basic}`],
+    ['basic, lower case', `authorization: basic ${basic}`],
+    ['Token', `Authorization: Token ${tok}`],
+    ['Token in free text', `retry with Token ${tok} later`],
+  ])('redacts %s credentials like Bearer', (_label, s) => {
+    const out = redactString(s);
+    expect(out).not.toContain(basic);
+    expect(out).not.toContain(tok);
+    expect(out).toContain(REDACTED);
+    expect(redactString(out)).toBe(out);
   });
 });

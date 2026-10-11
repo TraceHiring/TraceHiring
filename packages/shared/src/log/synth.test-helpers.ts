@@ -28,4 +28,9 @@ export const synth = {
   secretKey: (s = 1) => ['sb', 'secret', `${lower(10, s)}${digits(6, s)}`].join('_'),
   dbUrl: (s = 1) =>
     `${['post', 'gresql'].join('')}://${lower(5, s)}:${lower(8, s)}@${lower(6, s)}.example:5432/db`,
+  /** Several words, like a street address: a number, then capitalised words. */
+  phrase: (s = 1) =>
+    [digits(2, s), ...[0, 1, 2].map((i) => upper(1, s + i) + lower(5, s + i + 3))].join(' '),
+  /** An HTTP Basic credential: base64 of user:password. */
+  basic: (s = 1) => btoa(`${lower(6, s)}:${lower(4, s + 1)}${digits(3, s)}`),
 };
