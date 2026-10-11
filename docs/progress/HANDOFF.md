@@ -46,7 +46,7 @@ W3b/W2 database review: arrived after the first push and is recorded in `docs/re
    - run a real `pnpm test:rls`, confirming W2's `-x` exclude list (it excludes `kong` and `postgrest`) and that TAP comes on stdout;
    - full `pnpm verify`.
 5. **Gate:** `spec-reviewer` on the whole S1.7 diff. Then in the `milestone/m0a` worktree run `git merge --ff-only <integration tip>`, and tag `cp/m0a-02` (S1.4–S1.6) and `cp/m0a-03` (S1.7).
-6. S1.4 Lows N8 and N9 (before S3). Then **S2 ∥ S3** (spec §14).
+6. S1.4 Low N9 is DONE on `m0a/s14-lows` @ `a2d9dc8` (merge it at integration; first re-run the full scripts suite, which hung once). N8 is still open (before S3). Then **S2 ∥ S3** (spec §14).
 
 ## Decisions made this session
 - **Integration branch** is now `m0a/integration` (see above).
