@@ -24,4 +24,4 @@
 Other engines' Unicode tables (Workers runtime, browsers); `pnpm verify`, lint and typecheck on the branch (vitest only); consumer call sites; fuzzing beyond ~200K random strings.
 
 ## Disposition (lead)
-PASS WITH FINDINGS, all Low: `m0a/w1-lows` (`aa99476`) merged into `m0a/integration`. F1–F8 go to one writer next session (test-first, one commit each, `packages/shared/src/log/**` only), before the S1.7 gate if the window allows; otherwise onto the M0a deferred list with an owner.
+PASS WITH FINDINGS, all Low: `m0a/w1-lows` (`aa99476`) merged into `m0a/integration`. F7 fixed by the lead (`cc9fd4d`, test-first; shared 467/467). F1–F6 and F8 go to one writer next session (test-first, one commit each, `packages/shared/src/log/**` only), before the S1.7 gate if the window allows; otherwise onto the M0a deferred list with an owner.

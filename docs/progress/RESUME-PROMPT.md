@@ -73,7 +73,7 @@ STEP 3 — Verify, then report in 5 lines whether the repo matches the handoff (
 STEP 4 — Do the HANDOFF "Next step" list in order. Summary (HANDOFF and the review reports have the details):
 1. Two read-only reviews in parallel: database-reviewer on `9bac676..43d5a30` (catalog fixes, spec rev 12 §8.5) and
    (done: the redactor security review; `m0a/w1-lows` merged; F1–F8 Lows open). Record reports in `docs/reviews/`; fix findings test-first.
-2. Two Low-fix writers in parallel: redactor F1–F8 (`docs/reviews/M0a-S1.7-redactor-lows-security-review.md`) and S1.4 Lows N10–N13 from `64bd4e3` (`docs/reviews/M0a-S1.4-n8-n9-security-review.md`), then a re-review.
+2. Two Low-fix writers in parallel: redactor F1–F6, F8 (F7 done `cc9fd4d`; `docs/reviews/M0a-S1.7-redactor-lows-security-review.md`) and S1.4 Lows N10–N13 from `64bd4e3` (`docs/reviews/M0a-S1.4-n8-n9-security-review.md`), then a re-review.
 3. Merge into `m0a/integration` with `--no-ff`: the redactor F1–F8 branch, `m0a/s17-assembly` (re-merge catalog fixes first if
    the review changed them), the N10–N13 branch; full `pnpm verify`.
 4. Gate: spec-reviewer on `adbbb61..m0a/integration`; `git merge --ff-only` in the `milestone/m0a` worktree; tags
