@@ -110,6 +110,21 @@ describe('measureInitialJs', () => {
 
   // S1.4 security review L8: an inline module's static imports load up front too, resolved
   // against index.html (the dist root).
+  // S1.4 security re-review N7: a cross-origin import is neither counted nor reported otherwise.
+  it('reports a cross-origin import from an inline module or a chunk', () => {
+    const root = repo({
+      'dist/index.html': html(
+        '<script type="module">import "https://cdn.example/big.js";import "./assets/a.js"</script>',
+      ),
+      'dist/assets/a.js': 'export * from "//cdn.example/other.js";',
+    });
+    const r = measureInitialJs(`${root}/dist`);
+    expect(r.errors).toEqual([
+      'a script imports from another origin: https://cdn.example/big.js',
+      'a script imports from another origin: //cdn.example/other.js',
+    ]);
+  });
+
   it('counts the static imports of an inline module script, resolved from the dist root', () => {
     const vendor = heavy(1_000);
     const shared = 'export const s=1;';

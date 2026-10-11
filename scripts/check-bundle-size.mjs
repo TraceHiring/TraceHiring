@@ -56,16 +56,29 @@ export function htmlEntries(html) {
   return { files, inline, external };
 }
 
-/** Relative or root-relative specifiers a module imports statically. */
+/** Relative or root-relative specifiers a module imports statically (`//host` is another origin). */
 export function staticImports(code) {
   const out = [];
   const re =
-    /(?:^|[^\w$.])(?:import|export)\s*(?:[\w$*{}\s,]*?\bfrom\s*)?["']((?:\.{1,2})?\/[^"'\s]*)["']/g;
+    /(?:^|[^\w$.])(?:import|export)\s*(?:[\w$*{}\s,]*?\bfrom\s*)?["']((?:\.{1,2}\/|\/(?!\/))[^"'\s]*)["']/g;
+  for (const m of code.matchAll(re)) out.push(m[1]);
+  return out;
+}
+
+/**
+ * Specifiers a module imports from another origin: a scheme (`https:`, `data:` …) or `//host`.
+ * They are never counted toward the budget, so they are reported instead (S1.4 re-review N7).
+ */
+export function crossOriginImports(code) {
+  const out = [];
+  const re =
+    /(?:^|[^\w$.])(?:import|export)\s*(?:[\w$*{}\s,]*?\bfrom\s*)?["']((?:\/\/|[a-zA-Z][a-zA-Z0-9+.-]*:)[^"'\s]*)["']/g;
   for (const m of code.matchAll(re)) out.push(m[1]);
   return out;
 }
 
 const fmt = (bytes) => `${(bytes / 1000).toFixed(1)} kB`;
+const crossOriginError = (url) => `a script imports from another origin: ${url}`;
 
 /**
  * Measures one app's initial JS in `distDir`.
@@ -92,7 +105,10 @@ export function measureInitialJs(distDir) {
   // An inline module's static imports load up front too; they resolve against index.html, the
   // dist root (`from: null`). A classic script cannot import, so counting every inline script's
   // imports only over-counts, which fails closed (S1.4 security review L8).
-  for (const code of inline) for (const url of staticImports(code)) queue.push({ url, from: null });
+  for (const code of inline) {
+    for (const url of crossOriginImports(code)) errors.push(crossOriginError(url));
+    for (const url of staticImports(code)) queue.push({ url, from: null });
+  }
   while (queue.length > 0) {
     const { url, from } = queue.shift();
     const clean = decodeURIComponent(url.replace(/[?#].*$/, ''));
@@ -114,7 +130,9 @@ export function measureInitialJs(distDir) {
     const gzip = gzipSync(buf).length;
     files.push({ file: rel, gzip });
     total += gzip;
-    for (const spec of staticImports(buf.toString('utf8'))) queue.push({ url: spec, from: abs });
+    const code = buf.toString('utf8');
+    for (const url of crossOriginImports(code)) errors.push(crossOriginError(url));
+    for (const spec of staticImports(code)) queue.push({ url: spec, from: abs });
   }
   return { total, files, errors };
 }
