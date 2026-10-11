@@ -590,6 +590,15 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['long hex-like segments', fill('abcde:')],
     ['long word segments', fill(`${'g'.repeat(50)}:`)],
     ['addresses between words and dashes', fill(`${synth.ipv6Doc(2)}:up-`)],
+    // emails and UPI ids glued to the one before them (redactor re-review G1)
+    ['emails glued by _', fill(`${synth.upi(5)}.example_`)],
+    ['UPI ids glued by -', fill(`${synth.upi(6)}-`)],
+    ['UPI ids glued by _', fill(`${synth.upi(7)}_`)],
+    ['emails glued to UPI ids', fill(`${synth.upi(8)}_${synth.upi(9)}.example-`)],
+    ['long runs after each email', fill(`a@b.example_${'c'.repeat(500)} `)],
+    ['long runs before each @', fill(`${'a'.repeat(300)}@${synth.upi(10)} `)],
+    ['psps between @', fill('ab@cd@')],
+    ['encoded @ chains', fill('ab%40cd-')],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -1501,5 +1510,57 @@ describe('IPv6 followed by a word segment (redactor lows review F8)', () => {
   it('still leaves clock times and word:word chains followed by words alone', () => {
     const s = 'at:12:30:45:ok cafe:beef:dead:x std::map::at:y a:b:c:z x:12:30:go';
     expect(redactString(s)).toBe(s);
+  });
+});
+
+// Redactor re-review G1: the email and UPI lookbehinds start a match once per run of their
+// characters, so a value that starts right where the previous one ends (`<email>_<email>`) was
+// never matched, and only a second pass redacted it. Where a UPI id cannot end before the next
+// value (`_` or a digit after its psp), the next match started at its psp and its handle was kept.
+describe('an email or UPI id glued to the one before it (redactor re-review G1)', () => {
+  const [e1, e2] = [`${synth.upi(31)}.example`, `${synth.upi(32)}.example`];
+  const [u1, u2] = [synth.upi(33), synth.upi(34)];
+  const cf = String.fromCodePoint(0xfff9);
+  const ONLY_REDACTED = /^x (?:\[REDACTED\])+ y$/;
+
+  it.each([
+    ['_', '_'],
+    ['-', '-'],
+    ['+', '+'],
+    ['a digit', '7'],
+    ['%', '%'],
+    ['U+FFF9 and _', `${cf}_`],
+  ])('redacts both emails joined by %s', (_label, sep) => {
+    const out = redactString(`x ${e1}${sep}${e2} y`);
+    expect(out).toBe(`x ${REDACTED}${REDACTED} y`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it.each([
+    ['-', '-'],
+    ['.-', '.-'],
+    ['_', '_'],
+    ['a digit', '7'],
+    ['U+FFF9 and _', `${cf}_`],
+  ])('redacts both UPI ids, and a UPI id and an email, joined by %s', (_label, sep) => {
+    for (const [a, b] of [
+      [u1, u2],
+      [u1, e2],
+    ]) {
+      const out = redactString(`x ${a}${sep}${b} y`);
+      expect(out).toMatch(ONLY_REDACTED);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it('redacts a chain of glued values', () => {
+    const out = redactString(`x ${[e1, e2, u1, e1, u2].join('_')} y`);
+    expect(out).toMatch(ONLY_REDACTED);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('keeps the text around glued values', () => {
+    const out = redactString(`see: ${u1}_${u2}, then ${e1}-${e2}; ok`);
+    expect(out).toBe(`see: ${REDACTED}, then ${REDACTED}${REDACTED}; ok`);
   });
 });
