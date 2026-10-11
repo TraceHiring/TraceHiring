@@ -9,6 +9,8 @@
 --     that reaches one schema, whose expressions reach the other by the MT-5a rule.
 --   inheritance_link: an inheritance tree (INHERITS or partitions) with members in both schemas, reported at its
 --     root, so a scan of one schema's table returns the other schema's rows.
+--   table_rule: any rewrite rule other than a view's _RETURN rule on an in-scope relation (scope_rel below). A rule
+--     runs with the table owner's rights, so it can link the two schemas and bypass RLS. Trace never needs one.
 -- The MT-5a rule: a closure through pg_class and pg_proc refs, recursively through the rules of views (pg_rewrite,
 -- skipping a rule's reference to its own relation) and functions, plus pg_type and pg_namespace refs. A node
 -- reaches a schema when it lives there, when it is a type or schema ref there, or, for a function, when its prosrc
@@ -44,6 +46,47 @@ rel_reach as (
   join family as g on g.root_oid = f.root_oid
   join pg_class as gc on gc.oid = g.member_oid
   join target as t on t.oid = gc.relnamespace
+),
+-- escape_schema: system-list schemas where a migration can still create objects (spec §8.5 revision 12): postgres
+-- can SET ROLE to the schema owner, or to a role with CREATE on it. Locally: extensions, _realtime,
+-- supabase_functions and supabase_migrations, plus any listed schema that a migration creates (cron, net and so on).
+escape_schema as (
+  select n.oid
+  from pg_namespace as n
+  where n.nspname in (
+      'auth', 'storage', 'extensions', 'realtime', '_realtime', 'graphql', 'graphql_public', 'supabase_functions',
+      'supabase_migrations', 'vault', 'pgsodium', 'pgsodium_masks', 'net', 'cron', 'pgbouncer', '_analytics'
+    )
+    and (
+      pg_has_role('postgres', n.nspowner, 'SET')
+      or exists (
+        select 1
+        from pg_roles as r
+        where pg_has_role('postgres', r.oid, 'SET')
+          and has_schema_privilege(r.oid, n.oid, 'CREATE')
+      )
+    )
+),
+-- scope_rel: the in-scope relations. Every relation in public, private, quality and integrity, every relation in an
+-- escape_schema whose owner postgres can SET ROLE to, every pg_inherits descendant of those, wherever it lives, and
+-- every relation that reaches quality or integrity (rel_reach).
+scope_rel (oid) as (
+  select c.oid
+  from pg_class as c
+  join pg_namespace as n on n.oid = c.relnamespace
+  where n.nspname in ('public', 'private', 'quality', 'integrity')
+  union
+  select c.oid
+  from pg_class as c
+  where c.relnamespace in (select es.oid from escape_schema as es)
+    and pg_has_role('postgres', c.relowner, 'SET')
+  union
+  select rr.oid
+  from rel_reach as rr
+  union
+  select i.inhrelid
+  from scope_rel as s
+  join pg_inherits as i on i.inhparent = s.oid
 ),
 foreign_key as (
   select
@@ -172,3 +215,13 @@ join pg_class as c on c.oid = f.root_oid
 join pg_namespace as n on n.oid = c.relnamespace
 group by f.root_oid, n.nspname, c.relname
 having count(distinct t.nspname) = 2
+union all
+select
+  'table_rule'::text,
+  format('%I on %I.%I', r.rulename, n.nspname, c.relname)::text,
+  'rewrite rule on an in-scope relation (Trace never needs table rules)'::text
+from pg_rewrite as r
+join pg_class as c on c.oid = r.ev_class
+join pg_namespace as n on n.oid = c.relnamespace
+where r.rulename <> '_RETURN'
+  and r.ev_class in (select s.oid from scope_rel as s)

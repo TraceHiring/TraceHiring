@@ -30,7 +30,13 @@
     { "id": "MT-5c", "branches": ["direct_grantee", "role_membership", "read_write_all_data"] },
     {
       "id": "MT-5d",
-      "branches": ["foreign_key", "trigger_function", "policy_expression", "inheritance_link"]
+      "branches": [
+        "foreign_key",
+        "trigger_function",
+        "policy_expression",
+        "inheritance_link",
+        "table_rule"
+      ]
     },
     {
       "id": "MT-6",
