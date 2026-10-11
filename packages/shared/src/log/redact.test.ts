@@ -9,6 +9,7 @@ import {
   TRUNCATED,
   applyPatterns,
   canonical,
+  isSensitiveKey,
   redact,
   redactString,
 } from './redact.js';
@@ -100,6 +101,41 @@ describe('key rules', () => {
     const id = '7f3c1e2a-5b6d-4c8e-9f01-23456789abcd';
     const input = { orgId: id, requestId: id, sessionId: id, keyVersion: 3, org_id: id };
     expect(redact(input)).toEqual(input);
+  });
+
+  // Spec review L6: every entry of SAFE_KEYS in redact.ts (it is not exported, so it is listed
+  // here; keep the two in step), in camelCase and snake_case, and each one only as an exact key.
+  const allowList = [
+    'orgId',
+    'requestId',
+    'sessionId',
+    'keyVersion',
+    'attemptId',
+    'invitationId',
+    'workspaceId',
+    'statusCode',
+    'errorCode',
+    'stage',
+    'page',
+    'pageSize',
+    'contentType',
+    'contentLength',
+    'responseStatus',
+    'responseTimeMs',
+  ];
+  const snake = (key: string): string => key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+
+  it.each(allowList)('keeps the allow-listed key "%s" in any case or separator', (key) => {
+    for (const k of [key, snake(key), key.toUpperCase(), snake(key).replaceAll('_', '-')]) {
+      expect(redact({ [k]: 'v' })).toEqual({ [k]: 'v' });
+    }
+  });
+
+  it.each(allowList)('still redacts a longer key that contains "%s"', (key) => {
+    expect(isSensitiveKey(`${key}Name`)).toBe(true);
+    expect(redact({ [`candidate_${key}_name`]: 'v' })).toEqual({
+      [`candidate_${key}_name`]: REDACTED,
+    });
   });
 
   it('redacts a whole subtree under a matching key', () => {
