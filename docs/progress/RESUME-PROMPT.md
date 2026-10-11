@@ -30,7 +30,7 @@ STEP 2 — Get onto the integration branch without losing anyone's work
 - In the checkout you use, run `pnpm install --frozen-lockfile` before the first commit (git hooks need it).
 
 STEP 3 — Verify first, and report in 5 lines whether the repo matches the handoff
-- git log --oneline -8 (tip should be 6902078 or a later handoff commit) ; git status
+- git log --oneline -8 (tip should be the newest "chore(progress)" handoff commit, after 54d7265) ; git status
 - pnpm -s verify:fast   (must exit 0)
 - docker ps   (container supabase_db_trace = the shared local stack; if it is down, start it yourself with
   pnpm exec supabase start -x realtime,storage-api,imgproxy,mailpit,studio,edge-runtime,logflare,vector,supavisor,postgres-meta)
@@ -51,7 +51,7 @@ Operating rules learned the hard way:
 - Catalog-check dev runner: node docs/progress/tools/catalog-run.mjs <checkout root> MT-5b MT-5c …
   The pending root-scripts test is docs/progress/tools/root-scripts.test.mjs.pending (wire it at integration).
 - Reviews before anything merges into milestone/m0a (AUTOPILOT §2): security-reviewer on the redactor stream
-  (git diff da5c5ca..<redactor tip> -- packages/shared) and on the S1.4 fixes (git diff 6fadb17..271018d -- scripts);
+  (git diff da5c5ca..<redactor tip> -- packages/shared) and on the S1.4 fixes (git diff 6fadb17..54d7265 -- scripts);
   database-reviewer on all supabase/ work; spec-reviewer on the S1.7 diff. Fix every Blocking/High/Medium
   test-first, one commit per finding. Merge streams with `git merge --no-ff`, then a full `pnpm verify`.
 - Windows: never pipe supabase/docker output into `head` (it hangs) — write to a file. commitlint rejects a
