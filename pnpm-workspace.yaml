@@ -44,3 +44,17 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - prettier@3.9.10
+
+# Security override (CI `security` job, 2026-10-11). eslint-plugin-boundaries 7.2.0 pins handlebars 4.7.9
+# (GHSA-8r5x-fm3f-whwj and GHSA-p8wg-vrv2-v86f critical, GHSA-xw65-4hp5-5hc7 moderate); 4.7.10 is the
+# patched release. Remove when the plugin depends on handlebars >= 4.7.10.
+overrides:
+  handlebars: 4.7.10
+
+# braces <= 3.0.3 (GHSA-vfj7-8cjw-p6xm, high: stack exhaustion on deeply nested brace patterns) has no
+# fixed release. It is reached only through eslint-plugin-boundaries > micromatch at lint time, with
+# patterns from this repository's own eslint config: never untrusted input, never shipped. Ignored until a
+# fix exists, then removed (docs/build-notes.md "Autopilot changes", 2026-10-11).
+auditConfig:
+  ignoreGhsas:
+    - GHSA-vfj7-8cjw-p6xm
