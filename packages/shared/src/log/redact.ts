@@ -404,9 +404,12 @@ const redactAddresses =
 const STEPS: readonly Step[] = [
   // secrets and tokens first, so later patterns never see their pieces
   sub(/(?<![\w-])eyJ[\w-]*\.[\w-]*\.[\w-]*/g, REDACTED),
-  // A scheme word followed by `=` or `:` is a key (`token = v`), left to the key rule (redactor
-  // G-lows re-review H1); the look-ahead also stops `\s{1,8}` from ending inside a longer run.
-  sub(/\b(?:Bearer|Basic|Token)\s{1,8}(?![\s=:])[^\s"',;]+/gi, REDACTED),
+  sub(/\b(?:Bearer|Basic)\s{1,8}[^\s"',;]+/gi, REDACTED),
+  // `Token` is also a key stem: followed by `=` or `:` it is a key (`token = v`), left to the key
+  // rule (redactor G-lows re-review H1). Only `Token`: `bearer`/`basic` are not key stems, so
+  // `Bearer =v` must stay here (S1.7 gate review K2). The look-ahead also stops `\s{1,8}` from
+  // ending inside a longer run of spaces.
+  sub(/\bToken\s{1,8}(?![\s=:])[^\s"',;]+/gi, REDACTED),
   // free-text headers: any Authorization scheme, and every Cookie pair, not only the first
   sub(/\b((?:proxy-)?authorization\s{0,3}[=:]\s{0,3})[^\r\n"',;]+/gi, keepPrefix),
   sub(/\b((?:set-)?cookie\s{0,3}[=:]\s{0,3})[^\r\n"']+/gi, keepPrefix),

@@ -841,6 +841,19 @@ describe('Authorization schemes (S1.7 follow-up 2)', () => {
   ])('still redacts the scheme form %s (H1 control)', (_label, s) => {
     expect(redactString(s)).toBe(REDACTED);
   });
+
+  // S1.7 gate review K2: H1's look-ahead must not hand `Bearer =v` / `Basic :v` to the key rule,
+  // because `bearer` and `basic` are not key stems there (the value leaked at 72f8f1f).
+  it.each([
+    ['Bearer =v', `Bearer =${tok}`],
+    ['Basic =v', `Basic =${tok}`],
+    ['Bearer :v', `Bearer :${tok}`],
+    ['Basic :v', `Basic :${tok}`],
+  ])('redacts the value after %s (K2)', (_label, s) => {
+    const out = redactString(s);
+    expect(out).not.toContain(tok);
+    expect(redactString(out)).toBe(out);
+  });
 });
 
 describe('number canonicalisation (S1.7 follow-ups 3-5)', () => {
