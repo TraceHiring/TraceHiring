@@ -417,6 +417,36 @@ describe('checkWorkflow', () => {
     expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
   });
 
+  // S1.4 second re-review N9: bash reads SHELLOPTS (noexec), BASH_ENV, BASHOPTS and ENV from the
+  // environment, so an env: entry can skip every run: step just like a shell template could.
+  it.each([
+    ['workflow env', (d) => (d.env = { SHELLOPTS: 'noexec' })],
+    ['job env', (d) => (d.jobs.static.env = { ...d.jobs.static.env, BASH_ENV: './.ci/env.sh' })],
+    ['step env', (d) => (d.jobs.rls.steps[2].env = { bashopts: 'x' })],
+    ['an expression env key', (d) => (d.jobs.static.env = { "${{ 'SHELLOPTS' }}": 'noexec' })],
+    ['ENV', (d) => (d.env = { ENV: './x.sh' })],
+  ])('rejects a shell-startup variable in %s', (_label, mutate) => {
+    const d = doc();
+    mutate(d);
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/env: may not set/);
+  });
+
+  it.each([
+    ['container', (d) => (d.jobs.static.container = 'ghcr.io/example/ci-image:latest')],
+    ['services', (d) => (d.jobs.rls.services = { db: { image: 'postgres:17' } })],
+  ])('rejects %s on a required job', (_label, mutate) => {
+    const d = doc();
+    mutate(d);
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/may not use container: or services:/);
+  });
+
+  it('accepts an ordinary env: name such as DO_NOT_TRACK', () => {
+    const d = doc();
+    d.env = { DO_NOT_TRACK: '1' };
+    d.jobs.static.env = { ...d.jobs.static.env, CI_FLAG: 'yes' };
+    expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
+  });
+
   it('allows a required job to need only other required jobs', () => {
     const d = doc();
     d.jobs.static.needs = 'rls';

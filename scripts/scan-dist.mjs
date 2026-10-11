@@ -9,6 +9,9 @@
 //   - a dist/ holds, at any depth, a .gitleaksignore, .gitleaks.toml or .gitleaksbaseline (any
 //     case), or a file containing gitleaks' inline allow marker: `gitleaks dir` honours an ignore
 //     file in the scanned directory and skips marked lines, so either could hide a finding
+//   - a dist/ holds an archive (by name or by magic bytes), whose content cannot be scanned
+//   - `gitleaks stdin` finds a key in the dist/ content (every file, binary or not, in sorted
+//     order after a fixed ASCII header), which catches files `gitleaks dir` skips by path or type
 // The repository's .gitleaks.toml is always passed with --config (a built-in default config when
 // it is missing), and GITLEAKS_CONFIG / GITLEAKS_CONFIG_TOML are dropped from gitleaks' environment,
 // so a config that a build copies into dist/ can never change the rules.
@@ -80,9 +83,19 @@ export const HIDER_NAMES = ['.gitleaksignore', '.gitleaks.toml', '.gitleaksbasel
 const ALLOW_MARKER = ['gitleaks', 'allow'].join(':');
 
 /**
+ * A directory's entries sorted by name (UTF-16 code units), so every walk visits files in the
+ * same order on NTFS and ext4 (S1.4 security re-review N8).
+ */
+const sortedEntries = (abs) =>
+  readdirSync(abs, { withFileTypes: true }).sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  );
+
+/**
  * Anything in a dist/ that could make gitleaks skip a finding there (S1.4 security review M5):
- * an ignore, config or baseline file at any depth, or a file containing the inline allow marker
- * (in any case). Symlinks are not followed; a symlink with a hider's name still counts.
+ * an ignore, config or baseline file at any depth, an archive (by name or by magic bytes), or a
+ * file containing the inline allow marker (in any case). Symlinks are not followed; a symlink
+ * with a hider's name still counts.
  * @param {string} root repository root
  * @param {string} rel repo-relative POSIX path of the dist/ directory
  * @returns {string[]} problems
@@ -90,7 +103,7 @@ const ALLOW_MARKER = ['gitleaks', 'allow'].join(':');
 export function findHiders(root, rel) {
   const problems = [];
   const walk = (abs, relPath) => {
-    for (const e of readdirSync(abs, { withFileTypes: true })) {
+    for (const e of sortedEntries(abs)) {
       const childAbs = path.join(abs, e.name);
       const childRel = `${relPath}/${e.name}`;
       if (HIDER_NAMES.includes(e.name.toLowerCase())) {
@@ -99,17 +112,20 @@ export function findHiders(root, rel) {
         );
         continue;
       }
-      if (e.isDirectory()) walk(childAbs, childRel);
-      else if (e.isFile() && ARCHIVE_RE.test(e.name)) {
+      if (e.isDirectory()) {
+        walk(childAbs, childRel);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      const buf = readFileSync(childAbs);
+      if (ARCHIVE_RE.test(e.name) || ARCHIVE_MAGIC.some((m) => startsWith(buf, m))) {
         problems.push(
           `${childRel}: archive in build output (compressed content cannot be scanned)`,
         );
-      } else if (e.isFile()) {
-        const text = readFileSync(childAbs).toString('latin1').toLowerCase();
-        if (text.includes(ALLOW_MARKER))
-          problems.push(
-            `${childRel}: contains the inline allow marker, which makes gitleaks skip that line`,
-          );
+      } else if (buf.toString('latin1').toLowerCase().includes(ALLOW_MARKER)) {
+        problems.push(
+          `${childRel}: contains the inline allow marker, which makes gitleaks skip that line`,
+        );
       }
     }
   };
@@ -119,23 +135,47 @@ export function findHiders(root, rel) {
 
 /** Compressed files: gitleaks cannot see inside them, so none may ship (S1.4 re-review N5). */
 const ARCHIVE_RE = /\.(?:gz|br|zst|zip|tgz|tar|bz2|xz|7z|rar)$/i;
+/**
+ * The leading bytes of compressed formats, so an archive under any name fails (S1.4 re-review
+ * N8): gzip, zip, bzip2, xz, zstd, 7z, rar (v4 and v5).
+ */
+const ARCHIVE_MAGIC = [
+  '1f8b',
+  '504b0304',
+  '425a68',
+  'fd377a585a00',
+  '28b52ffd',
+  '377abcaf271c',
+  '526172211a07',
+].map((hex) => Buffer.from(hex, 'hex'));
+const startsWith = (buf, prefix) =>
+  buf.length >= prefix.length && buf.subarray(0, prefix.length).equals(prefix);
 
 /**
- * The content of every text file (no NUL byte in its first 8 KB) in a dist/, joined by newlines.
- * `gitleaks dir` skips paths on gitleaks' built-in allowlist (node_modules/, images, lockfiles,
- * anything containing gitleaks.toml), so this content also goes through `gitleaks stdin`, which
- * has no path to allowlist (S1.4 security re-review N5). Symlinks are not followed.
+ * The start of every stream sent to `gitleaks stdin`. gitleaks 8.30.1 sniffs the type of the
+ * stream's first read (a 100 KB buffer) and skips the whole stream when it looks like
+ * application/*: not only by leading bytes (%PDF, MZ, BZh, %!, \0asm, gzip) but also by bytes
+ * further in (tar's `ustar` at byte 257, DICOM at 128, ISO 9660 at 32769). Plain ASCII lines
+ * longer than that first read mean no dist file's bytes can decide the type (verified with the
+ * real gitleaks 8.30.1; S1.4 security re-review N8).
+ */
+export const STDIN_HEADER = Buffer.from('scan-dist\n'.repeat(12_800), 'latin1');
+
+/**
+ * The stream for `gitleaks stdin`: STDIN_HEADER, then the bytes of every file in a dist/ in
+ * sorted path order, each followed by a newline. Binary files are kept (a key after a binary
+ * header, or in a file with a NUL byte, is still found). `gitleaks dir` skips paths on gitleaks'
+ * built-in allowlist (node_modules/, images, lockfiles, anything containing gitleaks.toml) and
+ * files that look binary, so this content also goes through `gitleaks stdin`, which has no path
+ * to allowlist (S1.4 security re-review N5, N8). Symlinks are not followed.
  */
 export function distText(root, rel) {
-  const parts = [];
+  const parts = [STDIN_HEADER];
   const walk = (abs) => {
-    for (const e of readdirSync(abs, { withFileTypes: true })) {
+    for (const e of sortedEntries(abs)) {
       const childAbs = path.join(abs, e.name);
       if (e.isDirectory()) walk(childAbs);
-      else if (e.isFile()) {
-        const buf = readFileSync(childAbs);
-        if (!buf.subarray(0, 8192).includes(0)) parts.push(buf, Buffer.from('\n'));
-      }
+      else if (e.isFile()) parts.push(readFileSync(childAbs), Buffer.from('\n'));
     }
   };
   walk(path.join(root, ...rel.split('/')));
@@ -214,7 +254,8 @@ export function scanDist({ root, gitleaks = 'gitleaks', env = process.env }) {
       if (s.status !== 0) {
         problems.push(
           `${rel}: gitleaks found a secret or failed (exit ${s.status}) in a file that gitleaks dir ` +
-            `skips by path (node_modules/, images, lockfiles, gitleaks.toml names). To find it, pipe each such file through: ` +
+            `skips by path (node_modules/, images, lockfiles, gitleaks.toml names) or as binary. To find it, ` +
+            `pipe each such file, after a first line of plain text, through: ` +
             `gitleaks stdin --redact --no-banner -v --config .gitleaks.toml`,
         );
       }

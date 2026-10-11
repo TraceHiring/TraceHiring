@@ -655,6 +655,32 @@ function checkStepCommon(step, file, where, out, ctx) {
   if (step.shell !== undefined && step.shell !== 'bash') {
     out.push(v(file, where, SHELL_MESSAGE));
   }
+  checkEnv(step.env, file, where, out);
+}
+
+// bash reads these from the environment at startup: SHELLOPTS=noexec or a BASH_ENV/ENV script can make
+// every run: step exit 0 without running it, like a shell template (S1.4 second re-review N9).
+const SHELL_STARTUP_ENV = new Set(['shellopts', 'bashopts', 'bash_env', 'env']);
+
+/** An env: mapping at any level may not set a shell-startup variable or build a key from an expression. */
+function checkEnv(env, file, where, out) {
+  if (!isObj(env)) return;
+  for (const key of Object.keys(env)) {
+    const bad = key.includes('${{')
+      ? 'a key built from an expression'
+      : SHELL_STARTUP_ENV.has(key.toLowerCase())
+        ? key
+        : null;
+    if (bad !== null) {
+      out.push(
+        v(
+          file,
+          where,
+          `env: may not set ${bad} (bash reads it at startup and can skip every run: step)`,
+        ),
+      );
+    }
+  }
 }
 
 // A custom shell template such as 'true {0}' makes every run: step exit 0 without running it
@@ -737,6 +763,7 @@ export function checkWorkflow(doc, file, ctx = {}) {
       );
   }
   checkDefaults(doc.defaults, file, 'defaults', out);
+  checkEnv(doc.env, file, 'env', out);
   if (!isObj(doc.jobs)) {
     out.push(v(file, 'jobs', 'workflow has no jobs mapping'));
     return out;
@@ -770,6 +797,14 @@ export function checkWorkflow(doc, file, ctx = {}) {
     }
     if (isTruthyFlag(job['continue-on-error'])) {
       out.push(v(file, where, 'continue-on-error is not allowed on a job'));
+    }
+    checkEnv(job.env, file, where, out);
+    // A job container (or service) image decides which bash runs the steps (N9).
+    if (
+      REQUIRED_JOBS.includes(name) &&
+      (job.container !== undefined || job.services !== undefined)
+    ) {
+      out.push(v(file, where, 'a required job may not use container: or services:'));
     }
     if (REQUIRED_JOBS.includes(name) && job.if !== undefined) {
       out.push(

@@ -6,8 +6,16 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
-import { INSTALL_HINT, findDists, scanDist } from '../scan-dist.mjs';
+import {
+  INSTALL_HINT,
+  STDIN_HEADER,
+  distText,
+  findDists,
+  findHiders,
+  scanDist,
+} from '../scan-dist.mjs';
 import { cleanupTempDirs, makeTempDir, writeFiles } from './fixtures/checks/temp-repo.mjs';
 
 afterEach(cleanupTempDirs);
@@ -19,6 +27,10 @@ const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 /** A random string in the shape of a GitHub personal access token (gitleaks rule github-pat). */
 const fakeToken = () =>
   ['gh', 'p_', ...[...randomBytes(36)].map((b) => ALNUM[b % ALNUM.length])].join('');
+
+/** A random Supabase-secret-shaped key (the repository rule supabase-secret-key). */
+const sbSecret = () =>
+  ['sb', 'secret', [...randomBytes(40)].map((b) => ALNUM[b % ALNUM.length]).join('')].join('_');
 
 const pkg = (build = true) =>
   JSON.stringify({ name: 'fixture', private: true, scripts: build ? { build: 'x' } : {} });
@@ -56,6 +68,61 @@ describe('findDists', () => {
       dists: ['apps/candidate/dist', 'apps/recruiter/dist', 'workers/edge/dist'],
       missing: ['workers/jobs', 'services/api'],
     });
+  });
+});
+
+// S1.4 security re-review N8: archives are found by their magic bytes, not only by name.
+describe('findHiders', () => {
+  it.each([
+    ['gzip', '1f8b0800000000000003'],
+    ['zip', '504b030414000000'],
+    ['bzip2', '425a683931415926'],
+    ['xz', 'fd377a585a000004'],
+    ['zstd', '28b52ffd2400'],
+    ['7z', '377abcaf271c0004'],
+    ['rar', '526172211a070100'],
+  ])('reports %s bytes in assets/data.dat as an archive', (_label, hex) => {
+    const root = cleanRepo({ 'apps/candidate/dist/assets/data.dat': Buffer.from(hex, 'hex') });
+    expect(findHiders(root, 'apps/candidate/dist')).toEqual([
+      'apps/candidate/dist/assets/data.dat: archive in build output (compressed content cannot be scanned)',
+    ]);
+  });
+
+  it('does not report text, images or wasm as archives', () => {
+    const root = cleanRepo({
+      'apps/candidate/dist/assets/a.png': Buffer.from('89504e470d0a1a0a0000', 'hex'),
+      'apps/candidate/dist/assets/b.wasm': Buffer.from('0061736d01000000', 'hex'),
+      'apps/candidate/dist/assets/c.txt': 'BZ is not bzip2\n',
+      'apps/candidate/dist/assets/d.txt': '',
+    });
+    expect(findHiders(root, 'apps/candidate/dist')).toEqual([]);
+  });
+});
+
+// S1.4 security re-review N8: the stream that goes through gitleaks stdin.
+describe('distText', () => {
+  it('starts with a fixed ASCII header longer than the first read gitleaks sniffs', () => {
+    expect(STDIN_HEADER.length).toBeGreaterThan(100_000);
+    expect(/^(?:scan-dist\n)+$/.test(STDIN_HEADER.toString('latin1'))).toBe(true);
+    const root = cleanRepo();
+    const text = distText(root, 'apps/candidate/dist');
+    expect(text.subarray(0, STDIN_HEADER.length).equals(STDIN_HEADER)).toBe(true);
+  });
+
+  it('keeps files with NUL bytes and joins files in sorted path order', () => {
+    const root = makeTempDir();
+    writeFiles(root, {
+      'd/zeta.js': 'marker-zeta\n',
+      'd/b/inner.js': 'marker-b-inner\n',
+      'd/a.bin': Buffer.from('\0\0marker-a-bin\n', 'latin1'),
+      'd/B.js': 'marker-upper-b\n',
+    });
+    const body = distText(root, 'd').subarray(STDIN_HEADER.length).toString('latin1');
+    const order = ['marker-upper-b', 'marker-a-bin', 'marker-b-inner', 'marker-zeta'].map((m) =>
+      body.indexOf(m),
+    );
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
   });
 });
 
@@ -174,6 +241,51 @@ describe('scanDist (real gitleaks)', () => {
     const r = scanDist({ root });
     expect(r.ok).toBe(false);
     expect(r.problems.join('\n')).toMatch(/assets\/index\.js\.gz: archive in build output/);
+  });
+
+  // S1.4 security re-review N8: gitleaks stdin sniffs the type of its first read and skips the
+  // whole stream when it looks like application/* (offset 0 such as %PDF, but also tar's `ustar`
+  // at byte 257), so the file that sorts first must not decide whether anything is scanned.
+  it.each([
+    ['a text-only %PDF file', 'assets/a-notice.pdf', '%PDF-1.4\nnotice\n'],
+    [
+      'a text file that sniffs as tar',
+      'assets/a-notes.txt',
+      `${'a'.repeat(247)}ustar${'a'.repeat(5)}ustar\n`,
+    ],
+  ])('finds a key in assets/bootstrap-<hash>.js when %s sorts first', (_label, file, content) => {
+    const root = cleanRepo({
+      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+      [`apps/candidate/dist/${file}`]: content,
+      'apps/candidate/dist/assets/bootstrap-4f2a9c1e.js': `x("${sbSecret()}");\n`,
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toMatch(/apps\/candidate\/dist: gitleaks found a secret/);
+  });
+
+  it.each([
+    ['a NUL-containing logo.svg', 'logo.svg', '<svg xmlns="http://www.w3.org/2000/svg">\0\0\0\n'],
+    ['a file after a \\0asm header', 'assets/app-9c1e.wasm', '\0asm\x01\0\0\0\n'],
+  ])('finds a key in %s', (_label, file, head) => {
+    const key = sbSecret();
+    const root = cleanRepo({
+      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+      [`apps/candidate/dist/${file}`]: Buffer.from(`${head}x("${key}");\n`, 'latin1'),
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toMatch(/apps\/candidate\/dist: gitleaks found a secret/);
+    expect(r.problems.join('\n')).not.toContain(key);
+  });
+
+  it('fails on gzip bytes in a file whose name is not an archive name', () => {
+    const root = cleanRepo({
+      'apps/candidate/dist/assets/data.dat': gzipSync(Buffer.from('fixture build output\n')),
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toMatch(/assets\/data\.dat: archive in build output/);
   });
 
   it('keeps the default rules in the repository .gitleaks.toml', () => {
