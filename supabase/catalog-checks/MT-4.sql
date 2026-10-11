@@ -1,16 +1,20 @@
 -- MT-4 (spec specs/m0-foundations.md §8.5, tenancy): (a) any privilege for anon on an in-scope relation, column,
 -- sequence or function (has_*_privilege, so grants through PUBLIC and role membership count). anon_column fires only
 -- for column privileges that the same table-level privilege does not already explain. (b) an aclexplode(relacl)
--- entry on an in-scope table (relkind r or p) that gives TRUNCATE, TRIGGER or REFERENCES to a grantee other than the
--- owner. (b) reads ACL entries, not has_table_privilege, so superusers do not show up. TRUNCATE ignores RLS.
--- Same scope and skips as MT-1. Functions are those in the four schemas, prokind f, p, a or w. The CASE around
--- has_sequence_privilege keeps the planner from calling it on a non-sequence, which raises an error.
-with scope_schema as (
+-- entry on an in-scope table (relkind r or p) that gives TRUNCATE, TRIGGER, REFERENCES or MAINTAIN to a grantee other
+-- than the owner, and (column_references) an aclexplode(attacl) entry on a column of such a table that gives
+-- REFERENCES to a grantee other than the owner. (b) reads ACL entries, not has_table_privilege, so superusers do not
+-- show up. TRUNCATE ignores RLS, MAINTAIN runs VACUUM, ANALYZE, CLUSTER, REINDEX and REFRESH MATERIALIZED VIEW, and
+-- REFERENCES lets a foreign key probe the referenced values.
+-- Same scope (partitions and INHERITS descendants included) and skips as MT-1. Functions are those in the four
+-- schemas, prokind f, p, a or w. The CASE around has_sequence_privilege keeps the planner from calling it on a
+-- non-sequence, which raises an error.
+with recursive scope_schema as (
   select n.oid
   from pg_namespace as n
   where n.nspname in ('public', 'private', 'quality', 'integrity')
 ),
-scope_rel as (
+scope_rel (oid) as (
   select c.oid
   from pg_class as c
   where c.relnamespace in (select s.oid from scope_schema as s)
@@ -20,6 +24,10 @@ scope_rel as (
   cross join lateral pg_partition_tree(c.oid) as t
   where c.relkind = 'p'
     and c.relnamespace in (select s.oid from scope_schema as s)
+  union
+  select i.inhrelid
+  from pg_inherits as i
+  join scope_rel as r on r.oid = i.inhparent
 ),
 scope_class as (
   select c.oid, c.relkind, c.relowner, c.relacl, format('%I.%I', n.nspname, c.relname) as qualified_name
@@ -62,7 +70,7 @@ select
   'anon holds a table privilege'::text as detail
 from scope_class as sc
 where sc.relkind in ('r', 'p', 'v', 'm', 'f')
-  and has_table_privilege('anon', sc.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+  and has_table_privilege('anon', sc.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
 union all
 select
   'anon_column'::text,
@@ -99,4 +107,20 @@ from scope_class as sc
 cross join lateral aclexplode(sc.relacl) as a
 where sc.relkind in ('r', 'p')
   and a.grantee <> sc.relowner
-  and a.privilege_type in ('TRUNCATE', 'TRIGGER', 'REFERENCES')
+  and a.privilege_type in ('TRUNCATE', 'TRIGGER', 'REFERENCES', 'MAINTAIN')
+union all
+select
+  'column_references'::text,
+  format('%s.%I', sc.qualified_name, att.attname)::text,
+  format(
+    '%s holds REFERENCES on the column',
+    case when a.grantee = 0 then 'PUBLIC' else pg_get_userbyid(a.grantee)::text end
+  )::text
+from scope_class as sc
+join pg_attribute as att on att.attrelid = sc.oid
+cross join lateral aclexplode(att.attacl) as a
+where sc.relkind in ('r', 'p')
+  and att.attnum > 0
+  and not att.attisdropped
+  and a.grantee <> sc.relowner
+  and a.privilege_type = 'REFERENCES'
