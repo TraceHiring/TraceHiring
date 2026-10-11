@@ -74,7 +74,7 @@ The next session may be on another account: start from `docs/progress/RESUME-PRO
 
 ## Open questions for the founder (unchanged; `docs/progress/FOUNDER-QUEUE.md`)
 - **URGENT:** revoke the Cloudflare token pasted as a secret *name*; set `CLOUDFLARE_API_TOKEN` and `SUPABASE_STAGING_DB_URL`.
-- `workers.dev` subdomain (H4); D1 placement (founder asked for an explanation first; re-ask (a)/(b)). Answered 21:55 IST: `main` protection (a), Bedrock (a); deny-rule widening + H3 main-only policy delegated to the autopilot (do early next session). None
+- `workers.dev` subdomain (H4); Answered 21:55–22:05 IST: D1 = (a) thin slice right after M0b; `main` protection (a), Bedrock (a); deny-rule widening + H3 main-only policy delegated to the autopilot (do early next session). None
   blocks S2/S3 code; they block the staging deploy and its deferred gates.
 
 ## Gotchas / do not touch
