@@ -1,10 +1,12 @@
 // AT-12 (local part): scripts/check-workflows.mjs and its YAML-subset parser (spec §7.1, §7.2).
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEPLOY_IF,
+  ENV_ALLOW_LIST,
   REQUIRED_JOBS,
   YamlError,
   checkAction,
@@ -440,11 +442,166 @@ describe('checkWorkflow', () => {
     expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/may not use container: or services:/);
   });
 
+  // N10 made env: names fail closed, so CI_FLAG (accepted here before N10) now fails; the
+  // ordinary names that pass are the ones on ENV_ALLOW_LIST.
   it('accepts an ordinary env: name such as DO_NOT_TRACK', () => {
     const d = doc();
     d.env = { DO_NOT_TRACK: '1' };
-    d.jobs.static.env = { ...d.jobs.static.env, CI_FLAG: 'yes' };
+    d.jobs.static.env = { ...d.jobs.static.env, WRANGLER_SEND_METRICS: 'false' };
     expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
+    d.jobs.static.env.CI_FLAG = 'yes';
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+      /jobs\.static\): env: may not set CI_FLAG.*ENV_ALLOW_LIST/,
+    );
+  });
+
+  // S1.4 N8/N9 security review N10: a deny-list of four names missed every other variable that
+  // bash, node, pnpm, the dynamic loader or the runner reads at startup (BASH_FUNC_pnpm%%,
+  // NODE_OPTIONS and pnpm_config_script_shell each made run: steps exit 0 without running), so
+  // only upper-case names on ENV_ALLOW_LIST pass, at every level.
+  describe('env: names fail closed (N10)', () => {
+    const REPRO_NAMES = [
+      'BASH_FUNC_pnpm%%',
+      'NODE_OPTIONS',
+      'pnpm_config_script_shell',
+      'LD_PRELOAD',
+      'PATH',
+      'ACTIONS_ALLOW_UNSECURE_COMMANDS',
+    ];
+    const WHOLE_ENV = `\${{ fromJSON('{"SHELLOPTS":"noexec"}') }}`;
+    // [label, the node whose env: is set, where the violation is reported]
+    const LEVELS = [
+      ['workflow env', (d) => d, /ci\.yml \(env\): env: /],
+      ['job env', (d) => d.jobs.static, /\(jobs\.static\): env: /],
+      ['step env', (d) => d.jobs.rls.steps[2], /\(jobs\.rls\.steps\[2\]\): env: /],
+      [
+        'deploy-staging step env',
+        (d) => d.jobs['deploy-staging'].steps[6],
+        /\(jobs\.deploy-staging\.steps\[6\]\): env: /,
+      ],
+    ];
+    const caseVariants = (name) => [
+      ...new Set([
+        name,
+        name.toLowerCase(),
+        name.toUpperCase(),
+        name[0] + name.slice(1).toLowerCase(),
+      ]),
+    ];
+
+    describe.each(REPRO_NAMES)('%s', (name) => {
+      it.each(LEVELS)('is rejected in a %s', (_label, target, where) => {
+        for (const variant of caseVariants(name)) {
+          const d = doc();
+          const t = target(d);
+          t.env = { ...t.env, [variant]: 'x' };
+          const m = msgs(checkWorkflow(d, 'ci.yml', ctx));
+          expect(m, variant).toMatch(new RegExp(`${where.source}may not set`));
+          expect(m, variant).toContain(`may not set ${variant}`);
+        }
+      });
+
+      it('is rejected in a composite-action step env', () => {
+        for (const variant of caseVariants(name)) {
+          const a = parseYaml(ACTION);
+          a.runs.steps[2].env = { [variant]: 'x' };
+          expect(msgs(checkAction(a, 'action.yml')), variant).toMatch(
+            /action\.yml \(runs\.steps\[2\]\): env: may not set/,
+          );
+        }
+      });
+    });
+
+    it.each([
+      ['NODE_OPTIONS', 'node_options', /node reads/],
+      ['BASH_FUNC_pnpm%%', 'bash_func_x%%', /bash imports/],
+      ['pnpm_config_script_shell', 'PNPM_CONFIG_SCRIPT_SHELL', /pnpm and npm read/],
+      ['npm_config_script_shell', 'Npm_Config_Script_Shell', /pnpm and npm read/],
+      ['LD_PRELOAD', 'ld_preload', /dynamic loader/],
+      ['PATH', 'Path', /which program/],
+      ['ACTIONS_ALLOW_UNSECURE_COMMANDS', 'actions_allow_unsecure_commands', /runner reads/],
+      ['SHELLOPTS', 'ShellOpts', /bash reads it at startup/],
+    ])('names why %s is denied, in any case (%s)', (_name, variant, reason) => {
+      const d = doc();
+      d.env = { ...d.env, [variant]: 'x' };
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(reason);
+    });
+
+    it.each(LEVELS)('rejects a whole-env expression in a %s', (_label, target, where) => {
+      const d = doc();
+      target(d).env = WHOLE_ENV;
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+        new RegExp(`${where.source}must be a mapping`),
+      );
+    });
+
+    it('rejects a whole-env expression in a composite-action step', () => {
+      const a = parseYaml(ACTION);
+      a.runs.steps[2].env = WHOLE_ENV;
+      expect(msgs(checkAction(a, 'action.yml'))).toMatch(
+        /runs\.steps\[2\]\): env: must be a mapping/,
+      );
+    });
+
+    it.each([
+      ['an empty env:', null],
+      ['a list', ['SHELLOPTS=noexec']],
+      ['a number', 1],
+    ])('rejects an env: that is %s', (_label, value) => {
+      const d = doc();
+      d.jobs.static.steps[2].env = value;
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+        /jobs\.static\.steps\[2\]\): env: must be a mapping/,
+      );
+    });
+
+    it.each([
+      ['a listed name in lower case', 'do_not_track'],
+      ['a name that is not listed', 'CI_FLAG'],
+      ['a name with a hyphen', 'DO-NOT-TRACK'],
+      ['a name starting with a digit', '1PASSWORD'],
+      ['a name with a space', 'DO_NOT_TRACK '],
+    ])('rejects %s', (_label, name) => {
+      const d = doc();
+      d.jobs.security.steps[2].env = { [name]: '1' };
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+        /jobs\.security\.steps\[2\]\): env: may not set/,
+      );
+    });
+
+    it('keeps the allow-list to upper-case names from ci.yml, the setup action and spec §7.2/§7.3', () => {
+      expect(Object.isFrozen(ENV_ALLOW_LIST)).toBe(true);
+      for (const name of ENV_ALLOW_LIST) expect(name).toMatch(/^[A-Z][A-Z0-9_]*$/);
+      expect([...ENV_ALLOW_LIST].sort()).toEqual(
+        [
+          // .github/workflows/ci.yml
+          'DO_NOT_TRACK',
+          'WRANGLER_SEND_METRICS',
+          'MIGRATIONS_BASE',
+          'OSV_SCANNER_VERSION',
+          'OSV_SCANNER_SHA256',
+          // .github/actions/setup/action.yml
+          'GITLEAKS_VERSION',
+          'GITLEAKS_SHA256',
+          // the S3 deploy-staging job (spec §7.2, §7.3)
+          'SUPABASE_STAGING_DB_URL',
+          'CLOUDFLARE_API_TOKEN',
+          'CLOUDFLARE_ACCOUNT_ID',
+        ].sort(),
+      );
+    });
+
+    it('accepts every listed name at every level', () => {
+      const all = Object.fromEntries(ENV_ALLOW_LIST.map((n) => [n, 'x']));
+      const d = doc();
+      d.env = { ...all, MIGRATIONS_BASE: 'origin/main' };
+      d.jobs.static.env = { ...all, MIGRATIONS_BASE: 'origin/main' };
+      d.jobs.rls.steps[2].env = { ...all };
+      expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
+      const a = parseYaml(ACTION);
+      a.runs.steps[2].env = { ...all };
+      expect(checkAction(a, 'action.yml')).toEqual([]);
+    });
   });
 
   it('allows a required job to need only other required jobs', () => {
@@ -862,6 +1019,69 @@ describe('runChecks over a fixture repository', () => {
         '.github/actions/outer/action.yml': composite(['uses: ./.github/actions/setup']),
       });
       expect(msgs(runChecks(root))).toMatch(/deploy-staging\.steps\[1\].*install/);
+    });
+  });
+
+  // S1.4 N8/N9 security review N10, on the real files: the repository's own .github passes, and
+  // each repro from the review, added to the real ci.yml, fails.
+  describe('the real .github (N10)', () => {
+    const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
+    const real = (rel) => readFileSync(path.join(REPO_ROOT, ...rel.split('/')), 'utf8');
+    const REAL_CI = real('.github/workflows/ci.yml');
+    const REAL_ACTION = real('.github/actions/setup/action.yml');
+    const ANCHOR = "  WRANGLER_SEND_METRICS: 'false'\n";
+
+    it('passes the real ci.yml and setup action', () => {
+      expect(runChecks(REPO_ROOT)).toEqual([]);
+      const script = fileURLToPath(new URL('../check-workflows.mjs', import.meta.url));
+      const r = spawnSync(process.execPath, [script], { encoding: 'utf8' });
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/check-workflows: OK/);
+    });
+
+    it.each([
+      ['BASH_FUNC_pnpm%%', '"() { :; }"'],
+      ['NODE_OPTIONS', '--import=data:text/javascript,process.exit(0)'],
+      ['pnpm_config_script_shell', '"true"'],
+      ['LD_PRELOAD', './x.so'],
+      ['PATH', './bin'],
+      ['ACTIONS_ALLOW_UNSECURE_COMMANDS', "'true'"],
+    ])('fails when the workflow env: of the real ci.yml sets %s', (name, value) => {
+      expect(REAL_CI).toContain(ANCHOR);
+      const root = repo({
+        '.github/workflows/ci.yml': REAL_CI.replace(ANCHOR, `${ANCHOR}  ${name}: ${value}\n`),
+        '.github/actions/setup/action.yml': REAL_ACTION,
+      });
+      expect(msgs(runChecks(root))).toMatch(
+        new RegExp(`ci\\.yml \\(env\\): env: may not set ${name.replace(/[%$]/g, '\\$&')}`),
+      );
+    });
+
+    it('fails when a step of the real ci.yml sets its whole env: from an expression', () => {
+      const step = '      - name: Typecheck\n        run: pnpm typecheck\n';
+      expect(REAL_CI).toContain(step);
+      const whole = `        env: \${{ fromJSON('{"SHELLOPTS":"noexec"}') }}\n`;
+      const root = repo({
+        '.github/workflows/ci.yml': REAL_CI.replace(step, step + whole),
+        '.github/actions/setup/action.yml': REAL_ACTION,
+      });
+      expect(msgs(runChecks(root))).toMatch(/jobs\.static\.steps\[2\]\): env: must be a mapping/);
+    });
+
+    it('fails when a step of the real setup action sets NODE_OPTIONS', () => {
+      const anchor = '        GITLEAKS_VERSION: 8.30.1\n';
+      expect(REAL_ACTION).toContain(anchor);
+      const root = repo({
+        '.github/workflows/ci.yml': REAL_CI,
+        '.github/actions/setup/action.yml': REAL_ACTION.replace(
+          anchor,
+          `${anchor}        NODE_OPTIONS: --import=data:text/javascript,process.exit(0)\n`,
+        ),
+      });
+      expect(msgs(runChecks(root))).toMatch(
+        /setup\/action\.yml \(runs\.steps\[2\]\): env: may not set NODE_OPTIONS/,
+      );
     });
   });
 

@@ -4,17 +4,23 @@
 // bytes, so no secret-shaped string is ever committed.
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, symlinkSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gzipSync } from 'node:zlib';
+import { deflateSync, gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  GITLEAKS_MAX_PEEK,
   INSTALL_HINT,
   STDIN_HEADER,
+  STDIN_PIECE_MAX,
+  STDIN_PIECE_OVERLAP,
   distText,
   findDists,
   findHiders,
   scanDist,
+  stdinPieces,
+  wideText,
 } from '../scan-dist.mjs';
 import { cleanupTempDirs, makeTempDir, writeFiles } from './fixtures/checks/temp-repo.mjs';
 
@@ -97,6 +103,88 @@ describe('findHiders', () => {
     });
     expect(findHiders(root, 'apps/candidate/dist')).toEqual([]);
   });
+
+  // S1.4 N8/N9 security review N13: more compressed formats, found by their bytes under any name.
+  const ARCHIVE = 'archive in build output (compressed content cannot be scanned)';
+  it.each([
+    ['zlib (default level)', () => deflateSync(Buffer.from('fixture build output\n'))],
+    ['zlib (best compression)', () => deflateSync(Buffer.from('fixture\n'), { level: 9 })],
+    ['zlib (no compression)', () => deflateSync(Buffer.from('fixture\n'), { level: 0 })],
+    [
+      'zlib (fastest, small window)',
+      () => deflateSync(randomBytes(64), { level: 1, windowBits: 9 }),
+    ],
+    ['an lz4 frame', () => Buffer.from('04224d1864400700000080', 'hex')],
+    ['legacy lz4', () => Buffer.from('02214c18000000001f', 'hex')],
+    ['unix compress (.Z)', () => Buffer.from('1f9d906600', 'hex')],
+    ['lzip', () => Buffer.from('4c5a4950010c00', 'hex')],
+    [
+      'a zip appended to a png (end record only)',
+      () => Buffer.concat([Buffer.from('89504e470d0a1a0a0000', 'hex'), zipEndRecord()]),
+    ],
+  ])('reports %s bytes in assets/data.bin as an archive', (_label, bytes) => {
+    const root = cleanRepo({ 'apps/candidate/dist/assets/data.bin': bytes() });
+    expect(findHiders(root, 'apps/candidate/dist')).toEqual([
+      `apps/candidate/dist/assets/data.bin: ${ARCHIVE}`,
+    ]);
+  });
+
+  it.each(['assets/x.lz4', 'assets/x.lz', 'assets/x.Z', 'assets/x.zlib', 'assets/x.brotli'])(
+    'reports %s as an archive by name',
+    (file) => {
+      const root = cleanRepo({ [`apps/candidate/dist/${file}`]: 'plain text\n' });
+      expect(findHiders(root, 'apps/candidate/dist')).toEqual([
+        `apps/candidate/dist/${file}: ${ARCHIVE}`,
+      ]);
+    },
+  );
+
+  it('does not report text that happens to start like a zlib header', () => {
+    // "(r" and "x^" pass zlib's header checksum, but a UTF-8 text file is not compressed.
+    expect(((0x28 << 8) | 0x72) % 31).toBe(0);
+    expect(((0x78 << 8) | 0x5e) % 31).toBe(0);
+    const root = cleanRepo({
+      'apps/candidate/dist/assets/a.js': '(r=globalThis).x=1;\n',
+      'apps/candidate/dist/assets/b.txt': 'x^2 + 1\n',
+    });
+    expect(findHiders(root, 'apps/candidate/dist')).toEqual([]);
+  });
+});
+
+/** The 22-byte end-of-central-directory record of an empty zip, which zip readers look for. */
+const zipEndRecord = () => Buffer.concat([Buffer.from('504b0506', 'hex'), Buffer.alloc(18)]);
+
+/** A PNG signature, so random bytes after it never start like an archive. */
+const PNG_HEAD = Buffer.from('89504e470d0a1a0a0000', 'hex');
+const utf16le = (s) => Buffer.from(s, 'utf16le');
+const utf16be = (s) => Buffer.from(s, 'utf16le').swap16();
+/** `s` (BMP characters only) as UTF-32 code units in the given byte order. */
+const utf32 = (s, order) => {
+  const b = Buffer.alloc(s.length * 4);
+  for (let i = 0; i < s.length; i++) b[`writeUInt32${order}`](s.charCodeAt(i), i * 4);
+  return b;
+};
+
+// S1.4 N8/N9 security review N13.
+describe('wideText', () => {
+  it('is null for content without a NUL byte', () => {
+    expect(wideText(Buffer.from('plain UTF-8 text, no NUL\n'))).toBeNull();
+  });
+
+  it.each([
+    ['UTF-16LE', (s) => utf16le(`﻿${s}`)],
+    ['UTF-16BE', (s) => utf16be(s)],
+    ['UTF-32LE', (s) => utf32(s, 'LE')],
+    ['UTF-32BE', (s) => utf32(`﻿${s}`, 'BE')],
+    ['UTF-16LE between binary bytes', (s) => Buffer.concat([PNG_HEAD, utf16le(s), PNG_HEAD])],
+  ])('returns the ASCII text of %s', (_label, encode) => {
+    const text = 'token: "wide text fixture"\nnext line';
+    expect(wideText(encode(text)).toString('latin1')).toContain(text);
+  });
+
+  it('skips runs shorter than 8 characters', () => {
+    expect(wideText(Buffer.concat([utf16le('short'), Buffer.from([0xff, 0xff])]))).toBeNull();
+  });
 });
 
 // S1.4 security re-review N8: the stream that goes through gitleaks stdin.
@@ -123,6 +211,175 @@ describe('distText', () => {
     );
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
+  });
+});
+
+// S1.4 N8/N9 security review N11: gitleaks 8.30.1 reads its input in chunks (up to 100,000 bytes
+// per read, as many as the pipe holds), reads on until a blank line or GITLEAKS_MAX_PEEK more
+// bytes, and scans each chunk on its own, so a key across a cut in a long run without a blank line
+// was missed. The pipe decides the cut offsets, so the stream must give gitleaks a blank line
+// within its read-ahead from every offset, and every key must be whole between two blank lines.
+describe('distText pieces (N11)', () => {
+  /** Synthetic content shapes that once had no blank line for longer than gitleaks reads ahead. */
+  const shapes = () => ({
+    'a 400 KB single line': Buffer.from(
+      Array.from({ length: 7_000 }, (_, i) => `x("k${i}-${'v'.repeat(48)}");`).join(''),
+    ),
+    'a 150 KB file of short lines': Buffer.from(
+      Array.from({ length: 5_000 }, (_, i) => `.c${i}{color:red}`).join('\n'),
+    ),
+    '200 KB of random bytes': randomBytes(200_000),
+    '90 KB of base64 with no safe cut': Buffer.from(randomBytes(67_500).toString('base64')),
+    'a short file': Buffer.from('x\n'),
+    'an empty file': Buffer.alloc(0),
+    'exactly STDIN_PIECE_MAX bytes': Buffer.alloc(STDIN_PIECE_MAX, 0x61),
+    'STDIN_PIECE_MAX + 1 bytes': Buffer.alloc(STDIN_PIECE_MAX + 1, 0x61),
+  });
+
+  it('fits a piece and its blank line inside gitleaks read-ahead', () => {
+    expect(GITLEAKS_MAX_PEEK).toBe(25_000);
+    expect(STDIN_PIECE_MAX + 2).toBeLessThan(GITLEAKS_MAX_PEEK);
+    expect(STDIN_PIECE_OVERLAP).toBeGreaterThanOrEqual(8_192);
+  });
+
+  it.each([
+    'a 400 KB single line',
+    'a 150 KB file of short lines',
+    '200 KB of random bytes',
+    '90 KB of base64 with no safe cut',
+    'a short file',
+    'an empty file',
+    'exactly STDIN_PIECE_MAX bytes',
+    'STDIN_PIECE_MAX + 1 bytes',
+  ])('covers every substring of up to STDIN_PIECE_OVERLAP bytes of %s with one piece', (label) => {
+    const buf = shapes()[label];
+    const pieces = stdinPieces(buf);
+    expect(pieces[0][0]).toBe(0);
+    expect(pieces.at(-1)[1]).toBe(buf.length);
+    for (const [s, e] of pieces) {
+      expect(e - s).toBeLessThanOrEqual(STDIN_PIECE_MAX);
+      expect(e).toBeGreaterThanOrEqual(s);
+    }
+    for (let k = 1; k < pieces.length; k++) {
+      expect(pieces[k][0]).toBeGreaterThan(pieces[k - 1][0]); // progress
+      // The next piece starts at least STDIN_PIECE_OVERLAP before this one ends, so a substring
+      // starting in this piece (and not in the next) ends inside it.
+      expect(pieces[k][0]).toBeLessThanOrEqual(pieces[k - 1][1] - STDIN_PIECE_OVERLAP);
+    }
+  });
+
+  it('cuts a long line after a ; or ) rather than inside a token when it can', () => {
+    const buf = shapes()['a 400 KB single line'];
+    const pieces = stdinPieces(buf);
+    expect(pieces.length).toBeGreaterThan(20);
+    for (const [s, e] of pieces) {
+      if (s > 0) expect(';)').toContain(String.fromCharCode(buf[s - 1]));
+      if (e < buf.length) expect(';)').toContain(String.fromCharCode(buf[e - 1]));
+    }
+  });
+
+  it('leaves no run of the stream without a blank line longer than STDIN_PIECE_MAX', () => {
+    const root = makeTempDir();
+    const files = shapes();
+    writeFiles(
+      root,
+      Object.fromEntries(Object.entries(files).map(([label, b], i) => [`d/${i}-${label}`, b])),
+    );
+    const text = distText(root, 'd');
+    // The header's last line and the next byte make a blank line, so no file joins the header.
+    expect(text.subarray(STDIN_HEADER.length - 1, STDIN_HEADER.length + 1).toString()).toBe('\n\n');
+    let last = STDIN_HEADER.length + 1;
+    let longest = 0;
+    for (let i = text.indexOf('\n\n', last); i >= 0; i = text.indexOf('\n\n', i + 1)) {
+      longest = Math.max(longest, i - last);
+      last = i + 2;
+    }
+    longest = Math.max(longest, text.length - last);
+    expect(longest).toBeLessThanOrEqual(STDIN_PIECE_MAX);
+    // Every byte of every file is in the stream.
+    for (const b of Object.values(files))
+      expect(text.includes(b)).toBe(b.length <= STDIN_PIECE_MAX);
+  });
+});
+
+/** Every secret real gitleaks stdin reports for the distText stream of `rel` (unredacted). */
+function stdinSecrets(root, rel) {
+  const out = makeTempDir('trace-scan-report-');
+  const report = `${out}/report.json`;
+  const r = spawnSync(
+    'gitleaks',
+    [
+      'stdin',
+      '--no-banner',
+      '--config',
+      REPO_CONFIG,
+      '--report-format',
+      'json',
+      '--report-path',
+      report,
+    ],
+    { input: distText(root, rel), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+  );
+  expect(r.error).toBeUndefined();
+  return new Set(JSON.parse(readFileSync(report, 'utf8')).map((f) => f.Secret));
+}
+
+/**
+ * A Supabase-secret-shaped key with no vowels. gitleaks' default global allowlist drops any secret
+ * containing "false" or ending in "null" (any case), which a few of thousands of random keys
+ * would, so keys used by the thousand carry no word at all.
+ */
+const denseKey = () =>
+  [
+    'sb',
+    'secret',
+    [...randomBytes(40)].map((b) => CONSONANTS[b % CONSONANTS.length]).join(''),
+  ].join('_');
+const CONSONANTS = 'BCDFGHJKLMNPQRSTVWXYZbcdfghjklmnpqrstvwxyz0123456789';
+
+describe('distText through real gitleaks stdin (N11)', () => {
+  // A key every 60 bytes: wherever the pipe makes gitleaks cut, the cut falls in or next to a key.
+  it('finds every key in a 400 KB single-line file, across every cut gitleaks makes', () => {
+    const keys = [];
+    let line = '';
+    while (line.length < 400_000) {
+      const k = denseKey();
+      keys.push(k);
+      line += `x("${k}");`;
+    }
+    const root = makeTempDir();
+    writeFiles(root, { 'd/node_modules/pkg/index.js': line });
+    const found = stdinSecrets(root, 'd');
+    expect(keys.filter((k) => !found.has(k)).length, 'keys gitleaks missed').toBe(0);
+  });
+
+  it('finds every key in 3,000 single-line ~1.2 KB files', () => {
+    const keys = [];
+    const files = {};
+    for (let i = 0; i < 3_000; i++) {
+      const k = denseKey();
+      keys.push(k);
+      files[`d/assets/chunk-${String(i).padStart(4, '0')}.js`] =
+        `${'a'.repeat(560)}x("${k}");${'b'.repeat(560)}`;
+    }
+    const root = makeTempDir();
+    writeFiles(root, files);
+    const found = stdinSecrets(root, 'd');
+    expect(keys.filter((k) => !found.has(k)).length, 'keys gitleaks missed').toBe(0);
+  });
+
+  it('finds every key in a 150 KB file of short lines with no blank line', () => {
+    const keys = [];
+    const lines = [];
+    for (let size = 0; size < 150_000; size += lines.at(-1).length + 1) {
+      const k = denseKey();
+      keys.push(k);
+      lines.push(`  x("${k}");`);
+    }
+    const root = makeTempDir();
+    writeFiles(root, { 'd/assets/styles.css': lines.join('\n') });
+    const found = stdinSecrets(root, 'd');
+    expect(keys.filter((k) => !found.has(k)).length, 'keys gitleaks missed').toBe(0);
   });
 });
 
@@ -279,6 +536,54 @@ describe('scanDist (real gitleaks)', () => {
     expect(r.problems.join('\n')).not.toContain(key);
   });
 
+  // S1.4 N8/N9 security review N13: gitleaks reads UTF-16 text as bytes with a NUL after every
+  // ASCII character, so a key stored that way never matched. The ASCII text of UTF-16 and UTF-32
+  // code units (either byte order, any offset, with or without a BOM) is streamed as well.
+  it.each([
+    ['UTF-16LE with a BOM', (s) => utf16le(`﻿${s}`)],
+    ['UTF-16LE without a BOM', (s) => utf16le(s)],
+    ['UTF-16BE with a BOM', (s) => utf16be(`﻿${s}`)],
+    ['UTF-16BE without a BOM', (s) => utf16be(s)],
+    ['UTF-32LE', (s) => utf32(s, 'LE')],
+    ['UTF-32BE', (s) => utf32(s, 'BE')],
+    [
+      'UTF-16LE at an odd offset inside binary bytes',
+      (s) => Buffer.concat([PNG_HEAD, randomBytes(991), utf16le(s), randomBytes(999)]),
+    ],
+  ])('finds a key in assets/config.json stored as %s', (_label, encode) => {
+    const key = sbSecret();
+    const root = cleanRepo({
+      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+      'apps/candidate/dist/assets/config.json': encode(`{"service": "${key}"}\n`),
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toMatch(/apps\/candidate\/dist: gitleaks found a secret/);
+    expect(r.problems.join('\n')).not.toContain(key);
+  });
+
+  it('fails on the inline allow marker stored as UTF-16, which would hide that line too', () => {
+    const marker = ['gitleaks', 'allow'].join(':');
+    const root = cleanRepo({
+      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+      'apps/candidate/dist/assets/strings.json': utf16le(`{"k": "${sbSecret()}"} // ${marker}\n`),
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toContain(
+      'apps/candidate/dist/assets/strings.json: contains the inline allow marker',
+    );
+  });
+
+  it('fails on zlib bytes in a file whose name is not an archive name', () => {
+    const root = cleanRepo({
+      'apps/candidate/dist/assets/data.bin': deflateSync(Buffer.from('fixture build output\n')),
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toMatch(/assets\/data\.bin: archive in build output/);
+  });
+
   it('fails on gzip bytes in a file whose name is not an archive name', () => {
     const root = cleanRepo({
       'apps/candidate/dist/assets/data.dat': gzipSync(Buffer.from('fixture build output\n')),
@@ -286,6 +591,66 @@ describe('scanDist (real gitleaks)', () => {
     const r = scanDist({ root });
     expect(r.ok).toBe(false);
     expect(r.problems.join('\n')).toMatch(/assets\/data\.dat: archive in build output/);
+  });
+
+  // S1.4 N8/N9 security review N12: the scan does not follow links, but wrangler's asset and Pages
+  // uploads stat each entry and upload the link's target, so nothing in a dist/ may be a link (or
+  // any other entry that is neither a regular file nor a directory).
+  describe('links in dist/ (N12)', () => {
+    /** A secret outside every dist/, which a link inside dist/ points at. */
+    const outside = () => ({ 'outside/secret/config.js': `x("${sbSecret()}");\n` });
+    const LINK_PROBLEM = 'neither a regular file nor a directory';
+
+    it('fails on a directory junction (a directory symlink on Linux) inside dist/', () => {
+      const root = cleanRepo(outside());
+      symlinkSync(
+        path.join(root, 'outside', 'secret'),
+        path.join(root, 'apps', 'candidate', 'dist', 'assets', 'vendor'),
+        'junction',
+      );
+      const r = scanDist({ root });
+      expect(r.ok).toBe(false);
+      expect(r.problems.join('\n')).toContain(`apps/candidate/dist/assets/vendor: ${LINK_PROBLEM}`);
+      expect(findHiders(root, 'apps/candidate/dist')).toEqual([
+        expect.stringContaining(`apps/candidate/dist/assets/vendor: ${LINK_PROBLEM}`),
+      ]);
+    });
+
+    it('fails on a file symlink inside dist/', (ctx) => {
+      const root = cleanRepo(outside());
+      try {
+        symlinkSync(
+          path.join(root, 'outside', 'secret', 'config.js'),
+          path.join(root, 'workers', 'edge', 'dist', 'config.js'),
+          'file',
+        );
+      } catch (err) {
+        // The only skip in this file: Windows refuses file symlinks without admin rights or
+        // developer mode. Linux CI creates the link, so the case always runs there.
+        if (err.code === 'EPERM' && process.platform === 'win32') {
+          ctx.skip('Windows needs admin rights or developer mode for a file symlink (EPERM)');
+        }
+        throw err;
+      }
+      const r = scanDist({ root });
+      expect(r.ok).toBe(false);
+      expect(r.problems.join('\n')).toContain(`workers/edge/dist/config.js: ${LINK_PROBLEM}`);
+    });
+
+    it('fails when a dist/ itself is a junction', () => {
+      const root = cleanRepo({
+        'apps/docs/package.json': pkg(),
+        'outside/build/index.js': 'console.log("fixture");\n',
+      });
+      symlinkSync(
+        path.join(root, 'outside', 'build'),
+        path.join(root, 'apps', 'docs', 'dist'),
+        'junction',
+      );
+      const r = scanDist({ root });
+      expect(r.ok).toBe(false);
+      expect(r.problems.join('\n')).toContain(`apps/docs/dist: ${LINK_PROBLEM}`);
+    });
   });
 
   it('keeps the default rules in the repository .gitleaks.toml', () => {
