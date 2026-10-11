@@ -140,25 +140,41 @@ const keepPrefix: Replacer = (_m, prefix = '') => `${prefix}${REDACTED}`;
 const digits = (source: string): RegExp =>
   new RegExp(source.replaceAll('SEP', '[\\s.-]{0,2}'), 'g');
 
-/** A key, `=` or `:` (the key may be quoted or escaped-quoted), then an opening quote. */
-const KEY_THEN_QUOTE = /(?<![\w-])([\w-]{1,64})(\\?["']?\s{0,3}[=:]\s{0,3})(\\"|["'])/g;
+/**
+ * A key, `=` or `:` (the key may be quoted or escaped-quoted), then an opening quote. JSON inside
+ * a JSON string escapes each quote with 1, 3, 7, … backslashes (one level deeper each time), so
+ * both quotes take any number of them (redactor review #4).
+ */
+const KEY_THEN_QUOTE = /(?<![\w-])([\w-]{1,64})(\\*["']?\s{0,3}[=:]\s{0,3})(\\*["'])/g;
 
 /**
  * Where a quoted value's body ends: the index of its closing quote, or the end of the text, or
- * MAX_STRING characters on (the bound keeps it linear). A backslash escapes the next character;
- * inside an escaped quote (`\"`, JSON inside a JSON string) `\\` and an escape form one unit.
+ * MAX_STRING characters on (the bound keeps it linear). The opener is a quote after k backslashes
+ * (k = 0 for a plain quote, 2^n - 1 for JSON n levels inside JSON strings). A quote after a run
+ * of r backslashes closes the value when r = k plus an even number of escapes at the value's own
+ * level, each of which is 2k + 2 backslashes: (r - k) % (2k + 2) === 0. Any other quote is
+ * escaped inside the value, or belongs to an outer string (malformed text), and the scan goes on,
+ * which redacts more, never less.
  */
 const quotedEnd = (text: string, from: number, open: string): number => {
   const limit = Math.min(text.length, from + MAX_STRING);
+  const quote = open.at(-1);
+  const k = open.length - 1;
   let i = from;
-  if (open === '\\"') {
-    while (i < limit && !(text[i] === '\\' && text[i + 1] === '"')) {
-      i += text[i] !== '\\' ? 1 : text[i + 1] !== '\\' ? 2 : text[i + 2] === '\\' ? 4 : 3;
+  while (i < limit) {
+    if (text[i] === '\\') {
+      let j = i;
+      while (j < limit && text[j] === '\\') j++;
+      const r = j - i;
+      if (j < limit && text[j] === quote && r >= k && (r - k) % (2 * k + 2) === 0) return j - k;
+      i = j + 1; // the run, and the character it escapes
+    } else if (k === 0 && text[i] === quote) {
+      return i;
+    } else {
+      i++;
     }
-  } else {
-    while (i < limit && text[i] !== open) i += text[i] === '\\' ? 2 : 1;
   }
-  return Math.min(i, limit);
+  return limit;
 };
 
 /**
@@ -211,9 +227,18 @@ const STEPS: readonly Step[] = [
   redactQuotedValues,
   // query strings and fragments that carry parameters: keep the '?' or '#', drop the rest
   sub(/([?#])[^\s?#"'<>]*=[^\s"'<>]*/g, keepPrefix),
-  // `key=value` and `key: value` in free text, when the key would be redacted as an object key
-  sub(/(?<![\w-])([\w-]{1,64})("?\s{0,3}[=:]\s{0,3}"?)([^\s"'&,;)]+)/g, (m, key = '', sep = '') =>
-    isSensitiveKey(key) ? `${key}${sep}${REDACTED}` : m,
+  // `key=value` and `key: value` in free text, when the key would be redacted as an object key.
+  // The key's closing quote may be escaped (`\"otp\":123456` in nested JSON, review #4). A value of
+  // only backslashes is the opener of a quoted value (handled above), and backslashes that end a
+  // value are the escape of the quote after it, so both are kept.
+  sub(
+    /(?<![\w-])([\w-]{1,64})(\\*["']?\s{0,3}[=:]\s{0,3}"?)([^\s"'&,;)]+)/g,
+    (m, key = '', sep = '', value = '') => {
+      if (!isSensitiveKey(key)) return m;
+      let end = value.length;
+      while (end > 0 && value[end - 1] === '\\') end--;
+      return end === 0 ? m : `${key}${sep}${REDACTED}${value.slice(end)}`;
+    },
   ),
   // email (also percent-encoded), then UPI (handle@psp without a dot after the psp)
   sub(/(?<![\w.%+-])[\w.%+-]+(?:@|%40)(?:[a-z0-9-]+\.)+[a-z]{2,}/gi, REDACTED),

@@ -467,6 +467,15 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['words glued to values', fill(`ok\u3164${synth.pan()} `)],
     ['long glued run, no value', fill('a.b\u200b')],
     ['emails split in the local part', fill(`ab\u00adcd@${synth.word()}.example `)],
+    // backslash runs before and after the separator (redactor review #4)
+    ['key, then a long backslash run', 'token' + fill('\\')],
+    ['separator, then a long backslash run', 'token=' + fill('\\')],
+    ['keys between backslash runs', fill('a\\\\\\\\\\\\\\')],
+    ['deep escaped openers', fill('a:\\\\\\\\\\\\\\"')],
+    ['sensitive deep openers', fill('token=\\\\\\"')],
+    ['deep body of escaped quotes', 'token=\\\\\\"' + fill('\\\\\\\\\\\\\\"')],
+    ['deep body of outer quotes', 'token=\\\\\\"' + fill('\\" ')],
+    ['numbers under escaped keys', fill('otp\\\\\\":1,')],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -610,6 +619,44 @@ describe('quoted and multi-word key=value secrets (S1.7 follow-up 1)', () => {
   it('leaves quoted values under non-sensitive keys and empty values alone', () => {
     const s = `status="all good" level='warn' {"kind":"a b"} password=""`;
     expect(redactString(s)).toBe(s);
+  });
+});
+
+// Redactor security review #4: JSON inside a JSON string inside a JSON string (and deeper) escapes
+// each quote with 3, 7, … backslashes; a secret there must go like one at the first level.
+describe('secrets in nested JSON (redactor review #4)', () => {
+  const BS = '\\';
+  const secret = synth.base64(5).slice(0, 10);
+  const phrase = synth.phrase();
+  const nest = (value: unknown, levels: number): string => {
+    let s = JSON.stringify(value);
+    for (let i = 1; i < levels; i++) s = JSON.stringify({ data: s });
+    return s;
+  };
+
+  it.each([1, 2, 3, 4])('redacts the whole quoted value %i level(s) deep', (levels) => {
+    for (const value of [
+      `${secret} ${phrase}`,
+      `${secret}" ${phrase}`, // an escaped quote inside the value
+      `${phrase} ${secret}${BS}`, // a value that ends with a backslash
+      `${secret}${BS}" ${phrase}${BS}${BS}`,
+    ]) {
+      const out = redactString(`got ${nest({ password: value, n: 1 }, levels)}`);
+      expect(out).toBe(`got ${nest({ password: REDACTED, n: 1 }, levels)}`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it.each([1, 2, 3])('redacts a number under a sensitive key %i level(s) deep', (levels) => {
+    const otp = Number(synth.mobile().slice(0, 6));
+    const out = redactString(nest({ otp, n: 1 }, levels));
+    expect(out).toBe(nest({ otp: 0, n: 1 }, levels).replace(':0,', `:${REDACTED},`));
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('never closes a value at a quote of an outer string (fails safe)', () => {
+    const s = `token=${BS}${BS}${BS}"${secret} ${BS}" ${phrase}${BS}${BS}${BS}" next`;
+    expect(redactString(s)).toBe(`token=${BS}${BS}${BS}"${REDACTED}${BS}${BS}${BS}" next`);
   });
 });
 
