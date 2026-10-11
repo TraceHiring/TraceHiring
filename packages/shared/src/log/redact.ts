@@ -354,6 +354,8 @@ const redactFrames = (frames: readonly string[]): string[] =>
 const redactStack = (value: unknown, depth: number, state: State): unknown => {
   let text: string;
   if (typeof value === 'string') {
+    // Over the cap, a stack string is truncated like any other string (spec §9.1: never passed through).
+    if (value.length > MAX_STRING) return TRUNCATED;
     text = value;
   } else if (Array.isArray(value)) {
     const lines: string[] = [];

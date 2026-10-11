@@ -722,6 +722,34 @@ describe('stacks under stack-like keys (S1.7 follow-up 8)', () => {
     ...frames.map((f) => `    ${f}`),
   ];
 
+  // Redactor security review #1: message lines shaped like a frame must not survive, and a stack
+  // string over the cap becomes [TRUNCATED] like any other string (spec §9.1 caps).
+  it('drops message lines that only look like frames', () => {
+    const fake = `at ${phrase}:1:1`;
+    const times = `at 12:30:45 ${phrase} booked:1:1`;
+    expect(redact({ stack: ['Error: slot', fake, times, `    ${frames[0]}`].join('\n') })).toEqual({
+      stack: [frames[0]],
+    });
+  });
+
+  it('truncates a stack string over the cap instead of filtering it', () => {
+    const big = ['Error: x', `at ${phrase}:1:1`, ...Array<string>(80).fill(`    ${frames[0]}`)];
+    const text = big.join('\n');
+    expect(text.length).toBeGreaterThan(MAX_STRING);
+    expect(redact({ stack: text })).toEqual({ stack: TRUNCATED });
+  });
+
+  it.each([
+    'at Object.<anonymous> (file:///a.js:1:2)',
+    'at new Foo (/a.js:1:2)',
+    'at Foo.bar [as baz] (/a.js:1:2)',
+    'at async run (/a.js:1:2)',
+    'at node:internal/x:1:2',
+    'at fetch (index.js:1:2)',
+  ])('keeps the real V8 frame "%s"', (frame) => {
+    expect(redact({ stack: `Error: x\n    ${frame}` })).toEqual({ stack: [frame] });
+  });
+
   it.each(['stack', 'stacktrace', 'stack_trace', 'stackTrace', 'errorStack', 'Stack Trace'])(
     'keeps only the frames of a string under "%s"',
     (key) => {
@@ -760,13 +788,19 @@ describe('stacks under stack-like keys (S1.7 follow-up 8)', () => {
     ['long digit runs', `at x:${'1'.repeat(280)}:\n`],
     ['message lines', `Error: ${'x'.repeat(290)}\n`],
     ['frames', `${frames[0]}\n`],
-  ])('filters a ~100 KB stack of %s within 50 ms', (_label, line) => {
-    const big = line.repeat(Math.ceil(100_000 / line.length));
-    redact({ stack: big.slice(0, 1000) }); // warm-up
-    const out = redact({ stack: big }) as { stack: string[] };
-    expect(bestOfFiveMs(() => redact({ stack: big }))).toBeLessThan(50);
-    expect(out.stack.length).toBeLessThanOrEqual(20);
-  });
+  ])(
+    'truncates a ~100 KB stack string, and filters ~30 KB of %s lines within 50 ms',
+    (_label, line) => {
+      const big = line.repeat(Math.ceil(100_000 / line.length));
+      expect(redact({ stack: big })).toEqual({ stack: TRUNCATED });
+      // An array of lines is filtered line by line (at most MAX_ENTRIES of them), never truncated whole.
+      const lines = Array<string>(MAX_ENTRIES).fill(line.trimEnd());
+      redact({ stack: lines.slice(0, 5) }); // warm-up
+      const out = redact({ stack: lines }) as { stack: string[] };
+      expect(bestOfFiveMs(() => redact({ stack: lines }))).toBeLessThan(50);
+      expect(out.stack.length).toBeLessThanOrEqual(20);
+    },
+  );
 
   it('leaves other keys that mention a stack alone', () => {
     expect(redact({ stackSize: 3, stacks: 'a b' })).toEqual({ stackSize: 3, stacks: 'a b' });

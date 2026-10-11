@@ -14,7 +14,10 @@ const SAFE_CODE = /^[A-Za-z0-9_.-]{1,32}$/;
 const MAX_FRAMES = 20;
 const MAX_FRAME_LENGTH = 300;
 /** A V8 frame: `at fn (file:line:col)` or `at file:line:col`. Other engines' frames are dropped. */
-const FRAME = /^at \S[^\n]*:\d+:\d+\)?$/;
+// The function (optionally `async `/`new `-prefixed, with an optional `[as name]`) and the location are
+// single tokens without spaces, so a message line shaped like a frame (`at 12:30 <words>:1:1`) is dropped,
+// as are paths with spaces (fail safe; redactor security review #1). Lines are capped first.
+const FRAME = /^at (?:(?:async |new )?[^\s()]+(?: \[as [^\s\]]+\])? \()?[^\s()]+:\d+:\d+\)?$/;
 
 /** True for one trimmed line that is a V8 frame within the length cap. */
 export const isStackFrame = (line: string): boolean =>
