@@ -21,7 +21,7 @@ const sources = Object.entries(all).filter(([file]) => !/\.test\.tsx?$/.test(fil
  * is HTML Media Capture (an <input capture> or a `capture` prop), which opens the camera or recorder.
  */
 const MEDIA_CAPTURE =
-  /getUserMedia|getDisplayMedia|mediaDevices|enumerateDevices|MediaRecorder|ImageCapture|\bcapture\s*[=:]/i;
+  /getUserMedia|getDisplayMedia|mediaDevices|enumerateDevices|MediaRecorder|ImageCapture|\bcapture\s*[=:]|['"]capture['"]\s*[,:]/i;
 
 /** Error reporters, Sentry and analytics or session-replay vendors (spec §9.2, build-notes Q17). */
 const REPORTING_OR_ANALYTICS =
@@ -86,6 +86,8 @@ describe('guard patterns (negative controls)', () => {
       '<input type="file" accept="video/*" capture="user">',
       '<input capture = environment>',
       'createElement("input", { capture: "user" })',
+      "el.setAttribute('capture', 'user')",
+      'h("input", { "capture": "user" })',
     ])
       expect(MEDIA_CAPTURE.test(bad), bad).toBe(true);
   });

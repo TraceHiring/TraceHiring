@@ -91,12 +91,22 @@ interface BuiltFile {
 async function buildApp(version: string | undefined): Promise<BuiltFile[]> {
   if (version === undefined) delete process.env['VITE_APP_VERSION'];
   else process.env['VITE_APP_VERSION'] = version;
-  const result = await build({
-    root: appDir,
-    configFile: path.join(appDir, 'vite.config.ts'),
-    logLevel: 'silent',
-    build: { write: false },
-  });
+  // Build what ships: vitest sets NODE_ENV=test, which makes Vite bundle React's development
+  // build (S2 re-review S2-R1). Restored right after the build.
+  const savedNodeEnv = process.env['NODE_ENV'];
+  process.env['NODE_ENV'] = 'production';
+  let result: Awaited<ReturnType<typeof build>>;
+  try {
+    result = await build({
+      root: appDir,
+      configFile: path.join(appDir, 'vite.config.ts'),
+      logLevel: 'silent',
+      build: { write: false },
+    });
+  } finally {
+    if (savedNodeEnv === undefined) delete process.env['NODE_ENV'];
+    else process.env['NODE_ENV'] = savedNodeEnv;
+  }
   const outputs = Array.isArray(result)
     ? result.flatMap((r) => r.output)
     : 'output' in result
@@ -149,7 +159,8 @@ const DATA_FONT = /url\(\s*['"]?data:(?:font|application\/(?:font|x-font|vnd\.ms
 /** An absolute URL in emitted CSS: another origin for a font, image or @import. */
 const ABSOLUTE_URL = /https?:\/\//i;
 /** Media capture and reporting names that must not reach the built candidate bundle (rule 8). */
-const BUNDLE_FORBIDDEN = /getUserMedia|getDisplayMedia|MediaRecorder|sentry|\bcapture\s*=/i;
+const BUNDLE_FORBIDDEN =
+  /getUserMedia|getDisplayMedia|mediaDevices|enumerateDevices|MediaRecorder|ImageCapture|sentry|\bcapture\s*=|setAttribute\(\s*['"]capture['"]/i;
 
 describe(`${APP} built output (CSP hygiene, spec §10.3)`, () => {
   let files: BuiltFile[] = [];
@@ -158,6 +169,13 @@ describe(`${APP} built output (CSP hygiene, spec §10.3)`, () => {
   }, 60_000);
 
   const named = (pattern: RegExp): BuiltFile[] => files.filter((f) => pattern.test(f.fileName));
+
+  it('scans the production build that ships, not the dev React build vitest would give', () => {
+    // Under vitest NODE_ENV is "test", and Vite would bundle React's development build
+    // (S2 re-review S2-R1). Only the development build contains this word.
+    for (const chunk of files.filter((f) => f.type === 'chunk'))
+      expect(chunk.text, chunk.fileName).not.toContain('development');
+  });
 
   it('emits index.html, JS and CSS (the checks below cannot pass on an empty build)', () => {
     expect(named(/^index\.html$/)).toHaveLength(1);
@@ -225,6 +243,9 @@ describe('built-output patterns (negative controls)', () => {
       'Sentry.init({})',
       'e.capture="user"',
       'capture = "environment"',
+      'navigator.mediaDevices.enumerateDevices()',
+      'new ImageCapture(t)',
+      'e.setAttribute("capture","user")',
     ])
       expect(BUNDLE_FORBIDDEN.test(bad), bad).toBe(true);
     for (const ok of ['onClickCapture:1', '{capture:!0}', 'const captured = 1']) {
