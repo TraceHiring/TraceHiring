@@ -239,11 +239,11 @@ describe('security review regressions (S1.7)', () => {
     'A1a'.repeat(666),
     'eyJ' + 'a.'.repeat(998),
     // canonicalisation (follow-ups 3-5): digits far from their zero, ignorables, dashes
-    '٩'.repeat(1999),
+    '\u0669'.repeat(1999),
     String.fromCodePoint(0x1e959).repeat(999),
-    '9͏'.repeat(999),
+    '9\u034f'.repeat(999),
     '\u{e0020}'.repeat(999),
-    '9–'.repeat(999),
+    '9\u2013'.repeat(999),
   ];
   it.each(adversarial.map((s, i) => [i, s] as const))(
     'redacts adversarial input %i within the time budget',
@@ -394,9 +394,9 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['Basic spaces', 'Basic' + fill(' ')],
     ['Token words', fill('Token ')],
     // canonicalisation (follow-ups 3-5): what the patterns see after folding
-    ['Arabic-Indic digits and spaces', fill('٩ ')],
-    ['ignorable-split digits', fill('9͏')],
-    ['en-dash digits', fill('9–')],
+    ['Arabic-Indic digits and spaces', fill('\u0669 ')],
+    ['ignorable-split digits', fill('9\u034f')],
+    ['en-dash digits', fill('9\u2013')],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -571,7 +571,7 @@ describe('number canonicalisation (S1.7 follow-ups 3-5)', () => {
   });
 
   it('strips ignorable letters from keys', () => {
-    for (const key of ['eㅤmail', 'passᅟword', 'toﾠken']) {
+    for (const key of ['e\u3164mail', 'pass\u115fword', 'to\uffa0ken']) {
       expect(redact({ [key]: 'v' })).toEqual({ [key]: REDACTED });
     }
   });
@@ -610,8 +610,8 @@ describe('number canonicalisation (S1.7 follow-ups 3-5)', () => {
   );
 
   it('is idempotent on any Unicode text, even where a dropped ignorable lets marks compose', () => {
-    expect(canonical('e͏́')).toBe('é');
-    expect(canonical('ᄀㅤᅡ')).toBe('가');
+    expect(canonical('e\u034f\u0301')).toBe('\u00e9');
+    expect(canonical('\u1100\u3164\u1161')).toBe('\uac00');
     fc.assert(
       fc.property(fc.string({ unit: 'binary', maxLength: 40 }), (s) => {
         const once = canonical(s);
