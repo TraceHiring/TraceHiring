@@ -1,6 +1,5 @@
 -- MT-11 (spec specs/m0-foundations.md §8.5, separate per-operation policies, CLAUDE.md): a policy on an in-scope
--- table (the schemas public, private, quality and integrity, plus every member of the partition tree of a
--- partitioned table there, extension members skipped by the README rule) that is:
+-- table that is:
 --   for_all: FOR ALL (polcmd *).
 --   insert_without_check: an INSERT policy without WITH CHECK.
 --   update_missing_clause: an UPDATE policy without USING or without WITH CHECK.
@@ -11,7 +10,15 @@
 --     every scalar sub-select in exactly the deparsed form ( SELECT auth.uid() AS ...) or ( SELECT auth.jwt() AS ...)
 --     is removed, its deparsed USING or WITH CHECK still calls one of them. pg_get_expr omits the auth. prefix when
 --     auth is on the search_path, so the prefix is optional in both patterns.
-with reference_table (schema_name, table_name, adr) as (
+-- In-scope tables: every relation in public, private, quality and integrity, every relation that postgres can SET
+-- ROLE to the owner of in a system-list schema where a migration can still create objects (escape_schema below),
+-- and every pg_inherits descendant of those (INHERITS children and partitions, recursively, wherever they live).
+-- Extension members are skipped by the README rule. A policy that breaks a rule above on a table outside the four
+-- schemas is reported under one branch for where the table lives, with the rule in the detail:
+--   system_schema_policy: the table is in a system-list schema.
+--   inherited_table_policy: the table is a descendant in any other schema.
+with recursive
+reference_table (schema_name, table_name, adr) as (
   values
     -- One row per reference table whose policies may be literally true, each citing its ADR, e.g.
     -- ('public', 'countries', 'ADR-0NN reference data'),
@@ -23,16 +30,39 @@ scope_schema as (
   from pg_namespace as n
   where n.nspname in ('public', 'private', 'quality', 'integrity')
 ),
-scope_rel as (
+-- escape_schema: system-list schemas where a migration can still create objects (spec §8.5 revision 12): postgres
+-- can SET ROLE to the schema owner, or to a role with CREATE on it. Locally: extensions, _realtime,
+-- supabase_functions and supabase_migrations, plus any listed schema that a migration creates (cron, net and so on).
+escape_schema as (
+  select n.oid
+  from pg_namespace as n
+  where n.nspname in (
+      'auth', 'storage', 'extensions', 'realtime', '_realtime', 'graphql', 'graphql_public', 'supabase_functions',
+      'supabase_migrations', 'vault', 'pgsodium', 'pgsodium_masks', 'net', 'cron', 'pgbouncer', '_analytics'
+    )
+    and (
+      pg_has_role('postgres', n.nspowner, 'SET')
+      or exists (
+        select 1
+        from pg_roles as r
+        where pg_has_role('postgres', r.oid, 'SET')
+          and has_schema_privilege(r.oid, n.oid, 'CREATE')
+      )
+    )
+),
+scope_rel (oid) as (
   select c.oid
   from pg_class as c
   where c.relnamespace in (select s.oid from scope_schema as s)
   union
-  select t.relid
+  select c.oid
   from pg_class as c
-  cross join lateral pg_partition_tree(c.oid) as t
-  where c.relkind = 'p'
-    and c.relnamespace in (select s.oid from scope_schema as s)
+  where c.relnamespace in (select es.oid from escape_schema as es)
+    and pg_has_role('postgres', c.relowner, 'SET')
+  union
+  select i.inhrelid
+  from scope_rel as s
+  join pg_inherits as i on i.inhparent = s.oid
 ),
 auth_function as (
   select p.oid
@@ -52,7 +82,12 @@ scope_policy as (
     coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '') as check_text,
     n.nspname,
     c.relname,
-    format('%I on %I.%I', pol.polname, n.nspname, c.relname)::text as qualified_name
+    format('%I on %I.%I', pol.polname, n.nspname, c.relname)::text as qualified_name,
+    case
+      when c.relnamespace in (select s.oid from scope_schema as s) then 'scope'
+      when c.relnamespace in (select es.oid from escape_schema as es) then 'system'
+      else 'inherited'
+    end as location
   from pg_policy as pol
   join pg_class as c on c.oid = pol.polrelid
   join scope_rel as s on s.oid = c.oid
@@ -67,82 +102,98 @@ scope_policy as (
       and d.deptype = 'e'
       and x.extnamespace = c.relnamespace
   )
+),
+finding (oid, branch, detail) as (
+  select
+    sp.oid,
+    'for_all'::text,
+    'policy is FOR ALL, not one policy per operation'::text
+  from scope_policy as sp
+  where sp.polcmd = '*'
+  union all
+  select
+    sp.oid,
+    'insert_without_check'::text,
+    'INSERT policy has no WITH CHECK'::text
+  from scope_policy as sp
+  where sp.polcmd = 'a'
+    and not sp.has_check
+  union all
+  select
+    sp.oid,
+    'update_missing_clause'::text,
+    format(
+      'UPDATE policy has no %s',
+      case
+        when not sp.has_using and not sp.has_check then 'USING and no WITH CHECK'
+        when not sp.has_using then 'USING'
+        else 'WITH CHECK'
+      end
+    )::text
+  from scope_policy as sp
+  where sp.polcmd = 'w'
+    and (not sp.has_using or not sp.has_check)
+  union all
+  select
+    sp.oid,
+    'select_delete_without_using'::text,
+    format('%s policy has no USING', case when sp.polcmd = 'r' then 'SELECT' else 'DELETE' end)::text
+  from scope_policy as sp
+  where sp.polcmd in ('r', 'd')
+    and not sp.has_using
+  union all
+  select
+    sp.oid,
+    'public_role'::text,
+    'policy applies to PUBLIC'::text
+  from scope_policy as sp
+  where 0::oid = any(sp.polroles)
+  union all
+  select
+    sp.oid,
+    'literal_true'::text,
+    'USING or WITH CHECK is literally true'::text
+  from scope_policy as sp
+  where (sp.using_text = 'true' or sp.check_text = 'true')
+    and not exists (
+      select 1
+      from reference_table as rt
+      where rt.schema_name = sp.nspname
+        and rt.table_name = sp.relname
+        and rt.adr ~ '^ADR-[0-9]+'
+    )
+  union all
+  select
+    sp.oid,
+    'auth_call_unwrapped'::text,
+    'auth.uid() or auth.jwt() is called outside a ( SELECT ... ) sub-select'::text
+  from scope_policy as sp
+  where exists (
+      select 1
+      from pg_depend as d
+      where d.classid = 'pg_policy'::regclass
+        and d.objid = sp.oid
+        and d.refclassid = 'pg_proc'::regclass
+        and d.refobjid in (select af.oid from auth_function as af)
+    )
+    and regexp_replace(
+      sp.using_text || ' ' || sp.check_text,
+      '\( SELECT (auth\.)?(uid|jwt)\(\) AS [^)]*\)',
+      '',
+      'g'
+    ) ~ '(^|[^[:alnum:]_$."])(auth\.)?(uid|jwt)\(\)'
 )
 select
-  'for_all'::text as branch,
+  case sp.location
+    when 'system' then 'system_schema_policy'
+    when 'inherited' then 'inherited_table_policy'
+    else f.branch
+  end::text as branch,
   sp.qualified_name as object,
-  'policy is FOR ALL, not one policy per operation'::text as detail
-from scope_policy as sp
-where sp.polcmd = '*'
-union all
-select
-  'insert_without_check'::text,
-  sp.qualified_name,
-  'INSERT policy has no WITH CHECK'::text
-from scope_policy as sp
-where sp.polcmd = 'a'
-  and not sp.has_check
-union all
-select
-  'update_missing_clause'::text,
-  sp.qualified_name,
-  format(
-    'UPDATE policy has no %s',
-    case
-      when not sp.has_using and not sp.has_check then 'USING and no WITH CHECK'
-      when not sp.has_using then 'USING'
-      else 'WITH CHECK'
-    end
-  )::text
-from scope_policy as sp
-where sp.polcmd = 'w'
-  and (not sp.has_using or not sp.has_check)
-union all
-select
-  'select_delete_without_using'::text,
-  sp.qualified_name,
-  format('%s policy has no USING', case when sp.polcmd = 'r' then 'SELECT' else 'DELETE' end)::text
-from scope_policy as sp
-where sp.polcmd in ('r', 'd')
-  and not sp.has_using
-union all
-select
-  'public_role'::text,
-  sp.qualified_name,
-  'policy applies to PUBLIC'::text
-from scope_policy as sp
-where 0::oid = any(sp.polroles)
-union all
-select
-  'literal_true'::text,
-  sp.qualified_name,
-  'USING or WITH CHECK is literally true'::text
-from scope_policy as sp
-where (sp.using_text = 'true' or sp.check_text = 'true')
-  and not exists (
-    select 1
-    from reference_table as rt
-    where rt.schema_name = sp.nspname
-      and rt.table_name = sp.relname
-      and rt.adr ~ '^ADR-[0-9]+'
-  )
-union all
-select
-  'auth_call_unwrapped'::text,
-  sp.qualified_name,
-  'auth.uid() or auth.jwt() is called outside a ( SELECT ... ) sub-select'::text
-from scope_policy as sp
-where exists (
-    select 1
-    from pg_depend as d
-    where d.classid = 'pg_policy'::regclass
-      and d.objid = sp.oid
-      and d.refclassid = 'pg_proc'::regclass
-      and d.refobjid in (select af.oid from auth_function as af)
-  )
-  and regexp_replace(
-    sp.using_text || ' ' || sp.check_text,
-    '\( SELECT (auth\.)?(uid|jwt)\(\) AS [^)]*\)',
-    '',
-    'g'
-  ) ~ '(^|[^[:alnum:]_$."])(auth\.)?(uid|jwt)\(\)'
+  case sp.location
+    when 'system' then format('on a table in a system schema: %s (%s)', f.detail, f.branch)
+    when 'inherited' then format('on an inherited table outside the four schemas: %s (%s)', f.detail, f.branch)
+    else f.detail
+  end::text as detail
+from finding as f
+join scope_policy as sp on sp.oid = f.oid

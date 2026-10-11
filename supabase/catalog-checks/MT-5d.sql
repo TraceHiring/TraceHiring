@@ -1,12 +1,14 @@
 -- MT-5d (spec specs/m0-foundations.md §8.5, rule 1): a link between quality and integrity that is not a view or
--- a function. A relation reaches a schema when it lives there, and also reaches the schema of every member of its
--- partition tree. Branches:
+-- a function. A relation reaches a schema when it lives there, and also reaches the schema of every member of every
+-- inheritance tree it belongs to (INHERITS children and partitions alike, wherever they live). Branches:
 --   foreign_key: a foreign key (pg_constraint contype f) whose table reaches one of the two schemas and whose
 --     referenced table reaches the other.
 --   trigger_function: a trigger (not internal, so not the foreign-key triggers) on a table that reaches one schema,
 --     whose pg_depend rows (skipping the reference to its own table) reach the other by the MT-5a rule.
 --   policy_expression: a policy (pg_depend classid pg_policy, skipping the reference to its own table) on a table
 --     that reaches one schema, whose expressions reach the other by the MT-5a rule.
+--   inheritance_link: an inheritance tree (INHERITS or partitions) with members in both schemas, reported at its
+--     root, so a scan of one schema's table returns the other schema's rows.
 -- The MT-5a rule: a closure through pg_class and pg_proc refs, recursively through the rules of views (pg_rewrite,
 -- skipping a rule's reference to its own relation) and functions, plus pg_type and pg_namespace refs. A node
 -- reaches a schema when it lives there, when it is a type or schema ref there, or, for a function, when its prosrc
@@ -19,19 +21,29 @@ target as (
   from pg_namespace as n
   where n.nspname in ('quality', 'integrity')
 ),
+-- family: every inheritance tree (INHERITS children and partitions are both pg_inherits rows) as (root, member)
+-- pairs, the root included. A relation under several parents is a member of each parent's tree.
+family (root_oid, member_oid) as (
+  select i.inhparent, i.inhparent
+  from pg_inherits as i
+  where not exists (select 1 from pg_inherits as up where up.inhrelid = i.inhparent)
+  union
+  select f.root_oid, i.inhrelid
+  from family as f
+  join pg_inherits as i on i.inhparent = f.member_oid
+),
+-- rel_reach: a relation reaches a target schema when it lives there, or when a member of an inheritance tree it
+-- belongs to lives there, whatever schema the relation itself is in.
 rel_reach as (
   select c.oid, t.nspname
   from pg_class as c
   join target as t on t.oid = c.relnamespace
   union
-  select tree.relid::oid, t.nspname
-  from pg_class as p
-  cross join lateral pg_partition_tree(p.oid) as tree
-  cross join lateral pg_partition_tree(p.oid) as member
-  join pg_class as mc on mc.oid = member.relid::oid
-  join target as t on t.oid = mc.relnamespace
-  where p.relkind = 'p'
-    and not p.relispartition
+  select f.member_oid, t.nspname
+  from family as f
+  join family as g on g.root_oid = f.root_oid
+  join pg_class as gc on gc.oid = g.member_oid
+  join target as t on t.oid = gc.relnamespace
 ),
 foreign_key as (
   select
@@ -148,3 +160,15 @@ select
 from crossing as x
 join pg_class as c on c.oid = x.relid
 join pg_namespace as n on n.oid = c.relnamespace
+union all
+select
+  'inheritance_link'::text,
+  format('%I.%I', n.nspname, c.relname)::text,
+  'inheritance tree has members in quality and integrity'::text
+from family as f
+join pg_class as mc on mc.oid = f.member_oid
+join target as t on t.oid = mc.relnamespace
+join pg_class as c on c.oid = f.root_oid
+join pg_namespace as n on n.oid = c.relnamespace
+group by f.root_oid, n.nspname, c.relname
+having count(distinct t.nspname) = 2

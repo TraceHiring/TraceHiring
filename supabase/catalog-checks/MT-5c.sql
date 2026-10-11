@@ -1,8 +1,9 @@
 -- MT-5c (spec specs/m0-foundations.md §8.5, rule 1, separate worker roles, build-notes Q12): a role, other than
 -- the owner and superusers, that holds privileges on objects in both quality and integrity, or a non-superuser
 -- member of pg_read_all_data or pg_write_all_data that is not on the Supabase list below.
--- ACL entries counted, from the quality and integrity schemas: relations (and every member of the partition tree
--- of a partitioned table there, whatever schema it lives in), columns, functions, the schemas themselves, and
+-- ACL entries counted, from the quality and integrity schemas: relations (and every relation in an inheritance tree,
+-- INHERITS or partitions, that has a member there, whatever schema it lives in), columns, functions, the schemas
+-- themselves, and
 -- per-schema default ACLs (pg_default_acl rows for those schemas). A null relacl, proacl or nspacl is read as
 -- acldefault(), so a function with a null proacl gives EXECUTE to PUBLIC. Extension members are skipped by the
 -- README rule. PUBLIC (grantee 0) is expanded to every role. Grantees are expanded recursively to their members
@@ -21,23 +22,33 @@ supabase_data_role (rolname) as (
     ('supabase_read_only_user'::name)
 ),
 target as (
-  select n.oid, n.nspname::text as nspname, n.nspowner, n.nspacl
+  select n.oid, n.nspname::text as nspname
   from pg_namespace as n
   where n.nspname in ('quality', 'integrity')
 ),
+-- family: every inheritance tree (INHERITS children and partitions are both pg_inherits rows) as (root, member)
+-- pairs, the root included. A relation under several parents is a member of each parent's tree.
+family (root_oid, member_oid) as (
+  select i.inhparent, i.inhparent
+  from pg_inherits as i
+  where not exists (select 1 from pg_inherits as up where up.inhrelid = i.inhparent)
+  union
+  select f.root_oid, i.inhrelid
+  from family as f
+  join pg_inherits as i on i.inhparent = f.member_oid
+),
+-- rel_reach: a relation reaches a target schema when it lives there, or when a member of an inheritance tree it
+-- belongs to lives there, whatever schema the relation itself is in.
 rel_reach as (
   select c.oid, t.nspname
   from pg_class as c
   join target as t on t.oid = c.relnamespace
   union
-  select tree.relid::oid, t.nspname
-  from pg_class as p
-  cross join lateral pg_partition_tree(p.oid) as tree
-  cross join lateral pg_partition_tree(p.oid) as member
-  join pg_class as mc on mc.oid = member.relid::oid
-  join target as t on t.oid = mc.relnamespace
-  where p.relkind = 'p'
-    and not p.relispartition
+  select f.member_oid, t.nspname
+  from family as f
+  join family as g on g.root_oid = f.root_oid
+  join pg_class as gc on gc.oid = g.member_oid
+  join target as t on t.oid = gc.relnamespace
 ),
 scope_rel as (
   select rr.nspname, c.oid, c.relkind, c.relowner, c.relacl
@@ -84,9 +95,10 @@ acl_entry (nspname, owner_oid, grantee) as (
       and x.extnamespace = p.pronamespace
   )
   union
-  select t.nspname, t.nspowner, a.grantee
+  select t.nspname, n.nspowner, a.grantee
   from target as t
-  cross join lateral aclexplode(coalesce(t.nspacl, acldefault('n'::"char", t.nspowner))) as a
+  join pg_namespace as n on n.oid = t.oid
+  cross join lateral aclexplode(coalesce(n.nspacl, acldefault('n'::"char", n.nspowner))) as a
   union
   select t.nspname, da.defaclrole, a.grantee
   from pg_default_acl as da

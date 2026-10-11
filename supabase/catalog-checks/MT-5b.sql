@@ -1,33 +1,46 @@
--- MT-5b (spec specs/m0-foundations.md §8.5, rule 1): a function (any prokind), in any non-system schema and not an
--- extension member, that reaches both quality and integrity by the MT-5a rule. plpgsql bodies are not in
--- pg_depend, so prosrc and proconfig are read as well. The closure starts at the function and follows its pg_depend
--- rows (classid pg_proc) through pg_class and pg_proc refs, recursively through the rules of views (pg_rewrite,
--- skipping a rule's reference to its own relation) and other functions, plus pg_type and pg_namespace refs. UNION
--- keeps the walk finite on cycles. A node reaches a schema when it lives there (a relation also reaches the schema
--- of every member of its partition tree), when it is a type or schema ref there, or, for a function, when its
--- prosrc names it (quality. or "quality". or 'quality' as a format() argument, case-insensitive) or its proconfig
--- search_path lists it.
--- Branches, first match wins: begin_atomic_depend (pg_depend alone reaches both, as for a BEGIN ATOMIC body),
--- prosrc_reference (a prosrc match is needed, no proconfig), proconfig_search_path (a proconfig match is needed).
+-- MT-5b (spec specs/m0-foundations.md §8.5, rule 1): a function (any prokind), not an extension member, in any
+-- non-system schema or in a system-list schema where a migration can still create objects (escape_schema below,
+-- when postgres can SET ROLE to its owner), that reaches both quality and integrity by the MT-5a rule. plpgsql
+-- bodies are not in pg_depend, so prosrc and proconfig are read as well. The closure starts at the function and
+-- follows its pg_depend rows (classid pg_proc) through pg_class and pg_proc refs, recursively through the rules of
+-- views (pg_rewrite, skipping a rule's reference to its own relation) and other functions, plus pg_type and
+-- pg_namespace refs. UNION keeps the walk finite on cycles. A node reaches a schema when it lives there (a relation
+-- also reaches the schema of every member of every inheritance tree it belongs to: INHERITS children and partitions
+-- alike, wherever they live), when it is a type or schema ref there, or, for a function, when its prosrc names it
+-- (quality. or "quality". or 'quality' as a format() argument, case-insensitive) or its proconfig search_path
+-- lists it.
+-- Branches, first match wins: system_schema_function (the function lives in a system-list schema),
+-- begin_atomic_depend (pg_depend alone reaches both, as for a BEGIN ATOMIC body), prosrc_reference (a prosrc match
+-- is needed, no proconfig), proconfig_search_path (a proconfig match is needed).
 with recursive
 target as (
   select n.oid, n.nspname::text as nspname
   from pg_namespace as n
   where n.nspname in ('quality', 'integrity')
 ),
+-- family: every inheritance tree (INHERITS children and partitions are both pg_inherits rows) as (root, member)
+-- pairs, the root included. A relation under several parents is a member of each parent's tree.
+family (root_oid, member_oid) as (
+  select i.inhparent, i.inhparent
+  from pg_inherits as i
+  where not exists (select 1 from pg_inherits as up where up.inhrelid = i.inhparent)
+  union
+  select f.root_oid, i.inhrelid
+  from family as f
+  join pg_inherits as i on i.inhparent = f.member_oid
+),
+-- rel_reach: a relation reaches a target schema when it lives there, or when a member of an inheritance tree it
+-- belongs to lives there, whatever schema the relation itself is in.
 rel_reach as (
   select c.oid, t.nspname
   from pg_class as c
   join target as t on t.oid = c.relnamespace
   union
-  select tree.relid::oid, t.nspname
-  from pg_class as p
-  cross join lateral pg_partition_tree(p.oid) as tree
-  cross join lateral pg_partition_tree(p.oid) as member
-  join pg_class as mc on mc.oid = member.relid::oid
-  join target as t on t.oid = mc.relnamespace
-  where p.relkind = 'p'
-    and not p.relispartition
+  select f.member_oid, t.nspname
+  from family as f
+  join family as g on g.root_oid = f.root_oid
+  join pg_class as gc on gc.oid = g.member_oid
+  join target as t on t.oid = gc.relnamespace
 ),
 edge as (
   select 'pg_class'::regclass::oid as classid, r.ev_class as objid, d.refclassid, d.refobjid
@@ -46,19 +59,48 @@ node_edge as (
     'pg_class'::regclass, 'pg_proc'::regclass, 'pg_type'::regclass, 'pg_namespace'::regclass
   )
 ),
+-- escape_schema: system-list schemas where a migration can still create objects (spec §8.5 revision 12): postgres
+-- can SET ROLE to the schema owner, or to a role with CREATE on it. Locally: extensions, _realtime,
+-- supabase_functions and supabase_migrations, plus any listed schema that a migration creates (cron, net and so on).
+escape_schema as (
+  select n.oid
+  from pg_namespace as n
+  where n.nspname in (
+      'auth', 'storage', 'extensions', 'realtime', '_realtime', 'graphql', 'graphql_public', 'supabase_functions',
+      'supabase_migrations', 'vault', 'pgsodium', 'pgsodium_masks', 'net', 'cron', 'pgbouncer', '_analytics'
+    )
+    and (
+      pg_has_role('postgres', n.nspowner, 'SET')
+      or exists (
+        select 1
+        from pg_roles as r
+        where pg_has_role('postgres', r.oid, 'SET')
+          and has_schema_privilege(r.oid, n.oid, 'CREATE')
+      )
+    )
+),
 root as (
   select
     p.oid,
-    format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))::text as qualified_name
+    format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))::text as qualified_name,
+    n.oid in (select es.oid from escape_schema as es) as in_system_schema
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
-  where n.nspname not in (
-      'pg_catalog', 'information_schema', 'auth', 'storage', 'extensions', 'realtime', '_realtime',
-      'graphql', 'graphql_public', 'supabase_functions', 'supabase_migrations', 'vault', 'pgsodium',
-      'pgsodium_masks', 'net', 'cron', 'pgbouncer', '_analytics'
+  where (
+      (
+        n.nspname not in (
+          'pg_catalog', 'information_schema', 'auth', 'storage', 'extensions', 'realtime', '_realtime',
+          'graphql', 'graphql_public', 'supabase_functions', 'supabase_migrations', 'vault', 'pgsodium',
+          'pgsodium_masks', 'net', 'cron', 'pgbouncer', '_analytics'
+        )
+        and n.nspname !~ '^pg_toast(_temp_[0-9]+)?$'
+        and n.nspname !~ '^pg_temp_[0-9]+$'
+      )
+      or (
+        n.oid in (select es.oid from escape_schema as es)
+        and pg_has_role('postgres', p.proowner, 'SET')
+      )
     )
-    and n.nspname !~ '^pg_toast(_temp_[0-9]+)?$'
-    and n.nspname !~ '^pg_temp_[0-9]+$'
     and not exists (
       select 1
       from pg_depend as d
@@ -135,13 +177,16 @@ violation as (
 )
 select
   case
+    when r.in_system_schema then 'system_schema_function'
     when v.by_depend then 'begin_atomic_depend'
     when v.by_prosrc then 'prosrc_reference'
     else 'proconfig_search_path'
   end::text as branch,
   r.qualified_name as object,
   (
-    'function reaches quality and integrity '
+    'function '
+    || case when r.in_system_schema then 'in a system schema ' else '' end
+    || 'reaches quality and integrity '
     || case
       when v.by_depend then 'through pg_depend'
       when v.by_prosrc then 'through a schema named in a function body'
