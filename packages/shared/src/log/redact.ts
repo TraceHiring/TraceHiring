@@ -7,7 +7,12 @@
 // - neighbouring quantifiers never share characters, or are bounded;
 // - the quoted-value scanner reads each body at most once, and at most MAX_STRING characters.
 // redact.test.ts times applyPatterns on ~100 KB adversarial inputs to keep it that way.
-import { serializeError, type SerializedError } from './serialize-error.js';
+import {
+  isStackFrame,
+  serializeError,
+  stackFrames,
+  type SerializedError,
+} from './serialize-error.js';
 
 export const REDACTED = '[REDACTED]';
 export const TRUNCATED = '[TRUNCATED]';
@@ -271,6 +276,8 @@ const redactInner = (value: unknown, depth: number, state: State): unknown => {
   }
   if (value === null) return null;
   const obj = value as object;
+  const primitive = unbox(obj);
+  if (primitive !== obj) return redactInner(primitive, depth, state);
   if (depth >= MAX_DEPTH) return TRUNCATED;
   if (state.seen.has(obj)) return CIRCULAR;
   state.seen.add(obj);
@@ -282,7 +289,11 @@ const redactInner = (value: unknown, depth: number, state: State): unknown => {
       return Number.isNaN(t) ? 'Invalid Date' : Date.prototype.toISOString.call(obj);
     }
     if (Array.isArray(obj)) {
-      const out = obj.slice(0, MAX_ENTRIES).map((v) => redactInner(v, depth + 1, state));
+      // An index loop, not obj.slice or obj.map: an own slice or map, or a species constructor
+      // (which Array.prototype.slice.call would still look up), never runs.
+      const n = Math.min(obj.length, MAX_ENTRIES);
+      const out: unknown[] = [];
+      for (let i = 0; i < n; i++) out.push(redactInner(obj[i], depth + 1, state));
       if (obj.length > MAX_ENTRIES) out.push(TRUNCATED);
       return out;
     }
@@ -293,7 +304,9 @@ const redactInner = (value: unknown, depth: number, state: State): unknown => {
       const safeKey = redactString(key);
       out[safeKey] = isSensitiveKey(key)
         ? REDACTED
-        : redactInner((obj as Record<string, unknown>)[key], depth + 1, state);
+        : STACK_KEY.test(normaliseKey(key))
+          ? redactStack((obj as Record<string, unknown>)[key], depth + 1, state)
+          : redactInner((obj as Record<string, unknown>)[key], depth + 1, state);
     }
     if (keys.length > MAX_ENTRIES) out[TRUNCATED] = TRUNCATED;
     return out;
@@ -305,13 +318,65 @@ const redactInner = (value: unknown, depth: number, state: State): unknown => {
 };
 
 /**
+ * The primitive inside a String, Number, Boolean, BigInt or Symbol wrapper, read with the built-in
+ * valueOf (so the text is redacted as a whole, not as one key per character); otherwise obj.
+ */
+const unbox = (obj: object): unknown => {
+  try {
+    const tag = Object.prototype.toString.call(obj);
+    if (obj instanceof String || tag === '[object String]')
+      return String.prototype.valueOf.call(obj);
+    if (obj instanceof Number || tag === '[object Number]')
+      return Number.prototype.valueOf.call(obj);
+    if (obj instanceof Boolean || tag === '[object Boolean]') {
+      return Boolean.prototype.valueOf.call(obj);
+    }
+    if (tag === '[object BigInt]') return BigInt.prototype.valueOf.call(obj);
+    if (tag === '[object Symbol]') return Symbol.prototype.valueOf.call(obj);
+  } catch {
+    // A look-alike (a wrapper's prototype without its value, a spoofed tag): walk it as an object.
+  }
+  return obj;
+};
+
+/** Keys (normalised) that hold a stack trace: stack, stackTrace, stack_trace, errorStack, … */
+const STACK_KEY = /stack(?:trace)?$/;
+
+/** Redacts frames, then drops any line that no longer looks like a frame (keeps this idempotent). */
+const redactFrames = (frames: readonly string[]): string[] =>
+  frames.map(redactString).filter(isStackFrame);
+
+/**
+ * A stack logged as data, as a string or an array of lines: only the lines serializeError would
+ * keep as frames survive, so no message text does. Any other value is redacted as usual.
+ */
+const redactStack = (value: unknown, depth: number, state: State): unknown => {
+  let text: string;
+  if (typeof value === 'string') {
+    text = value;
+  } else if (Array.isArray(value)) {
+    const lines: string[] = [];
+    const n = Math.min(value.length, MAX_ENTRIES);
+    for (let i = 0; i < n; i++) {
+      const line: unknown = value[i];
+      if (typeof line === 'string') lines.push(line);
+    }
+    text = lines.join('\n');
+  } else {
+    return redactInner(value, depth, state);
+  }
+  if (--state.budget < 0 || depth >= MAX_DEPTH) return TRUNCATED;
+  return redactFrames(stackFrames(text));
+};
+
+/**
  * Value-only redaction for serializeError output: its keys (name, code, stack) are fixed and safe,
  * but every value still passes the string patterns (a code or name can carry a PII-shaped value).
  */
 export const redactSerializedError = (err: SerializedError): SerializedError => {
   const out: SerializedError = { name: redactString(err.name) };
   if (err.code !== undefined) out.code = redactString(err.code);
-  if (err.stack !== undefined) out.stack = err.stack.map(redactString);
+  if (err.stack !== undefined) out.stack = redactFrames(err.stack);
   return out;
 };
 

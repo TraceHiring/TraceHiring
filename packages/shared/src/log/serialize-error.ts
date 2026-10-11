@@ -16,6 +16,10 @@ const MAX_FRAME_LENGTH = 300;
 /** A V8 frame: `at fn (file:line:col)` or `at file:line:col`. Other engines' frames are dropped. */
 const FRAME = /^at \S[^\n]*:\d+:\d+\)?$/;
 
+/** True for one trimmed line that is a V8 frame within the length cap. */
+export const isStackFrame = (line: string): boolean =>
+  line.length <= MAX_FRAME_LENGTH && FRAME.test(line);
+
 const framesOf = (stack: string, message: string): string[] => {
   // Skip the header: everything up to the end of the first copy of the message.
   const at = message === '' ? -1 : stack.indexOf(message);
@@ -23,7 +27,7 @@ const framesOf = (stack: string, message: string): string[] => {
   const frames: string[] = [];
   for (const raw of body.split('\n')) {
     const line = raw.trim();
-    if (line.length > MAX_FRAME_LENGTH || !FRAME.test(line)) continue;
+    if (!isStackFrame(line)) continue;
     // A message changed after the stack was captured can still sit in it: drop any line it holds.
     if (message !== '' && message.includes(line)) continue;
     frames.push(line);
@@ -31,6 +35,12 @@ const framesOf = (stack: string, message: string): string[] => {
   }
   return frames;
 };
+
+/**
+ * The frames of a stack whose message is unknown (a stack logged as data): every line that is not
+ * a frame goes, so the header and message lines do too (redact.ts, stack-like keys).
+ */
+export const stackFrames = (stack: string): string[] => framesOf(stack, '');
 
 export const serializeError = (err: unknown): SerializedError => {
   if (!(err instanceof Error)) return { name: 'NonError' };
