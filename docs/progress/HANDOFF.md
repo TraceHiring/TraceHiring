@@ -5,7 +5,7 @@ The next session may be a new Claude Code on another account connected to this f
 
 ## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M8 = closed beta → M9 … M13 = paid pilots)
 - Milestones closed: **0 of 17** (no `m*-reviewed` tag).
-- Checkpoints: `cp/m0a-04` = `a45505d` (S2 + S3a merged). `cp/m0a-05`: see "Where we are".
+- Checkpoints: `cp/m0a-04` = `a45505d` (S2 + S3a merged); **`cp/m0a-05` = `f165fe0`** (S3b merged, full verify + Linux CI green).
 - **M0a: ~95% of BUILD.** S1, S2, S3a and S3b are all written, reviewed and fixed. What is left before the REVIEW phase:
   - AT-1a-local re-run and AT-1b on the final tip;
   - the `check-workflows` export gap (below);
@@ -15,7 +15,7 @@ The next session may be a new Claude Code on another account connected to this f
 ## Where we are
 - Milestone **M0a**, phase **BUILD**. Integration **`m0a/integration`** (checked out in `.claude/worktrees/trace-autopilot-resume-4ece3a`; enter it with `EnterWorktree` path).
 - Spec **revision 16** (S2/S3a/S3b review follow-ups; `specs/m0-foundations.md:3-12`).
-- `milestone/m0a` @ `a45505d` (`cp/m0a-04`), pushed. `main` unchanged (`fe77a87`).
+- `milestone/m0a` @ `f165fe0` (`cp/m0a-05`), pushed. `main` unchanged (`fe77a87`).
 - **Evidence this session:**
   - Full `pnpm verify` green on `a45505d`: scripts 1142 passed + 1 skipped (K4 Windows symlink case), `test:rls` 112/112, candidate 72.4 kB gzip, headers OK, `scan-dist` clean on 5 `dist/`.
   - Linux CI green on `146d465` (run 38167417262: static, rls, security, migrations).
@@ -24,7 +24,7 @@ The next session may be a new Claude Code on another account connected to this f
   - Full `pnpm verify` is green on `f165fe0`: scripts 1229 passed + 1 skipped (K4), `test:rls` 112/112, candidate 72.4 kB, headers and `scan-dist` OK.
   - Linux CI run 38169130226 on `f165fe0`: `static`, `security` and `migrations` passed; `deploy-staging` was skipped (PR event, as designed).
   - `rls` failed once on a **runner Docker port-binding error** ("failed to set up container networking … supabase_db_trace", 47 s). That is not a code fault; the job passed on the previous run. The lead re-ran it; the result is in the next bullet.
-  - CI re-run result and `cp/m0a-05`: see "Next step" 1.
+  - The `rls` re-run passed (2m46s), so the run is fully green.
 
 ## Done this session (all on `m0a/integration`; reports in `docs/reviews/`)
 - **W-S3a Workers** (`/health`, 404/500 JSON, reporter wiring):
@@ -56,19 +56,16 @@ The next session may be a new Claude Code on another account connected to this f
 | Branch @ tip | State |
 | --- | --- |
 | `m0a/integration` @ newest `chore(progress)` | all lead work; pushed; draft PR 1 runs CI |
-| `milestone/m0a` @ `a45505d` (`cp/m0a-04`) | pushed; fast-forward again after the S3b merge |
+| `milestone/m0a` @ `f165fe0` (`cp/m0a-05`) | pushed |
 | `m0a/s3b-fixes` @ `ba3ac88` (on `m0a/s3b-deploy` @ `91622ee`) | W-S3b + fixes; re-review PASS; merged `f165fe0` |
 | `m0a/s2-fixes` @ `ca75411`, `m0a/s3a-fixes` @ `621c545` | merged |
 | `m0a/s2-ui` @ `54620e6`, `m0a/s3-workers` @ `e04446e` | merged via their `-fixes` branches |
 | `worktree-agent-*` | writer scratch; do not use |
 
 ## Next step (in order)
-1. **Checkpoint `cp/m0a-05`.** Check whether the tag already exists (`git tag -l "cp/m0a-05"`). If it does not:
-   - Confirm that CI run 38169130226 (the `rls` re-run) is green: `gh run view 38169130226 --repo TraceHiring/TraceHiring`.
-   - If `rls` failed again on the same Docker networking error, re-run it again. If it fails on a test, fix the cause first.
-   - Tag `cp/m0a-05` on the merge `f165fe0`, or on the newest code commit if that is later.
-   - Fast-forward `milestone/m0a`: `EnterWorktree` into `.claude/worktrees/milestone-m0-spec-e4db77`, then `git merge --ff-only cp/m0a-05`, then go back.
-   - Push.
+1. **Done:** `cp/m0a-05` = `f165fe0`.
+   - CI run 38169130226 is fully green after the `rls` re-run (rls 2m46s, static, security, migrations; deploy-staging skipped on the PR).
+   - `milestone/m0a` is fast-forwarded to `f165fe0` and pushed.
 2. **`check-workflows` gap (S3b review, lead-only):** `run:` text can `export` names that `ENV_DENY_REASONS` denies (for example `NODE_OPTIONS`). Add a rule test-first, or record it as a residual.
 3. **AT-1a-local re-run** (`node scripts/verify-clean-clone.mjs --linux`, ~20 min) and **AT-1b** (`node scripts/verify-clean-clone.mjs`) on the final tip. Record both in `docs/progress/M0a-summary-draft.md` §4.1.
 4. Finish the summary draft:
