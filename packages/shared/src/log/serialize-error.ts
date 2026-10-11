@@ -9,7 +9,14 @@ export interface SerializedError {
   stack?: string[];
 }
 
-const SAFE_NAME = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/;
+/**
+ * An error class name (`TypeError`, `ValidationError`, `DOMException`): it ends in Error or
+ * Exception, so it is not a person's name. Any other name is logged as 'Error', and redact keeps
+ * such a name on a second pass although `name` is a PII stem (spec review L4).
+ */
+const ERROR_NAME = /^(?:[A-Za-z][A-Za-z0-9_.]{0,54})?(?:Error|Exception)$/;
+export const isErrorName = (name: unknown): name is string =>
+  typeof name === 'string' && ERROR_NAME.test(name);
 const SAFE_CODE = /^[A-Za-z0-9_.-]{1,32}$/;
 const MAX_FRAMES = 20;
 const MAX_FRAME_LENGTH = 300;
@@ -63,7 +70,8 @@ export const stackFrames = (stack: string): string[] => framesOf(stack.split('\n
 
 export const serializeError = (err: unknown): SerializedError => {
   if (!(err instanceof Error)) return { name: 'NonError' };
-  const out: SerializedError = { name: SAFE_NAME.test(err.name) ? err.name : 'Error' };
+  const name: unknown = err.name;
+  const out: SerializedError = { name: isErrorName(name) ? name : 'Error' };
   const code: unknown = (err as { code?: unknown }).code;
   if ((typeof code === 'string' || typeof code === 'number') && SAFE_CODE.test(String(code))) {
     out.code = String(code);

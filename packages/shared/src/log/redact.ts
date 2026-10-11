@@ -8,6 +8,7 @@
 // - the quoted-value scanner reads each body at most once, and at most MAX_STRING characters.
 // redact.test.ts times applyPatterns on ~100 KB adversarial inputs to keep it that way.
 import {
+  isErrorName,
   isStackFrame,
   serializeError,
   stackFrames,
@@ -411,13 +412,17 @@ const redactInner = (value: unknown, depth: number, state: State): unknown => {
     if (obj instanceof Map || obj instanceof Set || ArrayBuffer.isView(obj)) return UNSUPPORTED;
     const out: Record<string, unknown> = {};
     const keys = Object.keys(obj);
+    const errorShaped = isSerializedErrorShape(obj, keys);
     for (const key of keys.slice(0, MAX_ENTRIES)) {
       const safeKey = redactString(key);
-      out[safeKey] = isSensitiveKey(key)
-        ? REDACTED
-        : STACK_KEY.test(normaliseKey(key))
-          ? redactStack((obj as Record<string, unknown>)[key], depth + 1, state)
-          : redactInner((obj as Record<string, unknown>)[key], depth + 1, state);
+      out[safeKey] =
+        errorShaped && key === 'name'
+          ? errorName((obj as Record<string, unknown>)[key])
+          : isSensitiveKey(key)
+            ? REDACTED
+            : STACK_KEY.test(normaliseKey(key))
+              ? redactStack((obj as Record<string, unknown>)[key], depth + 1, state)
+              : redactInner((obj as Record<string, unknown>)[key], depth + 1, state);
     }
     if (keys.length > MAX_ENTRIES) out[TRUNCATED] = TRUNCATED;
     return out;
@@ -427,6 +432,22 @@ const redactInner = (value: unknown, depth: number, state: State): unknown => {
     state.seen.delete(obj);
   }
 };
+
+/**
+ * True for an object with the keys of serializeError output: `name` and a `stack` array, and maybe
+ * `code` (spec review L4). Its name is kept only if it is an error class name (errorName), so a
+ * serialised error is stable on a second pass. Its code stays under the `code` stem: an object of
+ * this shape may be plain data, and passing its code would weaken the stem rule.
+ */
+const isSerializedErrorShape = (obj: object, keys: readonly string[]): boolean =>
+  keys.includes('name') &&
+  keys.includes('stack') &&
+  keys.every((k) => k === 'name' || k === 'stack' || k === 'code') &&
+  Array.isArray((obj as { stack?: unknown }).stack);
+
+/** An error class name (never a person's name) passes the string patterns; anything else goes. */
+const errorName = (name: unknown): string =>
+  isErrorName(name) || name === REDACTED ? redactString(name) : REDACTED;
 
 /**
  * The primitive inside a String, Number, Boolean, BigInt or Symbol wrapper, read with the built-in

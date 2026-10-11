@@ -242,21 +242,42 @@ const strings = (v: unknown): string[] =>
       ? Object.entries(v as Record<string, unknown>).flatMap(([k, x]) => [k, ...strings(x)])
       : [];
 
+// Errors (spec review L4), alone and inside data. A code that passes serializeError is redacted by
+// the `code` stem on a second pass (see 'serialised errors on a second pass'), so the generated
+// codes are PII-shaped (redacted on the first pass) or unsafe (dropped on the first pass).
+const errorArb = fc
+  .tuple(
+    fc.string(),
+    fc.constantFrom('Error', 'TypeError', 'ValidationError', synth.word(), ''),
+    fc.constantFrom(undefined, synth.mobile(), synth.email()),
+  )
+  .map(([message, name, code]) => {
+    const err = new Error(message);
+    err.name = name;
+    return code === undefined ? err : Object.assign(err, { code });
+  });
+
 describe('properties', () => {
   it('never throws, is idempotent, respects the caps and is JSON-safe', () => {
     fc.assert(
       fc.property(
-        fc.anything({
-          maxDepth: 9,
-          withBigInt: true,
-          withDate: true,
-          withMap: true,
-          withSet: true,
-          withTypedArray: true,
-          withSparseArray: true,
-          withNullPrototype: true,
-          withBoxedValues: true,
-        }),
+        fc.oneof(
+          fc.anything({
+            maxDepth: 9,
+            withBigInt: true,
+            withDate: true,
+            withMap: true,
+            withSet: true,
+            withTypedArray: true,
+            withSparseArray: true,
+            withNullPrototype: true,
+            withBoxedValues: true,
+          }),
+          errorArb,
+          fc
+            .tuple(fc.anything({ maxDepth: 3 }), errorArb)
+            .map(([data, err]) => ({ data, err, list: [err] })),
+        ),
         (input) => {
           const once = redact(input);
           expect(redact(once)).toEqual(once);
@@ -1073,10 +1094,7 @@ describe('stacks under stack-like keys (S1.7 follow-up 8)', () => {
     const s = ['Error: x', `    ${odd}`, `    ${frames[0]}`].join('\n');
     const once = redact({ stack: s, err: Object.assign(new Error('x'), { stack: s }) });
     expect(once).toEqual({ stack: [frames[0]], err: { name: 'Error', stack: [frames[0]] } });
-    // A serialised error's own `name` key is a PII stem, so a second pass is compared on stacks.
-    const twice = redact(once) as { stack: unknown; err: { stack: unknown } };
-    expect(twice.stack).toEqual([frames[0]]);
-    expect(twice.err.stack).toEqual([frames[0]]);
+    expect(redact(once)).toEqual(once);
   });
 
   it('caps a stack array at the depth cap like any other array', () => {
@@ -1155,5 +1173,54 @@ describe('boxed primitives and hostile arrays (S1.7 follow-up 9)', () => {
     const out = redact(Array.from({ length: MAX_ENTRIES + 5 }, (_, i) => i)) as unknown[];
     expect(out).toHaveLength(MAX_ENTRIES + 1);
     expect(out.at(-1)).toBe(TRUNCATED);
+  });
+});
+
+// Spec review L4: a serialised error is stable on a second pass. Its `name` is a PII stem, so it
+// is kept only where it cannot be a person's name: an error-class name ("…Error"/"…Exception") in
+// an object of exactly the serialised-error shape. Its `code` stays under the stem rule (see below).
+describe('serialised errors on a second pass (spec review L4)', () => {
+  it.each([
+    ['an Error inside data', () => ({ e: new Error(`dup ${synth.email()}`) })],
+    ['an Error alone', () => new TypeError('x')],
+    ['Errors in an array', () => ({ list: [new RangeError('y'), new Error('z')] })],
+    [
+      'an Error with a PII-shaped code',
+      () => ({ e: Object.assign(new Error('x'), { code: synth.mobile() }) }),
+    ],
+    [
+      'an Error with a custom class name',
+      () => Object.assign(new Error('x'), { name: 'ValidationError' }),
+    ],
+  ])('is idempotent on %s', (_label, make) => {
+    const once = redact(make());
+    expect(redact(once)).toEqual(once);
+  });
+
+  it('keeps only error-class names from serializeError', () => {
+    const named = (name: string): unknown => redact(Object.assign(new Error('x'), { name }));
+    expect(named('ValidationError')).toMatchObject({ name: 'ValidationError' });
+    expect(named('DOMException')).toMatchObject({ name: 'DOMException' });
+    expect(named(synth.word())).toMatchObject({ name: 'Error' });
+    expect(named(`${synth.word()} Error`)).toMatchObject({ name: 'Error' });
+  });
+
+  it('still redacts other names, and codes, under the stem rule', () => {
+    const word = synth.word();
+    expect(redact({ name: word, stack: [] })).toEqual({ name: REDACTED, stack: [] });
+    expect(redact({ name: 'TypeError', extra: 1, stack: [] })).toEqual({
+      name: REDACTED,
+      extra: 1,
+      stack: [],
+    });
+    expect(redact({ name: 'TypeError', code: word, stack: [] })).toEqual({
+      name: 'TypeError',
+      code: REDACTED,
+      stack: [],
+    });
+    // so a safe code that a first pass kept is redacted by a second (known limitation)
+    const once = redact(Object.assign(new Error('x'), { code: 'E_BAD' })) as { code: string };
+    expect(once.code).toBe('E_BAD');
+    expect(redact(once)).toMatchObject({ name: 'Error', code: REDACTED });
   });
 });
