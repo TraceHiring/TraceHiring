@@ -37,6 +37,15 @@ export const synth = {
     Array.from({ length: 8 }, (_, i) =>
       (0x1000 + ((s * 977 + i * 4099) % 0xefff)).toString(16),
     ).join(':'),
+  /** A compressed IPv6 address in the documentation range 2001:db8::/32 (RFC 3849). */
+  ipv6Doc: (s = 1) =>
+    [
+      '2001',
+      'db8',
+      ((s * 977) % 0xffff).toString(16),
+      '',
+      (0xa00 + ((s * 7) % 0xff)).toString(16),
+    ].join(':'),
   /** An HTTP Basic credential: base64 of user:password. */
   basic: (s = 1) => btoa(`${lower(6, s)}:${lower(4, s + 1)}${digits(3, s)}`),
 };

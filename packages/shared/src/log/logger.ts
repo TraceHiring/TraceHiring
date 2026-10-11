@@ -3,6 +3,7 @@
 // ESLint rule, and at runtime (a non-matching event becomes `log.invalid_event`).
 import { redact, redactSerializedError, redactString } from './redact.js';
 import { serializeError } from './serialize-error.js';
+import { isVersion } from './version.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -31,7 +32,6 @@ export interface LoggerConfig {
 }
 
 const EVENT = /^[a-z0-9_.]{1,64}$/;
-const VERSION = /^[0-9a-f]{7,40}$|^dev$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** Valid only as a short contract-shaped string that the redactor would leave untouched. */
@@ -45,7 +45,7 @@ const defaultSink = (line: string): void => {
 };
 
 export const createLogger = (config: LoggerConfig): Logger => {
-  if (!VERSION.test(config.version)) throw new Error('createLogger: invalid version');
+  if (!isVersion(config.version)) throw new Error('createLogger: invalid version');
   if (!config.service) throw new Error('createLogger: service is required');
   const sink = config.sink ?? defaultSink;
   const now = config.now ?? (() => new Date());

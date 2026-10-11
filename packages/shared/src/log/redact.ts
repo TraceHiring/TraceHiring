@@ -8,6 +8,7 @@
 // - the quoted-value scanner reads each body at most once, and at most MAX_STRING characters.
 // redact.test.ts times applyPatterns on ~100 KB adversarial inputs to keep it that way.
 import {
+  isErrorName,
   isStackFrame,
   serializeError,
   stackFrames,
@@ -102,14 +103,33 @@ const toAsciiDigit = (ch: string): string => {
 };
 
 /**
- * The text the patterns see: compatibility forms folded, invisible characters dropped, every
- * digit ASCII and every dash '-'. NFKC runs again after the drop, because a dropped character can
- * let marks compose; that also keeps canonical idempotent. Internal (not exported from index.ts).
+ * Stands in for a run of invisible characters between two ASCII letters, or an ASCII letter and a
+ * digit (redactor review #3). There the run may sit inside one value (a soft hyphen in a copied
+ * PAN or email) or between a value and the next word (`<PAN>\u3164ok`), so applyPatterns reads
+ * the text both ways. It is itself an invisible character, so canonical text never has one
+ * otherwise, and it is not a word, space or digit character to any pattern.
+ */
+const SPLIT = '\u2063';
+/**
+ * A run of invisible characters; the first two alternatives capture a run between an ASCII letter
+ * and an ASCII letter or digit, or between a digit and an ASCII letter. Each run is read once:
+ * inside a run the lookbehinds fail, and no invisible character is a letter or digit to them.
+ */
+const IGNORABLE_RUN =
+  /(?<=[A-Za-z])(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z\p{Nd}])|(?<=\p{Nd})(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z])|\p{Default_Ignorable_Code_Point}+/gu;
+const splitOrDrop = (_run: string, letters?: string, digitThenLetter?: string): string =>
+  letters === undefined && digitThenLetter === undefined ? '' : SPLIT;
+
+/**
+ * The text the patterns see: compatibility forms folded, invisible characters dropped (or marked
+ * with SPLIT where they may separate two values), every digit ASCII and every dash '-'. NFKC runs
+ * again after the drop, because a dropped character can let marks compose; that also keeps
+ * canonical idempotent. Internal (not exported from index.ts).
  */
 export const canonical = (s: string): string =>
   s
     .normalize('NFKC')
-    .replace(IGNORABLE, '')
+    .replace(IGNORABLE_RUN, splitOrDrop)
     .normalize('NFKC')
     .replace(NON_ASCII_DIGIT, toAsciiDigit)
     .replace(DASH, '-');
@@ -121,25 +141,53 @@ const keepPrefix: Replacer = (_m, prefix = '') => `${prefix}${REDACTED}`;
 const digits = (source: string): RegExp =>
   new RegExp(source.replaceAll('SEP', '[\\s.-]{0,2}'), 'g');
 
-/** A key, `=` or `:` (the key may be quoted or escaped-quoted), then an opening quote. */
-const KEY_THEN_QUOTE = /(?<![\w-])([\w-]{1,64})(\\?["']?\s{0,3}[=:]\s{0,3})(\\"|["'])/g;
+/**
+ * A key in free text (redactor review #8), as two capture groups:
+ * 1. a run of word characters and dashes, of any length, with optional `[name]` segments
+ *    (`user[password]`, `a[0]["otp"]`); the lookbehind starts it once per run;
+ * 2. the text of a quoted key, which may hold spaces (`"Address Line 1"`), up to its closing
+ *    quote (which may be escaped); the text holds no quote or backslash, so it is read once.
+ */
+const KEY = String.raw`(?:(?<![\w-])([\w-]+(?:\[["']?[\w-]*["']?\])*)|"([^"\\\r\n]+)(?=\\*"))`;
+/** Keys longer than this are treated as sensitive whatever they say (the safe choice). */
+const MAX_KEY = 64;
+const isSensitiveTextKey = (key: string): boolean => key.length > MAX_KEY || isSensitiveKey(key);
+
+/**
+ * A key, `=` or `:` (the key may be quoted or escaped-quoted), then an opening quote. JSON inside
+ * a JSON string escapes each quote with 1, 3, 7, … backslashes (one level deeper each time), so
+ * both quotes take any number of them (redactor review #4).
+ */
+const KEY_THEN_QUOTE = new RegExp(String.raw`${KEY}(\\*["']?\s{0,3}[=:]\s{0,3})(\\*["'])`, 'g');
 
 /**
  * Where a quoted value's body ends: the index of its closing quote, or the end of the text, or
- * MAX_STRING characters on (the bound keeps it linear). A backslash escapes the next character;
- * inside an escaped quote (`\"`, JSON inside a JSON string) `\\` and an escape form one unit.
+ * MAX_STRING characters on (the bound keeps it linear). The opener is a quote after k backslashes
+ * (k = 0 for a plain quote, 2^n - 1 for JSON n levels inside JSON strings). A quote after a run
+ * of r backslashes closes the value when r = k plus an even number of escapes at the value's own
+ * level, each of which is 2k + 2 backslashes: (r - k) % (2k + 2) === 0. Any other quote is
+ * escaped inside the value, or belongs to an outer string (malformed text), and the scan goes on,
+ * which redacts more, never less.
  */
 const quotedEnd = (text: string, from: number, open: string): number => {
   const limit = Math.min(text.length, from + MAX_STRING);
+  const quote = open.at(-1);
+  const k = open.length - 1;
   let i = from;
-  if (open === '\\"') {
-    while (i < limit && !(text[i] === '\\' && text[i + 1] === '"')) {
-      i += text[i] !== '\\' ? 1 : text[i + 1] !== '\\' ? 2 : text[i + 2] === '\\' ? 4 : 3;
+  while (i < limit) {
+    if (text[i] === '\\') {
+      let j = i;
+      while (j < limit && text[j] === '\\') j++;
+      const r = j - i;
+      if (j < limit && text[j] === quote && r >= k && (r - k) % (2 * k + 2) === 0) return j - k;
+      i = j + 1; // the run, and the character it escapes
+    } else if (k === 0 && text[i] === quote) {
+      return i;
+    } else {
+      i++;
     }
-  } else {
-    while (i < limit && text[i] !== open) i += text[i] === '\\' ? 2 : 1;
   }
-  return Math.min(i, limit);
+  return limit;
 };
 
 /**
@@ -152,8 +200,9 @@ const redactQuotedValues = (text: string): string => {
   let last = 0;
   KEY_THEN_QUOTE.lastIndex = 0;
   for (let m = KEY_THEN_QUOTE.exec(text); m !== null; m = KEY_THEN_QUOTE.exec(text)) {
-    const [head, key = '', , open = ''] = m;
-    if (!isSensitiveKey(key)) continue; // a non-sensitive value is still scanned for inner pairs
+    const [head, bare, quoted, , open = ''] = m;
+    // a non-sensitive value is still scanned for inner pairs
+    if (!isSensitiveTextKey(bare ?? quoted ?? '')) continue;
     const from = m.index + head.length;
     const end = quotedEnd(text, from, open);
     if (end === from) continue;
@@ -165,8 +214,40 @@ const redactQuotedValues = (text: string): string => {
   return out + text.slice(last);
 };
 
-/** An IPv6 candidate is an address only with "::" or at least three colons (not a clock time). */
-const isIpv6 = (m: string): boolean => m.includes('::') || (m.match(/:/g)?.length ?? 0) >= 3;
+/**
+ * An IPv6 address: hex groups of at most four digits and two to eight colons, with "::" or at
+ * least three colons (so clock times are left alone). Never longer than MAX_IPV6 characters.
+ */
+const IPV6_SHAPE = /^(?:[0-9a-f]{0,4}:){2,8}[0-9a-f]{0,4}$/i;
+const MAX_IPV6 = 44;
+const isIpv6 = (s: string): boolean =>
+  IPV6_SHAPE.test(s) && (s.includes('::') || (s.match(/:/g)?.length ?? 0) >= 3);
+
+/**
+ * Where the longest address that ends `part` starts (at 0 or right after a ':'), or -1. Only the
+ * last MAX_IPV6 characters can hold it, so each part costs a bounded amount of work.
+ */
+const ipv6Start = (part: string): number => {
+  for (let i = Math.max(0, part.length - MAX_IPV6); i < part.length - 1; i++) {
+    if ((i === 0 || part[i - 1] === ':') && isIpv6(part.slice(i))) return i;
+  }
+  return -1;
+};
+
+/**
+ * IPv6 in a token of word characters, dashes and colons with at least two colons (redactor review
+ * #6): each piece between dashes and underscores loses its longest address suffix, and keeps the
+ * prefix before it (`from:`, `via:from:`, `_src:`, `1st:`, a prefix of any length). A prefix of
+ * hex groups (`a:b:`) reads as part of the address and goes with it. The lookbehind starts the
+ * token once per run of its characters, and its two first runs exclude ':', so it is linear.
+ */
+const redactIpv6 = (text: string): string =>
+  text.replace(/(?<![\w:-])[\w-]*:[\w-]*:[\w:-]*/g, (token) =>
+    token.replace(/[^_-]+/g, (part) => {
+      const at = ipv6Start(part);
+      return at < 0 ? part : `${part.slice(0, at)}${REDACTED}`;
+    }),
+  );
 
 type Step = (text: string) => string;
 const sub =
@@ -183,18 +264,31 @@ const STEPS: readonly Step[] = [
   sub(/\b((?:set-)?cookie\s{0,3}[=:]\s{0,3})[^\r\n"']+/gi, keepPrefix),
   sub(/\bsb_secret_[\w-]*/g, REDACTED),
   sub(/\bpostgres(?:ql)?:\/\/[^\s"']+/gi, REDACTED),
-  // userinfo in any other URL (`scheme://user:password@host`): keep the scheme and the host
+  // userinfo in any other URL (`scheme://user:password@host`): keep the scheme and the host. A
+  // password may hold '/', '?', '#' and '@' (redactor review #8), so the userinfo runs to the last
+  // '@' within 256 characters. It stops at the next '://', so no stretch is read twice (linear).
   sub(
-    /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/?#"'<>]+@/gi,
+    /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)(?:(?!:\/\/)[^\s"'<>]){0,256}@/gi,
     (_m, scheme = '') => `${scheme}${REDACTED}@`,
   ),
   // quoted values under sensitive keys, before anything else can take a piece of them
   redactQuotedValues,
   // query strings and fragments that carry parameters: keep the '?' or '#', drop the rest
   sub(/([?#])[^\s?#"'<>]*=[^\s"'<>]*/g, keepPrefix),
-  // `key=value` and `key: value` in free text, when the key would be redacted as an object key
-  sub(/(?<![\w-])([\w-]{1,64})("?\s{0,3}[=:]\s{0,3}"?)([^\s"'&,;)]+)/g, (m, key = '', sep = '') =>
-    isSensitiveKey(key) ? `${key}${sep}${REDACTED}` : m,
+  // `key=value` and `key: value` in free text, when the key would be redacted as an object key.
+  // The key's closing quote may be escaped (`\"otp\":123456` in nested JSON, review #4). A value of
+  // only backslashes is the opener of a quoted value (handled above), and backslashes that end a
+  // value are the escape of the quote after it, so both are kept.
+  sub(
+    new RegExp(String.raw`${KEY}(\\*["']?\s{0,3}[=:]\s{0,3}"?)([^\s"'&,;)]+)`, 'g'),
+    (m, bare = '', quoted = '', sep = '', value = '') => {
+      if (!isSensitiveTextKey(bare || quoted)) return m;
+      let end = value.length;
+      while (end > 0 && value[end - 1] === '\\') end--;
+      // the key as written (a quoted key keeps its opening quote), the separator, then the value
+      const key = m.slice(0, m.length - sep.length - value.length);
+      return end === 0 ? m : `${key}${sep}${REDACTED}${value.slice(end)}`;
+    },
   ),
   // email (also percent-encoded), then UPI (handle@psp without a dot after the psp)
   sub(/(?<![\w.%+-])[\w.%+-]+(?:@|%40)(?:[a-z0-9-]+\.)+[a-z]{2,}/gi, REDACTED),
@@ -216,16 +310,8 @@ const STEPS: readonly Step[] = [
   sub(/(?<![a-z0-9])[a-z]{3}\d{7}(?![a-z0-9])/gi, REDACTED),
   sub(/(?<![a-z0-9])[a-z]{4}0[a-z0-9]{6}(?![a-z0-9])/gi, REDACTED),
   sub(/(?<![a-z0-9])[a-z]\d{7}(?![a-z0-9])/gi, REDACTED),
-  // IPv6 (needs "::" or at least three colons, so clock times are left alone)
-  sub(/(?<![0-9a-z:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-z:])/gi, (m) =>
-    isIpv6(m) ? REDACTED : m,
-  ),
-  // IPv6 right after a `word:` prefix (`from:fe80::1`), which the lookbehind above skips: keep
-  // the prefix. The prefix starts at most once per run of word characters and is bounded.
-  sub(
-    /(?<![\w:-])([a-z][\w-]{0,31}:)((?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4})(?![0-9a-z:])/gi,
-    (m, prefix = '', ip = '') => (isIpv6(ip) ? `${prefix}${REDACTED}` : m),
-  ),
+  // IPv6, alone or after a `word:` prefix (`from:fe80::1`); clock times are left alone
+  redactIpv6,
   // long hex, and long base64 that mixes upper case, lower case and digits (random tokens)
   sub(/(?<![a-z0-9])[0-9a-f]{32,}(?![a-z0-9])/gi, REDACTED),
   sub(/(?<![\w+/-])[\w+/-]{32,}={0,2}/g, (m) =>
@@ -233,11 +319,33 @@ const STEPS: readonly Step[] = [
   ),
 ];
 
+const runSteps = (text: string): string => STEPS.reduce((out, step) => step(out), text);
+
+/**
+ * Characters of a value that a SPLIT may have cut in two (word characters and the punctuation of
+ * emails, URLs, tokens and IPv6), with SPLIT itself. The lookbehind starts GLUED_BEFORE once per
+ * run, so both scans are linear.
+ */
+const GLUED = '[\\w.%+/=:@\\u2063-]';
+const GLUED_BEFORE = new RegExp(`(?<!${GLUED})${GLUED}*\\u2063\\[REDACTED\\]`, 'g');
+const GLUED_AFTER = new RegExp(`\\[REDACTED\\]\\u2063${GLUED}*`, 'g');
+
 /**
  * Runs every value pattern over canonical text. No length cap, so it is internal (not exported
  * from index.ts) and only redactString calls it, after the cap.
+ *
+ * Where canonical left a SPLIT, the patterns first read it as a word break, so a value glued to
+ * the next word is still found. Any piece joined to a redaction by a SPLIT is then redacted with
+ * it (it may be the rest of the same value), and the patterns run again with every SPLIT dropped,
+ * so a value that the SPLIT cut in two is found whole.
  */
-export const applyPatterns = (text: string): string => STEPS.reduce((out, step) => step(out), text);
+export const applyPatterns = (text: string): string => {
+  const split = runSteps(text);
+  if (!split.includes(SPLIT)) return split;
+  return runSteps(
+    split.replace(GLUED_BEFORE, REDACTED).replace(GLUED_AFTER, REDACTED).replaceAll(SPLIT, ''),
+  );
+};
 
 /**
  * Redacts PII and secret patterns inside one string. Strings over the cap become TRUNCATED.
@@ -247,7 +355,7 @@ export const redactString = (input: string): string => {
   if (input.length > MAX_STRING) return TRUNCATED;
   const text = canonical(input);
   const out = applyPatterns(text);
-  if (out === text) return input;
+  if (out === text.replaceAll(SPLIT, '')) return input;
   return out.length > MAX_STRING ? TRUNCATED : out;
 };
 
@@ -304,13 +412,17 @@ const redactInner = (value: unknown, depth: number, state: State): unknown => {
     if (obj instanceof Map || obj instanceof Set || ArrayBuffer.isView(obj)) return UNSUPPORTED;
     const out: Record<string, unknown> = {};
     const keys = Object.keys(obj);
+    const errorShaped = isSerializedErrorShape(obj, keys);
     for (const key of keys.slice(0, MAX_ENTRIES)) {
       const safeKey = redactString(key);
-      out[safeKey] = isSensitiveKey(key)
-        ? REDACTED
-        : STACK_KEY.test(normaliseKey(key))
-          ? redactStack((obj as Record<string, unknown>)[key], depth + 1, state)
-          : redactInner((obj as Record<string, unknown>)[key], depth + 1, state);
+      out[safeKey] =
+        errorShaped && key === 'name'
+          ? errorName((obj as Record<string, unknown>)[key])
+          : isSensitiveKey(key)
+            ? REDACTED
+            : STACK_KEY.test(normaliseKey(key))
+              ? redactStack((obj as Record<string, unknown>)[key], depth + 1, state)
+              : redactInner((obj as Record<string, unknown>)[key], depth + 1, state);
     }
     if (keys.length > MAX_ENTRIES) out[TRUNCATED] = TRUNCATED;
     return out;
@@ -320,6 +432,22 @@ const redactInner = (value: unknown, depth: number, state: State): unknown => {
     state.seen.delete(obj);
   }
 };
+
+/**
+ * True for an object with the keys of serializeError output: `name` and a `stack` array, and maybe
+ * `code` (spec review L4). Its name is kept only if it is an error class name (errorName), so a
+ * serialised error is stable on a second pass. Its code stays under the `code` stem: an object of
+ * this shape may be plain data, and passing its code would weaken the stem rule.
+ */
+const isSerializedErrorShape = (obj: object, keys: readonly string[]): boolean =>
+  keys.includes('name') &&
+  keys.includes('stack') &&
+  keys.every((k) => k === 'name' || k === 'stack' || k === 'code') &&
+  Array.isArray((obj as { stack?: unknown }).stack);
+
+/** An error class name (never a person's name) passes the string patterns; anything else goes. */
+const errorName = (name: unknown): string =>
+  isErrorName(name) || name === REDACTED ? redactString(name) : REDACTED;
 
 /**
  * The primitive inside a String, Number, Boolean, BigInt or Symbol wrapper, read with the built-in
@@ -350,29 +478,57 @@ const STACK_KEY = /stack(?:trace)?$/;
 const redactFrames = (frames: readonly string[]): string[] =>
   frames.map(redactString).filter(isStackFrame);
 
+/** What redact puts in place of a value; under a stack key a first pass can leave any of them. */
+const MARKERS: ReadonlySet<string> = new Set([REDACTED, TRUNCATED, CIRCULAR, UNSUPPORTED]);
+
+/** At most this many entries in a stack array, as serializeError keeps at most 20 frames. */
+const MAX_STACK_ENTRIES = 20;
+
+/**
+ * The frames of an array of stack lines. Each string element is read like a stack string, but an
+ * element over the cap is never split and filtered: it becomes one TRUNCATED entry in its place
+ * (spec §9.1 caps, spec review M1), and a TRUNCATED entry from an earlier pass stays.
+ */
+const stackArrayFrames = (value: readonly unknown[]): string[] => {
+  const out: string[] = [];
+  let lines: string[] = [];
+  const flush = (): void => {
+    out.push(...redactFrames(stackFrames(lines.join('\n'))));
+    lines = [];
+  };
+  const n = Math.min(value.length, MAX_ENTRIES);
+  for (let i = 0; i < n; i++) {
+    const line: unknown = value[i];
+    if (typeof line !== 'string') continue;
+    if (line === TRUNCATED || line.length > MAX_STRING) {
+      flush();
+      out.push(TRUNCATED);
+    } else {
+      lines.push(line);
+    }
+  }
+  flush();
+  return out.slice(0, MAX_STACK_ENTRIES);
+};
+
 /**
  * A stack logged as data, as a string or an array of lines: only the lines serializeError would
  * keep as frames survive, so no message text does. Any other value is redacted as usual.
  */
 const redactStack = (value: unknown, depth: number, state: State): unknown => {
-  let text: string;
+  // A marker from an earlier pass stays as it is, so a second pass is stable (spec review L3).
+  if (typeof value === 'string' && MARKERS.has(value)) return value;
   if (typeof value === 'string') {
     // Over the cap, a stack string is truncated like any other string (spec §9.1: never passed through).
     if (value.length > MAX_STRING) return TRUNCATED;
-    text = value;
-  } else if (Array.isArray(value)) {
-    const lines: string[] = [];
-    const n = Math.min(value.length, MAX_ENTRIES);
-    for (let i = 0; i < n; i++) {
-      const line: unknown = value[i];
-      if (typeof line === 'string') lines.push(line);
-    }
-    text = lines.join('\n');
-  } else {
-    return redactInner(value, depth, state);
+    if (--state.budget < 0 || depth >= MAX_DEPTH) return TRUNCATED;
+    return redactFrames(stackFrames(value));
   }
-  if (--state.budget < 0 || depth >= MAX_DEPTH) return TRUNCATED;
-  return redactFrames(stackFrames(text));
+  if (Array.isArray(value)) {
+    if (--state.budget < 0 || depth >= MAX_DEPTH) return TRUNCATED;
+    return stackArrayFrames(value);
+  }
+  return redactInner(value, depth, state);
 };
 
 /**

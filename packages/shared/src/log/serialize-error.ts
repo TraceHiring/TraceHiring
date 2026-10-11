@@ -9,7 +9,14 @@ export interface SerializedError {
   stack?: string[];
 }
 
-const SAFE_NAME = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/;
+/**
+ * An error class name (`TypeError`, `ValidationError`, `DOMException`): it ends in Error or
+ * Exception, so it is not a person's name. Any other name is logged as 'Error', and redact keeps
+ * such a name on a second pass although `name` is a PII stem (spec review L4).
+ */
+const ERROR_NAME = /^(?:[A-Za-z][A-Za-z0-9_.]{0,54})?(?:Error|Exception)$/;
+export const isErrorName = (name: unknown): name is string =>
+  typeof name === 'string' && ERROR_NAME.test(name);
 const SAFE_CODE = /^[A-Za-z0-9_.-]{1,32}$/;
 const MAX_FRAMES = 20;
 const MAX_FRAME_LENGTH = 300;
@@ -23,15 +30,12 @@ const FRAME = /^at (?:(?:async |new )?[^\s()]+(?: \[as [^\s\]]+\])? \()?[^\s()]+
 export const isStackFrame = (line: string): boolean =>
   line.length <= MAX_FRAME_LENGTH && FRAME.test(line);
 
-const framesOf = (stack: string, message: string): string[] => {
-  // Skip the header: everything up to the end of the first copy of the message.
-  const at = message === '' ? -1 : stack.indexOf(message);
-  const body = at === -1 ? stack : stack.slice(at + message.length);
+/** The frames among lines (trimmed), at most MAX_FRAMES; a line the message holds is dropped. */
+const framesOf = (lines: readonly string[], message: string): string[] => {
   const frames: string[] = [];
-  for (const raw of body.split('\n')) {
+  for (const raw of lines) {
     const line = raw.trim();
     if (!isStackFrame(line)) continue;
-    // A message changed after the stack was captured can still sit in it: drop any line it holds.
     if (message !== '' && message.includes(line)) continue;
     frames.push(line);
     if (frames.length === MAX_FRAMES) break;
@@ -39,22 +43,42 @@ const framesOf = (stack: string, message: string): string[] => {
   return frames;
 };
 
+/** How V8 prints each frame of err.stack: on its own line after the header, indented 4 spaces. */
+const V8_FRAME_LINE = /^ {4}at /;
+
+/**
+ * The frames of err.stack: only the trailing run of lines that V8 printed as frames. The header
+ * before it (the message, which can span lines and was fixed when the stack was captured, so a
+ * message changed later no longer matches it) never counts, even where a line is frame-shaped
+ * (spec review L2). A frame-shaped line the current message holds is dropped as well.
+ */
+const errorFrames = (stack: string, message: string): string[] => {
+  const lines = stack.split('\n');
+  let end = lines.length;
+  while (end > 0 && (lines[end - 1] ?? '').trim() === '') end--;
+  let start = end;
+  while (start > 0 && V8_FRAME_LINE.test(lines[start - 1] ?? '')) start--;
+  return framesOf(lines.slice(start, end), message);
+};
+
 /**
  * The frames of a stack whose message is unknown (a stack logged as data): every line that is not
- * a frame goes, so the header and message lines do too (redact.ts, stack-like keys).
+ * a frame goes, so the header and message lines do too (redact.ts, stack-like keys). Lines need
+ * no indentation here: redacted output holds trimmed frames, and a second pass must keep them.
  */
-export const stackFrames = (stack: string): string[] => framesOf(stack, '');
+export const stackFrames = (stack: string): string[] => framesOf(stack.split('\n'), '');
 
 export const serializeError = (err: unknown): SerializedError => {
   if (!(err instanceof Error)) return { name: 'NonError' };
-  const out: SerializedError = { name: SAFE_NAME.test(err.name) ? err.name : 'Error' };
+  const name: unknown = err.name;
+  const out: SerializedError = { name: isErrorName(name) ? name : 'Error' };
   const code: unknown = (err as { code?: unknown }).code;
   if ((typeof code === 'string' || typeof code === 'number') && SAFE_CODE.test(String(code))) {
     out.code = String(code);
   }
   const message: unknown = err.message;
   if (typeof err.stack === 'string') {
-    out.stack = framesOf(err.stack, typeof message === 'string' ? message : '');
+    out.stack = errorFrames(err.stack, typeof message === 'string' ? message : '');
   }
   return out;
 };

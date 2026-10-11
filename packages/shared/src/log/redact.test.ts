@@ -9,6 +9,7 @@ import {
   TRUNCATED,
   applyPatterns,
   canonical,
+  isSensitiveKey,
   redact,
   redactString,
 } from './redact.js';
@@ -100,6 +101,41 @@ describe('key rules', () => {
     const id = '7f3c1e2a-5b6d-4c8e-9f01-23456789abcd';
     const input = { orgId: id, requestId: id, sessionId: id, keyVersion: 3, org_id: id };
     expect(redact(input)).toEqual(input);
+  });
+
+  // Spec review L6: every entry of SAFE_KEYS in redact.ts (it is not exported, so it is listed
+  // here; keep the two in step), in camelCase and snake_case, and each one only as an exact key.
+  const allowList = [
+    'orgId',
+    'requestId',
+    'sessionId',
+    'keyVersion',
+    'attemptId',
+    'invitationId',
+    'workspaceId',
+    'statusCode',
+    'errorCode',
+    'stage',
+    'page',
+    'pageSize',
+    'contentType',
+    'contentLength',
+    'responseStatus',
+    'responseTimeMs',
+  ];
+  const snake = (key: string): string => key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+
+  it.each(allowList)('keeps the allow-listed key "%s" in any case or separator', (key) => {
+    for (const k of [key, snake(key), key.toUpperCase(), snake(key).replaceAll('_', '-')]) {
+      expect(redact({ [k]: 'v' })).toEqual({ [k]: 'v' });
+    }
+  });
+
+  it.each(allowList)('still redacts a longer key that contains "%s"', (key) => {
+    expect(isSensitiveKey(`${key}Name`)).toBe(true);
+    expect(redact({ [`candidate_${key}_name`]: 'v' })).toEqual({
+      [`candidate_${key}_name`]: REDACTED,
+    });
   });
 
   it('redacts a whole subtree under a matching key', () => {
@@ -242,21 +278,42 @@ const strings = (v: unknown): string[] =>
       ? Object.entries(v as Record<string, unknown>).flatMap(([k, x]) => [k, ...strings(x)])
       : [];
 
+// Errors (spec review L4), alone and inside data. A code that passes serializeError is redacted by
+// the `code` stem on a second pass (see 'serialised errors on a second pass'), so the generated
+// codes are PII-shaped (redacted on the first pass) or unsafe (dropped on the first pass).
+const errorArb = fc
+  .tuple(
+    fc.string(),
+    fc.constantFrom('Error', 'TypeError', 'ValidationError', synth.word(), ''),
+    fc.constantFrom(undefined, synth.mobile(), synth.email()),
+  )
+  .map(([message, name, code]) => {
+    const err = new Error(message);
+    err.name = name;
+    return code === undefined ? err : Object.assign(err, { code });
+  });
+
 describe('properties', () => {
   it('never throws, is idempotent, respects the caps and is JSON-safe', () => {
     fc.assert(
       fc.property(
-        fc.anything({
-          maxDepth: 9,
-          withBigInt: true,
-          withDate: true,
-          withMap: true,
-          withSet: true,
-          withTypedArray: true,
-          withSparseArray: true,
-          withNullPrototype: true,
-          withBoxedValues: true,
-        }),
+        fc.oneof(
+          fc.anything({
+            maxDepth: 9,
+            withBigInt: true,
+            withDate: true,
+            withMap: true,
+            withSet: true,
+            withTypedArray: true,
+            withSparseArray: true,
+            withNullPrototype: true,
+            withBoxedValues: true,
+          }),
+          errorArb,
+          fc
+            .tuple(fc.anything({ maxDepth: 3 }), errorArb)
+            .map(([data, err]) => ({ data, err, list: [err] })),
+        ),
         (input) => {
           const once = redact(input);
           expect(redact(once)).toEqual(once);
@@ -459,6 +516,43 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['userinfo pairs', fill('a://b@')],
     ['scheme characters', fill('ab+.-')],
     ['schemes inside userinfo', 'a://' + fill('b:c://')],
+    // invisible characters between letters or digits (redactor review #3): two passes, and the
+    // scans for pieces glued to a redaction
+    ['letters split by fillers', fill('a\u3164')],
+    ['digits and letters split', fill('1\u200ba')],
+    ['values glued to words', fill(`${synth.pan()}\u3164`)],
+    ['words glued to values', fill(`ok\u3164${synth.pan()} `)],
+    ['long glued run, no value', fill('a.b\u200b')],
+    ['emails split in the local part', fill(`ab\u00adcd@${synth.word()}.example `)],
+    // backslash runs before and after the separator (redactor review #4)
+    ['key, then a long backslash run', 'token' + fill('\\')],
+    ['separator, then a long backslash run', 'token=' + fill('\\')],
+    ['keys between backslash runs', fill('a\\\\\\\\\\\\\\')],
+    ['deep escaped openers', fill('a:\\\\\\\\\\\\\\"')],
+    ['sensitive deep openers', fill('token=\\\\\\"')],
+    ['deep body of escaped quotes', 'token=\\\\\\"' + fill('\\\\\\\\\\\\\\"')],
+    ['deep body of outer quotes', 'token=\\\\\\"' + fill('\\" ')],
+    ['numbers under escaped keys', fill('otp\\\\\\":1,')],
+    // IPv6 tokens of any prefix (redactor review #6)
+    ['one long token of hex groups', fill('a1:')],
+    ['one long token of words', fill('xy:')],
+    ['many parts of hex groups', fill('a:b:-')],
+    ['many parts with an address', fill(`_${synth.ipv6Doc()}`)],
+    ['dashes and colons', fill('-:')],
+    ['colon-led words', fill(':a ')],
+    // bracketed, quoted and long keys, and URL passwords (redactor review #8)
+    ['bracket segments', fill('a[b]')],
+    ['unclosed brackets', fill('a[b')],
+    ['quoted bracket segments', fill('a["b"]')],
+    ['long keys with separators', fill(`${'a'.repeat(70)}=b `)],
+    ['long sensitive keys with quotes', fill(`${'a'.repeat(70)}="b `)],
+    ['quoted keys', fill('"a b":1,')],
+    ['quotes, no separator', fill('"a b" ')],
+    ['long quoted key, no closer', '"' + fill('a ')],
+    ['quoted keys before backslash runs', fill('"a\\\\\\\\')],
+    ['userinfo windows, no @', fill(`a://${'b/'.repeat(150)} `)],
+    ['userinfo windows ending in @', fill('a://b/c@')],
+    ['one scheme, then path characters', 'a://' + fill('b?#/')],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -466,6 +560,19 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     const text = canonical(s);
     applyPatterns(text.slice(0, 1000)); // warm-up so regex compilation is not timed
     expect(bestOfFiveMs(() => applyPatterns(text))).toBeLessThan(50);
+  });
+
+  // canonical itself (redactor review #3): each run of invisible characters is read once
+  it.each([
+    ['alternating fillers', fill('a\u3164')],
+    ['one long run', fill('\u3164')],
+    ['long runs between letters and spaces', fill(`a${'\u3164'.repeat(500)} `)],
+    ['long runs between digits and letters', fill(`1${'\u200b'.repeat(500)}a`)],
+    ['digits split by joiners', fill('9\u034f')],
+  ])('canonicalises ~100 KB of "%s" well inside 50 ms', (_label, s) => {
+    expect(s.length).toBeGreaterThanOrEqual(KB100);
+    canonical(s.slice(0, 1000)); // warm-up
+    expect(bestOfFiveMs(() => canonical(s))).toBeLessThan(50);
   });
 
   it('returns [TRUNCATED] for a 100 KB string without running the patterns', () => {
@@ -592,6 +699,44 @@ describe('quoted and multi-word key=value secrets (S1.7 follow-up 1)', () => {
   });
 });
 
+// Redactor security review #4: JSON inside a JSON string inside a JSON string (and deeper) escapes
+// each quote with 3, 7, … backslashes; a secret there must go like one at the first level.
+describe('secrets in nested JSON (redactor review #4)', () => {
+  const BS = '\\';
+  const secret = synth.base64(5).slice(0, 10);
+  const phrase = synth.phrase();
+  const nest = (value: unknown, levels: number): string => {
+    let s = JSON.stringify(value);
+    for (let i = 1; i < levels; i++) s = JSON.stringify({ data: s });
+    return s;
+  };
+
+  it.each([1, 2, 3, 4])('redacts the whole quoted value %i level(s) deep', (levels) => {
+    for (const value of [
+      `${secret} ${phrase}`,
+      `${secret}" ${phrase}`, // an escaped quote inside the value
+      `${phrase} ${secret}${BS}`, // a value that ends with a backslash
+      `${secret}${BS}" ${phrase}${BS}${BS}`,
+    ]) {
+      const out = redactString(`got ${nest({ password: value, n: 1 }, levels)}`);
+      expect(out).toBe(`got ${nest({ password: REDACTED, n: 1 }, levels)}`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it.each([1, 2, 3])('redacts a number under a sensitive key %i level(s) deep', (levels) => {
+    const otp = Number(synth.mobile().slice(0, 6));
+    const out = redactString(nest({ otp, n: 1 }, levels));
+    expect(out).toBe(nest({ otp: 0, n: 1 }, levels).replace(':0,', `:${REDACTED},`));
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('never closes a value at a quote of an outer string (fails safe)', () => {
+    const s = `token=${BS}${BS}${BS}"${secret} ${BS}" ${phrase}${BS}${BS}${BS}" next`;
+    expect(redactString(s)).toBe(`token=${BS}${BS}${BS}"${REDACTED}${BS}${BS}${BS}" next`);
+  });
+});
+
 describe('Authorization schemes (S1.7 follow-up 2)', () => {
   const basic = synth.basic();
   const tok = synth.base64(9).slice(0, 20);
@@ -682,6 +827,71 @@ describe('number canonicalisation (S1.7 follow-ups 3-5)', () => {
   });
 });
 
+// Redactor security review #3: dropping an invisible character must not glue a value to the word
+// next to it (the value's pattern then stops matching), nor split a value that it sits inside.
+describe('invisible characters next to and inside a value (redactor review #3)', () => {
+  const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
+  const expectGone = (s: string, value: string): void => {
+    const out = redactString(`x ${s} y`);
+    expect(out).not.toContain(value);
+    expect(out).toContain(REDACTED);
+    expect(out).not.toMatch(IGNORABLE);
+    expect(redactString(out)).toBe(out);
+  };
+
+  it.each([
+    ['a PAN, then letters', synth.pan(), '', '\u3164ok'],
+    ['an IFSC, then letters', synth.ifsc(), '', '\ufe0fbranch'],
+    ['a mobile number, then a letter', synth.mobile(), '', '\u3164x'],
+    ['a passport number, then letters', synth.passport(), '', '\u200bok'],
+    ['a voter EPIC, then letters', synth.epic(), '', '\u2060ok'],
+    ['an IPv6 address, then letters', synth.ipv6Doc(), '', '\u3164ok'],
+    ['long hex, then letters', synth.hex(), '', '\u00adok'],
+    ['letters, then a PAN', synth.pan(2), 'ok\u3164', ''],
+    ['letters, then an IFSC', synth.ifsc(2), 'id\ufe0f', ''],
+  ])('redacts %s', (_label, value, before, after) => {
+    expectGone(`${before}${value}${after}`, value);
+  });
+
+  // The same characters inside a value (a soft hyphen or zero-width space from copied text) still
+  // join it, and no piece of the value survives on either side.
+  const at = (s: string, i: number, c: string): string => `${s.slice(0, i)}${c}${s.slice(i)}`;
+  const local = `${synth.word(4)}${synth.word(5)}`;
+  it.each([
+    ['a PAN, between letters and digits', synth.pan(), 5, '\u00ad'],
+    ['a PAN, between digits and its last letter', synth.pan(), 9, '\u200b'],
+    ['an IFSC, between letters', synth.ifsc(), 2, '\u200b'],
+    ['a passport number, after its letter', synth.passport(), 1, '\u2060'],
+    ['an IPv6 address, inside a group', synth.ipv6Doc(), 6, '\u00ad'],
+    ['an email, inside the local part', `${local}@${synth.word(6)}.example`, 4, '\u00ad'],
+    [
+      'an email, inside the domain',
+      `${local}@${synth.word(6)}.example`,
+      local.length + 3,
+      '\u200b',
+    ],
+    ['a JWT', synth.jwt(), 12, '\u00ad'],
+    ['long base64', synth.base64(), 6, '\u200b'],
+  ])('redacts %s, split by an invisible character', (_label, value, i, c) => {
+    expectGone(at(value, i, c), value);
+    for (const piece of [value.slice(0, i), value.slice(i)].filter((p) => p.length >= 3)) {
+      expect(redactString(`x ${at(value, i, c)} y`)).not.toContain(piece);
+    }
+  });
+
+  it('still joins a free-text key split by an invisible character', () => {
+    const secret = synth.base64(5).slice(0, 10);
+    expectGone(`pass\u200bword=${secret}`, secret);
+    expectGone(`{"to\u00adken":"${synth.phrase()}"}`, synth.phrase());
+  });
+
+  it('leaves text with no value in it unchanged', () => {
+    for (const s of ['ok\u3164fine', 'a\u200bb c\u00add', '9\u2060x', 'fine\ufe0f!']) {
+      expect(redactString(s)).toBe(s);
+    }
+  });
+});
+
 describe('IPv6 after a word prefix (S1.7 follow-up 6)', () => {
   it.each([
     ['ip:', synth.ipv6()],
@@ -697,6 +907,45 @@ describe('IPv6 after a word prefix (S1.7 follow-up 6)', () => {
 
   it('leaves clock times and other word:value pairs after a prefix alone', () => {
     const s = 'at:12:30:45 ts:2026-10-11T12:30:45Z std::vector error:abc:def level:warn';
+    expect(redactString(s)).toBe(s);
+  });
+
+  // Redactor security review #6: any prefix of word characters, dashes and colons (documentation-
+  // range addresses only). A prefix of hex groups reads as part of the address and goes with it.
+  const full = ['2001', 'db8', ...[3, 5, 7, 11, 13, 17].map((n) => (n * 977).toString(16))].join(
+    ':',
+  );
+  it.each([
+    ['a chained prefix', 'via:from:', synth.ipv6Doc(3)],
+    ['a chained prefix, full address', 'via:from:', full],
+    ['an underscore-led prefix', '_src:', synth.ipv6Doc(4)],
+    ['a digit-led prefix', '1st:', synth.ipv6Doc(5)],
+    ['a dash-led prefix', '-peer:', synth.ipv6Doc(6)],
+    ['a prefix over 32 characters', `${'x'.repeat(40)}:`, synth.ipv6Doc(7)],
+    ['a prefix over 128 characters', `${'peer-'.repeat(30)}to:`, full],
+    ['a prefix of words, dashes and underscores', 'peer-addr_v6:', synth.ipv6Doc(8)],
+  ])('redacts the address after %s and keeps the prefix', (_label, prefix, ip) => {
+    const out = redactString(`conn ${prefix}${ip} closed`);
+    expect(out).toBe(`conn ${prefix}${REDACTED} closed`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('redacts a chained prefix of hex groups with the address', () => {
+    const ip = synth.ipv6Doc(9);
+    expect(redactString(`conn a:b:${ip} closed`)).toBe(`conn ${REDACTED} closed`);
+    expect(redactString(`conn via:a:b:${ip} closed`)).toBe(`conn via:${REDACTED} closed`);
+  });
+
+  it('still redacts addresses next to dashes, underscores and colons', () => {
+    const [a, b] = [synth.ipv6Doc(10), synth.ipv6Doc(11)];
+    expect(redactString(`range ${a}-${b} x`)).toBe(`range ${REDACTED}-${REDACTED} x`);
+    expect(redactString(`via_${a}_v6 x`)).toBe(`via_${REDACTED}_v6 x`);
+    expect(redactString(`addr ${a}: refused`)).not.toContain(a);
+    expect(redactString(`[${full}]:443`)).toBe(`[${REDACTED}]:443`);
+  });
+
+  it('leaves word:word chains and two-group hex pairs alone', () => {
+    const s = 'urn:isbn:x Foo::bar cafe:beef:dead a:b:c via:from:to std::map::at x:12:30';
     expect(redactString(s)).toBe(s);
   });
 });
@@ -723,6 +972,73 @@ describe('URL userinfo (S1.7 follow-up 7)', () => {
 
   it('leaves URLs without userinfo alone', () => {
     const s = `fetch https://${host}/v1/x and mailto:support done`;
+    expect(redactString(s)).toBe(s);
+  });
+
+  // Redactor security review #8: '/', '?' and '#' inside a password (not percent-encoded)
+  it.each([
+    ['a slash', `${synth.word(5)}/${pass}`],
+    ['a question mark', `${synth.word(5)}?${pass}`],
+    ['a hash', `${synth.word(5)}#${pass}`],
+    ['all three and an @', `a/b?c#d@${pass}`],
+  ])('redacts a password with %s in it', (_label, password) => {
+    const out = redactString(`fetch https://${user}:${password}@${host}/v1/x failed`);
+    expect(out).toBe(`fetch https://${REDACTED}@${host}/v1/x failed`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('redacts userinfo in a URL inside another URL', () => {
+    const inner = `https://${user}:${synth.word(5)}/${pass}@${host}/`;
+    const out = redactString(`go https://${synth.word(6)}.example/r?to=${inner} now`);
+    expect(out).not.toContain(pass);
+    expect(out).not.toContain(user);
+  });
+});
+
+// Redactor security review #8: more ways a key can be written in free text.
+describe('bracketed, quoted and long keys (redactor review #8)', () => {
+  const secret = synth.base64(6).slice(0, 12);
+  const phrase = synth.phrase(2);
+  const otp = synth.mobile(3).slice(0, 6);
+  const R = REDACTED;
+  const cases: [string, string, string][] = [
+    ['a bracketed field', `user[password]=${secret}`, `user[password]=${R}`],
+    ['nested bracketed fields', `a[0][otp]=${otp}&b=1`, `a[0][otp]=${R}&b=1`],
+    ['a quoted bracketed field', `params["token"]=${secret}`, `params["token"]=${R}`],
+    ['a bracketed field, quoted value', `user[password]="${phrase}"`, `user[password]="${R}"`],
+    ['a quoted key with spaces', `{"Address Line 1":"${phrase}"}`, `{"Address Line 1":"${R}"}`],
+    [
+      'a quoted key with spaces, number',
+      `{"OTP Value": ${otp}, "n": 1}`,
+      `{"OTP Value": ${R}, "n": 1}`,
+    ],
+    [
+      'an escaped quoted key with spaces',
+      JSON.stringify({ data: JSON.stringify({ 'Address Line 1': phrase, n: 1 }) }),
+      JSON.stringify({ data: JSON.stringify({ 'Address Line 1': R, n: 1 }) }),
+    ],
+    [
+      'a key over 64 characters',
+      `${'x'.repeat(70)}_password=${secret}`,
+      `${'x'.repeat(70)}_password=${R}`,
+    ],
+    // Safe choice for keys over 64 characters: the value is redacted whatever the key says.
+    ['a key over 64 characters, no stem', `${'y'.repeat(65)}=${secret}`, `${'y'.repeat(65)}=${R}`],
+    [
+      'a quoted key over 64 characters',
+      `{"${'z'.repeat(70)} kind":"${phrase}"}`,
+      `{"${'z'.repeat(70)} kind":"${R}"}`,
+    ],
+  ];
+
+  it.each(cases)('redacts the value under %s', (_label, s, expected) => {
+    const out = redactString(`got ${s} end`);
+    expect(out).toBe(`got ${expected} end`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('leaves non-sensitive keys of 64 characters or fewer alone', () => {
+    const s = `${'k'.repeat(64)}=${synth.word(7)} a[0][kind]=b "Line Count": 3 {"Status Kind":"ok"}`;
     expect(redactString(s)).toBe(s);
   });
 });
@@ -752,6 +1068,34 @@ describe('stacks under stack-like keys (S1.7 follow-up 8)', () => {
     const text = big.join('\n');
     expect(text.length).toBeGreaterThan(MAX_STRING);
     expect(redact({ stack: text })).toEqual({ stack: TRUNCATED });
+  });
+
+  // Spec review L3: a marker that a first pass left under a stack key stays on a second pass.
+  it('keeps a [TRUNCATED] or other marker under a stack key on a second pass', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.stack = cyclic;
+    for (const input of [
+      { stack: 'x'.repeat(MAX_STRING + 1) },
+      { stackTrace: (): number => 1 },
+      { errorStack: Symbol('s') },
+      cyclic,
+    ]) {
+      const once = redact(input);
+      expect(Object.values(once as object)[0]).toMatch(/^\[[A-Z]+\]$/);
+      expect(redact(once)).toEqual(once);
+    }
+  });
+
+  // Spec review M1: an element of a stack array over the cap is never split and filtered, so no
+  // frame-shaped line inside it gets through; it becomes one [TRUNCATED] entry in its place.
+  it('truncates an over-cap element of a stack array in place', () => {
+    const big = `Error: ${phrase} ${'q'.repeat(2500)}\n    at g (file:///b.js:3:4)`;
+    const once = redact({ stackTrace: [big] });
+    expect(once).toEqual({ stackTrace: [TRUNCATED] });
+    expect(redact(once)).toEqual(once);
+    const mixed = redact({ stack: ['Error: x', `    ${frames[0]}`, big, `    ${frames[1]}`] });
+    expect(mixed).toEqual({ stack: [frames[0], TRUNCATED, frames[1]] });
+    expect(redact(mixed)).toEqual(mixed);
   });
 
   it.each([
@@ -786,10 +1130,7 @@ describe('stacks under stack-like keys (S1.7 follow-up 8)', () => {
     const s = ['Error: x', `    ${odd}`, `    ${frames[0]}`].join('\n');
     const once = redact({ stack: s, err: Object.assign(new Error('x'), { stack: s }) });
     expect(once).toEqual({ stack: [frames[0]], err: { name: 'Error', stack: [frames[0]] } });
-    // A serialised error's own `name` key is a PII stem, so a second pass is compared on stacks.
-    const twice = redact(once) as { stack: unknown; err: { stack: unknown } };
-    expect(twice.stack).toEqual([frames[0]]);
-    expect(twice.err.stack).toEqual([frames[0]]);
+    expect(redact(once)).toEqual(once);
   });
 
   it('caps a stack array at the depth cap like any other array', () => {
@@ -868,5 +1209,54 @@ describe('boxed primitives and hostile arrays (S1.7 follow-up 9)', () => {
     const out = redact(Array.from({ length: MAX_ENTRIES + 5 }, (_, i) => i)) as unknown[];
     expect(out).toHaveLength(MAX_ENTRIES + 1);
     expect(out.at(-1)).toBe(TRUNCATED);
+  });
+});
+
+// Spec review L4: a serialised error is stable on a second pass. Its `name` is a PII stem, so it
+// is kept only where it cannot be a person's name: an error-class name ("…Error"/"…Exception") in
+// an object of exactly the serialised-error shape. Its `code` stays under the stem rule (see below).
+describe('serialised errors on a second pass (spec review L4)', () => {
+  it.each([
+    ['an Error inside data', () => ({ e: new Error(`dup ${synth.email()}`) })],
+    ['an Error alone', () => new TypeError('x')],
+    ['Errors in an array', () => ({ list: [new RangeError('y'), new Error('z')] })],
+    [
+      'an Error with a PII-shaped code',
+      () => ({ e: Object.assign(new Error('x'), { code: synth.mobile() }) }),
+    ],
+    [
+      'an Error with a custom class name',
+      () => Object.assign(new Error('x'), { name: 'ValidationError' }),
+    ],
+  ])('is idempotent on %s', (_label, make) => {
+    const once = redact(make());
+    expect(redact(once)).toEqual(once);
+  });
+
+  it('keeps only error-class names from serializeError', () => {
+    const named = (name: string): unknown => redact(Object.assign(new Error('x'), { name }));
+    expect(named('ValidationError')).toMatchObject({ name: 'ValidationError' });
+    expect(named('DOMException')).toMatchObject({ name: 'DOMException' });
+    expect(named(synth.word())).toMatchObject({ name: 'Error' });
+    expect(named(`${synth.word()} Error`)).toMatchObject({ name: 'Error' });
+  });
+
+  it('still redacts other names, and codes, under the stem rule', () => {
+    const word = synth.word();
+    expect(redact({ name: word, stack: [] })).toEqual({ name: REDACTED, stack: [] });
+    expect(redact({ name: 'TypeError', extra: 1, stack: [] })).toEqual({
+      name: REDACTED,
+      extra: 1,
+      stack: [],
+    });
+    expect(redact({ name: 'TypeError', code: word, stack: [] })).toEqual({
+      name: 'TypeError',
+      code: REDACTED,
+      stack: [],
+    });
+    // so a safe code that a first pass kept is redacted by a second (known limitation)
+    const once = redact(Object.assign(new Error('x'), { code: 'E_BAD' })) as { code: string };
+    expect(once.code).toBe('E_BAD');
+    expect(redact(once)).toMatchObject({ name: 'Error', code: REDACTED });
   });
 });
