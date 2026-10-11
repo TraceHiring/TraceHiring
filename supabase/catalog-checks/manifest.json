@@ -70,7 +70,8 @@
         "check_constraint",
         "index_expression",
         "column_domain",
-        "outside_host_both"
+        "outside_host_both",
+        "system_table_trigger"
       ]
     },
     {

@@ -26,6 +26,10 @@
 --     descendant elsewhere), whose code reaches both. Founder decision 2026-10-11: such a table (the plan's reports
 --     table) may hold foreign keys into both schemas and show both results side by side (rule 5), so its foreign
 --     keys are not flagged, but code on it must not combine them (rule 1).
+--   system_table_trigger: a trigger on a relation outside scope_rel (such as auth.users or storage.objects, where
+--     postgres holds TRIGGER), whose code (its WHEN clause and its function) reaches both. Triggers are the one host
+--     a migration can attach to a table it does not own, so trigger hosts are taken from every relation, not only
+--     scope_rel.
 -- The MT-5a rule is the closure in shared:graph and shared:closure below (the same text in MT-5a, 5b, 5c and 5d).
 -- Extension members are not skipped here: an extension installed in quality or integrity is already an MT-9
 -- violation.
@@ -235,12 +239,12 @@ foreign_key as (
     and src.nspname <> ref.nspname
 ),
 -- host: code attached to an in-scope relation, walked from the host itself (its edges are in code_edge). kind
--- names the branch.
+-- names the branch. Triggers are taken on every relation (system_table_trigger): TRIGGER is a privilege, so a
+-- migration can attach one to a table it does not own.
 host (classid, oid, relid, name, kind) as (
   select 'pg_trigger'::regclass::oid, tg.oid, tg.tgrelid, format('%I', tg.tgname), 'trigger'::text
   from pg_trigger as tg
   where not tg.tgisinternal
-    and tg.tgrelid in (select s.oid from scope_rel as s)
   union all
   select 'pg_policy'::regclass::oid, pol.oid, pol.polrelid, format('%I', pol.polname), 'policy'::text
   from pg_policy as pol
@@ -361,7 +365,8 @@ crossing as (
   where rc.nspname <> hr.nspname
   group by h.kind, h.classid, h.oid, h.relid, h.name, hr.nspname, rc.nspname
 ),
--- outside: a host on a relation that reaches neither schema, whose code reaches both.
+-- outside: a host on a relation that reaches neither schema, whose code reaches both (system_table_trigger when the
+-- host is a trigger on a relation outside scope_rel, outside_host_both otherwise).
 outside as (
   select h.kind, h.relid, h.name
   from host as h
@@ -403,17 +408,23 @@ join pg_class as c on c.oid = x.relid
 join pg_namespace as n on n.oid = c.relnamespace
 union all
 select
-  'outside_host_both'::text,
+  case
+    when o.relid in (select s.oid from scope_rel as s) then 'outside_host_both'
+    else 'system_table_trigger'
+  end::text,
   format('%s on %I.%I', o.name, n.nspname, c.relname)::text,
-  format(
-    '%s on a table outside quality and integrity reaches both',
-    case o.kind
-      when 'default' then 'column default'
-      when 'check' then 'CHECK constraint'
-      when 'domain' then 'column domain'
-      else o.kind
-    end
-  )::text
+  case
+    when o.relid in (select s.oid from scope_rel as s) then format(
+      '%s on a table outside quality and integrity reaches both',
+      case o.kind
+        when 'default' then 'column default'
+        when 'check' then 'CHECK constraint'
+        when 'domain' then 'column domain'
+        else o.kind
+      end
+    )
+    else 'trigger on a relation outside the catalog-check scope reaches quality and integrity'
+  end::text
 from outside as o
 join pg_class as c on c.oid = o.relid
 join pg_namespace as n on n.oid = c.relnamespace
