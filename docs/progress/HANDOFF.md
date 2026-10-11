@@ -1,5 +1,5 @@
 # HANDOFF — 2026-10-11 08:15 IST
-Reason for stopping: usage guard 80% (5-hour window at 79% when this was written; Pro plan; resets about 12:20 IST).
+Reason for stopping: usage guard (the founder allowed work up to ~93%; stopped at 86-87% of the 5-hour window, Pro plan, resets about 12:20 IST). After the 08:15 handoff the lead fixed S1.4 re-review N1, N2, N3, N4 and N7 (see Next step 1).
 
 ## Where we are
 - Milestone **M0a**: toolchain, pipeline and skeleton. **Phase: BUILD.** S1.0–S1.6 are built. **S1.7** is in progress: the shared logger is built (its follow-ups are on a stream branch), and the database half is about half done.
@@ -39,7 +39,7 @@ Reason for stopping: usage guard 80% (5-hour window at 79% when this was written
 1. **Resume streams on their own branches**, each in its existing worktree:
    - **W3b:** write MT-5b, 5c, 5d, 10, 11 and 12 per README and §8.5. Its settled design: MT-11 treats only the deparsed `( SELECT auth.uid() AS …)` / `auth.jwt()` form as wrapped. MT-5c counts relation, column, function, schema and per-schema default ACLs, and expands PUBLIC. MT-5b's BEGIN ATOMIC fixture contains `;`. Then run the runner for all 7 IDs.
    - **W2:** write `test-rls.mjs` (§8.3, revision 11 steps), then `db-types.mjs`, with stubbed tests. Its design: async `run` stub; injected lock dir, clock, sleep and pid-alive check; `parseFloor` from gen-catalog-tests.
-   - **W4 (new):** fix S1.4 re-review N1 and N2 (Medium), then N3, N4, N5 and N7 (Low), test-first, in `scripts/check-workflows.mjs`, `scan-dist.mjs` and `check-bundle-size.mjs`. Then re-run `security-reviewer` on that diff and fill in the Resolution section of the re-review report.
+   - **S1.4 re-review fixes:** N1, N2 (both Medium), N3, N4 and N7 were **fixed by the lead after this handoff** (`5c96e9f`, `0c29585`, `751ca41`, `99d0b5a`, `271018d`; scripts suite 464/464; Resolution table in the re-review report). Left: **N5** (Low, `scan-dist.mjs`), then a fresh `security-reviewer` on `git diff 6fadb17..271018d -- scripts`.
 2. **Run the reviews:** `security-reviewer` on W1's diff (`git diff da5c5ca..bcb6d54 -- packages/shared`), and `database-reviewer` on W3a + W3b + `cf8626d`.
 3. **Lead integration** on the integration branch, merging each with `git merge --no-ff`:
    - merge W1, W3a, W3b, W2 and W4;
