@@ -51,6 +51,23 @@ IDs and branches may only be added, never removed.
 5. It makes the check return **at least one row with `branch = '<branch>'`**, and should make no other branch
    of the same check fire. The generated assertion filters on `branch`, so each predicate is proven on its own.
 
+## PostgreSQL version
+
+The checks need **PostgreSQL 17 or later**:
+
+- MT-4 tests the `MAINTAIN` privilege, which PostgreSQL 17 added;
+- MT-5c reads `pg_auth_members.inherit_option` and `set_option` (PostgreSQL 16);
+- MT-5a, 5b, 5d, 10 and 11 follow the PostgreSQL 16 role model: a role that `postgres` creates gives `postgres`
+  ADMIN OPTION only (no INHERIT, no SET), and an ADMIN-only member can grant itself SET, so they test
+  `pg_has_role('postgres', …, 'MEMBER')`. Fixtures use the PostgreSQL 16 `grant … with inherit …, set …` syntax.
+
+On an older major the checks fail with an error rather than pass: on 16, MT-4 rejects the unknown privilege
+`MAINTAIN`; on 15, MT-5c and the fixtures that use `with inherit …, set …` fail too. This follows from the release
+notes and was not run (only a 17 stack is available). The local stack runs 17.11. Staging's major version is
+reported with H5 (spec §8.1), and AT-18, the first run of the checks on staging, confirms that staging runs
+PostgreSQL 17. MT-11 reads the stored node trees of policy clauses as text, and that format can change between
+major versions: run its fixtures again after any major upgrade.
+
 ## Day-one facts (local stack, CLI 2.120.0, PostgreSQL 17.11, 2026-10-11)
 
 - `postgres` is **not** a superuser (`supabase_admin` is). Migrations run as `postgres` and the reserved schemas
@@ -105,6 +122,15 @@ IDs and branches may only be added, never removed.
   baseline's.
 - `postgres_fdw` and `seg` are available and on the supautils privileged list, so `postgres` can create them (the
   MT-1 `foreign_table_in_scope` and MT-9 `extension_in_scope` fixtures).
+- Extensions on the supautils privileged list are owned by `supabase_admin` even when `postgres` creates them
+  (checked for `pg_net`, `pg_cron`, `pg_graphql`, `postgis`, `pgtap`, `vector`, `pg_trgm`). `lo` is trusted but not
+  privileged, so `postgres` can create it and owns it (the MT-9 `extension_owner` fixture).
+- `postgres` holds TRIGGER on 43 Supabase relations outside the four schemas (26 in `auth`, 8 in `realtime`, 7 in
+  `storage`, 2 in `extensions`), so a migration can put a trigger on `auth.users` (the MT-5d
+  `system_table_trigger` fixture).
+- `create role` run as `postgres` records a membership of `postgres` in the new role with ADMIN OPTION only
+  (grantor `supabase_admin`, no INHERIT, no SET). The MT-5a and MT-10 `system_schema_view` fixtures grant
+  `postgres` SET for a moment to create the view as that role, then revoke that grant.
 - Members of `pg_read_all_data`: `postgres` (ADMIN OPTION), `supabase_etl_admin`, `supabase_read_only_user`.
   `pg_write_all_data` has no members, and `postgres` has **no** ADMIN OPTION on it, so the MT-5c
   `read_write_all_data` fixture uses `pg_read_all_data`.
