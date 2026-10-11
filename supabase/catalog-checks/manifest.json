@@ -1,0 +1,56 @@
+{
+  "$comment": "Required catalog checks and their branches (spec specs/m0-foundations.md §8.5). One positive-control fixture per branch: fixtures/<id>.<branch>.violation.sql. A branch may be an object {\"id\": \"…\", \"unreachable\": \"<PostgreSQL error text>\"} only for the named MT-11 branches (§8.5). IDs and branches may only be added, never removed (gen-catalog-tests --check).",
+  "checks": [
+    { "id": "MT-1", "branches": ["table_without_rls", "partition_without_rls"] },
+    { "id": "MT-2", "branches": ["missing_org_id", "org_id_not_uuid", "org_id_nullable"] },
+    { "id": "MT-3", "branches": ["banned_column", "integrity_reject_column"] },
+    {
+      "id": "MT-4",
+      "branches": [
+        "anon_table",
+        "anon_column",
+        "anon_sequence",
+        "anon_function",
+        "acl_truncate_trigger_references"
+      ]
+    },
+    { "id": "MT-5a", "branches": ["direct_join", "nested_view", "via_function"] },
+    {
+      "id": "MT-5b",
+      "branches": ["begin_atomic_depend", "prosrc_reference", "proconfig_search_path"]
+    },
+    { "id": "MT-5c", "branches": ["direct_grantee", "role_membership", "read_write_all_data"] },
+    { "id": "MT-5d", "branches": ["foreign_key", "trigger_function", "policy_expression"] },
+    {
+      "id": "MT-6",
+      "branches": ["unused_integrity_enum", "direct_column", "array_column", "domain_column"]
+    },
+    { "id": "MT-7", "branches": ["missing_search_path", "outside_private"] },
+    {
+      "id": "MT-8",
+      "branches": ["schema_missing", "schema_wrong_owner", "usage_granted", "public_create"]
+    },
+    { "id": "MT-8b", "branches": ["unknown_schema"] },
+    { "id": "MT-9", "branches": ["wrong_owner", "extension_in_scope", "handmade_in_extensions"] },
+    {
+      "id": "MT-10",
+      "branches": ["view_without_security_invoker", "matview_in_public", "matview_privilege"]
+    },
+    {
+      "id": "MT-11",
+      "branches": [
+        "for_all",
+        "insert_without_check",
+        "update_missing_clause",
+        "select_delete_without_using",
+        "public_role",
+        "literal_true",
+        "auth_call_unwrapped"
+      ]
+    },
+    {
+      "id": "MT-12",
+      "branches": ["global_function_entry_missing", "global_entry_grant", "schema_entry_grant"]
+    }
+  ]
+}
