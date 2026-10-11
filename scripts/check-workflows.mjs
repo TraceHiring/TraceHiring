@@ -6,7 +6,8 @@
 //   - every remote `uses:` is pinned to a full 40-hex commit SHA (docker:// images to a sha256 digest);
 //     local `./` actions (also those used by another local action) must exist under
 //     .github/actions and pass the same rules; a cycle of local actions fails
-//   - every actions/checkout step sets `persist-credentials: false`; static, security and
+//   - every actions/checkout step sets `persist-credentials: false` (and, in a required job, no
+//     `ref:` or `repository:`, so the check tests the commit under review); static, security and
 //     migrations check out with `fetch-depth: 0`; static sets MIGRATIONS_BASE=origin/main (§8.4)
 //   - only deploy-staging names an environment (environments hold the staging secrets)
 //   - github.token (and the whole github context) counts as a secret (GITHUB_TOKEN); contexts
@@ -923,6 +924,23 @@ export function checkWorkflow(doc, file, ctx = {}) {
               'a step of a required job may not have an if: (a skipped step reports success)',
             ),
           );
+        // A required check must test the commit under review (N10–N13 re-review P3). Input names
+        // are case-insensitive on GitHub, so compare them trimmed and lowercased.
+        const isCheckout =
+          isObj(s) && typeof s.uses === 'string' && /^actions\/checkout@/i.test(s.uses);
+        if (
+          isCheckout &&
+          isObj(s.with) &&
+          Object.keys(s.with).some((k) => ['ref', 'repository'].includes(k.trim().toLowerCase()))
+        ) {
+          out.push(
+            v(
+              file,
+              `${where}.steps[${i}]`,
+              'actions/checkout in a required job may not set ref: or repository: (it must test the commit under review)',
+            ),
+          );
+        }
       });
     }
     if (job.uses !== undefined) checkUses(job.uses, file, where, out, ctx);

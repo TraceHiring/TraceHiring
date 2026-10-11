@@ -337,6 +337,30 @@ describe('checkWorkflow', () => {
     },
   );
 
+  // N10–N13 re-review P3: a required check must test the commit under review, not another ref/repo.
+  it.each(
+    ['static', 'rls', 'security', 'migrations'].flatMap((job) =>
+      ['ref', 'repository', 'Ref', ' REPOSITORY '].map((key) => [job, key]),
+    ),
+  )('rejects actions/checkout in %s setting %j', (job, key) => {
+    const d = doc();
+    d.jobs[job].steps[0].with[key] = key.trim().toLowerCase() === 'ref' ? 'refs/heads/main' : 'x/y';
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+      new RegExp(`jobs\\.${job}.*may not set ref: or repository:`),
+    );
+  });
+
+  it('rejects ref: on a later checkout step of a required job too', () => {
+    const d = doc();
+    d.jobs.rls.steps.push({
+      uses: d.jobs.rls.steps[0].uses,
+      with: { 'persist-credentials': false, ref: '${{ github.base_ref }}' },
+    });
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+      /jobs\.rls\.steps\[\d+\].*may not set ref: or repository:/,
+    );
+  });
+
   it('requires static to set MIGRATIONS_BASE=origin/main (job or workflow env)', () => {
     const d = doc();
     delete d.jobs.static.env;
