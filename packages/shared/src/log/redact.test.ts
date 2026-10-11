@@ -553,6 +553,15 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['userinfo windows, no @', fill(`a://${'b/'.repeat(150)} `)],
     ['userinfo windows ending in @', fill('a://b/c@')],
     ['one scheme, then path characters', 'a://' + fill('b?#/')],
+    // the key=value scan resumes inside a non-sensitive value (redactor lows review F1)
+    ['chained non-sensitive pairs', fill('a=')],
+    ['keys inside values', fill('a:b=')],
+    ['one non-sensitive key, then pairs', 'a=' + fill('b:')],
+    ['sensitive key, one long value', 'password=' + fill('b')],
+    ['chained sensitive pairs', fill('token=a=')],
+    ['long values under sensitive keys', fill(`otp=${'x'.repeat(300)}:`)],
+    ['quoted keys, then quoted values', fill('"a":"')],
+    ['escaped quoted keys, then values', fill('\\"a\\":\\"b=')],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -1258,5 +1267,34 @@ describe('serialised errors on a second pass (spec review L4)', () => {
     const once = redact(Object.assign(new Error('x'), { code: 'E_BAD' })) as { code: string };
     expect(once.code).toBe('E_BAD');
     expect(redact(once)).toMatchObject({ name: 'Error', code: REDACTED });
+  });
+});
+
+// Redactor lows review F1: the key=value scan took everything after a non-sensitive key as its
+// value and resumed after it, so a sensitive pair inside that value was never read.
+describe('a sensitive pair inside a non-sensitive value (redactor lows review F1)', () => {
+  const pw = synth.base64(7).slice(0, 10);
+  const otp = synth.mobile(5).slice(0, 6);
+  const R = REDACTED;
+  it.each([
+    ['a JSON string value', `{"event":"password=${pw}"}`, `{"event":"password=${R}"}`],
+    ['a key: prefix', `data:password=${pw}`, `data:password=${R}`],
+    ['a chain of non-sensitive keys', `a=b:c=otp:${otp}`, `a=b:c=otp:${R}`],
+    [
+      'an escaped JSON string value',
+      `{\\"kind\\":\\"token=${pw}\\"}`,
+      `{\\"kind\\":\\"token=${R}\\"}`,
+    ],
+    // the value of a sensitive key is redacted whole, however long it is
+    ['a long value', `data:password=${'x'.repeat(300)}${pw}`, `data:password=${R}`],
+  ])('redacts the pair inside %s', (_label, s, expected) => {
+    const out = redactString(`got ${s} end`);
+    expect(out).toBe(`got ${expected} end`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('still leaves non-sensitive pairs and their values alone', () => {
+    const s = 'a=b:c=d event:login.ok at:12:30:45 x=y=z';
+    expect(redactString(s)).toBe(s);
   });
 });

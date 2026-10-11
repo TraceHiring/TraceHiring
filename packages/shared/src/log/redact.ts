@@ -215,6 +215,47 @@ const redactQuotedValues = (text: string): string => {
 };
 
 /**
+ * A key, `=` or `:` (the key's closing quote may be escaped: `\"otp\":123456` in nested JSON, review
+ * #4), and an optional opening quote, before a value character. The value is not part of the
+ * match: a non-sensitive key's value is read again for pairs of its own (redactor lows review F1).
+ */
+const KEY_THEN_VALUE = new RegExp(
+  String.raw`${KEY}(\\*["']?\s{0,3}[=:]\s{0,3}"?)(?=[^\s"'&,;)])`,
+  'g',
+);
+/** A free-text value: up to the next space, quote, `&`, `,`, `;` or `)`. */
+const VALUE = /[^\s"'&,;)]+/y;
+
+/**
+ * `key=value` and `key: value` in free text, when the key would be redacted as an object key. The
+ * scan resumes at the start of a non-sensitive key's value, so a pair inside it (`data:password=…`,
+ * `{"event":"otp=…"}`) is still found; a sensitive key's value goes whole and the scan resumes after
+ * it. Each match reads only a key and a separator, and each value is read once (linear time). A
+ * value of only backslashes is the opener of a quoted value (handled by redactQuotedValues), and
+ * backslashes that end a value are the escape of the quote after it, so both are kept.
+ */
+const redactKeyValues = (text: string): string => {
+  let out = '';
+  let last = 0;
+  KEY_THEN_VALUE.lastIndex = 0;
+  for (let m = KEY_THEN_VALUE.exec(text); m !== null; m = KEY_THEN_VALUE.exec(text)) {
+    const [head, bare, quoted] = m;
+    if (!isSensitiveTextKey(bare ?? quoted ?? '')) continue; // lastIndex is at the value
+    const from = m.index + head.length;
+    VALUE.lastIndex = from;
+    const value = VALUE.exec(text)?.[0] ?? '';
+    let end = value.length;
+    while (end > 0 && value[end - 1] === '\\') end--;
+    if (end > 0) {
+      out += text.slice(last, from) + REDACTED;
+      last = from + end;
+    }
+    KEY_THEN_VALUE.lastIndex = from + value.length;
+  }
+  return out + text.slice(last);
+};
+
+/**
  * An IPv6 address: hex groups of at most four digits and two to eight colons, with "::" or at
  * least three colons (so clock times are left alone). Never longer than MAX_IPV6 characters.
  */
@@ -275,21 +316,8 @@ const STEPS: readonly Step[] = [
   redactQuotedValues,
   // query strings and fragments that carry parameters: keep the '?' or '#', drop the rest
   sub(/([?#])[^\s?#"'<>]*=[^\s"'<>]*/g, keepPrefix),
-  // `key=value` and `key: value` in free text, when the key would be redacted as an object key.
-  // The key's closing quote may be escaped (`\"otp\":123456` in nested JSON, review #4). A value of
-  // only backslashes is the opener of a quoted value (handled above), and backslashes that end a
-  // value are the escape of the quote after it, so both are kept.
-  sub(
-    new RegExp(String.raw`${KEY}(\\*["']?\s{0,3}[=:]\s{0,3}"?)([^\s"'&,;)]+)`, 'g'),
-    (m, bare = '', quoted = '', sep = '', value = '') => {
-      if (!isSensitiveTextKey(bare || quoted)) return m;
-      let end = value.length;
-      while (end > 0 && value[end - 1] === '\\') end--;
-      // the key as written (a quoted key keeps its opening quote), the separator, then the value
-      const key = m.slice(0, m.length - sep.length - value.length);
-      return end === 0 ? m : `${key}${sep}${REDACTED}${value.slice(end)}`;
-    },
-  ),
+  // `key=value` and `key: value` in free text, including pairs inside a non-sensitive value
+  redactKeyValues,
   // email (also percent-encoded), then UPI (handle@psp without a dot after the psp)
   sub(/(?<![\w.%+-])[\w.%+-]+(?:@|%40)(?:[a-z0-9-]+\.)+[a-z]{2,}/gi, REDACTED),
   // A trailing '.' (end of sentence) or dash ends the psp; only '.' followed by a letter or digit continues it.
