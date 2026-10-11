@@ -101,7 +101,8 @@
         "extension_in_scope",
         "handmade_in_extensions",
         "handmade_in_system_schema",
-        "handmade_nonadmin_owner"
+        "handmade_nonadmin_owner",
+        "extension_owner"
       ]
     },
     {
