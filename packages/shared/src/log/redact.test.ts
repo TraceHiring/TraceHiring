@@ -238,6 +238,12 @@ describe('security review regressions (S1.7)', () => {
     ':'.repeat(1999),
     'A1a'.repeat(666),
     'eyJ' + 'a.'.repeat(998),
+    // canonicalisation (follow-ups 3-5): digits far from their zero, ignorables, dashes
+    '٩'.repeat(1999),
+    String.fromCodePoint(0x1e959).repeat(999),
+    '9͏'.repeat(999),
+    '\u{e0020}'.repeat(999),
+    '9–'.repeat(999),
   ];
   it.each(adversarial.map((s, i) => [i, s] as const))(
     'redacts adversarial input %i within the time budget',
@@ -387,6 +393,10 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     // Authorization schemes (follow-up 2)
     ['Basic spaces', 'Basic' + fill(' ')],
     ['Token words', fill('Token ')],
+    // canonicalisation (follow-ups 3-5): what the patterns see after folding
+    ['Arabic-Indic digits and spaces', fill('٩ ')],
+    ['ignorable-split digits', fill('9͏')],
+    ['en-dash digits', fill('9–')],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -537,5 +547,78 @@ describe('Authorization schemes (S1.7 follow-up 2)', () => {
     expect(out).not.toContain(tok);
     expect(out).toContain(REDACTED);
     expect(redactString(out)).toBe(out);
+  });
+});
+
+describe('number canonicalisation (S1.7 follow-ups 3-5)', () => {
+  const m = synth.mobile();
+  const a = synth.aadhaar();
+  const inScript = (s: string, zero: number): string =>
+    s.replace(/\d/g, (d) => String.fromCodePoint(zero + Number(d)));
+  const hex = (cps: number[]): [string, number][] =>
+    cps.map((cp) => [cp.toString(16).toUpperCase().padStart(4, '0'), cp]);
+  const expectRedacted = (s: string): void => {
+    expect(redactString(`x ${s} y`)).toBe(`x ${REDACTED} y`);
+  };
+
+  // Default_Ignorable_Code_Point characters that the old fixed list did not cover
+  it.each(
+    hex([0x34f, 0x61c, 0x115f, 0x17b4, 0x180b, 0x2066, 0x3164, 0xfe0f, 0xffa0, 0x1d173, 0xe0020]),
+  )('strips the ignorable U+%s from inside a number', (_hex, cp) => {
+    const c = String.fromCodePoint(cp);
+    expectRedacted(`${m.slice(0, 5)}${c}${m.slice(5)}`);
+    expectRedacted([...a].join(c));
+  });
+
+  it('strips ignorable letters from keys', () => {
+    for (const key of ['eㅤmail', 'passᅟword', 'toﾠken']) {
+      expect(redact({ [key]: 'v' })).toEqual({ [key]: REDACTED });
+    }
+  });
+
+  it.each([
+    ['Arabic-Indic', 0x660],
+    ['Extended Arabic-Indic', 0x6f0],
+    ['Ol Chiki', 0x1c50],
+    ['Meetei Mayek', 0xabf0],
+    ['Lepcha', 0x1c40],
+    ['Myanmar', 0x1040],
+    ['Thai', 0xe50],
+    ['Sora Sompeng', 0x110f0],
+    ['Chakma', 0x11136],
+    ['Masaram Gondi', 0x11d50],
+    ['Adlam', 0x1e950],
+  ])('folds %s digits to ASCII', (_label, zero) => {
+    expectRedacted(inScript(m, zero));
+    expectRedacted(inScript(a, zero));
+    expect(canonical(inScript('0123456789', zero))).toBe('0123456789');
+  });
+
+  it('folds a number that mixes digit scripts', () => {
+    expectRedacted(inScript(m.slice(0, 5), 0x966) + inScript(m.slice(5), 0x660));
+  });
+
+  it.each(hex([0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2e3a, 0xfe58, 0x2212]))(
+    'maps the dash U+%s to "-" between digit groups',
+    (_hex, cp) => {
+      const d = String.fromCodePoint(cp);
+      expectRedacted(`${m.slice(0, 5)}${d}${m.slice(5)}`);
+      expectRedacted(`+91${d}${m}`);
+      expectRedacted(a.replace(/(\d{4})(\d{4})(\d{4})/, `$1${d}$2${d}$3`));
+      expect(canonical(`a${d}b`)).toBe('a-b');
+    },
+  );
+
+  it('is idempotent on any Unicode text, even where a dropped ignorable lets marks compose', () => {
+    expect(canonical('e͏́')).toBe('é');
+    expect(canonical('ᄀㅤᅡ')).toBe('가');
+    fc.assert(
+      fc.property(fc.string({ unit: 'binary', maxLength: 40 }), (s) => {
+        const once = canonical(s);
+        expect(canonical(once)).toBe(once);
+        expect(redactString(redactString(s))).toBe(redactString(s));
+      }),
+      { numRuns: 500 },
+    );
   });
 });
