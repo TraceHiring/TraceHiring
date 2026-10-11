@@ -6,7 +6,15 @@
 // at runtime, so nothing credential-shaped is committed.
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FLOOR_FILES } from '../gen-catalog-tests.mjs';
@@ -359,6 +367,108 @@ describe('§8.3 step 2: the shared lock', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ pid: ME, checkout: '/work/me' });
     lock.release();
     expect(existsSync(file)).toBe(false);
+  });
+
+  // W2 database review W2-1: two runs taking over the same stale lock at once. The interleaving
+  // is injected through acquireLock's `fs`: another run does its whole takeover after this run
+  // read the stale lock and before this run removes it.
+  const DEAD = 999_999;
+  const lockOpts = (file, clock, extra) => ({
+    file,
+    checkout: '/work/me',
+    now: clock.now,
+    sleep: clock.sleep,
+    isPidAlive: (p) => p !== DEAD,
+    log: () => {},
+    warn: () => {},
+    ...extra,
+  });
+  /** Real fs ops; `beforeRemove` runs before, `afterRemove` after, this run first moves or deletes the lock file. */
+  const interleavedFs = (file, { beforeRemove = () => {}, afterRemove = () => {} }) => ({
+    readFileSync,
+    writeFileSync,
+    unlinkSync: (p) => {
+      if (p === file) beforeRemove();
+      unlinkSync(p);
+      if (p === file) afterRemove();
+    },
+    renameSync: (from, to) => {
+      if (from === file) beforeRemove();
+      renameSync(from, to);
+      if (from === file) afterRemove();
+    },
+  });
+
+  it('acquireLock: when another run takes over the same stale lock first, this run waits and never deletes its fresh lock (W2-1)', async () => {
+    const dir = makeTempDir('trace-rls-lock-');
+    const file = lockPathFor(dir, 'trace');
+    writeHolder(file, { pid: DEAD, checkout: '/work/crashed run' });
+    const clock = fakeClock();
+    let other = null;
+    const fs = interleavedFs(file, {
+      beforeRemove: () => {
+        other ??= acquireLock(lockOpts(file, clock, { pid: 5151, checkout: '/work/b' }));
+      },
+    });
+    const holderWhileWaiting = [];
+    const mine = await acquireLock(
+      lockOpts(file, clock, {
+        pid: ME,
+        fs,
+        sleep: async () => {
+          const b = await other;
+          holderWhileWaiting.push(JSON.parse(readFileSync(file, 'utf8')).pid);
+          b.release();
+        },
+      }),
+    );
+    expect(other).not.toBeNull();
+    expect((await other).ok).toBe(true);
+    expect(holderWhileWaiting).toEqual([5151]);
+    expect(mine.ok).toBe(true);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ pid: ME });
+    mine.release();
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('acquireLock: a fresh lock moved aside by mistake is put back, never over a newer lock (W2-1)', async () => {
+    const dir = makeTempDir('trace-rls-lock-');
+    const file = lockPathFor(dir, 'trace');
+    writeHolder(file, { pid: DEAD, checkout: '/work/crashed run' });
+    const clock = fakeClock();
+    let second = null;
+    let third = null;
+    const fs = interleavedFs(file, {
+      beforeRemove: () => {
+        second ??= acquireLock(lockOpts(file, clock, { pid: 5151, checkout: '/work/b' }));
+      },
+      afterRemove: () => {
+        third ??= acquireLock(lockOpts(file, clock, { pid: 5252, checkout: '/work/c' }));
+      },
+    });
+    const warns = [];
+    const holderWhileWaiting = [];
+    const mine = await acquireLock(
+      lockOpts(file, clock, {
+        pid: ME,
+        fs,
+        warn: (m) => warns.push(m),
+        sleep: async () => {
+          const c = await third;
+          holderWhileWaiting.push(JSON.parse(readFileSync(file, 'utf8')).pid);
+          c.release();
+        },
+      }),
+    );
+    expect((await second).ok).toBe(true);
+    expect((await third).ok).toBe(true);
+    expect(holderWhileWaiting).toEqual([5252]);
+    expect(warns.join('\n')).toMatch(/could not be put back/);
+    expect(mine.ok).toBe(true);
+    (await second).release();
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ pid: ME });
+    mine.release();
+    expect(readdirSync(dir)).toEqual([]);
   });
 
   it('installReleaseHandlers: uninstall removes every handler it added', () => {
