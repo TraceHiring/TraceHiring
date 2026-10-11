@@ -2,11 +2,14 @@
 // Workers and apps (spec §7.2 step 8, §9.3, §9.4, §10.3). Wrangler's output file is a synthetic
 // recorded-shape fixture, and an injected fetch stands in for the network; nothing leaves this
 // machine.
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   APP_PROJECTS,
+  DEFAULTS,
+  MAX_BODY_BYTES,
   WORKER_NAMES,
   checkAppUrl,
   checkWorkerUrl,
@@ -21,6 +24,11 @@ const OUTPUT = readFileSync(
   fileURLToPath(new URL('./fixtures/staging/wrangler-output.ndjson', import.meta.url)),
   'utf8',
 );
+const fixture = (name) =>
+  readFileSync(fileURLToPath(new URL(`./fixtures/staging/${name}`, import.meta.url)), 'utf8');
+const PREVIEW_OUTPUT = fixture('wrangler-output-preview.ndjson');
+const WRONG_BRANCH_OUTPUT = fixture('wrangler-output-wrong-branch.ndjson');
+const SMOKE_SCRIPT = fileURLToPath(new URL('../smoke-staging.mjs', import.meta.url));
 const SHA = 'a'.repeat(40);
 const OTHER_SHA = 'b'.repeat(40);
 const TIME = '2026-10-12T00:00:00.000Z';
@@ -33,6 +41,12 @@ const WORKER_URLS = {
 const APP_URLS = {
   candidate: 'https://0a1b2c3d.trace-candidate-staging.pages.dev',
   recruiter: 'https://4e5f6a7b.trace-recruiter-staging.pages.dev',
+};
+
+/** The production alias of each project (the project's pages.dev origin). */
+const ALIAS_URLS = {
+  candidate: 'https://trace-candidate-staging.pages.dev',
+  recruiter: 'https://trace-recruiter-staging.pages.dev',
 };
 
 /** The §10.3 headers as the apps' _headers files set them (candidate connect-src: §10.3 extra). */
@@ -75,7 +89,7 @@ function fakeStaging({ sha = SHA, override = () => undefined } = {}) {
         );
     }
     for (const [app, base] of Object.entries(APP_URLS)) {
-      if (u.origin !== base) continue;
+      if (u.origin !== base && u.origin !== ALIAS_URLS[app]) continue;
       if (u.pathname === '/version.json') return json({ app, version: sha }, securityHeaders(app));
       if (u.pathname === '/')
         return new Response('<!doctype html><title>Trace</title>', {
@@ -110,6 +124,57 @@ describe('parseWranglerOutput', () => {
     expect(r.problems).toEqual([]);
     expect(r.workers).toEqual(WORKER_URLS);
     expect(r.apps).toEqual(APP_URLS);
+    expect(r.aliases).toEqual(ALIAS_URLS);
+  });
+
+  it('derives the production alias from a suffixed project host too', () => {
+    const suffixed = OUTPUT.replaceAll(
+      '0a1b2c3d.trace-candidate-staging.pages.dev',
+      '0a1b2c3d.trace-candidate-staging-7xq.pages.dev',
+    );
+    const r = parseWranglerOutput(suffixed);
+    expect(r.problems).toEqual([]);
+    expect(r.aliases.candidate).toBe('https://trace-candidate-staging-7xq.pages.dev');
+    expect(r.aliases.recruiter).toBe(ALIAS_URLS.recruiter);
+  });
+
+  it('fails a preview-environment deploy (the production alias would still serve the old build)', () => {
+    const r = parseWranglerOutput(PREVIEW_OUTPUT);
+    expect(r.problems.join('\n')).toMatch(
+      /trace-candidate-staging: deployed to the preview environment, not production/,
+    );
+    expect(r.apps.candidate).toBeUndefined();
+    expect(r.aliases.candidate).toBeUndefined();
+    expect(r.apps.recruiter).toBe(APP_URLS.recruiter);
+  });
+
+  it('fails a project whose production branch is not main', () => {
+    const r = parseWranglerOutput(WRONG_BRANCH_OUTPUT);
+    expect(r.problems.join('\n')).toMatch(
+      /trace-recruiter-staging: production branch is trunk, expected main/,
+    );
+    expect(r.apps.recruiter).toBeUndefined();
+  });
+
+  it('needs exactly one pages-deploy-detailed entry per project, for the same deployment', () => {
+    const noDetail = OUTPUT.split('\n').filter(
+      (l) =>
+        !(l.includes('"type":"pages-deploy-detailed"') && l.includes('trace-candidate-staging')),
+    );
+    expect(parseWranglerOutput(noDetail.join('\n')).problems.join('\n')).toMatch(
+      /no pages-deploy-detailed entry for trace-candidate-staging/,
+    );
+    const dup = OUTPUT.split('\n').filter((l) => l.includes('"type":"pages-deploy-detailed"'));
+    expect(parseWranglerOutput([OUTPUT, ...dup].join('\n')).problems.join('\n')).toMatch(
+      /2 pages-deploy-detailed entries for trace-recruiter-staging/,
+    );
+    const otherDeployment = OUTPUT.replace(
+      '"pages-deploy-detailed","version":1,"pages_project":"trace-candidate-staging","deployment_id":"00000000-0000-4000-8000-00000000000a"',
+      '"pages-deploy-detailed","version":1,"pages_project":"trace-candidate-staging","deployment_id":"00000000-0000-4000-8000-0000000000ff"',
+    );
+    expect(parseWranglerOutput(otherDeployment).problems.join('\n')).toMatch(
+      /trace-candidate-staging: pages-deploy-detailed is for another deployment than pages-deploy/,
+    );
   });
 
   it('ignores other entry types and blank lines, and accepts CRLF', () => {
@@ -311,6 +376,85 @@ describe('smokeWorker', () => {
     const p = await smokeWorker({ service: 'api', url: WORKER_URLS.api, sha: SHA, fetch });
     expect(p.join('\n')).toMatch(/request failed \(TimeoutError\)/);
   });
+
+  // S3B-3: the cap is enforced while streaming, not after the whole body is in memory.
+  const endlessBody = () => {
+    const state = { pulls: 0, cancelled: false };
+    const chunk = new Uint8Array(8_192).fill(120);
+    const body = new ReadableStream(
+      {
+        pull(controller) {
+          state.pulls++;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          state.cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return { state, body };
+  };
+
+  it('cancels an endless body once it is over the cap, after reading about the cap only', async () => {
+    const { state, body } = endlessBody();
+    const { fetch } = fakeStaging({
+      override: () => new Response(body, { status: 200, headers: { 'cache-control': 'no-store' } }),
+    });
+    const p = await smokeWorker({ service: 'edge', url: WORKER_URLS.edge, sha: SHA, fetch });
+    expect(p.join('\n')).toMatch(/body is larger than 65536 bytes/);
+    expect(state.cancelled).toBe(true);
+    expect(state.pulls).toBeLessThanOrEqual(Math.ceil(MAX_BODY_BYTES / 8_192) + 2);
+  });
+
+  it('rejects early on a content-length over the cap without reading the body', async () => {
+    const { state, body } = endlessBody();
+    const { fetch } = fakeStaging({
+      override: () =>
+        new Response(body, {
+          status: 200,
+          headers: { 'cache-control': 'no-store', 'content-length': String(MAX_BODY_BYTES + 1) },
+        }),
+    });
+    const p = await smokeWorker({ service: 'edge', url: WORKER_URLS.edge, sha: SHA, fetch });
+    expect(p.join('\n')).toMatch(/body is larger than 65536 bytes/);
+    expect(state.cancelled).toBe(true);
+    expect(state.pulls).toBe(0);
+  });
+
+  it('still reads a normal body in several chunks', async () => {
+    const text = JSON.stringify({ status: 'ok', service: 'edge', version: SHA, time: TIME });
+    const bytes = new TextEncoder().encode(text);
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes.slice(0, 10));
+        controller.enqueue(bytes.slice(10));
+        controller.close();
+      },
+    });
+    const { fetch } = fakeStaging({
+      override: () => new Response(body, { status: 200, headers: { 'cache-control': 'no-store' } }),
+    });
+    expect(await smokeWorker({ service: 'edge', url: WORKER_URLS.edge, sha: SHA, fetch })).toEqual(
+      [],
+    );
+  });
+});
+
+describe('the script under plain Node (S3B-7)', () => {
+  it('loads its module graph, including the .ts contracts import, and prints the usage line', () => {
+    const r = spawnSync(process.execPath, [SMOKE_SCRIPT, '--sha', 'bad'], {
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(r.error).toBeUndefined();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/smoke-staging: --wrangler-output <file> is required/);
+    expect(r.stderr).toMatch(
+      /smoke-staging: usage: node scripts\/smoke-staging\.mjs --wrangler-output <file> --sha <sha>/,
+    );
+    expect(r.stderr).not.toMatch(/ERR_|SyntaxError|Cannot find/);
+  });
 });
 
 describe('smokeApp', () => {
@@ -407,7 +551,7 @@ describe('smokeApp', () => {
 });
 
 describe('runSmoke', () => {
-  const targets = { workers: WORKER_URLS, apps: APP_URLS };
+  const targets = { workers: WORKER_URLS, apps: APP_URLS, aliases: ALIAS_URLS };
 
   it('reports every endpoint ok when staging serves the SHA', async () => {
     const { fetch } = fakeStaging();
@@ -419,6 +563,8 @@ describe('runSmoke', () => {
       'api /health: ok',
       'candidate /version.json and headers: ok',
       'recruiter /version.json and headers: ok',
+      'candidate production alias /version.json and headers: ok',
+      'recruiter production alias /version.json and headers: ok',
     ]);
   });
 
@@ -452,10 +598,49 @@ describe('runSmoke', () => {
   it("fails after the last attempt with that attempt's problems", async () => {
     const { fetch } = fakeStaging({ sha: OTHER_SHA });
     const r = await runSmoke({ targets, sha: SHA, fetch, sleep: noSleep, attempts: 2 });
-    expect(r.violations).toHaveLength(5);
+    expect(r.violations).toHaveLength(7);
     expect(r.violations[0]).toMatch(
       /^edge \/health: version is b{40}, expected a{40} \(after 2 attempts\)$/,
     );
+  });
+
+  it('fails when only the production alias serves an old build (a preview deploy)', async () => {
+    const { fetch } = fakeStaging({
+      override: (u) =>
+        u === `${ALIAS_URLS.candidate}/version.json`
+          ? json({ app: 'candidate', version: OTHER_SHA }, securityHeaders('candidate'))
+          : undefined,
+    });
+    const r = await runSmoke({ targets, sha: SHA, fetch, sleep: noSleep, attempts: 2 });
+    expect(r.violations).toHaveLength(1);
+    expect(r.violations[0]).toMatch(
+      /^candidate alias \/version\.json: version is b{40}, expected a{40} \(after 2 attempts\)$/,
+    );
+  });
+
+  it('stops retrying at the overall deadline and reports the rest as not run', async () => {
+    let t = 1_000;
+    const { fetch, calls } = fakeStaging({ sha: OTHER_SHA });
+    const r = await runSmoke({
+      targets,
+      sha: SHA,
+      fetch,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      attempts: 1000,
+      delayMs: 1_000,
+      deadlineMs: 5_000,
+    });
+    expect(r.violations).toHaveLength(7);
+    expect(r.violations[0]).toMatch(/^edge \/health: .*\(smoke deadline of 5 s exceeded\)$/);
+    for (const v of r.violations.slice(1)) expect(v).toMatch(/not run: smoke deadline of 5 s/);
+    expect(calls.length).toBeLessThan(10);
+  });
+
+  it('has a default overall deadline of six minutes', () => {
+    expect(DEFAULTS.deadlineMs).toBe(360_000);
   });
 });
 
@@ -482,7 +667,7 @@ describe('main', () => {
     });
     expect(c.lines.err).toEqual([]);
     expect(code).toBe(0);
-    expect(c.lines.out.at(-1)).toBe(`smoke-staging: OK (5 endpoints at ${SHA})`);
+    expect(c.lines.out.at(-1)).toBe(`smoke-staging: OK (7 endpoints at ${SHA})`);
   });
 
   it('exits 1 on a bad or missing --sha, a missing file or unknown arguments, before any request', async () => {
