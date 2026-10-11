@@ -59,19 +59,34 @@ rel_reach as (
   join pg_class as gc on gc.oid = g.member_oid
   join target as t on t.oid = gc.relnamespace
 ),
--- caller: a function in any language but c and internal, with its lowercased body and the schemas its search_path
--- setting lists (public and extensions, the database default, when it has none).
+-- caller: a function in any language but c and internal, with its body without SQL comments (src, and lsrc
+-- lowercased) and the schemas its search_path setting lists (public and extensions, the database default, when it
+-- has none). A single pass reads the body left to right: a string literal ('...', '' inside) or a quoted identifier
+-- ("...", "" inside) is kept, so a -- or /* inside one is not a comment, and each -- comment (to the end of its
+-- line) or /* */ comment becomes a space. Each kept literal or identifier gets a space after it, which no pattern
+-- below depends on.
 caller as materialized (
-  select f.oid, f.prosrc, lower(f.prosrc) as lsrc, sp.path
-  from pg_proc as f
-  join pg_language as l on l.oid = f.prolang
-  cross join lateral (
-    select coalesce(array_agg(btrim(s.part, ' "')), array['public', 'extensions']) as path
-    from unnest(f.proconfig) as cfg(setting)
-    cross join lateral regexp_split_to_table(substr(cfg.setting, 13), ',') as s(part)
-    where left(cfg.setting, 12) = 'search_path='
-  ) as sp
-  where l.lanname not in ('c', 'internal')
+  select b.oid, b.src, lower(b.src) as lsrc, b.path
+  from (
+    select
+      f.oid,
+      regexp_replace(
+        f.prosrc,
+        '(''(?:[^'']|'''')*''|"(?:[^"]|"")*")|--[^\n]*|/\*(?:[^*]|\*+[^*/])*\*+/',
+        '\1 ',
+        'g'
+      ) as src,
+      sp.path
+    from pg_proc as f
+    join pg_language as l on l.oid = f.prolang
+    cross join lateral (
+      select coalesce(array_agg(btrim(s.part, ' "')), array['public', 'extensions']) as path
+      from unnest(f.proconfig) as cfg(setting)
+      cross join lateral regexp_split_to_table(substr(cfg.setting, 13), ',') as s(part)
+      where left(cfg.setting, 12) = 'search_path='
+    ) as sp
+    where l.lanname not in ('c', 'internal')
+  ) as b
 ),
 -- callee: a function outside pg_catalog and information_schema, its schema and name escaped for a regex.
 callee as materialized (
@@ -155,12 +170,12 @@ code_edge (classid, objid, refclassid, refobjid, bit) as (
   select 'pg_proc'::regclass::oid, f.oid, 'pg_proc'::regclass::oid, g.oid, 8
   from caller as f
   join callee as g on position(g.lname in f.lsrc) > 0
-  where f.prosrc ~* (
+  where f.src ~* (
       '(^|[^[:alnum:]_$."])"?' || g.nsp || '"?[[:space:]]*\.[[:space:]]*"?' || g.fn || '"?[[:space:]]*\('
     )
     or (
       g.nspname = any(f.path)
-      and f.prosrc ~* ('(^|[^[:alnum:]_$."])"?' || g.fn || '"?[[:space:]]*\(')
+      and f.src ~* ('(^|[^[:alnum:]_$."])"?' || g.fn || '"?[[:space:]]*\(')
     )
 ),
 -- materialized: computed once, not once per step of the recursive walk
@@ -234,9 +249,9 @@ closure (seed_classid, seed_oid, classid, objid, lvl, mask) as (
   join node_edge as e on e.classid = cl.classid and e.objid = cl.objid
 ),
 -- reach: a node of the walk reaches a target schema. how: dep when the node lives there (a relation through its
--- inheritance trees too) or is a type, schema or function there, src when a function body names the schema
--- (quality. or "quality". or 'quality' as a format() argument, case-insensitive), cfg when a function's
--- search_path setting lists it.
+-- inheritance trees too) or is a type, schema or function there, src when a function body without comments
+-- (caller.src) names the schema (quality. or "quality"., or 'quality' as a format() argument: after format( in the
+-- same statement, case-insensitive), cfg when a function's search_path setting lists it.
 reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
   select cl.seed_classid, cl.seed_oid, rr.nspname, cl.lvl, cl.mask, 'dep'::text
   from closure as cl
@@ -262,13 +277,17 @@ reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
   union all
   select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'src'::text
   from closure as cl
-  join pg_proc as p on p.oid = cl.objid
-  join pg_language as l on l.oid = p.prolang
+  join caller as f on f.oid = cl.objid
   cross join target as t
   where cl.classid = 'pg_proc'::regclass
-    and l.lanname not in ('c', 'internal')
-    and p.prosrc ~* (
-      '(^|[^[:alnum:]_$])("' || t.nspname || '"|' || t.nspname || ')[[:space:]]*\.|''' || t.nspname || ''''
+    and position(t.nspname in f.lsrc) > 0
+    and (
+      f.src ~* ('(^|[^[:alnum:]_$])("' || t.nspname || '"|' || t.nspname || ')[[:space:]]*\.')
+      -- format( then string literals or anything but a quote or a semicolon (\x3b, the end of the statement), then
+      -- the schema as a literal
+      or f.src ~* (
+        '(^|[^[:alnum:]_$])format[[:space:]]*\((?:[^''\x3b]|''(?:[^'']|'''')*'')*''' || t.nspname || ''''
+      )
     )
   union all
   select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'cfg'::text
