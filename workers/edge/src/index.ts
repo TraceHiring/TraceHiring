@@ -1,6 +1,9 @@
-// Placeholder entrypoint (specs/m0-foundations.md §14 S1). The S3 stream replaces it with Hono and GET /health.
+// Worker entrypoint: a thin adapter over createApp (spec §2). The edge Worker has no secrets and
+// no error reporter, so there is nothing to inject.
+import { createApp } from './app.js';
+
+const app = createApp();
+
 export default {
-  fetch(): Response {
-    return new Response('Not Found', { status: 404 });
-  },
+  fetch: app.fetch,
 } satisfies ExportedHandler<Env>;
