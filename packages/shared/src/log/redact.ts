@@ -102,14 +102,33 @@ const toAsciiDigit = (ch: string): string => {
 };
 
 /**
- * The text the patterns see: compatibility forms folded, invisible characters dropped, every
- * digit ASCII and every dash '-'. NFKC runs again after the drop, because a dropped character can
- * let marks compose; that also keeps canonical idempotent. Internal (not exported from index.ts).
+ * Stands in for a run of invisible characters between two ASCII letters, or an ASCII letter and a
+ * digit (redactor review #3). There the run may sit inside one value (a soft hyphen in a copied
+ * PAN or email) or between a value and the next word (`<PAN>\u3164ok`), so applyPatterns reads
+ * the text both ways. It is itself an invisible character, so canonical text never has one
+ * otherwise, and it is not a word, space or digit character to any pattern.
+ */
+const SPLIT = '\u2063';
+/**
+ * A run of invisible characters; the first two alternatives capture a run between an ASCII letter
+ * and an ASCII letter or digit, or between a digit and an ASCII letter. Each run is read once:
+ * inside a run the lookbehinds fail, and no invisible character is a letter or digit to them.
+ */
+const IGNORABLE_RUN =
+  /(?<=[A-Za-z])(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z\p{Nd}])|(?<=\p{Nd})(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z])|\p{Default_Ignorable_Code_Point}+/gu;
+const splitOrDrop = (_run: string, letters?: string, digitThenLetter?: string): string =>
+  letters === undefined && digitThenLetter === undefined ? '' : SPLIT;
+
+/**
+ * The text the patterns see: compatibility forms folded, invisible characters dropped (or marked
+ * with SPLIT where they may separate two values), every digit ASCII and every dash '-'. NFKC runs
+ * again after the drop, because a dropped character can let marks compose; that also keeps
+ * canonical idempotent. Internal (not exported from index.ts).
  */
 export const canonical = (s: string): string =>
   s
     .normalize('NFKC')
-    .replace(IGNORABLE, '')
+    .replace(IGNORABLE_RUN, splitOrDrop)
     .normalize('NFKC')
     .replace(NON_ASCII_DIGIT, toAsciiDigit)
     .replace(DASH, '-');
@@ -233,11 +252,33 @@ const STEPS: readonly Step[] = [
   ),
 ];
 
+const runSteps = (text: string): string => STEPS.reduce((out, step) => step(out), text);
+
+/**
+ * Characters of a value that a SPLIT may have cut in two (word characters and the punctuation of
+ * emails, URLs, tokens and IPv6), with SPLIT itself. The lookbehind starts GLUED_BEFORE once per
+ * run, so both scans are linear.
+ */
+const GLUED = '[\\w.%+/=:@\\u2063-]';
+const GLUED_BEFORE = new RegExp(`(?<!${GLUED})${GLUED}*\\u2063\\[REDACTED\\]`, 'g');
+const GLUED_AFTER = new RegExp(`\\[REDACTED\\]\\u2063${GLUED}*`, 'g');
+
 /**
  * Runs every value pattern over canonical text. No length cap, so it is internal (not exported
  * from index.ts) and only redactString calls it, after the cap.
+ *
+ * Where canonical left a SPLIT, the patterns first read it as a word break, so a value glued to
+ * the next word is still found. Any piece joined to a redaction by a SPLIT is then redacted with
+ * it (it may be the rest of the same value), and the patterns run again with every SPLIT dropped,
+ * so a value that the SPLIT cut in two is found whole.
  */
-export const applyPatterns = (text: string): string => STEPS.reduce((out, step) => step(out), text);
+export const applyPatterns = (text: string): string => {
+  const split = runSteps(text);
+  if (!split.includes(SPLIT)) return split;
+  return runSteps(
+    split.replace(GLUED_BEFORE, REDACTED).replace(GLUED_AFTER, REDACTED).replaceAll(SPLIT, ''),
+  );
+};
 
 /**
  * Redacts PII and secret patterns inside one string. Strings over the cap become TRUNCATED.
@@ -247,7 +288,7 @@ export const redactString = (input: string): string => {
   if (input.length > MAX_STRING) return TRUNCATED;
   const text = canonical(input);
   const out = applyPatterns(text);
-  if (out === text) return input;
+  if (out === text.replaceAll(SPLIT, '')) return input;
   return out.length > MAX_STRING ? TRUNCATED : out;
 };
 

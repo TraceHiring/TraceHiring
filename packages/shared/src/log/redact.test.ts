@@ -459,6 +459,14 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['userinfo pairs', fill('a://b@')],
     ['scheme characters', fill('ab+.-')],
     ['schemes inside userinfo', 'a://' + fill('b:c://')],
+    // invisible characters between letters or digits (redactor review #3): two passes, and the
+    // scans for pieces glued to a redaction
+    ['letters split by fillers', fill('a\u3164')],
+    ['digits and letters split', fill('1\u200ba')],
+    ['values glued to words', fill(`${synth.pan()}\u3164`)],
+    ['words glued to values', fill(`ok\u3164${synth.pan()} `)],
+    ['long glued run, no value', fill('a.b\u200b')],
+    ['emails split in the local part', fill(`ab\u00adcd@${synth.word()}.example `)],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -466,6 +474,19 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     const text = canonical(s);
     applyPatterns(text.slice(0, 1000)); // warm-up so regex compilation is not timed
     expect(bestOfFiveMs(() => applyPatterns(text))).toBeLessThan(50);
+  });
+
+  // canonical itself (redactor review #3): each run of invisible characters is read once
+  it.each([
+    ['alternating fillers', fill('a\u3164')],
+    ['one long run', fill('\u3164')],
+    ['long runs between letters and spaces', fill(`a${'\u3164'.repeat(500)} `)],
+    ['long runs between digits and letters', fill(`1${'\u200b'.repeat(500)}a`)],
+    ['digits split by joiners', fill('9\u034f')],
+  ])('canonicalises ~100 KB of "%s" well inside 50 ms', (_label, s) => {
+    expect(s.length).toBeGreaterThanOrEqual(KB100);
+    canonical(s.slice(0, 1000)); // warm-up
+    expect(bestOfFiveMs(() => canonical(s))).toBeLessThan(50);
   });
 
   it('returns [TRUNCATED] for a 100 KB string without running the patterns', () => {
@@ -679,6 +700,71 @@ describe('number canonicalisation (S1.7 follow-ups 3-5)', () => {
       }),
       { numRuns: 500 },
     );
+  });
+});
+
+// Redactor security review #3: dropping an invisible character must not glue a value to the word
+// next to it (the value's pattern then stops matching), nor split a value that it sits inside.
+describe('invisible characters next to and inside a value (redactor review #3)', () => {
+  const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
+  const expectGone = (s: string, value: string): void => {
+    const out = redactString(`x ${s} y`);
+    expect(out).not.toContain(value);
+    expect(out).toContain(REDACTED);
+    expect(out).not.toMatch(IGNORABLE);
+    expect(redactString(out)).toBe(out);
+  };
+
+  it.each([
+    ['a PAN, then letters', synth.pan(), '', '\u3164ok'],
+    ['an IFSC, then letters', synth.ifsc(), '', '\ufe0fbranch'],
+    ['a mobile number, then a letter', synth.mobile(), '', '\u3164x'],
+    ['a passport number, then letters', synth.passport(), '', '\u200bok'],
+    ['a voter EPIC, then letters', synth.epic(), '', '\u2060ok'],
+    ['an IPv6 address, then letters', synth.ipv6Doc(), '', '\u3164ok'],
+    ['long hex, then letters', synth.hex(), '', '\u00adok'],
+    ['letters, then a PAN', synth.pan(2), 'ok\u3164', ''],
+    ['letters, then an IFSC', synth.ifsc(2), 'id\ufe0f', ''],
+  ])('redacts %s', (_label, value, before, after) => {
+    expectGone(`${before}${value}${after}`, value);
+  });
+
+  // The same characters inside a value (a soft hyphen or zero-width space from copied text) still
+  // join it, and no piece of the value survives on either side.
+  const at = (s: string, i: number, c: string): string => `${s.slice(0, i)}${c}${s.slice(i)}`;
+  const local = `${synth.word(4)}${synth.word(5)}`;
+  it.each([
+    ['a PAN, between letters and digits', synth.pan(), 5, '\u00ad'],
+    ['a PAN, between digits and its last letter', synth.pan(), 9, '\u200b'],
+    ['an IFSC, between letters', synth.ifsc(), 2, '\u200b'],
+    ['a passport number, after its letter', synth.passport(), 1, '\u2060'],
+    ['an IPv6 address, inside a group', synth.ipv6Doc(), 6, '\u00ad'],
+    ['an email, inside the local part', `${local}@${synth.word(6)}.example`, 4, '\u00ad'],
+    [
+      'an email, inside the domain',
+      `${local}@${synth.word(6)}.example`,
+      local.length + 3,
+      '\u200b',
+    ],
+    ['a JWT', synth.jwt(), 12, '\u00ad'],
+    ['long base64', synth.base64(), 6, '\u200b'],
+  ])('redacts %s, split by an invisible character', (_label, value, i, c) => {
+    expectGone(at(value, i, c), value);
+    for (const piece of [value.slice(0, i), value.slice(i)].filter((p) => p.length >= 3)) {
+      expect(redactString(`x ${at(value, i, c)} y`)).not.toContain(piece);
+    }
+  });
+
+  it('still joins a free-text key split by an invisible character', () => {
+    const secret = synth.base64(5).slice(0, 10);
+    expectGone(`pass\u200bword=${secret}`, secret);
+    expectGone(`{"to\u00adken":"${synth.phrase()}"}`, synth.phrase());
+  });
+
+  it('leaves text with no value in it unchanged', () => {
+    for (const s of ['ok\u3164fine', 'a\u200bb c\u00add', '9\u2060x', 'fine\ufe0f!']) {
+      expect(redactString(s)).toBe(s);
+    }
   });
 });
 
