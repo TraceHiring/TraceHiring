@@ -24,7 +24,8 @@
     "prettier": "catalog:",
     "supabase": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
   },
   "type": "module"
 }
