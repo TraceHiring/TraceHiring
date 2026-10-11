@@ -590,6 +590,24 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['long hex-like segments', fill('abcde:')],
     ['long word segments', fill(`${'g'.repeat(50)}:`)],
     ['addresses between words and dashes', fill(`${synth.ipv6Doc(2)}:up-`)],
+    // emails and UPI ids glued to the one before them (redactor re-review G1)
+    ['emails glued by _', fill(`${synth.upi(5)}.example_`)],
+    ['UPI ids glued by -', fill(`${synth.upi(6)}-`)],
+    ['UPI ids glued by _', fill(`${synth.upi(7)}_`)],
+    ['emails glued to UPI ids', fill(`${synth.upi(8)}_${synth.upi(9)}.example-`)],
+    ['long runs after each email', fill(`a@b.example_${'c'.repeat(500)} `)],
+    ['long runs before each @', fill(`${'a'.repeat(300)}@${synth.upi(10)} `)],
+    ['psps between @', fill('ab@cd@')],
+    ['encoded @ chains', fill('ab%40cd-')],
+    // a pair inside a quoted key is read from the key's own text (redactor re-review G2)
+    ['quoted keys holding a pair', fill('"otp=1": 1,')],
+    ['escaped quoted keys holding a pair', fill('\\"token=x\\":1,')],
+    ['quoted keys holding a pair, then quoted values', fill('"otp=1": "x", ')],
+    ['quoted keys holding several pairs', fill('"a=b c=d password=e": ')],
+    ['quoted keys holding colons', fill('"a: b: c": 1,')],
+    ['one long quoted key of pairs, no closer', '"' + fill('a=b ')],
+    ['one long quoted key of pairs, then a value', '"' + fill('a=b ') + '": 1'],
+    ['one long quoted key of sensitive pairs', '"' + fill('otp=1 ') + '": "x"'],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -1501,5 +1519,107 @@ describe('IPv6 followed by a word segment (redactor lows review F8)', () => {
   it('still leaves clock times and word:word chains followed by words alone', () => {
     const s = 'at:12:30:45:ok cafe:beef:dead:x std::map::at:y a:b:c:z x:12:30:go';
     expect(redactString(s)).toBe(s);
+  });
+});
+
+// Redactor re-review G1: the email and UPI lookbehinds start a match once per run of their
+// characters, so a value that starts right where the previous one ends (`<email>_<email>`) was
+// never matched, and only a second pass redacted it. Where a UPI id cannot end before the next
+// value (`_` or a digit after its psp), the next match started at its psp and its handle was kept.
+describe('an email or UPI id glued to the one before it (redactor re-review G1)', () => {
+  const [e1, e2] = [`${synth.upi(31)}.example`, `${synth.upi(32)}.example`];
+  const [u1, u2] = [synth.upi(33), synth.upi(34)];
+  const cf = String.fromCodePoint(0xfff9);
+  const ONLY_REDACTED = /^x (?:\[REDACTED\])+ y$/;
+
+  it.each([
+    ['_', '_'],
+    ['-', '-'],
+    ['+', '+'],
+    ['a digit', '7'],
+    ['%', '%'],
+    ['U+FFF9 and _', `${cf}_`],
+  ])('redacts both emails joined by %s', (_label, sep) => {
+    const out = redactString(`x ${e1}${sep}${e2} y`);
+    expect(out).toBe(`x ${REDACTED}${REDACTED} y`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it.each([
+    ['-', '-'],
+    ['.-', '.-'],
+    ['_', '_'],
+    ['a digit', '7'],
+    ['U+FFF9 and _', `${cf}_`],
+  ])('redacts both UPI ids, and a UPI id and an email, joined by %s', (_label, sep) => {
+    for (const [a, b] of [
+      [u1, u2],
+      [u1, e2],
+    ]) {
+      const out = redactString(`x ${a}${sep}${b} y`);
+      expect(out).toMatch(ONLY_REDACTED);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it('redacts a chain of glued values', () => {
+    const out = redactString(`x ${[e1, e2, u1, e1, u2].join('_')} y`);
+    expect(out).toMatch(ONLY_REDACTED);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('keeps the text around glued values', () => {
+    const out = redactString(`see: ${u1}_${u2}, then ${e1}-${e2}; ok`);
+    expect(out).toBe(`see: ${REDACTED}, then ${REDACTED}${REDACTED}; ok`);
+  });
+});
+
+// Redactor re-review G2: a quoted key may hold spaces, so it is read as one key and the scan
+// resumed after it. A `key=value` pair inside the key's own text was never read, and error
+// messages that quote their input (`failed to parse "otp=…"`) are the honest shape.
+describe('a pair inside a quoted key (redactor re-review G2)', () => {
+  const R = REDACTED;
+  const otp = synth.mobile(5).slice(0, 6);
+  const pw = synth.base64(21).slice(0, 10);
+  const tok = synth.base64(22).slice(0, 10);
+
+  it.each([
+    [
+      'an error message quoting its input',
+      `failed to parse "otp=${otp}": invalid`,
+      `failed to parse "otp=${R}": ${R}`,
+    ],
+    ['a JSON key', `{"password=${pw}": true}`, `{"password=${R}": ${R}`],
+    ['an escaped JSON key', `{\\"token=${tok}\\":1}`, `{\\"token=${R}\\":${R}`],
+    ['an escaped JSON key with no value', `{\\"token=${tok}\\"}`, `{\\"token=${R}\\"}`],
+    ['a key: separator', `{"otp: ${otp}": 1}`, `{"otp: ${R}": ${R}`],
+    ['words around the pair', `"x otp=${otp} y": 4 next`, `"x otp=${R} y": ${R} next`],
+    ['two pairs', `"password=${pw} otp=${otp}": 4 next`, `"password=${R} otp=${R}": ${R} next`],
+    ['a double-quoted value', `{"otp=${otp}": "abc def"}`, `{"otp=${R}": "${R}"}`],
+    [
+      'an escaped quoted value',
+      `{\\"otp=${otp}\\": \\"abc def\\"}`,
+      `{\\"otp=${R}\\": \\"${R}\\"}`,
+    ],
+    ['a single-quoted value', `{"otp=${otp}": 'abc def'}`, `{"otp=${R}": '${R}'}`],
+  ])('redacts the value of a pair in a quoted key: %s', (_label, s, expected) => {
+    const out = redactString(`got ${s}`);
+    expect(out).toBe(`got ${expected}`);
+    expect(out).not.toContain(otp);
+    expect(out).not.toContain(pw);
+    expect(out).not.toContain(tok);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('leaves quoted keys with no sensitive pair unchanged', () => {
+    for (const s of [
+      '{"status": "ok"}',
+      '{"status": "ok", "k=v": "fine"}',
+      'failed to parse "a b=c": invalid',
+      '{"level: warn": 1}',
+      '{\\"kind=a\\":\\"b\\"}',
+    ]) {
+      expect(redactString(s)).toBe(s);
+    }
   });
 });

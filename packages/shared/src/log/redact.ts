@@ -242,6 +242,14 @@ const VALUE = /[^\s"'&,;)]+/y;
  * it. Each match reads only a key and a separator, and each value is read once (linear time). A
  * value of only backslashes is the opener of a quoted value (handled by redactQuotedValues), and
  * backslashes that end a value are the escape of the quote after it, so both are kept.
+ *
+ * A quoted key is matched whole, and the scan resumes after it, so the key's own text is scanned
+ * for pairs first (redactor re-review G2: `failed to parse "otp=<digits>": …`, an error message
+ * that quotes its input), and the key is judged as redacted. The text holds no quote and no
+ * backslash, so it holds no quoted key (the nesting stops there) and is read once, in its own
+ * length: the quoted keys of one text never overlap. redactQuotedValues needs no such scan: it
+ * leaves the key's text alone, and this step reads it next (after a single-quoted value, as the
+ * pair's own bare key).
  */
 const redactKeyValues = (text: string): string => {
   let out = '';
@@ -249,7 +257,18 @@ const redactKeyValues = (text: string): string => {
   KEY_THEN_VALUE.lastIndex = 0;
   for (let m = KEY_THEN_VALUE.exec(text); m !== null; m = KEY_THEN_VALUE.exec(text)) {
     const [head, bare, quoted] = m;
-    if (!isSensitiveTextKey(bare ?? quoted ?? '')) continue; // lastIndex is at the value
+    let key = bare ?? '';
+    if (quoted !== undefined) {
+      const resume = KEY_THEN_VALUE.lastIndex; // the nested scan uses this regex too
+      key = /[=:]/.test(quoted) ? redactKeyValues(quoted) : quoted;
+      KEY_THEN_VALUE.lastIndex = resume;
+      if (key !== quoted) {
+        const at = m.index + 1; // the key's text follows its opening quote
+        out += text.slice(last, at) + key;
+        last = at + quoted.length;
+      }
+    }
+    if (!isSensitiveTextKey(key)) continue; // lastIndex is at the value
     const from = m.index + head.length;
     VALUE.lastIndex = from;
     const value = VALUE.exec(text)?.[0] ?? '';
@@ -336,6 +355,52 @@ const sub =
   (text) =>
     text.replace(re, rep as string);
 
+/** An email (also percent-encoded), without the lookbehind that starts it. */
+const EMAIL = String.raw`[\w.%+-]+(?:@|%40)(?:[a-z0-9-]+\.)+[a-z]{2,}`;
+/**
+ * A UPI id (handle@psp without a dot after the psp), without the lookbehind that starts it. A
+ * trailing '.' (end of sentence) or dash ends the psp; only '.' followed by a letter or digit
+ * continues it.
+ */
+const UPI = String.raw`[\w.-]{2,}(?:@|%40)[a-z]{2,32}(?![\w@]|\.[a-z0-9])`;
+/** A character of a local part or handle, or '@'. */
+const HANDLE_CHAR = /[\w.%+@-]/;
+
+/**
+ * Emails or UPI ids (redactor re-review G1). The lookbehind of `first` starts it once per run of
+ * its characters, so it never started where the previous match ended either, and a value glued to
+ * the one before it (`<email>_<email>`, `<upi>-<upi>`) was kept. So after each match, `glued` (the
+ * same pattern, sticky, without the lookbehind) is tried at its end, again while it matches. And a
+ * match that starts right after an '@' began at the psp of an id that could not end there
+ * (`<upi>_<upi>`: '_' or a digit continues a psp), so the handle and '@' before it go too, back to
+ * the previous match at most. A glued try reads on to the next '@' and the domain after it, which
+ * the next match reads past; the look back reads only text since the previous match; so the
+ * whole step stays linear.
+ */
+const redactAddresses =
+  (first: RegExp, glued: RegExp): Step =>
+  (text) => {
+    let out = '';
+    let last = 0;
+    first.lastIndex = 0;
+    for (let m = first.exec(text); m !== null; m = first.exec(text)) {
+      let start = m.index;
+      if (text[start - 1] === '@') {
+        while (start > last && HANDLE_CHAR.test(text[start - 1] ?? '')) start--;
+      }
+      out += text.slice(last, start) + REDACTED;
+      let end = m.index + m[0].length;
+      glued.lastIndex = end;
+      for (let g = glued.exec(text); g !== null; g = glued.exec(text)) {
+        out += REDACTED;
+        end = g.index + g[0].length;
+      }
+      last = end;
+      first.lastIndex = end;
+    }
+    return out + text.slice(last);
+  };
+
 const STEPS: readonly Step[] = [
   // secrets and tokens first, so later patterns never see their pieces
   sub(/(?<![\w-])eyJ[\w-]*\.[\w-]*\.[\w-]*/g, REDACTED),
@@ -361,10 +426,10 @@ const STEPS: readonly Step[] = [
   sub(/([?#])[^\s?#"'<>]*=[^\s"'<>]*/g, keepPrefix),
   // `key=value` and `key: value` in free text, including pairs inside a non-sensitive value
   redactKeyValues,
-  // email (also percent-encoded), then UPI (handle@psp without a dot after the psp)
-  sub(/(?<![\w.%+-])[\w.%+-]+(?:@|%40)(?:[a-z0-9-]+\.)+[a-z]{2,}/gi, REDACTED),
-  // A trailing '.' (end of sentence) or dash ends the psp; only '.' followed by a letter or digit continues it.
-  sub(/(?<![\w.-])[\w.-]{2,}(?:@|%40)[a-z]{2,32}(?![\w@]|\.[a-z0-9])/gi, REDACTED),
+  // email (also percent-encoded), then UPI (handle@psp without a dot after the psp), each also
+  // when glued to the one before it
+  redactAddresses(new RegExp(String.raw`(?<![\w.%+-])${EMAIL}`, 'gi'), new RegExp(EMAIL, 'iy')),
+  redactAddresses(new RegExp(String.raw`(?<![\w.-])${UPI}`, 'gi'), new RegExp(UPI, 'iy')),
   // bank account numbers next to account keywords (a short, bounded non-digit gap)
   sub(/(\b(?:a\/c|acct|account|bank)\D{0,24}?)\d{9,18}(?!\d)/gi, keepPrefix),
   // IPv4 (before the digit patterns, which could otherwise take part of an address)
