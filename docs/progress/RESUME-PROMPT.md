@@ -1,6 +1,6 @@
 # Resume prompt — the full procedure for the next Claude Code session (any account)
 
-Written 2026-10-11 09:25 IST by the lead session; updated 14:30 IST. Everything the next session needs is in git; nothing from
+Written 2026-10-11 09:25 IST by the lead session; updated 13:55 IST. Everything the next session needs is in git; nothing from
 earlier chats is available or needed. The short "paste prompt" the founder uses points here.
 
 ## 1. What Trace is and where the build stands
