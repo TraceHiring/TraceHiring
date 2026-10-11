@@ -24,7 +24,8 @@
         "begin_atomic_depend",
         "prosrc_reference",
         "proconfig_search_path",
-        "system_schema_function"
+        "system_schema_function",
+        "prosrc_call"
       ]
     },
     { "id": "MT-5c", "branches": ["direct_grantee", "role_membership", "read_write_all_data"] },
@@ -35,7 +36,8 @@
         "trigger_function",
         "policy_expression",
         "inheritance_link",
-        "table_rule"
+        "table_rule",
+        "trigger_call_chain"
       ]
     },
     {

@@ -1,17 +1,17 @@
 -- MT-5a (spec specs/m0-foundations.md §8.5, rule 1): a view or materialized view, in any non-system schema or in a
 -- system-list schema where a migration can still create objects (escape_schema below, when postgres can SET ROLE to
--- its owner), whose recursive dependency closure reaches both quality and integrity. The closure follows each rule
--- of a relation (pg_rewrite.ev_class) to its pg_depend rows (classid pg_rewrite), skipping the rule's reference to
--- its own relation, and each function to its pg_depend rows, through pg_class and pg_proc refs and recursively
--- through other views and functions. UNION keeps the walk finite on cycles. A node reaches a schema when it lives
--- there (a relation also reaches the schema of every member of every inheritance tree it belongs to: INHERITS
--- children and partitions alike, wherever they live), when it is a type or schema ref there, or, for a function,
--- when its prosrc names it (quality. or "quality". or 'quality' as a format() argument, case-insensitive) or its
--- proconfig search_path lists it.
+-- its owner), whose recursive dependency closure reaches both quality and integrity. The closure (shared:graph and
+-- shared:closure below, the same text in MT-5a, 5b, 5c and 5d) starts at the view and follows its rules
+-- (pg_rewrite, skipping a rule's reference to its own relation), the pg_depend rows of functions, and every call a
+-- function body names, recursively. A node reaches a schema when it lives there (a relation also reaches the
+-- schema of every member of every inheritance tree it belongs to: INHERITS children and partitions alike, wherever
+-- they live), when it is a type or schema ref there, or, for a function, when its prosrc names it (quality. or
+-- "quality". or 'quality' as a format() argument, case-insensitive) or its proconfig search_path lists it.
 -- Branches, first match wins: system_schema_view (the view lives in a system-list schema), direct_join (the view
 -- and the relations it reads directly reach both), nested_view (relations reached through other views, no
 -- function), via_function (a function is needed).
 with recursive
+-- shared:graph begin (the same text in MT-5a, MT-5b, MT-5c and MT-5d)
 target as (
   select n.oid, n.nspname::text as nspname
   from pg_namespace as n
@@ -41,23 +41,81 @@ rel_reach as (
   join pg_class as gc on gc.oid = g.member_oid
   join target as t on t.oid = gc.relnamespace
 ),
-edge as (
-  select 'pg_class'::regclass::oid as classid, r.ev_class as objid, d.refclassid, d.refobjid
+-- caller: a function in any language but c and internal, with its lowercased body and the schemas its search_path
+-- setting lists (public and extensions, the database default, when it has none).
+caller as materialized (
+  select f.oid, f.prosrc, lower(f.prosrc) as lsrc, sp.path
+  from pg_proc as f
+  join pg_language as l on l.oid = f.prolang
+  cross join lateral (
+    select coalesce(array_agg(btrim(s.part, ' "')), array['public', 'extensions']) as path
+    from unnest(f.proconfig) as cfg(setting)
+    cross join lateral regexp_split_to_table(substr(cfg.setting, 13), ',') as s(part)
+    where left(cfg.setting, 12) = 'search_path='
+  ) as sp
+  where l.lanname not in ('c', 'internal')
+),
+-- callee: a function outside pg_catalog and information_schema, its schema and name escaped for a regex.
+callee as materialized (
+  select
+    g.oid,
+    lower(g.proname) as lname,
+    n.nspname::text as nspname,
+    regexp_replace(n.nspname, '([^[:alnum:]_])', '\\\1', 'g') as nsp,
+    regexp_replace(g.proname, '([^[:alnum:]_])', '\\\1', 'g') as fn
+  from pg_proc as g
+  join pg_namespace as n on n.oid = g.pronamespace
+  where n.nspname not in ('pg_catalog', 'information_schema')
+),
+-- code_edge: one step of the walk, from (classid, objid) to (refclassid, refobjid). bit tags the kind of step:
+-- 8 a call named in a function body, 0 any other.
+code_edge (classid, objid, refclassid, refobjid, bit) as (
+  -- the rules of a relation (a view body or a table rule), skipping a rule's reference to its own relation
+  select 'pg_class'::regclass::oid, r.ev_class, d.refclassid, d.refobjid, 0
   from pg_rewrite as r
   join pg_depend as d on d.classid = 'pg_rewrite'::regclass and d.objid = r.oid
   where not (d.refclassid = 'pg_class'::regclass and d.refobjid = r.ev_class)
   union
-  select d.classid, d.objid, d.refclassid, d.refobjid
+  -- the pg_depend rows of a function (all of a BEGIN ATOMIC body, only the signature of any other)
+  select d.classid, d.objid, d.refclassid, d.refobjid, 0
   from pg_depend as d
   where d.classid = 'pg_proc'::regclass
+  union
+  -- a trigger, skipping its reference to its own table
+  select 'pg_trigger'::regclass::oid, tg.oid, d.refclassid, d.refobjid, 0
+  from pg_trigger as tg
+  join pg_depend as d on d.classid = 'pg_trigger'::regclass and d.objid = tg.oid
+  where not (d.refclassid = 'pg_class'::regclass and d.refobjid = tg.tgrelid)
+  union
+  -- a policy, skipping its reference to its own table
+  select 'pg_policy'::regclass::oid, pol.oid, d.refclassid, d.refobjid, 0
+  from pg_policy as pol
+  join pg_depend as d on d.classid = 'pg_policy'::regclass and d.objid = pol.oid
+  where not (d.refclassid = 'pg_class'::regclass and d.refobjid = pol.polrelid)
+  union
+  -- a call named in a caller's body: schema.name( for any schema, or an unqualified name( when the callee's schema
+  -- is on the caller's search_path. Every overload of the name counts.
+  select 'pg_proc'::regclass::oid, f.oid, 'pg_proc'::regclass::oid, g.oid, 8
+  from caller as f
+  join callee as g on position(g.lname in f.lsrc) > 0
+  where f.prosrc ~* (
+      '(^|[^[:alnum:]_$."])"?' || g.nsp || '"?[[:space:]]*\.[[:space:]]*"?' || g.fn || '"?[[:space:]]*\('
+    )
+    or (
+      g.nspname = any(f.path)
+      and f.prosrc ~* ('(^|[^[:alnum:]_$."])"?' || g.fn || '"?[[:space:]]*\(')
+    )
 ),
-node_edge as (
-  select e.classid, e.objid, e.refclassid, e.refobjid
-  from edge as e
+-- materialized: computed once, not once per step of the recursive walk
+node_edge as materialized (
+  select e.classid, e.objid, e.refclassid, e.refobjid, e.bit
+  from code_edge as e
   where e.refclassid in (
     'pg_class'::regclass, 'pg_proc'::regclass, 'pg_type'::regclass, 'pg_namespace'::regclass
   )
 ),
+-- shared:graph end
+-- shared:escape begin (the same text in MT-5a, MT-5b, MT-5d, MT-10 and MT-11)
 -- escape_schema: system-list schemas where a migration can still create objects (spec §8.5 revision 12): postgres
 -- can SET ROLE to the schema owner, or to a role with CREATE on it. Locally: extensions, _realtime,
 -- supabase_functions and supabase_migrations, plus any listed schema that a migration creates (cron, net and so on).
@@ -78,6 +136,7 @@ escape_schema as (
       )
     )
 ),
+-- shared:escape end
 root as (
   select
     c.oid,
@@ -114,65 +173,89 @@ root as (
         and x.extnamespace = c.relnamespace
     )
 ),
--- lvl: 0 the view itself, 1 a direct ref, 2 reached through other relations only, 3 reached through a function.
-closure (root_oid, classid, objid, lvl) as (
-  select r.oid, 'pg_class'::regclass::oid, r.oid, 0
+seed (classid, oid) as (
+  select 'pg_class'::regclass::oid, r.oid
   from root as r
+),
+-- shared:closure begin (the same text in MT-5a, MT-5b, MT-5c and MT-5d)
+-- closure: the walk from each seed (defined by the check). lvl: 0 the seed, 1 a direct reference of the seed, 2
+-- reached through other relations or types only, 3 reached through a function. mask ORs the bits of the steps
+-- taken. UNION keeps the walk finite on cycles.
+closure (seed_classid, seed_oid, classid, objid, lvl, mask) as (
+  select s.classid, s.oid, s.classid, s.oid, 0, 0
+  from seed as s
   union
-  select cl.root_oid, e.refclassid, e.refobjid,
+  select
+    cl.seed_classid,
+    cl.seed_oid,
+    e.refclassid,
+    e.refobjid,
     case
       when cl.lvl = 3 or e.refclassid = 'pg_proc'::regclass then 3
       when cl.lvl = 0 then 1
       else 2
-    end
+    end,
+    cl.mask | e.bit
   from closure as cl
   join node_edge as e on e.classid = cl.classid and e.objid = cl.objid
 ),
-reach as (
-  select cl.root_oid, cl.lvl, rr.nspname
+-- reach: a node of the walk reaches a target schema. how: dep when the node lives there (a relation through its
+-- inheritance trees too) or is a type, schema or function there, src when a function body names the schema
+-- (quality. or "quality". or 'quality' as a format() argument, case-insensitive), cfg when a function's
+-- search_path setting lists it.
+reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
+  select cl.seed_classid, cl.seed_oid, rr.nspname, cl.lvl, cl.mask, 'dep'::text
   from closure as cl
   join rel_reach as rr on rr.oid = cl.objid
   where cl.classid = 'pg_class'::regclass
   union all
-  select cl.root_oid, cl.lvl, t.nspname
+  select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'dep'::text
   from closure as cl
   join pg_type as ty on ty.oid = cl.objid
   join target as t on t.oid = ty.typnamespace
   where cl.classid = 'pg_type'::regclass
   union all
-  select cl.root_oid, cl.lvl, t.nspname
+  select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'dep'::text
   from closure as cl
   join target as t on t.oid = cl.objid
   where cl.classid = 'pg_namespace'::regclass
   union all
-  select cl.root_oid, cl.lvl, t.nspname
+  select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'dep'::text
+  from closure as cl
+  join pg_proc as p on p.oid = cl.objid
+  join target as t on t.oid = p.pronamespace
+  where cl.classid = 'pg_proc'::regclass
+  union all
+  select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'src'::text
   from closure as cl
   join pg_proc as p on p.oid = cl.objid
   join pg_language as l on l.oid = p.prolang
   cross join target as t
   where cl.classid = 'pg_proc'::regclass
-    and (
-      p.pronamespace = t.oid
-      or (
-        l.lanname not in ('c', 'internal')
-        and p.prosrc ~* (
-          '(^|[^[:alnum:]_$])("' || t.nspname || '"|' || t.nspname || ')[[:space:]]*\.|''' || t.nspname || ''''
-        )
-      )
-      or exists (
-        select 1
-        from unnest(p.proconfig) as cfg(setting)
-        where cfg.setting ~* ('^search_path=(.*,)?[[:space:]]*"?' || t.nspname || '"?[[:space:]]*(,|$)')
-      )
+    and l.lanname not in ('c', 'internal')
+    and p.prosrc ~* (
+      '(^|[^[:alnum:]_$])("' || t.nspname || '"|' || t.nspname || ')[[:space:]]*\.|''' || t.nspname || ''''
+    )
+  union all
+  select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'cfg'::text
+  from closure as cl
+  join pg_proc as p on p.oid = cl.objid
+  cross join target as t
+  where cl.classid = 'pg_proc'::regclass
+    and exists (
+      select 1
+      from unnest(p.proconfig) as cfg(setting)
+      where cfg.setting ~* ('^search_path=(.*,)?[[:space:]]*"?' || t.nspname || '"?[[:space:]]*(,|$)')
     )
 ),
+-- shared:closure end
 violation as (
   select
-    rc.root_oid,
-    count(distinct rc.nspname) filter (where rc.lvl <= 1) = 2 as direct,
-    count(distinct rc.nspname) filter (where rc.lvl <= 2) = 2 as nested
+    rc.seed_oid,
+    count(distinct rc.nspname) filter (where rc.lvl <= 1 and rc.mask = 0) = 2 as direct,
+    count(distinct rc.nspname) filter (where rc.lvl <= 2 and rc.mask = 0) = 2 as nested
   from reach as rc
-  group by rc.root_oid
+  group by rc.seed_oid
   having count(distinct rc.nspname) = 2
 )
 select
@@ -194,4 +277,4 @@ select
     end
   )::text as detail
 from violation as v
-join root as r on r.oid = v.root_oid
+join root as r on r.oid = v.seed_oid

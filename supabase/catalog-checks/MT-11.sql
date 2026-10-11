@@ -30,6 +30,7 @@ scope_schema as (
   from pg_namespace as n
   where n.nspname in ('public', 'private', 'quality', 'integrity')
 ),
+-- shared:escape begin (the same text in MT-5a, MT-5b, MT-5d, MT-10 and MT-11)
 -- escape_schema: system-list schemas where a migration can still create objects (spec §8.5 revision 12): postgres
 -- can SET ROLE to the schema owner, or to a role with CREATE on it. Locally: extensions, _realtime,
 -- supabase_functions and supabase_migrations, plus any listed schema that a migration creates (cron, net and so on).
@@ -50,6 +51,7 @@ escape_schema as (
       )
     )
 ),
+-- shared:escape end
 scope_rel (oid) as (
   select c.oid
   from pg_class as c
