@@ -21,7 +21,11 @@ export const noopErrorReporter: ErrorReporter = {
 const safeContext = (ctx: { release: string } | undefined): { release: string } | undefined => {
   try {
     const release: unknown = ctx?.release;
-    return isVersion(release) ? { release } : undefined;
+    // An all-digit value fits the SHA shape but may be a mobile or Aadhaar number (redactor lows
+    // review F7), so a SHA must also contain a hex letter; 'dev' is the only other release.
+    return isVersion(release) && (release === 'dev' || /[a-f]/.test(release))
+      ? { release }
+      : undefined;
   } catch {
     return undefined;
   }

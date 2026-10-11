@@ -149,6 +149,10 @@ describe('ErrorReporter (AT-9)', () => {
     ['a semver', 'v1.2.3'],
     ['an empty string', ''],
     ['a number', 7 as unknown as string],
+    // Redactor lows review F7: an all-digit value matches the SHA shape but may be a mobile or an
+    // Aadhaar-shaped number (built at run time, synthetic).
+    ['an all-digit 10-digit value', '9' + '8'.repeat(9)],
+    ['an all-digit 12-digit value', '2345' + '6'.repeat(8)],
   ])('drops a release that is %s', (_label, release) => {
     const capture = vi.fn();
     reportError({ capture }, new Error('x'), { release });
