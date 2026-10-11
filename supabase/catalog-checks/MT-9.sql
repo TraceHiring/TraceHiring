@@ -3,10 +3,12 @@
 -- extension_in_scope is an extension whose extnamespace is one of the four in-scope schemas. The hand-made branches
 -- cover every system-list schema where postgres can create objects (has_schema_privilege, so membership counts:
 -- locally extensions, _realtime, supabase_functions and supabase_migrations). There, a relation, function or type that
--- is not a member of any extension, is owned by postgres and is not on the list of Supabase's own objects below was
--- made by our own migrations: handmade_in_extensions in extensions, handmade_in_system_schema in the others. Types
--- skip relation row types (the relation is checked itself) and true array types (their element type is checked).
--- Same scope and extension-member skip as MT-1 for wrong_owner.
+-- is not a member of any extension, is not owned by one of the Supabase service roles below and is not on the list
+-- of Supabase's own objects below was made by our own migrations: owned by postgres, it is handmade_in_extensions in
+-- extensions and handmade_in_system_schema in the others, and owned by any other role (service_role, a role postgres
+-- created or is a member of) it is handmade_nonadmin_owner. Types skip relation row types (the relation is checked
+-- itself) and true array types (their element type is checked). Same scope and extension-member skip as MT-1 for
+-- wrong_owner.
 with recursive scope_schema as (
   select n.oid
   from pg_namespace as n
@@ -37,14 +39,35 @@ writable_system_schema as (
   )
     and has_schema_privilege('postgres', n.oid, 'CREATE')
 ),
+supabase_owner as (
+  -- Supabase service roles that own Supabase's own objects. postgres is not a member of any of them and cannot be
+  -- granted one (supautils.reserved_memberships), so no migration can create an object they own. A listed role that
+  -- postgres is a member of is not trusted, and a role that does not exist is ignored.
+  select r.oid
+  from pg_roles as r
+  where r.rolname in (
+    'supabase_admin', 'supabase_auth_admin', 'supabase_storage_admin', 'supabase_realtime_admin',
+    'supabase_replication_admin', 'supabase_etl_admin', 'supabase_read_only_user', 'dashboard_user', 'pgbouncer'
+  )
+    and not pg_has_role('postgres', r.oid, 'MEMBER')
+),
 supabase_object (kind, schema_name, object_name, owner_name) as (
-  -- Supabase's own non-member objects in those schemas whose owner postgres is or can become (day-one check, local
-  -- stack, 2026-10-11). A relation by relname (indexes and sequences too), a function by name and identity arguments.
+  -- Supabase's own non-member objects whose owner postgres is or can become (postgres itself, and
+  -- supabase_functions_admin, of which postgres is a member), from the day-one check on the local stack
+  -- (2026-10-11). A relation by relname (indexes and sequences too), a function by name and identity arguments.
   values
     ('relation'::text, 'supabase_migrations'::name, 'schema_migrations'::text, 'postgres'::name),
     ('relation', 'supabase_migrations', 'schema_migrations_pkey', 'postgres'),
     ('relation', 'supabase_migrations', 'seed_files', 'postgres'),
-    ('relation', 'supabase_migrations', 'seed_files_pkey', 'postgres')
+    ('relation', 'supabase_migrations', 'seed_files_pkey', 'postgres'),
+    ('relation', 'supabase_functions', 'hooks', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'hooks_pkey', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'hooks_id_seq', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'supabase_functions_hooks_h_table_id_h_name_idx', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'supabase_functions_hooks_request_id_idx', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'migrations', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'migrations_pkey', 'supabase_functions_admin'),
+    ('function', 'supabase_functions', 'http_request()', 'supabase_functions_admin')
 ),
 system_object as (
   select
@@ -150,11 +173,15 @@ join pg_namespace as n on n.oid = e.extnamespace
 where e.extnamespace in (select s.oid from scope_schema as s)
 union all
 select
-  case when so.nspname = 'extensions' then 'handmade_in_extensions' else 'handmade_in_system_schema' end::text,
+  case
+    when pg_get_userbyid(so.owner_oid) <> 'postgres' then 'handmade_nonadmin_owner'
+    when so.nspname = 'extensions' then 'handmade_in_extensions'
+    else 'handmade_in_system_schema'
+  end::text,
   so.qualified_name::text,
-  format('%s owned by postgres and not an extension member', so.what)::text
+  format('%s owned by %s and not an extension member', so.what, pg_get_userbyid(so.owner_oid))::text
 from system_object as so
-where pg_get_userbyid(so.owner_oid) = 'postgres'
+where so.owner_oid not in (select sr.oid from supabase_owner as sr)
   and not exists (
     select 1
     from supabase_object as o
