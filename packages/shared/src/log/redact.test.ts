@@ -397,6 +397,18 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['Arabic-Indic digits and spaces', fill('\u0669 ')],
     ['ignorable-split digits', fill('9\u034f')],
     ['en-dash digits', fill('9\u2013')],
+    // IPv6 after a word prefix (follow-up 6)
+    ['word prefixes', fill('x:')],
+    ['prefix and hex', fill('ab:c')],
+    ['prefix then groups', fill('from:a:')],
+    ['long prefixes', fill('a-b_c-d-e-f-g-h_i-j-k-l-m-n-o-p-q:1:')],
+    // URL userinfo (follow-up 7)
+    ['scheme separators', fill('a://')],
+    ['long userinfo, no @', 'a://' + fill('b')],
+    ['userinfo of @', 'a://' + fill('@')],
+    ['userinfo pairs', fill('a://b@')],
+    ['scheme characters', fill('ab+.-')],
+    ['schemes inside userinfo', 'a://' + fill('b:c://')],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -620,5 +632,50 @@ describe('number canonicalisation (S1.7 follow-ups 3-5)', () => {
       }),
       { numRuns: 500 },
     );
+  });
+});
+
+describe('IPv6 after a word prefix (S1.7 follow-up 6)', () => {
+  it.each([
+    ['ip:', synth.ipv6()],
+    ['from:', synth.ipv6(2)],
+    ['host:', synth.ipv6Full()],
+    ['peer:', `fe80::${synth.ipv6(3).slice(-2)}`],
+    ['src_addr:', synth.ipv6Full(4)],
+  ])('redacts the address after "%s" and keeps the prefix', (prefix, ip) => {
+    const out = redactString(`conn ${prefix}${ip} closed`);
+    expect(out).toBe(`conn ${prefix}${REDACTED} closed`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('leaves clock times and other word:value pairs after a prefix alone', () => {
+    const s = 'at:12:30:45 ts:2026-10-11T12:30:45Z std::vector error:abc:def level:warn';
+    expect(redactString(s)).toBe(s);
+  });
+});
+
+describe('URL userinfo (S1.7 follow-up 7)', () => {
+  const user = synth.word(1);
+  const pass = `${synth.word(2)}${synth.mobile().slice(0, 3)}`;
+  const host = `${synth.word(3)}.example`;
+  it.each([
+    ['https', `https://${user}:${pass}@${host}/v1/x`, `https://${REDACTED}@${host}/v1/x`],
+    ['redis, password only', `redis://:${pass}@${host}:6379`, `redis://${REDACTED}@${host}:6379`],
+    ['amqp, no path', `amqp://${user}:${pass}@${host}`, `amqp://${REDACTED}@${host}`],
+    ['ftp, user only', `ftp://${user}@${host}/f`, `ftp://${REDACTED}@${host}/f`],
+    ['an @ in the password', `https://${user}:a@${pass}@${host}/`, `https://${REDACTED}@${host}/`],
+  ])('keeps the scheme and host and redacts the userinfo: %s', (_label, url, expected) => {
+    const out = redactString(`fetch ${url} failed`);
+    expect(out).toBe(`fetch ${expected} failed`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('still redacts a postgres URL completely', () => {
+    expect(redactString(`connect ${synth.dbUrl()} failed`)).toBe(`connect ${REDACTED} failed`);
+  });
+
+  it('leaves URLs without userinfo alone', () => {
+    const s = `fetch https://${host}/v1/x and mailto:support done`;
+    expect(redactString(s)).toBe(s);
   });
 });

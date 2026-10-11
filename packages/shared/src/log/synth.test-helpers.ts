@@ -31,6 +31,12 @@ export const synth = {
   /** Several words, like a street address: a number, then capitalised words. */
   phrase: (s = 1) =>
     [digits(2, s), ...[0, 1, 2].map((i) => upper(1, s + i) + lower(5, s + i + 3))].join(' '),
+  word: (s = 1) => lower(8, s),
+  /** A full (uncompressed) IPv6 address. */
+  ipv6Full: (s = 1) =>
+    Array.from({ length: 8 }, (_, i) =>
+      (0x1000 + ((s * 977 + i * 4099) % 0xefff)).toString(16),
+    ).join(':'),
   /** An HTTP Basic credential: base64 of user:password. */
   basic: (s = 1) => btoa(`${lower(6, s)}:${lower(4, s + 1)}${digits(3, s)}`),
 };
