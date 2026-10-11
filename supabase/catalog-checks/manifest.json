@@ -28,7 +28,10 @@
         "prosrc_call"
       ]
     },
-    { "id": "MT-5c", "branches": ["direct_grantee", "role_membership", "read_write_all_data"] },
+    {
+      "id": "MT-5c",
+      "branches": ["direct_grantee", "role_membership", "read_write_all_data", "definer_bridge"]
+    },
     {
       "id": "MT-5d",
       "branches": [

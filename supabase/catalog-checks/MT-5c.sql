@@ -3,15 +3,19 @@
 -- member of pg_read_all_data or pg_write_all_data that is not on the Supabase list below.
 -- ACL entries counted, from the quality and integrity schemas: relations (and every relation in an inheritance tree,
 -- INHERITS or partitions, that has a member there, whatever schema it lives in), columns, functions, the schemas
--- themselves, and
--- per-schema default ACLs (pg_default_acl rows for those schemas). A null relacl, proacl or nspacl is read as
--- acldefault(), so a function with a null proacl gives EXECUTE to PUBLIC. Extension members are skipped by the
--- README rule. PUBLIC (grantee 0) is expanded to every role. Grantees are expanded recursively to their members
--- through pg_auth_members memberships with inherit or set. An entry naming the object's owner (for a default ACL,
--- defaclrole) is not counted, and the owner is never expanded to its members.
--- Branches: direct_grantee (the role is a grantee in both schemas, by name or as PUBLIC), role_membership (it
--- needs a membership for at least one schema), read_write_all_data (pg_read_all_data or pg_write_all_data:
--- any direct membership, then members with inherit or set, not expanded through postgres, the owner).
+-- themselves, and per-schema default ACLs (pg_default_acl rows for those schemas). A null relacl, proacl or nspacl
+-- is read as acldefault(), so a function with a null proacl gives EXECUTE to PUBLIC. Extension members are skipped
+-- by the README rule. Also counted: EXECUTE on a SECURITY DEFINER function anywhere (outside pg_catalog and
+-- information_schema) holds every schema its MT-5a closure reaches (shared:graph and shared:closure below, the same
+-- text in MT-5a, 5b, 5c and 5d), because the function reads with its owner's rights. PUBLIC (grantee 0) is expanded
+-- to every role. Grantees are expanded recursively to their members through pg_auth_members memberships with
+-- inherit or set. An entry naming the object's owner (for a default ACL, defaclrole) is not counted, and the owner
+-- is never expanded to its members.
+-- Branches, first match wins for the two-schema rule: direct_grantee (the role is a grantee in both schemas, by
+-- name or as PUBLIC), role_membership (it needs a membership for at least one schema), definer_bridge (it needs
+-- EXECUTE on a SECURITY DEFINER function for at least one schema). read_write_all_data (pg_read_all_data or
+-- pg_write_all_data: any direct membership, then members with inherit or set, not expanded through postgres, the
+-- owner).
 with recursive
 -- Supabase roles that are members of pg_read_all_data or pg_write_all_data on the local stack
 -- (day-one check, supabase/catalog-checks/README.md, 2026-10-11). Add a role only with that evidence.
@@ -21,6 +25,7 @@ supabase_data_role (rolname) as (
     ('supabase_etl_admin'::name),
     ('supabase_read_only_user'::name)
 ),
+-- shared:graph begin (the same text in MT-5a, MT-5b, MT-5c and MT-5d)
 target as (
   select n.oid, n.nspname::text as nspname
   from pg_namespace as n
@@ -50,6 +55,80 @@ rel_reach as (
   join pg_class as gc on gc.oid = g.member_oid
   join target as t on t.oid = gc.relnamespace
 ),
+-- caller: a function in any language but c and internal, with its lowercased body and the schemas its search_path
+-- setting lists (public and extensions, the database default, when it has none).
+caller as materialized (
+  select f.oid, f.prosrc, lower(f.prosrc) as lsrc, sp.path
+  from pg_proc as f
+  join pg_language as l on l.oid = f.prolang
+  cross join lateral (
+    select coalesce(array_agg(btrim(s.part, ' "')), array['public', 'extensions']) as path
+    from unnest(f.proconfig) as cfg(setting)
+    cross join lateral regexp_split_to_table(substr(cfg.setting, 13), ',') as s(part)
+    where left(cfg.setting, 12) = 'search_path='
+  ) as sp
+  where l.lanname not in ('c', 'internal')
+),
+-- callee: a function outside pg_catalog and information_schema, its schema and name escaped for a regex.
+callee as materialized (
+  select
+    g.oid,
+    lower(g.proname) as lname,
+    n.nspname::text as nspname,
+    regexp_replace(n.nspname, '([^[:alnum:]_])', '\\\1', 'g') as nsp,
+    regexp_replace(g.proname, '([^[:alnum:]_])', '\\\1', 'g') as fn
+  from pg_proc as g
+  join pg_namespace as n on n.oid = g.pronamespace
+  where n.nspname not in ('pg_catalog', 'information_schema')
+),
+-- code_edge: one step of the walk, from (classid, objid) to (refclassid, refobjid). bit tags the kind of step:
+-- 8 a call named in a function body, 0 any other.
+code_edge (classid, objid, refclassid, refobjid, bit) as (
+  -- the rules of a relation (a view body or a table rule), skipping a rule's reference to its own relation
+  select 'pg_class'::regclass::oid, r.ev_class, d.refclassid, d.refobjid, 0
+  from pg_rewrite as r
+  join pg_depend as d on d.classid = 'pg_rewrite'::regclass and d.objid = r.oid
+  where not (d.refclassid = 'pg_class'::regclass and d.refobjid = r.ev_class)
+  union
+  -- the pg_depend rows of a function (all of a BEGIN ATOMIC body, only the signature of any other)
+  select d.classid, d.objid, d.refclassid, d.refobjid, 0
+  from pg_depend as d
+  where d.classid = 'pg_proc'::regclass
+  union
+  -- a trigger, skipping its reference to its own table
+  select 'pg_trigger'::regclass::oid, tg.oid, d.refclassid, d.refobjid, 0
+  from pg_trigger as tg
+  join pg_depend as d on d.classid = 'pg_trigger'::regclass and d.objid = tg.oid
+  where not (d.refclassid = 'pg_class'::regclass and d.refobjid = tg.tgrelid)
+  union
+  -- a policy, skipping its reference to its own table
+  select 'pg_policy'::regclass::oid, pol.oid, d.refclassid, d.refobjid, 0
+  from pg_policy as pol
+  join pg_depend as d on d.classid = 'pg_policy'::regclass and d.objid = pol.oid
+  where not (d.refclassid = 'pg_class'::regclass and d.refobjid = pol.polrelid)
+  union
+  -- a call named in a caller's body: schema.name( for any schema, or an unqualified name( when the callee's schema
+  -- is on the caller's search_path. Every overload of the name counts.
+  select 'pg_proc'::regclass::oid, f.oid, 'pg_proc'::regclass::oid, g.oid, 8
+  from caller as f
+  join callee as g on position(g.lname in f.lsrc) > 0
+  where f.prosrc ~* (
+      '(^|[^[:alnum:]_$."])"?' || g.nsp || '"?[[:space:]]*\.[[:space:]]*"?' || g.fn || '"?[[:space:]]*\('
+    )
+    or (
+      g.nspname = any(f.path)
+      and f.prosrc ~* ('(^|[^[:alnum:]_$."])"?' || g.fn || '"?[[:space:]]*\(')
+    )
+),
+-- materialized: computed once, not once per step of the recursive walk
+node_edge as materialized (
+  select e.classid, e.objid, e.refclassid, e.refobjid, e.bit
+  from code_edge as e
+  where e.refclassid in (
+    'pg_class'::regclass, 'pg_proc'::regclass, 'pg_type'::regclass, 'pg_namespace'::regclass
+  )
+),
+-- shared:graph end
 scope_rel as (
   select rr.nspname, c.oid, c.relkind, c.relowner, c.relacl
   from rel_reach as rr
@@ -65,14 +144,95 @@ scope_rel as (
       and x.extnamespace = c.relnamespace
   )
 ),
-acl_entry (nspname, owner_oid, grantee) as (
-  select sr.nspname, sr.relowner, a.grantee
+-- seed: the SECURITY DEFINER functions, walked by the shared closure.
+seed (classid, oid) as (
+  select 'pg_proc'::regclass::oid, p.oid
+  from pg_proc as p
+  join pg_namespace as n on n.oid = p.pronamespace
+  where p.prosecdef
+    and n.nspname not in ('pg_catalog', 'information_schema')
+),
+-- shared:closure begin (the same text in MT-5a, MT-5b, MT-5c and MT-5d)
+-- closure: the walk from each seed (defined by the check). lvl: 0 the seed, 1 a direct reference of the seed, 2
+-- reached through other relations or types only, 3 reached through a function. mask ORs the bits of the steps
+-- taken. UNION keeps the walk finite on cycles.
+closure (seed_classid, seed_oid, classid, objid, lvl, mask) as (
+  select s.classid, s.oid, s.classid, s.oid, 0, 0
+  from seed as s
+  union
+  select
+    cl.seed_classid,
+    cl.seed_oid,
+    e.refclassid,
+    e.refobjid,
+    case
+      when cl.lvl = 3 or e.refclassid = 'pg_proc'::regclass then 3
+      when cl.lvl = 0 then 1
+      else 2
+    end,
+    cl.mask | e.bit
+  from closure as cl
+  join node_edge as e on e.classid = cl.classid and e.objid = cl.objid
+),
+-- reach: a node of the walk reaches a target schema. how: dep when the node lives there (a relation through its
+-- inheritance trees too) or is a type, schema or function there, src when a function body names the schema
+-- (quality. or "quality". or 'quality' as a format() argument, case-insensitive), cfg when a function's
+-- search_path setting lists it.
+reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
+  select cl.seed_classid, cl.seed_oid, rr.nspname, cl.lvl, cl.mask, 'dep'::text
+  from closure as cl
+  join rel_reach as rr on rr.oid = cl.objid
+  where cl.classid = 'pg_class'::regclass
+  union all
+  select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'dep'::text
+  from closure as cl
+  join pg_type as ty on ty.oid = cl.objid
+  join target as t on t.oid = ty.typnamespace
+  where cl.classid = 'pg_type'::regclass
+  union all
+  select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'dep'::text
+  from closure as cl
+  join target as t on t.oid = cl.objid
+  where cl.classid = 'pg_namespace'::regclass
+  union all
+  select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'dep'::text
+  from closure as cl
+  join pg_proc as p on p.oid = cl.objid
+  join target as t on t.oid = p.pronamespace
+  where cl.classid = 'pg_proc'::regclass
+  union all
+  select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'src'::text
+  from closure as cl
+  join pg_proc as p on p.oid = cl.objid
+  join pg_language as l on l.oid = p.prolang
+  cross join target as t
+  where cl.classid = 'pg_proc'::regclass
+    and l.lanname not in ('c', 'internal')
+    and p.prosrc ~* (
+      '(^|[^[:alnum:]_$])("' || t.nspname || '"|' || t.nspname || ')[[:space:]]*\.|''' || t.nspname || ''''
+    )
+  union all
+  select cl.seed_classid, cl.seed_oid, t.nspname, cl.lvl, cl.mask, 'cfg'::text
+  from closure as cl
+  join pg_proc as p on p.oid = cl.objid
+  cross join target as t
+  where cl.classid = 'pg_proc'::regclass
+    and exists (
+      select 1
+      from unnest(p.proconfig) as cfg(setting)
+      where cfg.setting ~* ('^search_path=(.*,)?[[:space:]]*"?' || t.nspname || '"?[[:space:]]*(,|$)')
+    )
+),
+-- shared:closure end
+-- src: acl (an ACL entry of an object there) or definer (EXECUTE on a SECURITY DEFINER function that reaches it).
+acl_entry (nspname, owner_oid, grantee, src) as (
+  select sr.nspname, sr.relowner, a.grantee, 'acl'::text
   from scope_rel as sr
   cross join lateral aclexplode(
     coalesce(sr.relacl, acldefault(case when sr.relkind = 'S' then 's' else 'r' end::"char", sr.relowner))
   ) as a
   union
-  select sr.nspname, sr.relowner, a.grantee
+  select sr.nspname, sr.relowner, a.grantee, 'acl'::text
   from scope_rel as sr
   join pg_attribute as att on att.attrelid = sr.oid
   cross join lateral aclexplode(att.attacl) as a
@@ -80,7 +240,7 @@ acl_entry (nspname, owner_oid, grantee) as (
     and not att.attisdropped
     and att.attacl is not null
   union
-  select t.nspname, p.proowner, a.grantee
+  select t.nspname, p.proowner, a.grantee, 'acl'::text
   from pg_proc as p
   join target as t on t.oid = p.pronamespace
   cross join lateral aclexplode(coalesce(p.proacl, acldefault('f'::"char", p.proowner))) as a
@@ -95,36 +255,43 @@ acl_entry (nspname, owner_oid, grantee) as (
       and x.extnamespace = p.pronamespace
   )
   union
-  select t.nspname, n.nspowner, a.grantee
+  select t.nspname, n.nspowner, a.grantee, 'acl'::text
   from target as t
   join pg_namespace as n on n.oid = t.oid
   cross join lateral aclexplode(coalesce(n.nspacl, acldefault('n'::"char", n.nspowner))) as a
   union
-  select t.nspname, da.defaclrole, a.grantee
+  select t.nspname, da.defaclrole, a.grantee, 'acl'::text
   from pg_default_acl as da
   join target as t on t.oid = da.defaclnamespace
   cross join lateral aclexplode(da.defaclacl) as a
+  union
+  select rc.nspname, p.proowner, a.grantee, 'definer'::text
+  from reach as rc
+  join pg_proc as p on p.oid = rc.seed_oid
+  cross join lateral aclexplode(coalesce(p.proacl, acldefault('f'::"char", p.proowner))) as a
+  where rc.seed_classid = 'pg_proc'::regclass
+    and a.privilege_type = 'EXECUTE'
 ),
--- via: direct (named grantee), public (through PUBLIC) or member (through a role membership).
-holder (role_oid, nspname, owner_oid, via) as (
-  select e.grantee, e.nspname, e.owner_oid, 'direct'::text
+-- hop: 0 a named grantee or PUBLIC, 1 through a role membership. pub: the entry was a grant to PUBLIC.
+holder (role_oid, nspname, owner_oid, hop, pub, src) as (
+  select e.grantee, e.nspname, e.owner_oid, 0, false, e.src
   from acl_entry as e
   where e.grantee <> 0
     and e.grantee <> e.owner_oid
   union
-  select r.oid, e.nspname, e.owner_oid, 'public'::text
+  select r.oid, e.nspname, e.owner_oid, 0, true, e.src
   from acl_entry as e
   cross join pg_roles as r
   where e.grantee = 0
   union
-  select m.member, h.nspname, h.owner_oid, 'member'::text
+  select m.member, h.nspname, h.owner_oid, 1, h.pub, h.src
   from holder as h
   join pg_auth_members as m on m.roleid = h.role_oid
   where (m.inherit_option or m.set_option)
     and h.role_oid <> h.owner_oid
 ),
 held as (
-  select h.role_oid, h.nspname, h.via
+  select h.role_oid, h.nspname, h.hop, h.pub, h.src
   from holder as h
   join pg_roles as r on r.oid = h.role_oid
   where not r.rolsuper
@@ -133,8 +300,9 @@ held as (
 both_schemas as (
   select
     hd.role_oid,
-    count(distinct hd.nspname) filter (where hd.via <> 'member') = 2 as direct,
-    count(distinct hd.nspname) filter (where hd.via = 'public') > 0 as through_public
+    count(distinct hd.nspname) filter (where hd.hop = 0 and hd.src = 'acl') = 2 as direct,
+    count(distinct hd.nspname) filter (where hd.src = 'acl') = 2 as by_acl,
+    bool_or(hd.pub) as through_public
   from held as hd
   group by hd.role_oid
   having count(distinct hd.nspname) = 2
@@ -151,11 +319,19 @@ data_member (role_oid, data_role) as (
     and dm.role_oid <> 'postgres'::regrole
 )
 select
-  case when b.direct then 'direct_grantee' else 'role_membership' end::text as branch,
+  case
+    when b.direct then 'direct_grantee'
+    when b.by_acl then 'role_membership'
+    else 'definer_bridge'
+  end::text as branch,
   pg_get_userbyid(b.role_oid)::text as object,
   (
     'role holds privileges in quality and integrity '
-    || case when b.direct then 'as a grantee' else 'through role membership' end
+    || case
+      when b.direct then 'as a grantee'
+      when b.by_acl then 'through role membership'
+      else 'through EXECUTE on a SECURITY DEFINER function'
+    end
     || case when b.through_public then ' (counting grants to PUBLIC)' else '' end
   )::text as detail
 from both_schemas as b
