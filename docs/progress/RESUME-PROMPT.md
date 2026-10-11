@@ -1,6 +1,6 @@
 # Resume prompt — the full procedure for the next Claude Code session (any account)
 
-Written 2026-10-11 09:25 IST by the lead session; updated 20:10 IST. Everything the next session needs is in git; nothing from
+Written 2026-10-11 09:25 IST by the lead session; updated 20:10 and 23:50 IST. Everything the next session needs is in git; nothing from
 earlier chats is available or needed. The short "paste prompt" the founder uses points here.
 
 ## 1. What Trace is and where the build stands
@@ -9,9 +9,11 @@ earlier chats is available or needed. The short "paste prompt" the founder uses 
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
 - **Now: milestone M0a (toolchain, pipeline, skeleton), phase BUILD; S1 (S1.0–S1.7) done and through the S1.7 gate
-  (2026-10-11 20:10 IST); next: K1, then S2 ∥ S3.** `milestone/m0a` was fast-forwarded to the gate
+  (2026-10-11 20:10 IST); K1, K3, the gitleaks fix, H3 and the deny-rule widening done (23:50 IST); S3a written
+  (`m0a/s3-workers`, not reviewed), S2 mostly written (`m0a/s2-ui`, writer stalled at its last check); next: review
+  and merge S2 and S3a, then W-S3b.** `milestone/m0a` was fast-forwarded to the gate
   tip; checkpoints `cp/m0a-02`, `cp/m0a-03`. No milestone is closed yet (no `m*-reviewed` tag). Spec
-  `specs/m0-foundations.md` is at revision 14. Founder decisions of 2026-10-11 18:55 IST (build-notes §0) apply:
+  `specs/m0-foundations.md` is at revision 15. Founder decisions of 2026-10-11 18:55 IST (build-notes §0) apply:
   backstop scope, Sonnet/Opus model policy, CI via draft PR 1, SessionStart hook reads the integration handoff.
 - **Integration branch: `m0a/integration`** (all reviewed lead work + review reports + this file).
   `milestone/m0a` (`adbbb61`) moves only at the S1.7 gate. Older integration names
@@ -70,15 +72,16 @@ STEP 3 — Verify, then report in 5 lines whether the repo matches the handoff (
   `pnpm exec supabase start -x realtime,storage-api,imgproxy,mailpit,studio,edge-runtime,logflare,vector,supavisor,postgres-meta`
   (write the output to a file; never pipe docker/supabase output into `head` on Windows)
 - Branch tips as in HANDOFF.md "Branches": `m0a/integration` (newest `chore(progress)` commit), `milestone/m0a` @ `54bd44d`, the
-  S1.7 gate tip (tag `cp/m0a-03`), `m0a/s2s3-prep` @ `1c7dc63` (P1–P4), `main` @ `fe77a87`. All are on the `trace`
-  remote after this wrap-up's push. Draft PR 1 (integration → `main`) shows the CI result of the integration tip.
+  S1.7 gate tip (tag `cp/m0a-03`), `m0a/s2-ui` @ `54620e6` (W-S2), `m0a/s3-workers` @ `e04446e` (W-S3a),
+  `m0a/s2s3-prep` @ `1c7dc63` (merged), `main` @ `fe77a87`. All are on the `trace` remote after this wrap-up's push. Draft PR 1 (integration → `main`) shows the CI result of the integration tip.
 
 STEP 4 — Do the HANDOFF "Next step" list in order. Summary (HANDOFF and the review reports have the details):
-1. (J1 done in the previous session; skip.)
-2. K1 (lead, test-first): `scripts/check-staging-secrets.mjs` (spec §7.2 step 6, AT-15 local part).
-3. Merge `m0a/s2s3-prep` (P1–P4), record P5 (no `scripts/` grant); S2 ∥ S3 per `docs/progress/S2-S3-PLAN.md`
-   (max 2 writers; Sonnet for mechanical placeholders, Opus for the deploy job). Before CLOSE also: spec revision 15
-   (gate K3), the gitleaks allowlist fix, the M0a summary's Deferred table (HANDOFF "Owed before M0a CLOSE").
+1. (J1, K1, K3, gitleaks fix, P1–P4, H3 and the deny-rule widening are done; skip.)
+2. W-S2 leftovers: `git status` in its worktree, commit any wip, finish its last check (HANDOFF Next step 1).
+3. Opus reviews of S3a (`git diff fa147f8 e04446e`) and S2, fix findings, lead-only follow-ups, then merge each
+   stream `--no-ff` after a full `pnpm verify` with no writer running; `cp/m0a-04`/`-05`.
+4. W-S3b (Opus writer): the `deploy-staging` job per `docs/progress/S2-S3-PLAN.md` (`scripts/` stays lead-only).
+5. Before REVIEW: AT-1a-local, AT-1b; finish `docs/progress/M0a-summary-draft.md`.
    Do not start M0b or any later milestone.
 Rules learned the hard way:
 - Usage: check it often. The founder allows work to ~95% of each 5-hour window, with STEP 5 finished by 95–96%; parallel Opus agents can use 70% in 30 minutes, so check `get_usage` after every agent result. Max 2–3 agents at
