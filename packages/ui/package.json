@@ -9,7 +9,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
-    "lint": "eslint . --max-warnings=0",
+    "lint": "eslint . --max-warnings=0 && node scripts/build-tokens.mjs --check",
+    "tokens": "node scripts/build-tokens.mjs",
+    "tokens:check": "node scripts/build-tokens.mjs --check",
     "test": "vitest run"
   },
   "dependencies": {

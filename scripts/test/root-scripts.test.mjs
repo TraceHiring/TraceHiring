@@ -66,3 +66,25 @@ describe('root package.json scripts (spec §5)', () => {
     }
   });
 });
+
+describe('workspace scripts the spec pins (revision 16)', () => {
+  const pkg = (dir) =>
+    JSON.parse(readFileSync(resolve(repoRoot, dir, 'package.json'), 'utf8')).scripts ?? {};
+
+  it('@trace/ui lint also checks that the generated token files are current (§5, §11)', () => {
+    const ui = pkg('packages/ui');
+    expect(ui['tokens:check']).toBe('node scripts/build-tokens.mjs --check');
+    expect(ui.tokens).toBe('node scripts/build-tokens.mjs');
+    expect((ui.lint ?? '').split('&&').map((s) => s.trim())).toEqual([
+      'eslint . --max-warnings=0',
+      'node scripts/build-tokens.mjs --check',
+    ]);
+  });
+
+  it.each(['workers/edge', 'workers/jobs', 'services/api'])(
+    '%s types:gen keeps VERSION a string (wrangler types --strict-vars=false)',
+    (dir) => {
+      expect(pkg(dir)['types:gen']).toBe('wrangler types --strict-vars=false');
+    },
+  );
+});
