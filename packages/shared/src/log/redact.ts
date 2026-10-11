@@ -161,8 +161,11 @@ const isSensitiveTextKey = (key: string): boolean => key.length > MAX_KEY || isS
 const KEY_THEN_QUOTE = new RegExp(String.raw`${KEY}(\\*["']?\s{0,3}[=:]\s{0,3})(\\*["'])`, 'g');
 
 /**
- * Where a quoted value's body ends: the index of its closing quote, or the end of the text, or
- * MAX_STRING characters on (the bound keeps it linear). The opener is a quote after k backslashes
+ * Where a quoted value's body ends: the index of its closing quote, or else the end of the text.
+ * Only MAX_STRING characters are read (the bound keeps it linear); with no closing quote among
+ * them, the value runs to the end of the text. The bound can be hit inside a value, because NFKC
+ * can make text longer than the input cap (U+FDFA becomes 18 characters), and the rest of the
+ * value must not be kept (redactor lows review F2). The opener is a quote after k backslashes
  * (k = 0 for a plain quote, 2^n - 1 for JSON n levels inside JSON strings). A quote after a run
  * of r backslashes closes the value when r = k plus an even number of escapes at the value's own
  * level, each of which is 2k + 2 backslashes: (r - k) % (2k + 2) === 0. Any other quote is
@@ -187,7 +190,7 @@ const quotedEnd = (text: string, from: number, open: string): number => {
       i++;
     }
   }
-  return limit;
+  return text.length;
 };
 
 /**

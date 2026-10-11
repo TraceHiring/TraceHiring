@@ -353,6 +353,9 @@ describe('security review regressions (S1.7)', () => {
     '9\u034f'.repeat(999),
     '\u{e0020}'.repeat(999),
     '9\u2013'.repeat(999),
+    // a quoted value that NFKC makes longer than the scan's bound (redactor lows review F2)
+    'password="' + '\ufdfa'.repeat(1990),
+    'token="\ufdfa '.repeat(222),
   ];
   it.each(adversarial.map((s, i) => [i, s] as const))(
     'redacts adversarial input %i within the time budget',
@@ -1296,5 +1299,35 @@ describe('a sensitive pair inside a non-sensitive value (redactor lows review F1
   it('still leaves non-sensitive pairs and their values alone', () => {
     const s = 'a=b:c=d event:login.ok at:12:30:45 x=y=z';
     expect(redactString(s)).toBe(s);
+  });
+});
+
+// Redactor lows review F2: NFKC can make a quoted value longer than the quoted-value scan's bound
+// (U+FDFA becomes 18 characters). With no closing quote within the bound, the rest of the value
+// after the bound was kept.
+describe('a quoted value longer than the scan bound (redactor lows review F2)', () => {
+  const [w1, w2] = [synth.word(3), synth.word(4)];
+  const long = 'ﷺ'.repeat(112);
+  it.each([
+    ['double-quoted', `password="${long} ${w1} ${w2}" next`, `password="${REDACTED}`],
+    ['single-quoted', `token='${long} ${w1} ${w2}' next`, `token='${REDACTED}`],
+    [
+      'escaped, in JSON inside a JSON string',
+      `{\\"address\\":\\"${long} ${w1} ${w2}\\"} next`,
+      `{\\"address\\":\\"${REDACTED}`,
+    ],
+  ])('redacts a long %s value to the end of the text', (_label, s, expected) => {
+    expect(s.length).toBeLessThanOrEqual(MAX_STRING);
+    expect(canonical(s).length).toBeGreaterThan(MAX_STRING);
+    const out = redactString(`got ${s}`);
+    expect(out).not.toContain(w1);
+    expect(out).not.toContain(w2);
+    expect(out).toBe(`got ${expected}`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('still closes a long quoted value at its quote within the bound', () => {
+    const s = `password="${'ﷺ'.repeat(100)} ${w1}" ${w2}`;
+    expect(redactString(s)).toBe(`password="${REDACTED}" ${w2}`);
   });
 });
