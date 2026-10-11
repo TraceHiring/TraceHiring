@@ -148,6 +148,34 @@ describe('scanDist (real gitleaks)', () => {
     expect(r.problems.join('\n')).not.toContain(key);
   });
 
+  // S1.4 security re-review N5: `gitleaks dir` skips paths on its built-in allowlist
+  // (node_modules/, images, lockfiles, anything containing gitleaks.toml), so their content is
+  // also streamed through `gitleaks stdin`, which has no path to allowlist.
+  it.each([
+    'node_modules/pkg/index.js',
+    'logo.svg',
+    'pnpm-lock.yaml',
+    'assets/gitleaks.toml-abc.js',
+  ])('finds a key in %s, a path gitleaks dir skips', (file) => {
+    const tail = [...randomBytes(40)].map((b) => ALNUM[b % ALNUM.length]).join('');
+    const key = ['sb', 'secret', tail].join('_');
+    const root = cleanRepo({
+      '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),
+      [`apps/candidate/dist/${file}`]: `x("${key}");\n`,
+    });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toMatch(/apps\/candidate\/dist: gitleaks found a secret/);
+    expect(r.problems.join('\n')).not.toContain(key);
+  });
+
+  it('fails on an archive in build output, whose content cannot be scanned', () => {
+    const root = cleanRepo({ 'apps/candidate/dist/assets/index.js.gz': 'compressed' });
+    const r = scanDist({ root });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toMatch(/assets\/index\.js\.gz: archive in build output/);
+  });
+
   it('keeps the default rules in the repository .gitleaks.toml', () => {
     const root = cleanRepo({
       '.gitleaks.toml': readFileSync(REPO_CONFIG, 'utf8'),

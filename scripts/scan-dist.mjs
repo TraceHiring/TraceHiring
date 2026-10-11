@@ -100,7 +100,11 @@ export function findHiders(root, rel) {
         continue;
       }
       if (e.isDirectory()) walk(childAbs, childRel);
-      else if (e.isFile()) {
+      else if (e.isFile() && ARCHIVE_RE.test(e.name)) {
+        problems.push(
+          `${childRel}: archive in build output (compressed content cannot be scanned)`,
+        );
+      } else if (e.isFile()) {
         const text = readFileSync(childAbs).toString('latin1').toLowerCase();
         if (text.includes(ALLOW_MARKER))
           problems.push(
@@ -111,6 +115,31 @@ export function findHiders(root, rel) {
   };
   walk(path.join(root, ...rel.split('/')), rel);
   return problems;
+}
+
+/** Compressed files: gitleaks cannot see inside them, so none may ship (S1.4 re-review N5). */
+const ARCHIVE_RE = /\.(?:gz|br|zst|zip|tgz|tar|bz2|xz|7z|rar)$/i;
+
+/**
+ * The content of every text file (no NUL byte in its first 8 KB) in a dist/, joined by newlines.
+ * `gitleaks dir` skips paths on gitleaks' built-in allowlist (node_modules/, images, lockfiles,
+ * anything containing gitleaks.toml), so this content also goes through `gitleaks stdin`, which
+ * has no path to allowlist (S1.4 security re-review N5). Symlinks are not followed.
+ */
+export function distText(root, rel) {
+  const parts = [];
+  const walk = (abs) => {
+    for (const e of readdirSync(abs, { withFileTypes: true })) {
+      const childAbs = path.join(abs, e.name);
+      if (e.isDirectory()) walk(childAbs);
+      else if (e.isFile()) {
+        const buf = readFileSync(childAbs);
+        if (!buf.subarray(0, 8192).includes(0)) parts.push(buf, Buffer.from('\n'));
+      }
+    }
+  };
+  walk(path.join(root, ...rel.split('/')));
+  return Buffer.concat(parts);
 }
 
 /** gitleaks' environment: the caller's, minus anything that could swap its config. */
@@ -170,6 +199,23 @@ export function scanDist({ root, gitleaks = 'gitleaks', env = process.env }) {
         problems.push(
           `${rel}: gitleaks found a secret or failed (exit ${r.status}): ${summary}. ` +
             `See where with: gitleaks dir --redact --no-banner -v --config .gitleaks.toml ${rel}`,
+        );
+        continue;
+      }
+      // The same content again without paths, so the built-in path allowlist cannot hide a key.
+      const s = spawnSync(gitleaks, ['stdin', '--redact', '--no-banner', '--config', config], {
+        cwd: root,
+        env: gitleaksEnv(env),
+        input: distText(root, rel),
+        encoding: 'utf8',
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      if (s.error) throw s.error;
+      if (s.status !== 0) {
+        problems.push(
+          `${rel}: gitleaks found a secret or failed (exit ${s.status}) in a file that gitleaks dir ` +
+            `skips by path (node_modules/, images, lockfiles, gitleaks.toml names). To find it, pipe each such file through: ` +
+            `gitleaks stdin --redact --no-banner -v --config .gitleaks.toml`,
         );
       }
     }
