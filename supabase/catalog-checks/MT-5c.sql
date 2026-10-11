@@ -7,14 +7,17 @@
 -- is read as acldefault(), so a function with a null proacl gives EXECUTE to PUBLIC. Extension members are skipped
 -- by the README rule. Also counted: EXECUTE on a SECURITY DEFINER function anywhere (outside pg_catalog and
 -- information_schema) holds every schema its MT-5a closure reaches (shared:graph and shared:closure below, the same
--- text in MT-5a, 5b, 5c and 5d), because the function reads with its owner's rights. PUBLIC (grantee 0) is expanded
--- to every role. Grantees are expanded recursively to their members through pg_auth_members memberships with
+-- text in MT-5a, 5b, 5c and 5d), because the function reads with its owner's rights. Likewise any privilege on a
+-- materialized view, or on a view without the literal security_invoker=true, outside quality and integrity (outside
+-- pg_catalog and information_schema too), from its relacl (acldefault when null) and column ACLs, holds every schema
+-- its closure reaches. PUBLIC (grantee 0) is expanded to every role. Grantees are expanded recursively to their members through pg_auth_members memberships with
 -- inherit, set or ADMIN OPTION (an ADMIN-only member can grant itself inherit and set). An entry naming the object's
 -- owner (for a default ACL, defaclrole) is not counted, and the owner is never expanded to its members.
 -- Branches, first match wins for the two-schema rule: direct_grantee (the role is a grantee in both schemas, by
 -- name or as PUBLIC), role_membership (it needs a membership with inherit or set for at least one schema),
 -- admin_membership (it needs an ADMIN-only membership), definer_bridge (it needs EXECUTE on a SECURITY DEFINER
--- function for at least one schema). read_write_all_data (pg_read_all_data or pg_write_all_data: any direct
+-- function for at least one schema), owner_rights_relation (it needs a privilege on a view or materialized view
+-- that reads with its owner's rights). read_write_all_data (pg_read_all_data or pg_write_all_data: any direct
 -- membership, then members with inherit, set or ADMIN OPTION, not expanded through postgres, the owner).
 with recursive
 -- Supabase roles that are members of pg_read_all_data or pg_write_all_data on the local stack
@@ -189,13 +192,23 @@ scope_rel as (
       and x.extnamespace = c.relnamespace
   )
 ),
--- seed: the SECURITY DEFINER functions, walked by the shared closure.
+-- seed: the SECURITY DEFINER functions, and the materialized views and views without security_invoker=true outside
+-- quality and integrity (all read with their owner's rights), walked by the shared closure.
 seed (classid, oid) as (
   select 'pg_proc'::regclass::oid, p.oid
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where p.prosecdef
     and n.nspname not in ('pg_catalog', 'information_schema')
+  union all
+  select 'pg_class'::regclass::oid, c.oid
+  from pg_class as c
+  join pg_namespace as n on n.oid = c.relnamespace
+  where n.nspname not in ('pg_catalog', 'information_schema', 'quality', 'integrity')
+    and (
+      c.relkind = 'm'
+      or (c.relkind = 'v' and not ('security_invoker=true' = any(coalesce(c.reloptions, '{}'::text[]))))
+    )
 ),
 -- shared:closure begin (the same text in MT-5a, MT-5b, MT-5c and MT-5d)
 -- closure: the walk from each seed (defined by the check). lvl: 0 the seed, 1 a direct reference of the seed, 2
@@ -269,7 +282,8 @@ reach (seed_classid, seed_oid, nspname, lvl, mask, how) as (
     )
 ),
 -- shared:closure end
--- src: acl (an ACL entry of an object there) or definer (EXECUTE on a SECURITY DEFINER function that reaches it).
+-- src: acl (an ACL entry of an object there), definer (EXECUTE on a SECURITY DEFINER function that reaches it) or
+-- owner_rights (a privilege on a seeded view or materialized view that reaches it).
 acl_entry (nspname, owner_oid, grantee, src) as (
   select sr.nspname, sr.relowner, a.grantee, 'acl'::text
   from scope_rel as sr
@@ -316,6 +330,20 @@ acl_entry (nspname, owner_oid, grantee, src) as (
   cross join lateral aclexplode(coalesce(p.proacl, acldefault('f'::"char", p.proowner))) as a
   where rc.seed_classid = 'pg_proc'::regclass
     and a.privilege_type = 'EXECUTE'
+  union
+  select rs.nspname, c.relowner, a.grantee, 'owner_rights'::text
+  from (select distinct rc.seed_oid, rc.nspname from reach as rc where rc.seed_classid = 'pg_class'::regclass) as rs
+  join pg_class as c on c.oid = rs.seed_oid
+  cross join lateral aclexplode(coalesce(c.relacl, acldefault('r'::"char", c.relowner))) as a
+  union
+  select rs.nspname, c.relowner, a.grantee, 'owner_rights'::text
+  from (select distinct rc.seed_oid, rc.nspname from reach as rc where rc.seed_classid = 'pg_class'::regclass) as rs
+  join pg_class as c on c.oid = rs.seed_oid
+  join pg_attribute as att on att.attrelid = c.oid
+  cross join lateral aclexplode(att.attacl) as a
+  where att.attnum > 0
+    and not att.attisdropped
+    and att.attacl is not null
 ),
 -- hop: 0 a named grantee or PUBLIC, 1 through role memberships with inherit or set, 2 through at least one
 -- membership with ADMIN OPTION only (the member can grant itself inherit and set). pub: a grant to PUBLIC.
@@ -355,6 +383,7 @@ both_schemas as (
     count(distinct hd.nspname) filter (where hd.hop = 0 and hd.src = 'acl') = 2 as direct,
     count(distinct hd.nspname) filter (where hd.hop <= 1 and hd.src = 'acl') = 2 as by_membership,
     count(distinct hd.nspname) filter (where hd.src = 'acl') = 2 as by_acl,
+    count(distinct hd.nspname) filter (where hd.src in ('acl', 'definer')) = 2 as by_definer,
     bool_or(hd.pub) as through_public
   from held as hd
   group by hd.role_oid
@@ -376,7 +405,8 @@ select
     when b.direct then 'direct_grantee'
     when b.by_membership then 'role_membership'
     when b.by_acl then 'admin_membership'
-    else 'definer_bridge'
+    when b.by_definer then 'definer_bridge'
+    else 'owner_rights_relation'
   end::text as branch,
   pg_get_userbyid(b.role_oid)::text as object,
   (
@@ -385,7 +415,8 @@ select
       when b.direct then 'as a grantee'
       when b.by_membership then 'through role membership'
       when b.by_acl then 'through a membership with ADMIN OPTION only'
-      else 'through EXECUTE on a SECURITY DEFINER function'
+      when b.by_definer then 'through EXECUTE on a SECURITY DEFINER function'
+      else 'through a view or materialized view that reads with its owner''s rights'
     end
     || case when b.through_public then ' (counting grants to PUBLIC)' else '' end
   )::text as detail

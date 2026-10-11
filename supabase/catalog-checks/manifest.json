@@ -54,7 +54,8 @@
         "role_membership",
         "read_write_all_data",
         "definer_bridge",
-        "admin_membership"
+        "admin_membership",
+        "owner_rights_relation"
       ]
     },
     {
