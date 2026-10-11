@@ -570,6 +570,10 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['digit groups split by fillers', fill('98765\u3164')],
     ['mobile numbers glued to digits', fill(`${synth.mobile()}\u200b1`)],
     ['digits glued to Aadhaar numbers', fill(`1\u00ad${synth.aadhaar()}`)],
+    // format (Cf) characters are invisible characters too (redactor lows review F4)
+    ['PANs glued to words by U+FFF9', fill(`${synth.pan()}${String.fromCodePoint(0xfff9)}ok`)],
+    ['digits split by U+0600', fill(`9${String.fromCodePoint(0x600)}`)],
+    ['letters split by U+13430', fill(`a${String.fromCodePoint(0x13430)}`)],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -589,6 +593,14 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     // digit-digit runs are marked too (redactor lows review F3)
     ['long runs between digits', fill(`1${'\u200b'.repeat(500)}2`)],
     ['digits split by tags', fill('9\u{e0020}')],
+    // format (Cf) characters (redactor lows review F4)
+    ['letters split by U+0600', fill(`a${String.fromCodePoint(0x600)}`)],
+    ['digits split by U+110BD', fill(`9${String.fromCodePoint(0x110bd)}`)],
+    ['one long run of U+FFF9', fill(String.fromCodePoint(0xfff9))],
+    [
+      'mixed format and ignorable runs',
+      fill(`a${String.fromCodePoint(0x6dd, 0x200b, 0x13430).repeat(100)}9 `),
+    ],
   ])('canonicalises ~100 KB of "%s" well inside 50 ms', (_label, s) => {
     expect(s.length).toBeGreaterThanOrEqual(KB100);
     canonical(s.slice(0, 1000)); // warm-up
@@ -1385,5 +1397,44 @@ describe('invisible characters between two digits (redactor lows review F3)', ()
     for (const s of ['1\u200b2', 'v1\u00ad2.3', '12\u200b34:56', '2026\u200b10']) {
       expect(redactString(s)).toBe(s);
     }
+  });
+});
+
+// Redactor lows review F4: only Default_Ignorable characters were dropped or marked, so a value
+// split by a format (Cf) character outside that property (number signs, annotation and joiner
+// controls) leaked.
+describe('format characters inside a value (redactor lows review F4)', () => {
+  const cps: [string, number][] = [0xfff9, 0x600, 0x6dd, 0x110bd, 0x13430].map((cp) => [
+    cp.toString(16).toUpperCase().padStart(4, '0'),
+    cp,
+  ]);
+
+  it.each(cps)('redacts a value split at every character by U+%s', (_hex, cp) => {
+    const c = String.fromCodePoint(cp);
+    for (const value of [synth.pan(), synth.mobile(), synth.aadhaar(), synth.email()]) {
+      const out = redactString(`x ${[...value].join(c)} y`);
+      expect(out).toBe(`x ${REDACTED} y`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  // Not a leak before the fix (the value was found), but the character stayed in the output: it
+  // is now handled like any other invisible character next to a value.
+  it.each(cps)('redacts a value glued to the next word by U+%s', (_hex, cp) => {
+    const c = String.fromCodePoint(cp);
+    for (const value of [synth.pan(3), synth.mobile(3)]) {
+      const out = redactString(`x ${value}${c}ok y`);
+      expect(out).toBe(`x ${REDACTED} y`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it.each(cps)('joins a free-text key split by U+%s', (_hex, cp) => {
+    const c = String.fromCodePoint(cp);
+    const secret = synth.base64(8).slice(0, 10);
+    const out = redactString(`x pass${c}word=${secret} y`);
+    expect(out).not.toContain(secret);
+    expect(redactString(out)).toBe(out);
+    expect(redact({ [`to${c}ken`]: 'v' })).toEqual({ [`to${c}ken`]: REDACTED });
   });
 });

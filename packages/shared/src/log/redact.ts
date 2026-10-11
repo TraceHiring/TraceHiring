@@ -56,9 +56,12 @@ const SAFE_KEYS = new Set([
 
 /**
  * Invisible characters that could split a key or a value: zero-width marks and joiners, bidi
- * controls, variation selectors, Hangul fillers, tags. Every one of them is in this property.
+ * controls, variation selectors, Hangul fillers and tags (all Default_Ignorable_Code_Point), and
+ * every other format character (Cf: number signs such as U+0600 and U+110BD, annotation and
+ * hieroglyph format controls such as U+FFF9 and U+13430; redactor lows review F4).
  */
-const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+const INVISIBLE = String.raw`[\p{Default_Ignorable_Code_Point}\p{Cf}]`;
+const IGNORABLE = new RegExp(INVISIBLE, 'gu');
 /** Keys of ASCII letters, digits, `_` and `-` (most keys) need no Unicode normalisation. */
 const ASCII_KEY = /^[\w-]*$/;
 
@@ -116,8 +119,10 @@ const SPLIT = '\u2063';
  * and an ASCII letter or digit, or between a digit and an ASCII letter or digit. Each run is read
  * once: inside a run the lookbehinds fail, and no invisible character is a letter or digit to them.
  */
-const IGNORABLE_RUN =
-  /(?<=[A-Za-z])(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z\p{Nd}])|(?<=\p{Nd})(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z\p{Nd}])|\p{Default_Ignorable_Code_Point}+/gu;
+const IGNORABLE_RUN = new RegExp(
+  String.raw`(?<=[A-Za-z])(${INVISIBLE}+)(?=[A-Za-z\p{Nd}])|(?<=\p{Nd})(${INVISIBLE}+)(?=[A-Za-z\p{Nd}])|${INVISIBLE}+`,
+  'gu',
+);
 const splitOrDrop = (_run: string, afterLetter?: string, afterDigit?: string): string =>
   afterLetter === undefined && afterDigit === undefined ? '' : SPLIT;
 
