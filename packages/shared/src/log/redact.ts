@@ -141,11 +141,23 @@ const digits = (source: string): RegExp =>
   new RegExp(source.replaceAll('SEP', '[\\s.-]{0,2}'), 'g');
 
 /**
+ * A key in free text (redactor review #8), as two capture groups:
+ * 1. a run of word characters and dashes, of any length, with optional `[name]` segments
+ *    (`user[password]`, `a[0]["otp"]`); the lookbehind starts it once per run;
+ * 2. the text of a quoted key, which may hold spaces (`"Address Line 1"`), up to its closing
+ *    quote (which may be escaped); the text holds no quote or backslash, so it is read once.
+ */
+const KEY = String.raw`(?:(?<![\w-])([\w-]+(?:\[["']?[\w-]*["']?\])*)|"([^"\\\r\n]+)(?=\\*"))`;
+/** Keys longer than this are treated as sensitive whatever they say (the safe choice). */
+const MAX_KEY = 64;
+const isSensitiveTextKey = (key: string): boolean => key.length > MAX_KEY || isSensitiveKey(key);
+
+/**
  * A key, `=` or `:` (the key may be quoted or escaped-quoted), then an opening quote. JSON inside
  * a JSON string escapes each quote with 1, 3, 7, … backslashes (one level deeper each time), so
  * both quotes take any number of them (redactor review #4).
  */
-const KEY_THEN_QUOTE = /(?<![\w-])([\w-]{1,64})(\\*["']?\s{0,3}[=:]\s{0,3})(\\*["'])/g;
+const KEY_THEN_QUOTE = new RegExp(String.raw`${KEY}(\\*["']?\s{0,3}[=:]\s{0,3})(\\*["'])`, 'g');
 
 /**
  * Where a quoted value's body ends: the index of its closing quote, or the end of the text, or
@@ -187,8 +199,9 @@ const redactQuotedValues = (text: string): string => {
   let last = 0;
   KEY_THEN_QUOTE.lastIndex = 0;
   for (let m = KEY_THEN_QUOTE.exec(text); m !== null; m = KEY_THEN_QUOTE.exec(text)) {
-    const [head, key = '', , open = ''] = m;
-    if (!isSensitiveKey(key)) continue; // a non-sensitive value is still scanned for inner pairs
+    const [head, bare, quoted, , open = ''] = m;
+    // a non-sensitive value is still scanned for inner pairs
+    if (!isSensitiveTextKey(bare ?? quoted ?? '')) continue;
     const from = m.index + head.length;
     const end = quotedEnd(text, from, open);
     if (end === from) continue;
@@ -250,9 +263,11 @@ const STEPS: readonly Step[] = [
   sub(/\b((?:set-)?cookie\s{0,3}[=:]\s{0,3})[^\r\n"']+/gi, keepPrefix),
   sub(/\bsb_secret_[\w-]*/g, REDACTED),
   sub(/\bpostgres(?:ql)?:\/\/[^\s"']+/gi, REDACTED),
-  // userinfo in any other URL (`scheme://user:password@host`): keep the scheme and the host
+  // userinfo in any other URL (`scheme://user:password@host`): keep the scheme and the host. A
+  // password may hold '/', '?', '#' and '@' (redactor review #8), so the userinfo runs to the last
+  // '@' within 256 characters. It stops at the next '://', so no stretch is read twice (linear).
   sub(
-    /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/?#"'<>]+@/gi,
+    /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)(?:(?!:\/\/)[^\s"'<>]){0,256}@/gi,
     (_m, scheme = '') => `${scheme}${REDACTED}@`,
   ),
   // quoted values under sensitive keys, before anything else can take a piece of them
@@ -264,11 +279,13 @@ const STEPS: readonly Step[] = [
   // only backslashes is the opener of a quoted value (handled above), and backslashes that end a
   // value are the escape of the quote after it, so both are kept.
   sub(
-    /(?<![\w-])([\w-]{1,64})(\\*["']?\s{0,3}[=:]\s{0,3}"?)([^\s"'&,;)]+)/g,
-    (m, key = '', sep = '', value = '') => {
-      if (!isSensitiveKey(key)) return m;
+    new RegExp(String.raw`${KEY}(\\*["']?\s{0,3}[=:]\s{0,3}"?)([^\s"'&,;)]+)`, 'g'),
+    (m, bare = '', quoted = '', sep = '', value = '') => {
+      if (!isSensitiveTextKey(bare || quoted)) return m;
       let end = value.length;
       while (end > 0 && value[end - 1] === '\\') end--;
+      // the key as written (a quoted key keeps its opening quote), the separator, then the value
+      const key = m.slice(0, m.length - sep.length - value.length);
       return end === 0 ? m : `${key}${sep}${REDACTED}${value.slice(end)}`;
     },
   ),

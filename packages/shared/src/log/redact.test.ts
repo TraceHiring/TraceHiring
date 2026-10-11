@@ -483,6 +483,19 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['many parts with an address', fill(`_${synth.ipv6Doc()}`)],
     ['dashes and colons', fill('-:')],
     ['colon-led words', fill(':a ')],
+    // bracketed, quoted and long keys, and URL passwords (redactor review #8)
+    ['bracket segments', fill('a[b]')],
+    ['unclosed brackets', fill('a[b')],
+    ['quoted bracket segments', fill('a["b"]')],
+    ['long keys with separators', fill(`${'a'.repeat(70)}=b `)],
+    ['long sensitive keys with quotes', fill(`${'a'.repeat(70)}="b `)],
+    ['quoted keys', fill('"a b":1,')],
+    ['quotes, no separator', fill('"a b" ')],
+    ['long quoted key, no closer', '"' + fill('a ')],
+    ['quoted keys before backslash runs', fill('"a\\\\\\\\')],
+    ['userinfo windows, no @', fill(`a://${'b/'.repeat(150)} `)],
+    ['userinfo windows ending in @', fill('a://b/c@')],
+    ['one scheme, then path characters', 'a://' + fill('b?#/')],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -902,6 +915,73 @@ describe('URL userinfo (S1.7 follow-up 7)', () => {
 
   it('leaves URLs without userinfo alone', () => {
     const s = `fetch https://${host}/v1/x and mailto:support done`;
+    expect(redactString(s)).toBe(s);
+  });
+
+  // Redactor security review #8: '/', '?' and '#' inside a password (not percent-encoded)
+  it.each([
+    ['a slash', `${synth.word(5)}/${pass}`],
+    ['a question mark', `${synth.word(5)}?${pass}`],
+    ['a hash', `${synth.word(5)}#${pass}`],
+    ['all three and an @', `a/b?c#d@${pass}`],
+  ])('redacts a password with %s in it', (_label, password) => {
+    const out = redactString(`fetch https://${user}:${password}@${host}/v1/x failed`);
+    expect(out).toBe(`fetch https://${REDACTED}@${host}/v1/x failed`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('redacts userinfo in a URL inside another URL', () => {
+    const inner = `https://${user}:${synth.word(5)}/${pass}@${host}/`;
+    const out = redactString(`go https://${synth.word(6)}.example/r?to=${inner} now`);
+    expect(out).not.toContain(pass);
+    expect(out).not.toContain(user);
+  });
+});
+
+// Redactor security review #8: more ways a key can be written in free text.
+describe('bracketed, quoted and long keys (redactor review #8)', () => {
+  const secret = synth.base64(6).slice(0, 12);
+  const phrase = synth.phrase(2);
+  const otp = synth.mobile(3).slice(0, 6);
+  const R = REDACTED;
+  const cases: [string, string, string][] = [
+    ['a bracketed field', `user[password]=${secret}`, `user[password]=${R}`],
+    ['nested bracketed fields', `a[0][otp]=${otp}&b=1`, `a[0][otp]=${R}&b=1`],
+    ['a quoted bracketed field', `params["token"]=${secret}`, `params["token"]=${R}`],
+    ['a bracketed field, quoted value', `user[password]="${phrase}"`, `user[password]="${R}"`],
+    ['a quoted key with spaces', `{"Address Line 1":"${phrase}"}`, `{"Address Line 1":"${R}"}`],
+    [
+      'a quoted key with spaces, number',
+      `{"OTP Value": ${otp}, "n": 1}`,
+      `{"OTP Value": ${R}, "n": 1}`,
+    ],
+    [
+      'an escaped quoted key with spaces',
+      JSON.stringify({ data: JSON.stringify({ 'Address Line 1': phrase, n: 1 }) }),
+      JSON.stringify({ data: JSON.stringify({ 'Address Line 1': R, n: 1 }) }),
+    ],
+    [
+      'a key over 64 characters',
+      `${'x'.repeat(70)}_password=${secret}`,
+      `${'x'.repeat(70)}_password=${R}`,
+    ],
+    // Safe choice for keys over 64 characters: the value is redacted whatever the key says.
+    ['a key over 64 characters, no stem', `${'y'.repeat(65)}=${secret}`, `${'y'.repeat(65)}=${R}`],
+    [
+      'a quoted key over 64 characters',
+      `{"${'z'.repeat(70)} kind":"${phrase}"}`,
+      `{"${'z'.repeat(70)} kind":"${R}"}`,
+    ],
+  ];
+
+  it.each(cases)('redacts the value under %s', (_label, s, expected) => {
+    const out = redactString(`got ${s} end`);
+    expect(out).toBe(`got ${expected} end`);
+    expect(redactString(out)).toBe(out);
+  });
+
+  it('leaves non-sensitive keys of 64 characters or fewer alone', () => {
+    const s = `${'k'.repeat(64)}=${synth.word(7)} a[0][kind]=b "Line Count": 3 {"Status Kind":"ok"}`;
     expect(redactString(s)).toBe(s);
   });
 });
