@@ -1,7 +1,13 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** revision 10 (autopilot, 2026-10-11). Revision 8 was **approved by the autopilot reviewers**; revisions 9 and 10 only apply founder answers and day-one results (see below and the end of this file). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
+- **Status:** revision 11 (autopilot, 2026-10-11). Revision 8 was **approved by the autopilot reviewers**; revisions 9, 10 and 11 only apply founder answers and day-one results (see below and the end of this file). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
 - **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a`, created from `main` at `b7af663`, with `main` at `4863db2` merged in. Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
+- **Revision 11 changes (2026-10-11, S1.7 database half).** Day-one results and HOW-level changes only (AUTOPILOT §4); no product scope change.
+  - **Day-one results (§8.2), local stack on CLI 2.120.0, PostgreSQL 17.11:** `postgres` is not a superuser and owns what migrations create; pgTAP is installed by `supabase test db` `with schema extensions`, owned by `supabase_admin`, and `anon`/`authenticated` keep EXECUTE (no fallback needed); `supabase test db` recurses into sub-directories and runs every `.sql` file; `postgres` has CREATE on `extensions`; `pg_read_all_data` members are `postgres` (ADMIN), `supabase_etl_admin` and `supabase_read_only_user`, `pg_write_all_data` has none and `postgres` lacks ADMIN on it (the MT-5c fixture uses `pg_read_all_data`); PostgreSQL accepts every MT-11 `CREATE POLICY` form, so no branch is `unreachable`; every schema on the stack is on the §8.5 system list; `supabase start -x` names are `gotrue,realtime,storage-api,imgproxy,kong,mailpit,postgrest,postgres-meta,studio,edge-runtime,logflare,vector,supavisor`, and `gen types --local` works with `postgres-meta` excluded. Recorded in `supabase/catalog-checks/README.md`.
+  - **§8.3 step 5:** the harness runs `supabase test db --debug`. Without `--debug`, pg_prove prints only one status line per file, so assertions could not be counted by prefix. The harness also fails on a test file whose name is not `catalog_*` or `rls_*`, and when the number of files run differs from the `.sql` files under `supabase/tests/`.
+  - **§8.5 output and assertions:** every check returns `(branch, object, detail)`, and each positive-control assertion filters on `branch = '<branch>'`. The spec text asserted only that the check returns rows, so one branch's fixture could have hidden a broken predicate on another. This is stricter than revision 10.
+  - **§10.2:** the exempt regex text is `sb_secret_[\w-]*` (the backslash was missing; S1.4 security re-review N6).
+  - **Integration branch:** the earlier integration branch `claude/trace-autopilot-continue-8d4785` ends in a demo WIP commit. Production work continues on `claude/trace-autopilot-production-87e5e2`, cut from `da5c5ca` (its last production commit); the demo lives on `demo/d1-prototype`.
 - **Revision 10 changes (2026-10-11, infra-setup session).** Founder instructions for the one-time infra setup. No product scope change.
   - **Repo moved:** the GitHub home is now **`TraceHiring/TraceHiring`** (private), not `AbhayRajGit/Tracehiring` (founder, 2026-10-11). H3 and the §7.2 deploy gate use the new name.
   - **Sentry deferred until before D1** (founder, 2026-10-11). M0a ships an `ErrorReporter` interface with a **no-op** implementation instead of the Sentry SDK (§9.2). The Sentry adapter, `scrubSentryEvent`, H6, the `SENTRY_DSN_*` variables and the Sentry CSP host move to a deferred item owned by "before D1". Sentry is **not** an M0a exit-gate blocker; it **is** a blocker before D1. Which milestone "D1" is, is not defined in the repo and is a founder-queue item.
@@ -513,7 +519,7 @@ MT-4b proves the default ACLs **non-vacuously**, even in M0a, and every other ca
    - The lock is released on exit, on failure and on a signal.
 3. **Start.** `pnpm exec supabase start`, excluding services M0a doesn't need. Auth stays on.
 4. **Reset.** `pnpm exec supabase db reset` rebuilds from zero.
-5. **Test.** `pnpm exec supabase test db`, then parse the TAP output.
+5. **Test.** `pnpm exec supabase test db --debug` (revision 11: `--debug` makes pg_prove print every assertion), then parse the TAP output from stdout. Raw stderr is never echoed, because it can hold a connection URL.
    - It fails on any `not ok`, a plan mismatch, or a file with zero tests.
    - It counts assertions **by file prefix**:
      - `catalog_*` against `catalog-min-count`
@@ -556,7 +562,8 @@ In CI, the harness runs with `--stop`.
 **Where the checks run:**
 - **Locally and in CI:** `gen-catalog-tests.mjs` writes the committed file `tests/catalog_meta.test.sql`. For each check it emits two assertions:
   - `select is_empty($q$<check>$q$, 'MT-<id>: clean');`
-  - for each branch fixture: `savepoint mt; <fixture SQL inlined>; select isnt_empty($q$<check>$q$, 'MT-<id>.<branch>: fires'); rollback to savepoint mt;`
+  - for each branch fixture: `savepoint mt; <fixture SQL inlined>; reset role; select isnt_empty($q$select * from (<check>) as v where v.branch = '<branch>'$q$, 'MT-<id>.<branch>: fires'); rollback to savepoint mt;`
+  - *Revision 11:* every check returns the columns `(branch text, object text, detail text)`, so each assertion proves its own predicate. The file rules are in `supabase/catalog-checks/README.md`.
 - **`gen-catalog-tests.mjs --check` fails if:**
   - the generated file is stale;
   - a manifest ID has no check, or a listed branch has no fixture;
@@ -754,7 +761,7 @@ It fails if any of the following holds:
    - `service_role`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`
    - `sb_secret_`, `JWT_SECRET`, `SUPABASE_JWT`
    - `postgres://`, `postgresql://`, `DB_URL`, `DATABASE_URL`
-   - *Exemption (autopilot, S1.4 integration):* `packages/shared/src/log/redact.ts` may contain the exact regex text `sb_secret_[w-]*`, and nothing else credential-shaped, because §9.1 requires the redactor to match `sb_secret_…` values. That text is cut out before the check, so a key literal there still fails. The exemption is one frozen entry in `check-boundaries.mjs`, pinned by tests; `.gitleaks.toml` adds a `supabase-secret-key` rule so scans detect real keys (S1.4 security review M6).
+   - *Exemption (autopilot, S1.4 integration):* `packages/shared/src/log/redact.ts` may contain the exact regex text `sb_secret_[\w-]*`, and nothing else credential-shaped, because §9.1 requires the redactor to match `sb_secret_…` values. That text is cut out before the check, so a key literal there still fails. The exemption is one frozen entry in `check-boundaries.mjs`, pinned by tests; `.gitleaks.toml` adds a `supabase-secret-key` rule so scans detect real keys (S1.4 security review M6).
 2. Git tracks a `.dev.vars*` file, or any `.env*` file other than `env.example`.
 3. An app references a `VITE_*` name containing `SECRET`, `TOKEN`, `PASSWORD`, `PRIVATE`, `JWT`, `DB`, or `KEY` (other than `VITE_SENTRY_DSN`).
 4. `supabase/config.toml` exposes `private`, `quality` or `integrity` (§8.1). A missing `config.toml` passes only while `supabase/migrations/` is also missing, which is the state before S1.7 (§5).
