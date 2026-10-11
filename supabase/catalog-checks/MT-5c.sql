@@ -9,13 +9,13 @@
 -- information_schema) holds every schema its MT-5a closure reaches (shared:graph and shared:closure below, the same
 -- text in MT-5a, 5b, 5c and 5d), because the function reads with its owner's rights. PUBLIC (grantee 0) is expanded
 -- to every role. Grantees are expanded recursively to their members through pg_auth_members memberships with
--- inherit or set. An entry naming the object's owner (for a default ACL, defaclrole) is not counted, and the owner
--- is never expanded to its members.
+-- inherit, set or ADMIN OPTION (an ADMIN-only member can grant itself inherit and set). An entry naming the object's
+-- owner (for a default ACL, defaclrole) is not counted, and the owner is never expanded to its members.
 -- Branches, first match wins for the two-schema rule: direct_grantee (the role is a grantee in both schemas, by
--- name or as PUBLIC), role_membership (it needs a membership for at least one schema), definer_bridge (it needs
--- EXECUTE on a SECURITY DEFINER function for at least one schema). read_write_all_data (pg_read_all_data or
--- pg_write_all_data: any direct membership, then members with inherit or set, not expanded through postgres, the
--- owner).
+-- name or as PUBLIC), role_membership (it needs a membership with inherit or set for at least one schema),
+-- admin_membership (it needs an ADMIN-only membership), definer_bridge (it needs EXECUTE on a SECURITY DEFINER
+-- function for at least one schema). read_write_all_data (pg_read_all_data or pg_write_all_data: any direct
+-- membership, then members with inherit, set or ADMIN OPTION, not expanded through postgres, the owner).
 with recursive
 -- Supabase roles that are members of pg_read_all_data or pg_write_all_data on the local stack
 -- (day-one check, supabase/catalog-checks/README.md, 2026-10-11). Add a role only with that evidence.
@@ -317,7 +317,8 @@ acl_entry (nspname, owner_oid, grantee, src) as (
   where rc.seed_classid = 'pg_proc'::regclass
     and a.privilege_type = 'EXECUTE'
 ),
--- hop: 0 a named grantee or PUBLIC, 1 through a role membership. pub: the entry was a grant to PUBLIC.
+-- hop: 0 a named grantee or PUBLIC, 1 through role memberships with inherit or set, 2 through at least one
+-- membership with ADMIN OPTION only (the member can grant itself inherit and set). pub: a grant to PUBLIC.
 holder (role_oid, nspname, owner_oid, hop, pub, src) as (
   select e.grantee, e.nspname, e.owner_oid, 0, false, e.src
   from acl_entry as e
@@ -329,10 +330,16 @@ holder (role_oid, nspname, owner_oid, hop, pub, src) as (
   cross join pg_roles as r
   where e.grantee = 0
   union
-  select m.member, h.nspname, h.owner_oid, 1, h.pub, h.src
+  select
+    m.member,
+    h.nspname,
+    h.owner_oid,
+    greatest(h.hop, case when m.inherit_option or m.set_option then 1 else 2 end),
+    h.pub,
+    h.src
   from holder as h
   join pg_auth_members as m on m.roleid = h.role_oid
-  where (m.inherit_option or m.set_option)
+  where (m.inherit_option or m.set_option or m.admin_option)
     and h.role_oid <> h.owner_oid
 ),
 held as (
@@ -346,6 +353,7 @@ both_schemas as (
   select
     hd.role_oid,
     count(distinct hd.nspname) filter (where hd.hop = 0 and hd.src = 'acl') = 2 as direct,
+    count(distinct hd.nspname) filter (where hd.hop <= 1 and hd.src = 'acl') = 2 as by_membership,
     count(distinct hd.nspname) filter (where hd.src = 'acl') = 2 as by_acl,
     bool_or(hd.pub) as through_public
   from held as hd
@@ -360,13 +368,14 @@ data_member (role_oid, data_role) as (
   select m.member, dm.data_role
   from data_member as dm
   join pg_auth_members as m on m.roleid = dm.role_oid
-  where (m.inherit_option or m.set_option)
+  where (m.inherit_option or m.set_option or m.admin_option)
     and dm.role_oid <> 'postgres'::regrole
 )
 select
   case
     when b.direct then 'direct_grantee'
-    when b.by_acl then 'role_membership'
+    when b.by_membership then 'role_membership'
+    when b.by_acl then 'admin_membership'
     else 'definer_bridge'
   end::text as branch,
   pg_get_userbyid(b.role_oid)::text as object,
@@ -374,7 +383,8 @@ select
     'role holds privileges in quality and integrity '
     || case
       when b.direct then 'as a grantee'
-      when b.by_acl then 'through role membership'
+      when b.by_membership then 'through role membership'
+      when b.by_acl then 'through a membership with ADMIN OPTION only'
       else 'through EXECUTE on a SECURITY DEFINER function'
     end
     || case when b.through_public then ' (counting grants to PUBLIC)' else '' end

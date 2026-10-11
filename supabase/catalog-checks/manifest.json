@@ -37,7 +37,13 @@
     },
     {
       "id": "MT-5c",
-      "branches": ["direct_grantee", "role_membership", "read_write_all_data", "definer_bridge"]
+      "branches": [
+        "direct_grantee",
+        "role_membership",
+        "read_write_all_data",
+        "definer_bridge",
+        "admin_membership"
+      ]
     },
     {
       "id": "MT-5d",
