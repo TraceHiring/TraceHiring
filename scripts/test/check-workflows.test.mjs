@@ -555,6 +555,26 @@ describe('checkWorkflow', () => {
       expect(m).toMatch(/ci\.yml \(env\).*step level/);
     });
 
+    // S1.4 security re-review N2: GitHub evaluates an expression used as a key in env: and with:.
+    it.each([
+      ['an env: key', { env: { '${{ github.token }}': 'x' } }, ['GITHUB_TOKEN']],
+      ['a with: key', { with: { '${{ SECRETS.ANY }}': 'y' } }, ['ANY']],
+      ['a nested key', { a: { b: { "x-${{ secrets['K'] }}": 'z' } } }, ['K']],
+    ])('finds a secret in %s', (_label, node, refs) => {
+      expect(secretRefs(node).sort()).toEqual(refs);
+    });
+
+    it('rejects a secret in an env: key outside deploy-staging and at job and workflow level', () => {
+      const d = doc();
+      d.jobs.static.steps[2].env = { '${{ secrets.X }}': 'x' };
+      d.jobs.rls.env = { '${{ github.token }}': 'x' };
+      d.env['${{ secrets.Y }}'] = 'y';
+      const m = msgs(checkWorkflow(d, 'ci.yml', ctx));
+      expect(m).toMatch(/jobs\.static\.steps\[2\].*not allowed outside deploy-staging/);
+      expect(m).toMatch(/jobs\.rls.*found in env:/);
+      expect(m).toMatch(/ci\.yml \(env\).*step level/);
+    });
+
     it('rejects a mixed-case secret in an if: on a deploy-staging step', () => {
       const d = doc();
       d.jobs['deploy-staging'].steps[6].if = "Secrets.CLOUDFLARE_API_TOKEN != ''";

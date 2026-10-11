@@ -604,7 +604,14 @@ export function secretRefs(node, key = null) {
       if (k === 'if') scan(n);
       else for (const body of expressionBodies(n)) scan(body);
     } else if (Array.isArray(n)) n.forEach((x) => walk(x, null));
-    else if (isObj(n)) for (const [kk, vv] of Object.entries(n)) walk(vv, kk);
+    else if (isObj(n)) {
+      for (const [kk, vv] of Object.entries(n)) {
+        // GitHub evaluates an expression used as a key in mappings that allow contexts (env:,
+        // with:), so keys are scanned like values (S1.4 security re-review N2).
+        for (const body of expressionBodies(kk)) scan(body);
+        walk(vv, kk);
+      }
+    }
   };
   walk(node, key);
   return [...out];
