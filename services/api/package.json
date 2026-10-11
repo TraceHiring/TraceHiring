@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "build": "wrangler deploy --dry-run --outdir dist",
-    "types:gen": "wrangler types",
+    "types:gen": "wrangler types --strict-vars=false",
     "typecheck": "wrangler types --check && tsc --noEmit -p . && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run"
