@@ -1,6 +1,6 @@
 -- MT-5b (spec specs/m0-foundations.md §8.5, rule 1): a function (any prokind), not an extension member, in any
 -- non-system schema or in a system-list schema where a migration can still create objects (escape_schema below,
--- when postgres can SET ROLE to its owner), that reaches both quality and integrity by the MT-5a rule. plpgsql
+-- when postgres is a member of its owner), that reaches both quality and integrity by the MT-5a rule. plpgsql
 -- bodies are not in pg_depend, so prosrc and proconfig are read as well. The closure (shared:graph and
 -- shared:closure below, the same text in MT-5a, 5b, 5c and 5d) starts at the function and follows its pg_depend
 -- rows, every call its body names (schema.name(, or an unqualified name( resolved through its search_path
@@ -165,8 +165,9 @@ node_edge as materialized (
 -- shared:graph end
 -- shared:escape begin (the same text in MT-5a, MT-5b, MT-5d, MT-10 and MT-11)
 -- escape_schema: system-list schemas where a migration can still create objects (spec §8.5 revision 12): postgres
--- can SET ROLE to the schema owner, or to a role with CREATE on it. Locally: extensions, _realtime,
--- supabase_functions and supabase_migrations, plus any listed schema that a migration creates (cron, net and so on).
+-- is a member (INHERIT, SET or ADMIN) of the schema owner or of a role with CREATE on it. An ADMIN-only member can
+-- grant itself SET. Locally: extensions, _realtime, supabase_functions and supabase_migrations, plus any listed
+-- schema that a migration creates (cron, net and so on).
 escape_schema as (
   select n.oid
   from pg_namespace as n
@@ -175,11 +176,11 @@ escape_schema as (
       'supabase_migrations', 'vault', 'pgsodium', 'pgsodium_masks', 'net', 'cron', 'pgbouncer', '_analytics'
     )
     and (
-      pg_has_role('postgres', n.nspowner, 'SET')
+      pg_has_role('postgres', n.nspowner, 'MEMBER')
       or exists (
         select 1
         from pg_roles as r
-        where pg_has_role('postgres', r.oid, 'SET')
+        where pg_has_role('postgres', r.oid, 'MEMBER')
           and has_schema_privilege(r.oid, n.oid, 'CREATE')
       )
     )
@@ -204,7 +205,7 @@ root as (
       )
       or (
         n.oid in (select es.oid from escape_schema as es)
-        and pg_has_role('postgres', p.proowner, 'SET')
+        and pg_has_role('postgres', p.proowner, 'MEMBER')
       )
     )
     and not exists (

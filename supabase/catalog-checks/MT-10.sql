@@ -1,5 +1,5 @@
 -- MT-10 (spec specs/m0-foundations.md §8.5, rule 5, views cannot bypass RLS): in the schemas public, private,
--- quality and integrity, and among the views and materialized views that postgres can SET ROLE to the owner of in a
+-- quality and integrity, and among the views and materialized views whose owner postgres is a member of in a
 -- system-list schema where a migration can still create objects (escape_schema below), extension members skipped
 -- by the README rule:
 --   view_without_security_invoker: a view (relkind v) whose reloptions lack the literal security_invoker=true.
@@ -20,8 +20,9 @@ client_role (rolname) as (
 ),
 -- shared:escape begin (the same text in MT-5a, MT-5b, MT-5d, MT-10 and MT-11)
 -- escape_schema: system-list schemas where a migration can still create objects (spec §8.5 revision 12): postgres
--- can SET ROLE to the schema owner, or to a role with CREATE on it. Locally: extensions, _realtime,
--- supabase_functions and supabase_migrations, plus any listed schema that a migration creates (cron, net and so on).
+-- is a member (INHERIT, SET or ADMIN) of the schema owner or of a role with CREATE on it. An ADMIN-only member can
+-- grant itself SET. Locally: extensions, _realtime, supabase_functions and supabase_migrations, plus any listed
+-- schema that a migration creates (cron, net and so on).
 escape_schema as (
   select n.oid
   from pg_namespace as n
@@ -30,11 +31,11 @@ escape_schema as (
       'supabase_migrations', 'vault', 'pgsodium', 'pgsodium_masks', 'net', 'cron', 'pgbouncer', '_analytics'
     )
     and (
-      pg_has_role('postgres', n.nspowner, 'SET')
+      pg_has_role('postgres', n.nspowner, 'MEMBER')
       or exists (
         select 1
         from pg_roles as r
-        where pg_has_role('postgres', r.oid, 'SET')
+        where pg_has_role('postgres', r.oid, 'MEMBER')
           and has_schema_privilege(r.oid, n.oid, 'CREATE')
       )
     )
@@ -55,7 +56,7 @@ scope_rel as (
       n.nspname in ('public', 'private', 'quality', 'integrity')
       or (
         n.oid in (select es.oid from escape_schema as es)
-        and pg_has_role('postgres', c.relowner, 'SET')
+        and pg_has_role('postgres', c.relowner, 'MEMBER')
       )
     )
     and not exists (
