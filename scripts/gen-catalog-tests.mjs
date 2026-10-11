@@ -4,7 +4,9 @@
 //   node scripts/gen-catalog-tests.mjs --check    verifies it (in `pnpm lint`); never writes
 //     [--base <ref>]                              else $MIGRATIONS_BASE, else `main` (as check-migrations)
 // Both modes validate supabase/catalog-checks/ (manifest shape, one check file per ID, one fixture per
-// reachable branch, nothing stray, the check and fixture rules in its README) and list every problem.
+// reachable branch, nothing stray, the check and fixture rules in its README, `-- shared:<name>` blocks
+// identical in every check that has them, `-- MT-<id> copy` blocks in supabase/tests/*.sql identical to
+// their check) and list every problem.
 // --check also fails when the generated file is stale, when a floor file (supabase/tests/*-min-count)
 // is lower than at the base or at an m*-reviewed tag that is an ancestor of HEAD, or when the manifest
 // at any of those refs is not a subset of the current one. A base that does not resolve fails.
@@ -18,7 +20,8 @@ import { isEntryPoint } from './lib/cli.mjs';
 export const CATALOG_DIR = 'supabase/catalog-checks';
 export const FIXTURES_DIR = `${CATALOG_DIR}/fixtures`;
 export const MANIFEST_PATH = `${CATALOG_DIR}/manifest.json`;
-export const OUTPUT = 'supabase/tests/catalog_meta.test.sql';
+export const TESTS_DIR = 'supabase/tests';
+export const OUTPUT = `${TESTS_DIR}/catalog_meta.test.sql`;
 export const FLOOR_FILES = Object.freeze([
   'supabase/tests/catalog-min-count',
   'supabase/tests/rls-min-count',
@@ -310,6 +313,121 @@ function listDir(abs) {
   return existsSync(abs) ? readdirSync(abs, { withFileTypes: true }) : [];
 }
 
+const SHARED_MARK_RE = /^-- shared:([a-z0-9_]+) (begin|end)\b(.*)$/;
+const COPY_MARK_RE = /^-- (MT-\d+[a-z]?) copy (begin|end)\s*$/;
+const SAME_TEXT_RE = /^ \(the same text in (.+)\)$/;
+
+/**
+ * The `-- <name> begin` … `-- <name> end` blocks in `text` (catalog review D9). `re` captures the
+ * name, begin|end and (optionally) the rest of the begin line; `label(name)` names a block in problems.
+ * @returns {{ blocks: {name: string, rest: string, body: string}[], problems: string[] }}
+ */
+export function markedBlocks(text, re, label) {
+  const blocks = [];
+  const problems = [];
+  let open = null;
+  toLf(text)
+    .split('\n')
+    .forEach((line, k) => {
+      const m = re.exec(line);
+      if (!m) {
+        open?.body.push(line);
+        return;
+      }
+      const [, name, kind, rest = ''] = m;
+      if (kind === 'begin') {
+        if (open) {
+          problems.push(
+            `${label(open.name)}: begin on line ${open.line} without end (another begin on line ${k + 1})`,
+          );
+        }
+        open = { name, line: k + 1, rest, body: [] };
+      } else if (open?.name === name) {
+        blocks.push({ name, rest: open.rest, body: open.body.join('\n') });
+        open = null;
+      } else {
+        problems.push(`${label(name)}: end on line ${k + 1} without begin`);
+      }
+    });
+  if (open) problems.push(`${label(open.name)}: begin on line ${open.line} without end`);
+  return { blocks, problems };
+}
+
+/**
+ * Shared blocks (`-- shared:<name> begin (the same text in <IDs>)`) must be byte-identical (after LF)
+ * in every check file, and sit in exactly the checks their begin line lists.
+ * @param {{ rel: string, id: string, text: string }[]} files check files in manifest order
+ */
+export function sharedBlockProblems(files) {
+  const problems = [];
+  const copies = new Map();
+  for (const f of files) {
+    const { blocks, problems: p } = markedBlocks(f.text, SHARED_MARK_RE, (n) => `shared:${n}`);
+    problems.push(...p.map((x) => `${f.rel}: ${x}`));
+    for (const b of blocks) {
+      if (!copies.has(b.name)) copies.set(b.name, []);
+      copies.get(b.name).push({ ...f, rest: b.rest, key: `${b.rest}\n${b.body}` });
+    }
+  }
+  for (const name of [...copies.keys()].sort()) {
+    const [first, ...others] = copies.get(name);
+    for (const c of others) {
+      if (c.key !== first.key) {
+        problems.push(
+          `${c.rel}: shared:${name} differs from the copy in ${first.rel} (copies must be identical)`,
+        );
+      }
+    }
+    const m = SAME_TEXT_RE.exec(first.rest);
+    if (!m) {
+      problems.push(
+        `${first.rel}: shared:${name} begin line must end with "(the same text in <IDs>)"`,
+      );
+      continue;
+    }
+    const listed = [...new Set(m[1].split(/,\s*|\s+and\s+/).map((s) => s.trim()))].sort();
+    const actual = [...new Set(copies.get(name).map((c) => c.id))].sort();
+    if (listed.join() !== actual.join()) {
+      problems.push(
+        `shared:${name}: the begin line lists ${listed.join(', ')} but the block is in ${actual.join(', ')}`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
+ * Hand-kept copies of a check in supabase/tests/*.sql (`-- MT-11 copy begin` … `-- MT-11 copy end`, the
+ * probe's negative controls) must equal the check as embedded (LF, trimmed, trailing `;` dropped).
+ * @param {Map<string, string | null>} sqlById embedded SQL per manifest ID (null when the file is missing)
+ */
+export function checkCopyProblems(root, sqlById) {
+  const problems = [];
+  const files = listDir(path.join(root, ...TESTS_DIR.split('/')))
+    .filter((d) => d.isFile() && d.name.endsWith('.sql') && `${TESTS_DIR}/${d.name}` !== OUTPUT)
+    .map((d) => d.name)
+    .sort();
+  for (const name of files) {
+    const rel = `${TESTS_DIR}/${name}`;
+    const { blocks, problems: p } = markedBlocks(
+      readRel(root, rel),
+      COPY_MARK_RE,
+      (n) => `${n} copy`,
+    );
+    problems.push(...p.map((x) => `${rel}: ${x}`));
+    for (const b of blocks) {
+      if (!sqlById.has(b.name)) {
+        problems.push(`${rel}: ${b.name} copy: no such check in manifest.json`);
+      } else if (sqlById.get(b.name) !== null && embeddedCheck(b.body) !== sqlById.get(b.name)) {
+        problems.push(
+          `${rel}: the ${b.name} copy differs from ${CATALOG_DIR}/${b.name}.sql (keep it identical)`,
+        );
+      }
+    }
+  }
+  return problems;
+}
+
 function readRel(root, rel) {
   return readFileSync(path.join(root, ...rel.split('/')), 'utf8');
 }
@@ -347,6 +465,7 @@ export function loadCatalog(root) {
   );
   const wanted = new Set(checks.map((c) => `${c.id}.sql`));
   const catalog = [];
+  const texts = [];
   for (const c of checks) {
     const rel = `${CATALOG_DIR}/${c.id}.sql`;
     let sql = null;
@@ -357,6 +476,7 @@ export function loadCatalog(root) {
       const p = checkFileProblems(text);
       problems.push(...p.map((x) => `${rel}: ${x}`));
       sql = embeddedCheck(text);
+      texts.push({ rel, id: c.id, text });
     }
     catalog.push({ id: c.id, sql, branches: [] });
   }
@@ -365,6 +485,10 @@ export function loadCatalog(root) {
       problems.push(`${CATALOG_DIR}/${name}: not listed in manifest.json`);
     }
   }
+
+  // Copied text (catalog review D9): shared blocks across checks, and hand-kept copies in tests.
+  problems.push(...sharedBlockProblems(texts));
+  problems.push(...checkCopyProblems(root, new Map(catalog.map((c) => [c.id, c.sql]))));
 
   // Fixtures: exactly one per reachable branch, nothing else in fixtures/.
   const fixtureEntries = listDir(abs(FIXTURES_DIR));

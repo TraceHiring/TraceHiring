@@ -608,6 +608,116 @@ describe('--check', () => {
   });
 });
 
+describe('copied blocks stay identical (catalog review D9)', () => {
+  const PROBE = 'supabase/tests/catalog_probe.test.sql';
+  const block = (name, ids, body = 'with g as (select 1)') =>
+    `-- shared:${name} begin (the same text in ${ids})\n-- ${body}\n-- shared:${name} end\n`;
+  const probe = (inner, id = 'MT-11') =>
+    [
+      'begin;',
+      'select is_empty(',
+      '  $q$',
+      '  select * from (',
+      `-- ${id} copy begin`,
+      inner,
+      `-- ${id} copy end`,
+      '  ) as v',
+      '  $q$,',
+      "  'synthetic negative control'",
+      ');',
+      'rollback;',
+      '',
+    ].join('\n');
+  const mt11 = check('for_all').replace(/;\n$/, '');
+  const both = (b1, b11) => ({
+    [`${DIR}/MT-1.sql`]: b1 + check('table_without_rls'),
+    [`${DIR}/MT-11.sql`]: b11 + check('for_all'),
+  });
+
+  it('accepts a shared block that is identical in every check its begin line lists', () => {
+    const b = block('graph', 'MT-1 and MT-11');
+    expect(problemsOf(catalogDir(both(b, b)))).toBe('');
+  });
+
+  it('reports a one-character drift between copies of a shared block', () => {
+    const p = problemsOf(
+      catalogDir(
+        both(
+          block('graph', 'MT-1 and MT-11'),
+          block('graph', 'MT-1 and MT-11', 'with g as (select 2)'),
+        ),
+      ),
+    );
+    expect(p).toMatch(
+      /catalog-checks\/MT-11\.sql: shared:graph differs from the copy in supabase\/catalog-checks\/MT-1\.sql/,
+    );
+  });
+
+  it('reports a shared block missing from a listed check or present in an unlisted one', () => {
+    const missing = problemsOf(catalogDir(both(block('graph', 'MT-1 and MT-11'), '')));
+    expect(missing).toMatch(
+      /shared:graph: the begin line lists MT-1, MT-11 but the block is in MT-1$/m,
+    );
+    const b = block('graph', 'MT-1');
+    const extra = problemsOf(catalogDir(both(b, b)));
+    expect(extra).toMatch(
+      /shared:graph: the begin line lists MT-1 but the block is in MT-1, MT-11/,
+    );
+  });
+
+  it('reports a begin line without the list of checks', () => {
+    const b = '-- shared:graph begin\n-- x\n-- shared:graph end\n';
+    expect(problemsOf(catalogDir(both(b, b)))).toMatch(
+      /MT-1\.sql: shared:graph begin line must end with "\(the same text in <IDs>\)"/,
+    );
+  });
+
+  it.each([
+    [
+      'a begin without end',
+      '-- shared:graph begin (the same text in MT-1)\n',
+      /shared:graph: begin on line 1 without end/,
+    ],
+    ['an end without begin', '-- shared:graph end\n', /shared:graph: end on line 1 without begin/],
+    [
+      'a second begin before the end',
+      '-- shared:graph begin (the same text in MT-1)\n-- shared:graph begin (the same text in MT-1)\n-- shared:graph end\n',
+      /shared:graph: begin on line 1 without end/,
+    ],
+  ])('reports %s', (_label, b, re) => {
+    expect(problemsOf(catalogDir(both(b, '')))).toMatch(re);
+  });
+
+  it('accepts a probe copy equal to its check, ignoring CRLF and a trailing ;', () => {
+    expect(problemsOf(catalogDir({ [PROBE]: probe(mt11) }))).toBe('');
+    expect(problemsOf(catalogDir({ [PROBE]: probe(`${mt11};`).replace(/\n/g, '\r\n') }))).toBe('');
+  });
+
+  it('reports a one-character drift in a probe copy, naming the file and the check', () => {
+    const p = problemsOf(catalogDir({ [PROBE]: probe(mt11.replace('for_all', 'for_alL')) }));
+    expect(p).toMatch(
+      /supabase\/tests\/catalog_probe\.test\.sql: the MT-11 copy differs from supabase\/catalog-checks\/MT-11\.sql/,
+    );
+  });
+
+  it('reports a copy of an unknown check and a copy without its end line', () => {
+    expect(problemsOf(catalogDir({ [PROBE]: probe('select 1', 'MT-77') }))).toMatch(
+      /catalog_probe\.test\.sql: MT-77 copy: no such check in manifest\.json/,
+    );
+    const open = probe(mt11).replace('-- MT-11 copy end\n', '');
+    expect(problemsOf(catalogDir({ [PROBE]: open }))).toMatch(
+      /catalog_probe\.test\.sql: MT-11 copy: begin on line 5 without end/,
+    );
+  });
+
+  it('fails --check on a drifted probe copy', () => {
+    const repo = repoWithCatalog({ ...catalogFiles(), [PROBE]: probe(mt11) });
+    expect(checkRun(repo).problems).toEqual([]);
+    writeFiles(repo, { [PROBE]: probe(mt11.replace('where false', 'where true')) });
+    expect(checkRun(repo).problems.join('\n')).toMatch(/the MT-11 copy differs/);
+  });
+});
+
 describe('main()', () => {
   const io = () => {
     const out = [];
