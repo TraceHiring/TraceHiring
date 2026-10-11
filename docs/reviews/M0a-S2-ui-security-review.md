@@ -62,3 +62,29 @@ Reviewer: `security-reviewer` agent (Opus), read-only, 2026-10-12. Diff: `git di
 
 ## Resolution (lead)
 S2-1 to S2-4 are fixed on `m0a/s2-fixes` by a Sonnet writer (see the re-review). Follow-ups 1 and 2 are done by the lead on `m0a/integration`; 3 and 5 go in the M0a summary.
+
+## Re-review of the fixes (Sonnet, 2026-10-12): **PASS WITH FINDINGS**
+Diff `git diff 54620e6 ca75411` (`m0a/s2-fixes`, 5 test-only commits). Tests: `@trace/ui` 57 → 67, candidate 68 → 79, recruiter 46 → 67 (writer's runs; the writer mutation-tested each guard).
+- **S2-1, fixed.**
+  - Every guard in `build-tokens.mjs` has a negative test.
+  - The mutated keys exist in `tokens.json`, so a test cannot pass on a `TypeError`.
+  - Positive controls are included.
+- **S2-2, fixed.** `apps/recruiter/src/recruiter-guards.test.ts`:
+  - reporting is installed before `createRoot`;
+  - `RouteError` is wired and calls `reportAppError`;
+  - no `.capture(`, `reportError` or `serializeError` appears outside `error-reporting.ts`;
+  - every pattern has a negative control.
+- **S2-3, fixed.**
+  - `\bcapture\s*[=:]` is in the patterns.
+  - `index.html` is scanned.
+  - A real-build chunk scan with a non-empty guard was added.
+- **S2-4, fixed.**
+  - Real-build assertions on `index.html` (no inline script or style, no `style=`) and on emitted CSS (no `data:` font, no absolute URL).
+  - Non-empty guards were added; nothing was weakened.
+- **S2-R1 (Low):**
+  - The candidate bundle scan (`version-file.test.ts` `BUNDLE_FORBIDDEN`) omits `mediaDevices|enumerateDevices|ImageCapture`.
+  - The vitest `build()` likely runs with `NODE_ENV=test`, so it scans the dev React bundle.
+  - Fix: add the names and build in production mode.
+- **S2-R2 (Low):** `MEDIA_CAPTURE` misses `setAttribute('capture', …)` and a quoted `'capture':` key. Fix: add both patterns.
+
+**Resolution:** S2-R1 and S2-R2 are fixed by the lead on `m0a/integration` after the merge (see the LOG row of 2026-10-12).
