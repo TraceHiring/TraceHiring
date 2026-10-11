@@ -1013,6 +1013,18 @@ describe('stacks under stack-like keys (S1.7 follow-up 8)', () => {
     expect(redact({ stack: text })).toEqual({ stack: TRUNCATED });
   });
 
+  // Spec review M1: an element of a stack array over the cap is never split and filtered, so no
+  // frame-shaped line inside it gets through; it becomes one [TRUNCATED] entry in its place.
+  it('truncates an over-cap element of a stack array in place', () => {
+    const big = `Error: ${phrase} ${'q'.repeat(2500)}\n    at g (file:///b.js:3:4)`;
+    const once = redact({ stackTrace: [big] });
+    expect(once).toEqual({ stackTrace: [TRUNCATED] });
+    expect(redact(once)).toEqual(once);
+    const mixed = redact({ stack: ['Error: x', `    ${frames[0]}`, big, `    ${frames[1]}`] });
+    expect(mixed).toEqual({ stack: [frames[0], TRUNCATED, frames[1]] });
+    expect(redact(mixed)).toEqual(mixed);
+  });
+
   it.each([
     'at Object.<anonymous> (file:///a.js:1:2)',
     'at new Foo (/a.js:1:2)',

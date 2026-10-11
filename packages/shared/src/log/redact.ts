@@ -457,29 +457,52 @@ const STACK_KEY = /stack(?:trace)?$/;
 const redactFrames = (frames: readonly string[]): string[] =>
   frames.map(redactString).filter(isStackFrame);
 
+/** At most this many entries in a stack array, as serializeError keeps at most 20 frames. */
+const MAX_STACK_ENTRIES = 20;
+
+/**
+ * The frames of an array of stack lines. Each string element is read like a stack string, but an
+ * element over the cap is never split and filtered: it becomes one TRUNCATED entry in its place
+ * (spec §9.1 caps, spec review M1), and a TRUNCATED entry from an earlier pass stays.
+ */
+const stackArrayFrames = (value: readonly unknown[]): string[] => {
+  const out: string[] = [];
+  let lines: string[] = [];
+  const flush = (): void => {
+    out.push(...redactFrames(stackFrames(lines.join('\n'))));
+    lines = [];
+  };
+  const n = Math.min(value.length, MAX_ENTRIES);
+  for (let i = 0; i < n; i++) {
+    const line: unknown = value[i];
+    if (typeof line !== 'string') continue;
+    if (line === TRUNCATED || line.length > MAX_STRING) {
+      flush();
+      out.push(TRUNCATED);
+    } else {
+      lines.push(line);
+    }
+  }
+  flush();
+  return out.slice(0, MAX_STACK_ENTRIES);
+};
+
 /**
  * A stack logged as data, as a string or an array of lines: only the lines serializeError would
  * keep as frames survive, so no message text does. Any other value is redacted as usual.
  */
 const redactStack = (value: unknown, depth: number, state: State): unknown => {
-  let text: string;
   if (typeof value === 'string') {
     // Over the cap, a stack string is truncated like any other string (spec §9.1: never passed through).
     if (value.length > MAX_STRING) return TRUNCATED;
-    text = value;
-  } else if (Array.isArray(value)) {
-    const lines: string[] = [];
-    const n = Math.min(value.length, MAX_ENTRIES);
-    for (let i = 0; i < n; i++) {
-      const line: unknown = value[i];
-      if (typeof line === 'string') lines.push(line);
-    }
-    text = lines.join('\n');
-  } else {
-    return redactInner(value, depth, state);
+    if (--state.budget < 0 || depth >= MAX_DEPTH) return TRUNCATED;
+    return redactFrames(stackFrames(value));
   }
-  if (--state.budget < 0 || depth >= MAX_DEPTH) return TRUNCATED;
-  return redactFrames(stackFrames(text));
+  if (Array.isArray(value)) {
+    if (--state.budget < 0 || depth >= MAX_DEPTH) return TRUNCATED;
+    return stackArrayFrames(value);
+  }
+  return redactInner(value, depth, state);
 };
 
 /**
