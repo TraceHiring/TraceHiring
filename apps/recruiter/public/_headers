@@ -1,3 +1,4 @@
+# TODO(M0b): add the Supabase staging origin (https://<project-ref>.supabase.co) to connect-src when the recruiter app first calls Supabase (spec m0-foundations §10.3). The Sentry ingest host joins with the adapter, before D1.
 /*
   Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
   Strict-Transport-Security: max-age=31536000; includeSubDomains
