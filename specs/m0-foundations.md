@@ -5,6 +5,7 @@
 - **Revision 16 changes (2026-10-12, S2 and S3a stream reviews).** HOW-level follow-ups from `docs/reviews/M0a-S2-ui-security-review.md` and `docs/reviews/M0a-S3a-workers-security-review.md`. No product scope change.
   - **§5 `verify:fast` (S2 follow-up 2):** `docs/design/tokens.json` is an input of `@trace/ui` (§11), so a change to it selects `@trace/ui` and its dependents instead of counting as docs (`PACKAGE_INPUTS` in `scripts/verify-fast.mjs`).
   - **§5 Workers `types:gen` (S3a deviation a):** `wrangler types --strict-vars=false`, so `VERSION` is typed `string`, not the literal `"dev"`; `wrangler types --check` reads the flags from the generated file's header.
+  - **§7.2 deploy job (W-S3b review, `docs/reviews/M0a-S3b-deploy-security-review.md`):** step 3 `--yes`; step 4 `-q`, `statement_timeout` and a required `sslmode`; step 5 deploys the scanned staging bundle with `--no-bundle`; step 8 reads URLs from the wrangler output file, asserts a production Pages deploy and checks the alias. Accepted residual S3B-5: runs are serialised but not ordered, so an older commit can deploy after a newer one (owner M8, before any production deploy job).
   - **§10.2 rule 7 (S3a S3A-3, plan risk 9):** `check-boundaries.mjs` fails if non-test source of the candidate app or the edge Worker names an error reporter or Sentry. Rule 6 (S1.4) is listed there too.
 - **Revision 15 changes (2026-10-11, S1.7 gate finding K3).** Text fixes from `docs/reviews/M0a-S1.7-gate-spec-review.md` (K3 (a)–(e)): lines that went stale while S1.7 and the first Linux CI runs happened. No product scope change, no behaviour change, no new check.
   - **§2 `claude-*` scripts (K3 a):** they are no longer "unchanged". `claude-session-start.mjs` was rewritten in `d9bf35a`: it shows `docs/progress/HANDOFF.md` from the newest `*/integration` branch, not from the checkout, and keeps its output within 9,000 bytes (9 tests in `scripts/test/session-start.test.mjs`). `claude-usage-guard.mjs` now warns at 90% and 95% of a usage limit (`4a83998`; it was 80% and 90%). `claude-statusline.mjs` and `claude-stop-gate.sh` behave as before.
@@ -437,13 +438,13 @@ Fixing a finding locally is safe because the pre-push scan and the AUTOPILOT §6
 
 1. **Checkout, setup, install, build.** No secrets.
 2. **Scan the build output:** `gitleaks dir` over `apps/*/dist` and every Worker's `dist`. A finding fails the job.
-3. **Apply migrations:** `pnpm exec supabase db push --db-url "$SUPABASE_STAGING_DB_URL"`. Only this step and step 4 get `SUPABASE_STAGING_DB_URL`.
+3. **Apply migrations:** `pnpm exec supabase db push --db-url "$SUPABASE_STAGING_DB_URL" --yes` (*revision 16:* `--yes` makes the push non-interactive on CLI 2.120.0). Only this step and step 4 get `SUPABASE_STAGING_DB_URL`.
 4. **Run the catalog checks against staging** (§8.5).
-   - Each `supabase/catalog-checks/MT-*.sql` runs through `psql -X -v ON_ERROR_STOP=1 -At`, inside `begin; set transaction read only; … rollback;`. The positive-control fixtures do not run here.
+   - Each `supabase/catalog-checks/MT-*.sql` runs through `psql -X -q -v ON_ERROR_STOP=1 -At`, inside `begin; set transaction read only; set local statement_timeout = '60s'; … rollback;` (*revision 16:* `-q` stops psql printing command tags; the timeout stops a runaway query on staging; the URL must carry `sslmode=require`, `verify-ca` or `verify-full`, or the script refuses it; S3b review S3B-4, S3B-6). The positive-control fixtures do not run here.
    - Any output line or non-zero exit fails the deploy.
    - The step also asserts that the number of files run equals `manifest.json`.
    - MT-12 reads `pg_default_acl` directly, so drift in staging's default ACLs is caught even before the first table exists (database review F9).
-5. **Deploy the Workers:** `wrangler deploy --env staging` for edge, jobs and api, with `VERSION=<sha>`. Only this step and steps 6–7 get `CLOUDFLARE_API_TOKEN`.
+5. **Deploy the Workers:** `wrangler deploy --env staging` for edge, jobs and api, with `VERSION=<sha>`. *(Revision 16, S3B-1)* The no-secret build step first writes each Worker's staging bundle (`--dry-run --env staging --outdir dist`), step 2 scans it, and this step uploads exactly that file with `--no-bundle`, so the deployed bytes are the scanned bytes. Only this step and steps 6–7 get `CLOUDFLARE_API_TOKEN`.
 6. **Check Worker secrets:** `node scripts/check-staging-secrets.mjs` reads `wrangler secret list` for each staging Worker and **fails unless the set is a subset of the allow-list**:
    - edge: `[]`
    - jobs: `[]`
@@ -451,7 +452,7 @@ Fixing a finding locally is safe because the pre-push scan and the AUTOPILOT §6
 
    M0b and later extend the allow-list explicitly. Edge stays `[]`.
 7. **Deploy Pages:** `wrangler pages deploy … --project-name trace-{candidate,recruiter}-staging --branch main`. The Pages project is created first if it is missing.
-8. **Smoke test:**
+8. **Smoke test** *(revision 16: URLs come from wrangler's ND-JSON output file, `WRANGLER_OUTPUT_FILE_PATH`; each Pages deploy must report `environment: production` with production branch `main`, and the `<project>.pages.dev` alias is checked as well as the deployment URL; S3B-2)*:
    - each Worker's `/health` returns a schema-valid body with `version == <sha>`;
    - each app's `/version.json` returns `<sha>`;
    - the security headers in §10.3 are present on both apps.
