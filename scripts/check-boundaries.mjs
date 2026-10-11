@@ -9,6 +9,9 @@
 //   5. a text file in the index with CRLF line endings
 //   6. an eslint-disable comment that switches off a boundaries/ or trace/ rule, or names no rule
 //      (S1.4 security review), in apps/, packages/, workers/ or services/ source
+//   7. an error reporter or Sentry name in non-test source of apps/candidate/ or workers/edge/
+//      (spec §9.2: only the recruiter app, workers/jobs and services/api report errors; S3a review
+//      S3A-3, plan risk 9)
 // Prints only paths and rule names, never file contents.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -53,6 +56,11 @@ export const PRIVATE_SCHEMAS = ['private', 'quality', 'integrity'];
 /** Workspaces whose source is checked for eslint-disable comments (rule 6). */
 export const SOURCE_SCOPES = ['apps/', 'packages/', 'workers/', 'services/'];
 const SOURCE_EXT = /\.(?:[cm]?[jt]sx?)$/;
+
+/** Workspaces that must never report errors (rule 7): the candidate app and the edge Worker. */
+export const NO_REPORTER_SCOPES = ['apps/candidate/', 'workers/edge/'];
+const REPORTER_NAMES = /\b(?:reportError|noopErrorReporter|ErrorReporter)\b|@sentry\//;
+const isTestFile = (p) => /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(p);
 
 /** Generated files, the same ones ESLint ignores (packages/config/eslint/index.js). */
 function isGenerated(p) {
@@ -255,6 +263,20 @@ export function checkEslintDisables(files) {
   return out;
 }
 
+// ---------- rule 7 ----------
+/** @param {{path: string, content: string}[]} files repo-relative POSIX paths */
+export function checkNoErrorReporter(files) {
+  const out = [];
+  for (const { path: p, content } of files) {
+    if (!inScope(p, NO_REPORTER_SCOPES) || !SOURCE_EXT.test(p)) continue;
+    if (isGenerated(p) || isTestFile(p)) continue;
+    if (REPORTER_NAMES.test(content)) {
+      out.push(violation(7, p, 'names an error reporter or Sentry (spec §9.2: not here)'));
+    }
+  }
+  return out;
+}
+
 // ---------- repo walk ----------
 function gitOut(root, args) {
   const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
@@ -300,6 +322,7 @@ export function runChecks(root) {
     }),
     ...checkCrlf(gitOut(root, ['ls-files', '--eol', '-z'])),
     ...checkEslintDisables(files),
+    ...checkNoErrorReporter(files),
   ];
 }
 

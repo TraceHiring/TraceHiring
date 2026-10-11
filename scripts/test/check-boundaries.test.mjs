@@ -8,6 +8,8 @@ import {
   checkCredentialNames,
   checkCrlf,
   checkEslintDisables,
+  checkNoErrorReporter,
+  NO_REPORTER_SCOPES,
   checkSupabaseConfig,
   checkTrackedEnvFiles,
   checkViteNames,
@@ -299,6 +301,48 @@ describe('rule 6: eslint-disable directives that switch off boundary or Trace ru
       f('scripts/check-x.mjs', '/* eslint-disable */'),
     ]);
     expect(v.map((x) => x.path)).toEqual(['workers/jobs/src/a.ts', 'services/api/src/b.ts']);
+  });
+});
+
+describe('rule 7: no error reporter or Sentry in the candidate app or the edge Worker', () => {
+  it('covers exactly the candidate app and the edge Worker (spec §9.2, §3 D6)', () => {
+    expect(NO_REPORTER_SCOPES).toEqual(['apps/candidate/', 'workers/edge/']);
+  });
+
+  it.each([
+    ['a reportError import', 'import { reportError } from "@trace/shared/log";'],
+    ['the noop reporter', 'import { noopErrorReporter } from "@trace/shared";'],
+    ['the ErrorReporter type', 'type R = import("@trace/shared/log").ErrorReporter;'],
+    ['a Sentry package', 'import * as S from "@sentry/browser";'],
+    ['a call to the runtime global', 'reportError(new Error("x"));'],
+  ])('flags %s in edge or candidate source', (_label, code) => {
+    for (const p of ['workers/edge/src/app.ts', 'apps/candidate/src/main.tsx']) {
+      const v = checkNoErrorReporter([f(p, code)]);
+      expect(v).toHaveLength(1);
+      expect(v[0].rule).toBe(7);
+      expect(v[0].path).toBe(p);
+    }
+  });
+
+  it('allows the reporter in the recruiter app, jobs and api, and skips tests, generated and non-code files', () => {
+    const code = 'import { reportError, noopErrorReporter } from "@trace/shared/log";';
+    expect(
+      checkNoErrorReporter([
+        f('apps/recruiter/src/error-reporting.ts', code),
+        f('workers/jobs/src/app.ts', code),
+        f('services/api/src/app.ts', code),
+        f('workers/edge/src/no-error-reporter.test.ts', code),
+        f('apps/candidate/src/candidate-guards.test.ts', code),
+        f('workers/edge/worker-configuration.d.ts', 'declare function reportError(e: any): void;'),
+        f('apps/candidate/README.md', code),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('allows plain prose such as "no error reporter"', () => {
+    expect(
+      checkNoErrorReporter([f('workers/edge/src/app.ts', '// The edge has no error reporter.')]),
+    ).toEqual([]);
   });
 });
 

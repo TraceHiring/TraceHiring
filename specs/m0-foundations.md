@@ -5,6 +5,7 @@
 - **Revision 16 changes (2026-10-12, S2 and S3a stream reviews).** HOW-level follow-ups from `docs/reviews/M0a-S2-ui-security-review.md` and `docs/reviews/M0a-S3a-workers-security-review.md`. No product scope change.
   - **§5 `verify:fast` (S2 follow-up 2):** `docs/design/tokens.json` is an input of `@trace/ui` (§11), so a change to it selects `@trace/ui` and its dependents instead of counting as docs (`PACKAGE_INPUTS` in `scripts/verify-fast.mjs`).
   - **§5 Workers `types:gen` (S3a deviation a):** `wrangler types --strict-vars=false`, so `VERSION` is typed `string`, not the literal `"dev"`; `wrangler types --check` reads the flags from the generated file's header.
+  - **§10.2 rule 7 (S3a S3A-3, plan risk 9):** `check-boundaries.mjs` fails if non-test source of the candidate app or the edge Worker names an error reporter or Sentry. Rule 6 (S1.4) is listed there too.
 - **Revision 15 changes (2026-10-11, S1.7 gate finding K3).** Text fixes from `docs/reviews/M0a-S1.7-gate-spec-review.md` (K3 (a)–(e)): lines that went stale while S1.7 and the first Linux CI runs happened. No product scope change, no behaviour change, no new check.
   - **§2 `claude-*` scripts (K3 a):** they are no longer "unchanged". `claude-session-start.mjs` was rewritten in `d9bf35a`: it shows `docs/progress/HANDOFF.md` from the newest `*/integration` branch, not from the checkout, and keeps its output within 9,000 bytes (9 tests in `scripts/test/session-start.test.mjs`). `claude-usage-guard.mjs` now warns at 90% and 95% of a usage limit (`4a83998`; it was 80% and 90%). `claude-statusline.mjs` and `claude-stop-gate.sh` behave as before.
   - **§2, §4 and §7.1 dependency advisories (K3 b):** the layout lists `osv-scanner.toml` and describes the `overrides` (handlebars 4.7.10, sharp 0.35.5, undici 7.29.1) and `auditConfig.ignoreGhsas` (braces, GHSA-vfj7-8cjw-p6xm) in `pnpm-workspace.yaml`. §7.1 says how the `security` job uses them. The braces ignore ends on 2027-01-11 in `osv-scanner.toml`. The §4 osv-scanner row records the pin (v2.6.0, SHA-256 checked in `ci.yml`).
@@ -812,6 +813,8 @@ It fails if any of the following holds:
 3. An app references a `VITE_*` name containing `SECRET`, `TOKEN`, `PASSWORD`, `PRIVATE`, `JWT`, `DB`, or `KEY` (other than `VITE_SENTRY_DSN`).
 4. `supabase/config.toml` exposes `private`, `quality` or `integrity` (§8.1). A missing `config.toml` passes only while `supabase/migrations/` is also missing, which is the state before S1.7 (§5).
 5. A text file in the index has CRLF line endings (`git ls-files --eol`).
+6. *(S1.4 security review)* An `eslint-disable` comment in `apps/`, `packages/`, `workers/` or `services/` source switches off a `boundaries/` or `trace/` rule, or names no rule.
+7. *(Revision 16, S3a review S3A-3, plan risk 9)* Non-test source under `apps/candidate/**` or `workers/edge/**` names `reportError`, `noopErrorReporter`, `ErrorReporter` or `@sentry/` (§9.2: only the recruiter app, `workers/jobs` and `services/api` report errors). Test files, generated files and Markdown are skipped.
 
 **At deploy time,** `check-staging-secrets.mjs` (§7.2 step 6) catches secrets bound outside the code, through `wrangler secret put` or the dashboard.
 
