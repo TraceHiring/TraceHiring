@@ -135,6 +135,28 @@ describe('value patterns', () => {
     expect(out.startsWith('before ')).toBe(true);
   });
 
+  // Redactor security review #2 (docs/reviews/M0a-S1.7-redactor-security-review.md): a UPI id at the end of a
+  // sentence or before a dash (canonical() folds every Pd dash and U+2212 to '-') must still be redacted.
+  it.each([
+    ['a full stop', '.'],
+    ['a hyphen', '-x'],
+    ['an em dash', '—x'],
+    ['an en dash', '–x'],
+    ['a minus sign', '−x'],
+  ])('redacts a UPI id followed by %s', (_label, tail) => {
+    const upi = synth.upi();
+    const out = redactString(`refund to ${upi}${tail}`);
+    expect(out).not.toContain(upi);
+    expect(out).toContain(REDACTED);
+  });
+
+  it('still redacts an email whose local part has a dot', () => {
+    const email = `${synth.upi().split('@')[0]}.${synth.upi(2).replace('@', '@mail.')}.example`;
+    const out = redactString(`mail ${email} now`);
+    expect(out).not.toContain(email);
+    expect(out).toBe(`mail ${REDACTED} now`);
+  });
+
   it('redacts bank account numbers next to account keywords', () => {
     const acct = synth.account();
     expect(redactString(`account no: ${acct}`)).not.toContain(acct);

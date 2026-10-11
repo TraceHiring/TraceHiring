@@ -195,7 +195,8 @@ const STEPS: readonly Step[] = [
   ),
   // email (also percent-encoded), then UPI (handle@psp without a dot after the psp)
   sub(/(?<![\w.%+-])[\w.%+-]+(?:@|%40)(?:[a-z0-9-]+\.)+[a-z]{2,}/gi, REDACTED),
-  sub(/(?<![\w.-])[\w.-]{2,}(?:@|%40)[a-z]{2,32}(?![\w.@-])/gi, REDACTED),
+  // A trailing '.' (end of sentence) or dash ends the psp; only '.' followed by a letter or digit continues it.
+  sub(/(?<![\w.-])[\w.-]{2,}(?:@|%40)[a-z]{2,32}(?![\w@]|\.[a-z0-9])/gi, REDACTED),
   // bank account numbers next to account keywords (a short, bounded non-digit gap)
   sub(/(\b(?:a\/c|acct|account|bank)\D{0,24}?)\d{9,18}(?!\d)/gi, keepPrefix),
   // IPv4 (before the digit patterns, which could otherwise take part of an address)
