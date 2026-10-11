@@ -565,6 +565,11 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['long values under sensitive keys', fill(`otp=${'x'.repeat(300)}:`)],
     ['quoted keys, then quoted values', fill('"a":"')],
     ['escaped quoted keys, then values', fill('\\"a\\":\\"b=')],
+    // invisible characters between two digits are marked, not dropped (redactor lows review F3)
+    ['digits split by zero-width spaces', fill('9\u200b')],
+    ['digit groups split by fillers', fill('98765\u3164')],
+    ['mobile numbers glued to digits', fill(`${synth.mobile()}\u200b1`)],
+    ['digits glued to Aadhaar numbers', fill(`1\u00ad${synth.aadhaar()}`)],
   ];
 
   it.each(shapes)('runs the patterns over ~100 KB of "%s" well inside 50 ms', (_label, s) => {
@@ -581,6 +586,9 @@ describe('linear-time patterns (S1.7 ReDoS finding)', () => {
     ['long runs between letters and spaces', fill(`a${'\u3164'.repeat(500)} `)],
     ['long runs between digits and letters', fill(`1${'\u200b'.repeat(500)}a`)],
     ['digits split by joiners', fill('9\u034f')],
+    // digit-digit runs are marked too (redactor lows review F3)
+    ['long runs between digits', fill(`1${'\u200b'.repeat(500)}2`)],
+    ['digits split by tags', fill('9\u{e0020}')],
   ])('canonicalises ~100 KB of "%s" well inside 50 ms', (_label, s) => {
     expect(s.length).toBeGreaterThanOrEqual(KB100);
     canonical(s.slice(0, 1000)); // warm-up
@@ -1307,7 +1315,7 @@ describe('a sensitive pair inside a non-sensitive value (redactor lows review F1
 // after the bound was kept.
 describe('a quoted value longer than the scan bound (redactor lows review F2)', () => {
   const [w1, w2] = [synth.word(3), synth.word(4)];
-  const long = 'ﷺ'.repeat(112);
+  const long = '\ufdfa'.repeat(112);
   it.each([
     ['double-quoted', `password="${long} ${w1} ${w2}" next`, `password="${REDACTED}`],
     ['single-quoted', `token='${long} ${w1} ${w2}' next`, `token='${REDACTED}`],
@@ -1327,7 +1335,55 @@ describe('a quoted value longer than the scan bound (redactor lows review F2)', 
   });
 
   it('still closes a long quoted value at its quote within the bound', () => {
-    const s = `password="${'ﷺ'.repeat(100)} ${w1}" ${w2}`;
+    const s = `password="${'\ufdfa'.repeat(100)} ${w1}" ${w2}`;
     expect(redactString(s)).toBe(`password="${REDACTED}" ${w2}`);
+  });
+});
+
+// Redactor lows review F3: an invisible character between two digits was dropped, not marked, so
+// a value glued to the digits after it became a longer digit run that no digit pattern matches.
+describe('invisible characters between two digits (redactor lows review F3)', () => {
+  const cps: [string, number][] = [0x200b, 0x3164, 0xfe0f, 0xad, 0x34f, 0xe0020].map((cp) => [
+    cp.toString(16).toUpperCase().padStart(4, '0'),
+    cp,
+  ]);
+  const glued: [string, string][] = [
+    [synth.mobile(), '123'],
+    [synth.aadhaar(), '9'],
+    [synth.vid(), '12'],
+  ];
+
+  it.each(cps)('redacts a value glued to the digits after it by U+%s', (_hex, cp) => {
+    const c = String.fromCodePoint(cp);
+    for (const [value, tail] of glued) {
+      const out = redactString(`x ${value}${c}${tail} y`);
+      expect(out).toBe(`x ${REDACTED} y`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it.each(cps)('redacts a value glued to the digits before it by U+%s', (_hex, cp) => {
+    const c = String.fromCodePoint(cp);
+    for (const [value, tail] of glued) {
+      const out = redactString(`x ${tail}${c}${value} y`);
+      expect(out).toBe(`x ${REDACTED} y`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it('still joins a value split between two of its digits', () => {
+    const m = synth.mobile(2);
+    const a = synth.aadhaar(2);
+    for (const s of [`${m.slice(0, 4)}\u200b${m.slice(4)}`, [...a].join('\u00ad')]) {
+      const out = redactString(`x ${s} y`);
+      expect(out).toBe(`x ${REDACTED} y`);
+      expect(redactString(out)).toBe(out);
+    }
+  });
+
+  it('leaves digits split by an invisible character, with no value in them, unchanged', () => {
+    for (const s of ['1\u200b2', 'v1\u00ad2.3', '12\u200b34:56', '2026\u200b10']) {
+      expect(redactString(s)).toBe(s);
+    }
   });
 });

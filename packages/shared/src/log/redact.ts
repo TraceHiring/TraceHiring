@@ -103,22 +103,23 @@ const toAsciiDigit = (ch: string): string => {
 };
 
 /**
- * Stands in for a run of invisible characters between two ASCII letters, or an ASCII letter and a
- * digit (redactor review #3). There the run may sit inside one value (a soft hyphen in a copied
- * PAN or email) or between a value and the next word (`<PAN>\u3164ok`), so applyPatterns reads
- * the text both ways. It is itself an invisible character, so canonical text never has one
- * otherwise, and it is not a word, space or digit character to any pattern.
+ * Stands in for a run of invisible characters between two ASCII letters, an ASCII letter and a
+ * digit (redactor review #3), or two digits (redactor lows review F3). There the run may sit
+ * inside one value (a soft hyphen in a copied PAN or mobile number) or between a value and the
+ * next word or digits (`<PAN>\u3164ok`, `<mobile>\u200b123`), so applyPatterns reads the text
+ * both ways. It is itself an invisible character, so canonical text never has one otherwise, and
+ * it is not a word, space or digit character to any pattern.
  */
 const SPLIT = '\u2063';
 /**
  * A run of invisible characters; the first two alternatives capture a run between an ASCII letter
- * and an ASCII letter or digit, or between a digit and an ASCII letter. Each run is read once:
- * inside a run the lookbehinds fail, and no invisible character is a letter or digit to them.
+ * and an ASCII letter or digit, or between a digit and an ASCII letter or digit. Each run is read
+ * once: inside a run the lookbehinds fail, and no invisible character is a letter or digit to them.
  */
 const IGNORABLE_RUN =
-  /(?<=[A-Za-z])(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z\p{Nd}])|(?<=\p{Nd})(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z])|\p{Default_Ignorable_Code_Point}+/gu;
-const splitOrDrop = (_run: string, letters?: string, digitThenLetter?: string): string =>
-  letters === undefined && digitThenLetter === undefined ? '' : SPLIT;
+  /(?<=[A-Za-z])(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z\p{Nd}])|(?<=\p{Nd})(\p{Default_Ignorable_Code_Point}+)(?=[A-Za-z\p{Nd}])|\p{Default_Ignorable_Code_Point}+/gu;
+const splitOrDrop = (_run: string, afterLetter?: string, afterDigit?: string): string =>
+  afterLetter === undefined && afterDigit === undefined ? '' : SPLIT;
 
 /**
  * The text the patterns see: compatibility forms folded, invisible characters dropped (or marked
