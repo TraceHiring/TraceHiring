@@ -1,0 +1,9 @@
+{
+  "extends": "@trace/config/tsconfig.base.json",
+  "compilerOptions": {
+    // The code uses only Web APIs (Request, Response) that Workers and Node 22 share; the tests run
+    // in Node. Workers keep their own runtime types (worker-configuration.d.ts).
+    "types": ["node"]
+  },
+  "include": ["src", "*.ts"]
+}
