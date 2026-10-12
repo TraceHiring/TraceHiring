@@ -41,7 +41,7 @@ The next session may be a new Claude Code on another account: start from `docs/p
 - Unchanged: GitHub plan (row 15, blocks M0a CLOSE); H8–H11 (row 20, updated; blocks M0b CLOSE); URGENT Cloudflare token roll, `CLOUDFLARE_API_TOKEN`, `SUPABASE_STAGING_DB_URL`, H4, H5. No new question.
 
 ## Verify status
-- `verify:fast` on `e24f2e9`: started at wrap-up while the B5 writer was still running; its result was not available before the push (re-run it first next session; the workers-http, config, check-boundaries and prettier checks of this session passed individually).
+- `verify:fast` on `e24f2e9`: **exit 1 at `test`** (234 s, B5 writer running): only `packages/shared` `src/log/redact.test.ts` "linear-time patterns" timing cases failed (50.5–53.6 ms vs the 50 ms budget, 6 of 618) — load, not code (`packages/shared` untouched this session). Typecheck and lint passed. **Re-run first next session with no agent running**; if the timing cases still fail idle, treat it as a real ReDoS regression.
 - An earlier `verify:fast` on `04c0131` ran under heavy load (two writers, 2525 s) and failed only on 60-second timeouts in gitleaks/git subprocess tests and on a fixture test edited mid-run; not a code signal.
 
 ## Gotchas / do not touch
