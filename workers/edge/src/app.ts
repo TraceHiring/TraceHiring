@@ -19,7 +19,13 @@ export interface AppDeps {
 
 export const createApp = (deps: AppDeps = {}): Hono<{ Bindings: Env }> => {
   const now = deps.now ?? (() => new Date());
-  const app = createHttpApp<{ Bindings: Env }>(SERVICE, deps);
+  // Only the sink is handed on, never the whole deps object, so nothing else (a reporter passed
+  // through a cast) can reach the shared error path. The getter reads the sink at error time.
+  const app = createHttpApp<{ Bindings: Env }>(SERVICE, {
+    get sink() {
+      return deps.sink;
+    },
+  });
 
   app.get('/health', (c) =>
     c.json(healthBody(SERVICE, resolveVersion(c.env.VERSION), now()), 200, NO_STORE),

@@ -33,7 +33,7 @@ export interface ErrorHandlingDeps {
    */
   readonly reporter?: ErrorReporter;
   /** Where log lines go. Defaults to the logger's own sink (console). Tests inject their own. */
-  readonly sink?: (line: string) => void;
+  readonly sink?: ((line: string) => void) | undefined;
 }
 
 /**

@@ -76,3 +76,45 @@ describe('edge app wiring (AT-B14)', () => {
     }
   });
 });
+
+describe('edge app hands the shared handling only the log sink (B5-SEC2)', () => {
+  it('never calls a reporter that is smuggled into the deps, when a route throws', async () => {
+    const captured: unknown[] = [];
+    const reporter = {
+      capture(...args: unknown[]) {
+        captured.push(args);
+      },
+    };
+    const lines: string[] = [];
+    // The cast stands in for any caller that gets a reporter past the type; the edge has none.
+    const deps = {
+      now: () => throwValue(new Error(piiMessage())),
+      sink: (line: string) => lines.push(line),
+      reporter,
+    };
+    const app = createApp(deps as never);
+
+    const response = await request(app);
+
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe('{"error":"internal"}');
+    expect(captured).toHaveLength(0);
+    expect(lines).toHaveLength(1);
+  });
+
+  it('reads the sink at error time, so a throwing sink getter still ends in the static 500', async () => {
+    const deps = {
+      now: () => throwValue(new Error(piiMessage())),
+      get sink(): (line: string) => void {
+        throw new Error(piiMessage());
+      },
+    };
+    const app = createApp(deps);
+
+    const response = await request(app);
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.text()).toBe('{"error":"internal"}');
+  });
+});
