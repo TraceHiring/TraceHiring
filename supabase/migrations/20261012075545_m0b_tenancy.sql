@@ -568,11 +568,11 @@ as $$
 declare
   v_changed text[] := '{}';
 begin
-  if new.name is distinct from old.name then v_changed := v_changed || 'name'; end if;
+  if new.name is distinct from old.name then v_changed := array_append(v_changed, 'name'); end if;
   if new.data_residency is distinct from old.data_residency then
-    v_changed := v_changed || 'data_residency';
+    v_changed := array_append(v_changed, 'data_residency');
   end if;
-  if new.status is distinct from old.status then v_changed := v_changed || 'status'; end if;
+  if new.status is distinct from old.status then v_changed := array_append(v_changed, 'status'); end if;
   if cardinality(v_changed) > 0 then
     perform private.audit(new.org_id, 'org.update', 'orgs', new.id,
       jsonb_build_object('changed', to_jsonb(v_changed)));
@@ -644,8 +644,8 @@ begin
       jsonb_build_object('kind', new.kind), new.id);
     return null;
   end if;
-  if new.name is distinct from old.name then v_changed := v_changed || 'name'; end if;
-  if new.archived_at is distinct from old.archived_at then v_changed := v_changed || 'archived_at'; end if;
+  if new.name is distinct from old.name then v_changed := array_append(v_changed, 'name'); end if;
+  if new.archived_at is distinct from old.archived_at then v_changed := array_append(v_changed, 'archived_at'); end if;
   if cardinality(v_changed) > 0 then
     perform private.audit(new.org_id, 'workspace.update', 'workspaces', new.id,
       jsonb_build_object('kind', new.kind, 'changed', to_jsonb(v_changed)), new.id);
@@ -844,14 +844,14 @@ begin
       jsonb_build_object('old_status', old.status), new.workspace_id);
     return null;
   end if;
-  if new.roles is distinct from old.roles then v_changed := v_changed || 'roles'; end if;
-  if new.status is distinct from old.status then v_changed := v_changed || 'status'; end if;
+  if new.roles is distinct from old.roles then v_changed := array_append(v_changed, 'roles'); end if;
+  if new.status is distinct from old.status then v_changed := array_append(v_changed, 'status'); end if;
   if new.workspace_id is distinct from old.workspace_id then
-    v_changed := v_changed || 'workspace_id';
+    v_changed := array_append(v_changed, 'workspace_id');
   end if;
-  if new.team_id is distinct from old.team_id then v_changed := v_changed || 'team_id'; end if;
+  if new.team_id is distinct from old.team_id then v_changed := array_append(v_changed, 'team_id'); end if;
   if new.display_name is distinct from old.display_name then
-    v_changed := v_changed || 'display_name';
+    v_changed := array_append(v_changed, 'display_name');
   end if;
   if cardinality(v_changed) > 0 then
     perform private.audit(new.org_id, 'membership.update', 'memberships', new.id,
