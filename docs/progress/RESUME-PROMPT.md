@@ -8,6 +8,8 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
+- **Update 2026-10-12 14:40 IST:** M0b BUILD continues. B5 is merged; B0 + B1 + most of B4 sit reviewed and
+  fully verified on stream branch `m0b/b0-db` (`f727d0a`), **not merged yet** — HANDOFF "Next step" 1–3 merges it.
 - **Now (2026-10-12 09:25 IST): M0a REVIEW and FIX are done; M0a stops before CLOSE (founder). M0b is in SPEC.**
   M0a verdict: BLOCK, founder-gated, no code defect (`docs/reviews/M0a.md`): the GitHub plan blocks branch protection
   (SEC-1) and the staging secrets are open; CLOSE (merge to `main`, tag `m0a-reviewed`) is the founder's.
