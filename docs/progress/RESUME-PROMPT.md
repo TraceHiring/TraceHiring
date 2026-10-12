@@ -1,7 +1,7 @@
 # Resume prompt — the full procedure for the next Claude Code session (any account)
 
 Written 2026-10-11 09:25 IST by the lead session; updated 20:10 and 23:50 IST, and 2026-10-12 01:45 IST. Everything the next session needs is in git; nothing from Updated 2026-10-12 09:25 IST: M0b on `m0b/integration`.
-earlier chats is available or needed. Updated 2026-10-12 13:05 IST: M0b spec approved, BUILD started. The short "paste prompt" the founder uses points here.
+earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec approved, BUILD started. The short "paste prompt" the founder uses points here.
 
 ## 1. What Trace is and where the build stands
 - Trace: an India-first online assessment platform; every integrity flag comes with evidence. CLAUDE.md holds
@@ -13,7 +13,7 @@ earlier chats is available or needed. Updated 2026-10-12 13:05 IST: M0b spec app
   (SEC-1) and the staging secrets are open; CLOSE (merge to `main`, tag `m0a-reviewed`) is the founder's.
   `milestone/m0a` @ `7dc8c0d` = `cp/m0a-06` (full verify + Linux CI green). M0b started before `m0a-reviewed` by the
   founder's overnight decision (build-notes §0); it closes only after `m0a-reviewed`. `specs/m0b-tenancy.md` is **approved at
-  revision 5** (13:05 IST); **M0b is in BUILD**: B3 merged, B4 partly done, B5 on `m0b/b5-workers-http` awaiting review.
+  revision 5** (12:35 IST); **M0b is in BUILD**: B3 merged, B4 partly done, B5 on `m0b/b5-workers-http` awaiting review.
   No milestone is closed yet. Model policy, CI via draft PRs, and the SessionStart hook reading the newest
   `*/integration` handoff still apply.
 - **Integration branch: `m0b/integration`** (M0b work + this file), cut from `milestone/m0a` @ `7dc8c0d`.

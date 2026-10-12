@@ -1,4 +1,4 @@
-# HANDOFF — 2026-10-12 13:05 IST
+# HANDOFF — 2026-10-12 12:35 IST
 Reason for stopping: usage — the 95% rule (wrap-up started at 86% of the 5-hour window, Pro plan, resets ~14:20 IST; weekly 85%).
 The next session may be a new Claude Code on another account: start from `docs/progress/RESUME-PROMPT.md` on **`m0b/integration`** (its §4 paste prompt).
 
