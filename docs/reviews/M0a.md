@@ -64,7 +64,7 @@ Not raised as a finding: the database reviewer could not test (permission denied
 Every stream-review fix was re-checked and holds: S3A-1 non-Error middleware in all three Workers; S3B-1/S3B-6 (scanned bundle uploaded with `--no-bundle`, `sslmode` check, URL redaction); the run-text rules of `0179e2a`/`dbb20c7`/`41f0bff` (probed with backslash-newline, brace, `$''`, `GITHUB_PATH`, `defaults: {Run|Shell}` splits); the w1-w2 and S1.7 gate spec findings (#1–#6, K1–K5). No test lost an assertion in the range; no floor went down.
 
 ## Re-run
-Full `pnpm verify` on the FIX tip with no agent running: see `docs/progress/LOG.md` (row of 2026-10-12, this session).
+Full `pnpm verify` on the FIX tip `7dc8c0d` with no agent running: **exit 0**. Package suites as above; scripts 1299 passed + 1 skipped (K4), so the commitlint suite passed (G4 load flake cleared); `test:rls` "OK: 2 test files; catalog_* 112 assertions (floor 112), rls_* 0 assertions (floor 0); packages/db-types/src/database.ts is current"; candidate 72.4 kB gzip; `check-headers: OK`; `scan-dist: OK, no secrets in 5 dist/`. Linux CI on `7dc8c0d`: run 38199234040 (result in `docs/progress/LOG.md`).
 
 ## Not verified (and why)
 - The staging gates (AT-11, AT-18, AT-22-staging, deferred parts of AT-12/15/16): need the founder's secrets and the CLOSE push to `main`.
