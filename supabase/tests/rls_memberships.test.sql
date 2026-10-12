@@ -22,7 +22,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(139);
+select plan(143);
 grant trace_candidate to postgres with inherit false, set true;
 grant usage on schema extensions to trace_candidate;
 -- Personas (spec §6): synthetic users, fixed ids, created on the operator path (postgres, no claims).
@@ -393,6 +393,15 @@ select is(pg_temp.try($$update public.memberships set display_name = 'Cross Org'
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000004", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
 select is(pg_temp.try($$update public.memberships set display_name = 'Aal1 Edit' where user_id = '00000000-0000-4000-8000-000000000005'$$), 'OK 0', 'U: admin at aal1 cannot update other members [AT-B6]');
+-- B0-DB1 (M0b database review): seeing your own row at any aal (§2.2) is not writing it. A membership that does not
+-- count (privileged at aal1, password at aal1, suspended, or in a suspended org) cannot change its own display_name.
+select is(pg_temp.try($$update public.memberships set display_name = 'Aal1 Self' where user_id = '00000000-0000-4000-8000-000000000004'$$), 'OK 0', 'U: an admin at aal1 cannot change their own display_name [B0-DB1]');
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000006", "aal": "aal1", "amr": [{"method": "password", "timestamp": 1760000000}], "role": "authenticated"}';
+select is(pg_temp.try($$update public.memberships set display_name = 'Pw Self' where user_id = '00000000-0000-4000-8000-000000000006'$$), 'OK 0', 'U: a password recruiter at aal1 cannot change their own display_name [B0-DB1]');
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000c", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000001}], "role": "authenticated"}';
+select is(pg_temp.try($$update public.memberships set display_name = 'Suspended Self' where user_id = '00000000-0000-4000-8000-00000000000c'$$), 'OK 0', 'U: a suspended member cannot change their own display_name [B0-DB1]');
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000d", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000001}], "role": "authenticated"}';
+select is(pg_temp.try($$update public.memberships set display_name = 'S Self' where user_id = '00000000-0000-4000-8000-00000000000d'$$), 'OK 0', 'U: a member of a suspended org cannot change their own display_name [B0-DB1, N6]');
 reset role;
 reset request.jwt.claims;
 select matches(pg_temp.try($$update public.memberships set user_id = '00000000-0000-4000-8000-000000000021' where user_id = '00000000-0000-4000-8000-000000000007'$$), '^42501 TRACE_GUARD', 'U: even the operator cannot change user_id');

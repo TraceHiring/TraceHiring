@@ -736,6 +736,11 @@ begin
       raise exception 'TRACE_GUARD: a membership starts active' using errcode = '42501';
     end if;
     new.removed_at := null;
+    -- Write-skew guard [D9]: lock first, so the checks below (each a fresh READ COMMITTED snapshot) see any
+    -- concurrent owner change that committed while we waited (M0b database review B0-DB2).
+    if v_touches_owner then
+      perform 1 from public.orgs where id = new.org_id for no key update;
+    end if;
     if not v_operator then
       if new.status <> 'active' then
         raise exception 'TRACE_GUARD: invitations arrive in M1' using errcode = '42501';
@@ -749,9 +754,6 @@ begin
       if v_touches_owner and not (new.org_id = any (private.my_org_ids('{org_owner}'))) then
         raise exception 'TRACE_GUARD: only an owner adds an owner' using errcode = '42501';
       end if;
-    end if;
-    if v_touches_owner then
-      perform 1 from public.orgs where id = new.org_id for no key update;
     end if;
     return new;
   end if;
@@ -779,6 +781,11 @@ begin
 
   v_touches_owner := 'org_owner' = any (old.roles) or 'org_owner' = any (new.roles);
 
+  -- Write-skew guard [D9]: lock before the role checks (B0-DB2, as for INSERT above).
+  if v_touches_owner or new.status is distinct from old.status then
+    perform 1 from public.orgs where id = new.org_id for no key update;
+  end if;
+
   if not v_operator then
     if old.user_id = v_uid then
       if new.roles is distinct from old.roles or new.status is distinct from old.status
@@ -795,10 +802,6 @@ begin
         raise exception 'TRACE_GUARD: only an owner edits an owner' using errcode = '42501';
       end if;
     end if;
-  end if;
-
-  if v_touches_owner or new.status is distinct from old.status then
-    perform 1 from public.orgs where id = new.org_id for no key update;
   end if;
   return new;
 end
@@ -1112,9 +1115,17 @@ create policy memberships_insert_owner_admin on public.memberships for insert to
 create policy memberships_update_owner_admin on public.memberships for update to authenticated
   using (org_id = any ((select private.my_org_ids('{org_owner,admin}'))::uuid[]))
   with check (org_id = any ((select private.my_org_ids('{org_owner,admin}'))::uuid[]));
+-- Seeing your own row at any aal (§2.2) is not writing it: the own-row edit needs a membership that counts, in an
+-- active org (M0b database review B0-DB1).
 create policy memberships_update_own on public.memberships for update to authenticated
-  using (user_id = (select auth.uid()))
-  with check (user_id = (select auth.uid()));
+  using (
+    user_id = (select auth.uid())
+    and org_id = any ((select private.my_org_ids('{org_owner,admin,recruiter,reviewer,hiring_manager}'))::uuid[])
+  )
+  with check (
+    user_id = (select auth.uid())
+    and org_id = any ((select private.my_org_ids('{org_owner,admin,recruiter,reviewer,hiring_manager}'))::uuid[])
+  );
 
 -- audit_log: read by owners and admins of the org; written only by private.audit.
 grant select on public.audit_log to authenticated;
