@@ -510,6 +510,122 @@ describe('createHttpApp: a handler throws a Hono HTTPException', () => {
     expect(await response.text()).toBe('forbidden');
   });
 
+  it('forces cache-control no-store on a 4xx, over any value the exception response sets', async () => {
+    const res = new Response('{"error":"conflict"}', {
+      headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=600' },
+    });
+    const app = buildApp(() => new HTTPException(409, { res }), { sink: () => {} });
+
+    const response = await request(app, envWith('abcdef1'));
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('content-type')).toBe('application/json');
+    expect(await response.text()).toBe('{"error":"conflict"}');
+  });
+
+  it('adds cache-control no-store to a 4xx whose exception response sets none', async () => {
+    const app = buildApp(() => new HTTPException(401, { message: 'unauthorised' }), {
+      sink: () => {},
+    });
+
+    const response = await request(app, envWith('abcdef1'));
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('drops set-cookie from a 4xx exception response and keeps its other headers', async () => {
+    const session = ['sid', 'q1w2e3r4t5'].join('');
+    const res = new Response('{"error":"denied"}', {
+      headers: {
+        'content-type': 'application/json',
+        'set-cookie': `sid=${session}; Path=/`,
+        'x-synthetic': 'kept',
+      },
+    });
+    const app = buildApp(() => new HTTPException(403, { res }), { sink: () => {} });
+
+    const response = await request(app, envWith('abcdef1'));
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(response.headers.get('x-synthetic')).toBe('kept');
+    expect(await response.text()).toBe('{"error":"denied"}');
+  });
+
+  it.each([400, 499])('passes the %i boundary status through', async (status) => {
+    const app = buildApp(() => new HTTPException(status as 400, { message: 'constant' }), {
+      sink: () => {},
+    });
+
+    const response = await request(app, envWith('abcdef1'));
+
+    expect(response.status).toBe(status);
+    expect(await response.text()).toBe('constant');
+  });
+
+  it.each([500, 503])(
+    'treats a %i HTTPException as a failure: constant 500, one log line, one report',
+    async (status) => {
+      const lines: string[] = [];
+      const { reporter, captured } = spyReporter();
+      const canary = piiMessage();
+      const app = buildApp(
+        () =>
+          new HTTPException(status as 500, {
+            message: canary,
+            res: new Response(canary, { status, headers: { 'set-cookie': `sid=${canary}` } }),
+            cause: new Error(canary),
+          }),
+        { reporter, sink: (line) => lines.push(line) },
+      );
+
+      const response = await request(app, envWith('abcdef1'));
+
+      expect(response.status).toBe(500);
+      expect(response.headers.get('content-type')).toBe('application/json');
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.get('set-cookie')).toBeNull();
+      const text = await response.text();
+      expect(text).toBe('{"error":"internal"}');
+      expect(captured).toHaveLength(1);
+      expect(captured[0]?.ctx).toEqual({ release: 'abcdef1' });
+      expect(lines).toHaveLength(1);
+      expect(LogLine.parse(JSON.parse(lines[0] ?? ''))).toMatchObject({
+        level: 'error',
+        service: SERVICE,
+        version: 'abcdef1',
+        event: 'request.failed',
+      });
+      const everything = everythingSeen(text, lines, captured);
+      for (const sensitive of [email(), mobile(), 'failed for']) {
+        expect(everything).not.toContain(sensitive);
+      }
+    },
+  );
+
+  it.each([200, 302, 600])(
+    'treats an HTTPException with status %i (outside 400-499) as a failure',
+    async (status) => {
+      const lines: string[] = [];
+      const { reporter, captured } = spyReporter();
+      const app = buildApp(() => new HTTPException(status as 400, { message: 'constant' }), {
+        reporter,
+        sink: (line) => lines.push(line),
+      });
+
+      const response = await request(app, envWith('abcdef1'));
+
+      expect(response.status).toBe(500);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.text()).toBe('{"error":"internal"}');
+      expect(captured).toHaveLength(1);
+      expect(lines).toHaveLength(1);
+    },
+  );
+
   it('falls back to the static JSON 500 when building the exception response throws', async () => {
     class BrokenException extends HTTPException {
       override getResponse(): Response {

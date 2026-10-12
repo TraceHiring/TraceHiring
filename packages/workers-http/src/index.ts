@@ -49,16 +49,34 @@ const versionForErrorPath = (env: { VERSION: string }): string => {
 };
 
 /**
+ * A copy of a 4xx HTTPException's response: same status and body, headers without `set-cookie`,
+ * and `cache-control: no-store` over whatever it set.
+ */
+const clientErrorAnswer = (err: HTTPException): Response => {
+  const original = err.getResponse();
+  const headers = new Headers(original.headers);
+  headers.delete('set-cookie');
+  headers.set('cache-control', NO_STORE['cache-control']);
+  return new Response(original.body, { status: err.status, headers });
+};
+
+/**
  * A Hono app with the Workers' shared error handling already installed. Add routes to the result;
  * the handling is registered first, so it wraps every route added afterwards.
  *
  * - A thrown string, null or object becomes `new Error('non_error_thrown')` first. Hono hands only
  *   Error instances to onError and rethrows anything else out of fetch, where the runtime would
  *   answer with its own page and record the thrown value outside the redactor (S3A-1).
- * - A Hono `HTTPException` is answered with its own `getResponse()` (its own status): it is an
- *   answer the code chose, not a failure, so it is neither logged nor reported. Its message is sent
- *   to the client as is, so it must be a constant, never text built from input.
- * - Any other error is logged once as `request.failed` through the redacting logger (the serialised
+ * - A Hono `HTTPException` with a status from 400 to 499 is answered with a copy of its
+ *   `getResponse()`: the same status and body, its headers except `set-cookie` (dropped), and
+ *   `cache-control: no-store` forced over any value it set. It is an answer the code chose, not a
+ *   failure, so it is neither logged nor reported. Its message goes to the client as is, so it must
+ *   be a constant, never text built from input. Hono's `validator('form')` builds its message from
+ *   parser errors, so do not use it without a custom hook.
+ * - An `HTTPException` with any other status (5xx, or outside 400-499) is a failure: it takes the
+ *   path below, so it is reported once and logged once, and the client gets the constant 500, never
+ *   the exception's own message or body.
+ * - Any other error (and such an `HTTPException`) is logged once as `request.failed` through the redacting logger (the serialised
  *   error, never its message) and, when a reporter is given, reported first with the release. The
  *   body is `{"error":"internal"}` with status 500 and `cache-control: no-store`: no message, no
  *   stack. If anything in the handler throws, the static 500 still goes out.
@@ -84,7 +102,9 @@ export const createHttpApp = <E extends { Bindings: { VERSION: string } }>(
 
   app.onError((err, c) => {
     try {
-      if (err instanceof HTTPException) return err.getResponse();
+      if (err instanceof HTTPException && err.status >= 400 && err.status <= 499) {
+        return clientErrorAnswer(err);
+      }
       const release = versionForErrorPath(c.env);
       if (deps.reporter !== undefined) reportError(deps.reporter, err, { release });
       const log = createLogger({
