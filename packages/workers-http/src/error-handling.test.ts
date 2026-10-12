@@ -217,12 +217,17 @@ describe('createHttpApp: a handler throws an Error', () => {
         throw new Error(piiMessage());
       },
     };
-    const app = buildApp(failWithPii, { reporter, sink: () => {} });
+    const lines: string[] = [];
+    const app = buildApp(failWithPii, { reporter, sink: (line) => lines.push(line) });
 
     const response = await request(app, envWith('abcdef1'));
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe('{"error":"internal"}');
+    // A broken reporter must not cost the log line.
+    expect(lines).toHaveLength(1);
+    expect(LogLine.parse(JSON.parse(lines[0] ?? ''))).toMatchObject({ event: 'request.failed' });
+    expect(lines[0]).not.toContain(email());
   });
 
   it('does not report requests that succeed or that match no route', async () => {
