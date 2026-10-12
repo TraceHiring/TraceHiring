@@ -15,6 +15,9 @@
 //   8. a Worker's wrangler.jsonc (workers/*/, services/*/) whose top-level `observability` is not exactly
 //      WORKERS_OBSERVABILITY, or an env block that overrides it (specs/m0b-tenancy.md §1.1 item 9 (c):
 //      Workers Logs on, invocation logs and traces off, query strings redacted)
+//   9. supabase/config.toml Auth settings other than REQUIRED_AUTH_CONFIG, or a magic-link template
+//      without the {{ .Token }} code (specs/m0b-tenancy.md §4.1; checked only when config.toml exists)
+//  10. an @supabase/* import in apps/candidate/, workers/edge/ or packages/shared/ (specs/m0b-tenancy.md §4.3)
 // Prints only paths and rule names, never file contents.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -52,7 +55,8 @@ export const CREDENTIAL_SCOPES = ['apps/', 'packages/', 'workers/edge/'];
 
 /** Words a VITE_* name may not contain (rule 3); VITE_* values are public once bundled. */
 export const FORBIDDEN_VITE_WORDS = ['SECRET', 'TOKEN', 'PASSWORD', 'PRIVATE', 'JWT', 'DB', 'KEY'];
-export const ALLOWED_VITE_NAMES = ['VITE_SENTRY_DSN'];
+/** VITE_SUPABASE_PUBLISHABLE_KEY is the public `sb_publishable_…` key (specs/m0b-tenancy.md §2.7). */
+export const ALLOWED_VITE_NAMES = ['VITE_SENTRY_DSN', 'VITE_SUPABASE_PUBLISHABLE_KEY'];
 
 /** Schemas that must never be reachable through PostgREST (rule 4, spec §8.1). */
 export const PRIVATE_SCHEMAS = ['private', 'quality', 'integrity'];
@@ -169,6 +173,25 @@ export function checkSupabaseConfig({ configToml, migrationsDirExists }) {
       : [];
   }
   const out = [];
+  for (const { fullKey, value } of readTomlEntries(configToml)) {
+    const inApi = fullKey === 'api' || fullKey.startsWith('api.');
+    if (!inApi) continue;
+    const exposed = PRIVATE_SCHEMAS.filter((s) => new RegExp(`["']\\s*${s}\\s*["']`).test(value));
+    if (exposed.length > 0) {
+      out.push(
+        violation(4, where, `${fullKey} exposes ${exposed.join(', ')} through the API (spec §8.1)`),
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * Every `key = value` of a TOML text as `{ fullKey, value }` (table path + dotted key, raw value
+ * text with comments stripped; a multi-line array is joined onto one line).
+ */
+export function readTomlEntries(configToml) {
+  const entries = [];
   const lines = configToml.split(/\r?\n/).map(stripTomlComment);
   let table = '';
   for (let i = 0; i < lines.length; i++) {
@@ -200,12 +223,66 @@ export function checkSupabaseConfig({ configToml, migrationsDirExists }) {
         count(lines[i]);
       }
     }
-    const inApi = fullKey === 'api' || fullKey.startsWith('api.');
-    if (!inApi) continue;
-    const exposed = PRIVATE_SCHEMAS.filter((s) => new RegExp(`["']\\s*${s}\\s*["']`).test(value));
-    if (exposed.length > 0) {
+    entries.push({ fullKey, value: value.trim() });
+  }
+  return entries;
+}
+
+// ---------- rule 9 ----------
+/**
+ * Supabase Auth settings M0b requires (specs/m0b-tenancy.md §4.1), as raw TOML values. Staging
+ * mirrors them by hand (H8); this pins the local copy against drift.
+ */
+export const REQUIRED_AUTH_CONFIG = Object.freeze({
+  'auth.enable_signup': 'false',
+  'auth.enable_anonymous_sign_ins': 'false',
+  'auth.minimum_password_length': '12',
+  'auth.password_requirements': '"letters_digits"',
+  'auth.email.enable_signup': 'false',
+  'auth.email.otp_length': '6',
+  'auth.email.otp_expiry': '600',
+  'auth.email.template.magic_link.content_path': '"./supabase/templates/magic_link.html"',
+  'auth.mfa.totp.enroll_enabled': 'true',
+  'auth.mfa.totp.verify_enabled': 'true',
+});
+
+/** @param {{ configToml: string, magicLinkTemplate: string | null }} input */
+export function checkAuthConfig({ configToml, magicLinkTemplate }) {
+  const where = 'supabase/config.toml';
+  const values = new Map(readTomlEntries(configToml).map((e) => [e.fullKey, e.value]));
+  const out = [];
+  for (const [key, expected] of Object.entries(REQUIRED_AUTH_CONFIG)) {
+    if (values.get(key) !== expected) {
+      out.push(violation(9, where, `${key} must be ${expected} (specs/m0b-tenancy.md §4.1)`));
+    }
+  }
+  if (magicLinkTemplate == null || !/\{\{\s*\.Token\s*\}\}/.test(magicLinkTemplate)) {
+    out.push(
+      violation(
+        9,
+        'supabase/templates/magic_link.html',
+        'the sign-in email must carry the code {{ .Token }} (specs/m0b-tenancy.md §4.1)',
+      ),
+    );
+  }
+  return out;
+}
+
+// ---------- rule 10 ----------
+/** Where @supabase/* may never be imported: candidates never call Supabase (Q6), nor does edge or shared. */
+export const SUPABASE_JS_FORBIDDEN_SCOPES = [
+  'apps/candidate/',
+  'workers/edge/',
+  'packages/shared/',
+];
+
+export function checkSupabaseJsScope(files) {
+  const out = [];
+  for (const { path: p, content } of files) {
+    if (!inScope(p, SUPABASE_JS_FORBIDDEN_SCOPES) || isMarkdown(p)) continue;
+    if (content.includes('@supabase/')) {
       out.push(
-        violation(4, where, `${fullKey} exposes ${exposed.join(', ')} through the API (spec §8.1)`),
+        violation(10, p, 'imports @supabase/* outside apps/recruiter (specs/m0b-tenancy.md §4.3)'),
       );
     }
   }
@@ -416,6 +493,13 @@ export function runChecks(root) {
     ...checkEslintDisables(files),
     ...checkNoErrorReporter(files),
     ...checkWorkersObservability(files),
+    ...(existsSync(configPath)
+      ? checkAuthConfig({
+          configToml: readFileSync(configPath, 'utf8'),
+          magicLinkTemplate: readText(path.join(root, 'supabase', 'templates', 'magic_link.html')),
+        })
+      : []),
+    ...checkSupabaseJsScope(files),
   ];
 }
 
