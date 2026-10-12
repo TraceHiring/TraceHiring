@@ -532,6 +532,9 @@ importers:
       '@trace/vendors':
         specifier: workspace:*
         version: link:../../packages/vendors
+      '@trace/workers-http':
+        specifier: workspace:*
+        version: link:../../packages/workers-http
       hono:
         specifier: 'catalog:'
         version: 4.13.13
@@ -569,6 +572,9 @@ importers:
       '@trace/vendors':
         specifier: workspace:*
         version: link:../../packages/vendors
+      '@trace/workers-http':
+        specifier: workspace:*
+        version: link:../../packages/workers-http
       hono:
         specifier: 'catalog:'
         version: 4.13.13
@@ -606,6 +612,9 @@ importers:
       '@trace/vendors':
         specifier: workspace:*
         version: link:../../packages/vendors
+      '@trace/workers-http':
+        specifier: workspace:*
+        version: link:../../packages/workers-http
       hono:
         specifier: 'catalog:'
         version: 4.13.13
