@@ -35,7 +35,7 @@ Split into M0a then M0b (rule 5). The original M0 exit gate is the union of the 
 
 ### D1 · Demo slice (founder, 2026-10-11)
 D1 — Demo slice (staging, synthetic data only): a recruiter creates a test (written + MCQ), invites a candidate by link; the candidate takes it in the browser with a server-held timer, start photo and autosave; the result shows Answer Quality (0–100, mock grader allowed) and the Integrity band with an evidence timeline as two separate results; a reviewer opens the report. Deployed on `<subdomain>.workers.dev` / Pages. Exit gate: full flow passes an automated E2E test on staging, plus a 5-minute screen recording.
-- *Notes (autopilot):* the `*.workers.dev` subdomain is still to be confirmed by the founder (`docs/infra/environments.md`, H4). Sentry (H6, AT-9-sentry) lands before D1 starts. Whether D1 is built as a thin slice straight after `m0b-reviewed` or reached after the M1–M6 parts it needs is an open founder question (`docs/progress/FOUNDER-QUEUE.md`).
+- *Notes (autopilot):* the `*.workers.dev` subdomain is still to be confirmed by the founder (`docs/infra/environments.md`, H4). Sentry (H6, AT-9-sentry) lands before D1 starts. Where D1 sits was answered (a) by the founder on 2026-10-11: a thin slice right after `m0b-reviewed`, before M1 (`docs/build-notes.md` §0; `docs/progress/FOUNDER-QUEUE.md` Resolved).
 
 ### M1 · Test authoring ∥ M2
 - ABH-5 role templates + JD → blueprint · ABH-10 pools, sections, shuffle, per-section timers, server-side item delivery model · ABH-9 Excel/Word import · ABH-8 AI drafting with human approval (via `LlmGrader`/Bedrock interface) · ABH-7 parameterised quant variants · ABH-6 item-bank tooling (content itself is a human task).

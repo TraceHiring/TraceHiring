@@ -1,6 +1,6 @@
 # Spec — M0 Foundations · part **M0a: toolchain, pipeline and skeleton**
 
-- **Status:** revision 16 (autopilot, 2026-10-12). Revision 16 applies HOW-level follow-ups from the S2 and S3a stream reviews (below). Revision 15 fixes spec text that went stale during S1.7 and the first Linux CI runs (gate finding K3, below). Revision 14 applies catalog pass D under the founder's backstop-scope decision (below). Revision 13 applies the catalog re-review fixes (pass C, below). Revision 12 applies the S1.7 review fixes and one founder answer (below). Revision 8 was **approved by the autopilot reviewers**; revisions 9, 10 and 11 only apply founder answers and day-one results (see below and the end of this file). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
+- **Status:** revision 17 (autopilot, 2026-10-12; M0a REVIEW Lows, written inline in §7.4, §9.2 and §10.3 so no line moves). Revision 16 (autopilot, 2026-10-12). Revision 16 applies HOW-level follow-ups from the S2 and S3a stream reviews (below). Revision 15 fixes spec text that went stale during S1.7 and the first Linux CI runs (gate finding K3, below). Revision 14 applies catalog pass D under the founder's backstop-scope decision (below). Revision 13 applies the catalog re-review fixes (pass C, below). Revision 12 applies the S1.7 review fixes and one founder answer (below). Revision 8 was **approved by the autopilot reviewers**; revisions 9, 10 and 11 only apply founder answers and day-one results (see below and the end of this file). Revision 3 was **approved by the founder 2026-10-10**. Revision 4 applies three founder instructions from 2026-10-11 and does not change the product scope: the Q54 answer (**drop auto-push, work locally only**), the autopilot (`docs/AUTOPILOT.md`), and the parallelism policy (AUTOPILOT §2). 
 - **Milestone:** M0a (`docs/build-order.md` → M0 → M0a). Branch `milestone/m0a`, created from `main` at `b7af663`, with `main` at `4863db2` merged in. Tag `m0a-reviewed` after a `trace-milestone-review` PASS.
 - **Revision 16 changes (2026-10-12, S2 and S3a stream reviews).** HOW-level follow-ups from `docs/reviews/M0a-S2-ui-security-review.md` and `docs/reviews/M0a-S3a-workers-security-review.md`. No product scope change.
   - **§5 `verify:fast` (S2 follow-up 2):** `docs/design/tokens.json` is an input of `@trace/ui` (§11), so a change to it selects `@trace/ui` and its dependents instead of counting as docs (`PACKAGE_INPUTS` in `scripts/verify-fast.mjs`).
@@ -476,7 +476,7 @@ Fixing a finding locally is safe because the pre-push scan and the AUTOPILOT §6
 - no force-push or deletion
 - linear history **not** required, because milestone merges are `--no-ff` merge commits
 
-**Repo-level settings:**
+**Repo-level settings:** *(Revision 17, M0a REVIEW SEC-1/SEC-2: on the current owner and plan, a private repo of the personal account `TraceHiring` on GitHub Free, branch protection, rulesets, secret scanning and push protection are unavailable (`gh api` 403); the read-only default token is set. Founder gate in FOUNDER-QUEUE; AT-13 stays unmet until it is answered. Compensating controls meanwhile: gitleaks pre-commit and in `pnpm lint`, the CI `security` job, and the rule that `main` moves only at CLOSE.)*
 - default workflow token read-only
 - `staging` environment branch policy set to `main`
 - secret scanning and push protection on (H3)
@@ -749,7 +749,7 @@ The scrubber is `scrubSentryEvent()` in `packages/shared/src/log/sentry-scrub.ts
   - run the redactor over everything that remains.
 - **Server side** (H6): "Prevent storing IP addresses" and data scrubbing are on, and the region is recorded in ADR-027 as a processor outside India.
 - **No DSN:** the SDK is not initialised. That is allowed locally and in tests; from D1, staging always has a DSN.
-- **Not on `workers/edge` or the candidate app.** They log only through the redacting logger, to Workers Logs (edge) and the console (candidate app). Workers Logs is also recorded in ADR-027 as a processor outside India.
+- **Not on `workers/edge` or the candidate app.** They log only through the redacting logger, to Workers Logs (edge) and the console (candidate app). Workers Logs is also recorded in ADR-027 as a processor outside India. *(Revision 17, M0a REVIEW SPEC-F2:)* Workers Logs are currently **off** on all three Workers (`observability: { enabled: false }`, chosen in the S3a review), so staging keeps no Worker logs. M0b decides: turn them on (ADR-027 already lists Workers Logs as a processor) or record that they stay off. Owner M0b.
 
 ### 9.3 Health contract (`@trace/shared/health`)
 `HealthResponse = z.object({ status: z.literal("ok"), service: z.enum(["edge","jobs","api"]), version: z.string().regex(/^[0-9a-f]{7,40}$|^dev$/), time: z.iso.datetime() })`
@@ -827,7 +827,7 @@ It fails if any of the following holds:
 - `Referrer-Policy: no-referrer`
 
 **`connect-src` per app:**
-- candidate: self plus the staging edge origin
+- candidate: self plus the staging edge origin *(revision 17, M0a REVIEW SPEC-F3: deferred until H4 names the `workers.dev` subdomain; until then the file ships `connect-src 'self'` and `check-headers` accepts it. Owner M0a CLOSE, with H4)*
 - recruiter: self and the Supabase staging origin (M0b); the Sentry ingest host is added with the adapter before D1 (revision 10)
 
 **`Permissions-Policy` per app:**
@@ -1010,7 +1010,7 @@ Rules:
 ### 15.2 Plan §11 rows that touch M0a
 Most rows in the register belong to later milestones. M0a lays groundwork for three of them:
 - **#13 and #14 (privacy):** the PII redactor, error-message dropping and the `ErrorReporter` contract (AT-8, AT-9; Sentry scrubbing AT-9-sentry before D1) keep candidate data out of logs from day one.
-- **#43 (residency stated precisely):** every processor outside India is recorded in ADR-027 (§9.2: Workers Logs now; the Sentry region when the adapter lands before D1).
+- **#43 (residency stated precisely):** every processor outside India is recorded in ADR-027 (§9.2: Workers Logs, currently off — revision 17, M0b decides; the Sentry region when the adapter lands before D1).
 - **#39 (database outage mid-drive):** not M0a. The edge Worker gets no database credential (D6), which keeps the Durable Object path independent of Postgres in M3.
 
 ---

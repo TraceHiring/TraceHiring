@@ -24,7 +24,7 @@ Copy everything in this folder into the root of an empty private GitHub repo and
 | `docs/progress/HANDOFF.md`, `LOG.md` | Where the build stopped and what's next; one log line per session | Claude Code (auto-loaded at session start) |
 | `.claude/skills/trace-handoff/` | Saves verified state and prints the resume prompt before a limit or `/clear` | Claude Code |
 | `scripts/claude-statusline.mjs` | Status line showing 5-hour and weekly usage; saves the numbers for the guard | Claude Code |
-| `scripts/claude-usage-guard.mjs` | Warns Claude at 80% / 90% of the limit so it hands off before being cut off | PostToolUse hook |
+| `scripts/claude-usage-guard.mjs` | Warns Claude at 90% / 95% of the limit so it hands off before being cut off | PostToolUse hook |
 | `scripts/claude-session-start.mjs` | Injects git state and the live handoff (from the newest `*/integration` branch, max 9 KB) into every new, resumed, cleared or compacted session | SessionStart hook |
 
 ## Steps
