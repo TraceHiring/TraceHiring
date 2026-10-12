@@ -115,7 +115,10 @@ const PSQL_FLAGS = ['-X', '-q', '-At', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY
 export function runSql({ url, sql, vars }, deps) {
   const varArgs = Object.entries(vars).flatMap(([k, v]) => ['-v', `${k}=${v}`]);
   const childEnv = { ...deps.env };
-  delete childEnv[DB_URL_ENV];
+  // the child needs none of these (the URL travels as PGDATABASE, only for a real psql)
+  for (const name of [DB_URL_ENV, 'SMOKE_PASSWORD', 'SUPABASE_STAGING_PUBLISHABLE_KEY']) {
+    delete childEnv[name];
+  }
   const opts = {
     input: sql,
     encoding: 'utf8',
