@@ -660,6 +660,7 @@ function checkStepCommon(step, file, where, out, ctx) {
   }
   checkEnv(step.env, file, where, out);
   checkRun(step.run, file, where, out);
+  checkKeyCase(step, file, where, out);
 }
 
 /**
@@ -772,43 +773,52 @@ function checkEnv(env, file, where, out) {
   }
 }
 
-// The one GITHUB_PATH write run text may make: a single directory directly under $RUNNER_TEMP
-// (the setup action's checksum-verified gitleaks), on a line of its own.
-const GITHUB_PATH_LINE_RE = /^\s*echo "\$RUNNER_TEMP\/[A-Za-z0-9_-]+" >> "\$GITHUB_PATH"\s*$/;
+// The one GITHUB_PATH write run text may make: the setup action adds its checksum-verified
+// gitleaks directory, on a line of its own. Any other directory (even under $RUNNER_TEMP) could
+// hold a shim that every later step runs (follow-up review of 0179e2a, Low).
+const SETUP_ACTION_FILE = '.github/actions/setup/action.yml';
+const GITHUB_PATH_LINE_RE = /^\s*echo "\$RUNNER_TEMP\/gitleaks" >> "\$GITHUB_PATH"\s*$/;
 
 /**
  * run: text may only read the names ENV_DENY_REASONS covers ($NAME, ${NAME}, ${#NAME}, ${!NAME},
- * ${NAME:-x}); any other use (an assignment, export, declare, read, unset, printf -v, a
- * GITHUB_ENV line or a workflow command) sets what env: may not (S3b security review). Every
- * GITHUB_ENV use is rejected: a line written to it sets any variable, named however the text
- * builds it, for every later step. GITHUB_PATH only takes GITHUB_PATH_LINE_RE. This is a deny
- * rule, unlike env:'s allow-list, because run text sets ordinary shell variables; what run text
- * does beyond that is for the protected-branch review of .github/.
+ * ${NAME:-x}, ${NAME[0]}); any other use (an assignment, export, declare, read, unset, printf -v,
+ * a GITHUB_ENV line, a workflow command, even a comment) is rejected, so run text cannot set what
+ * env: may not (S3b security review). Every GITHUB_ENV use is rejected: a line written to it sets
+ * any variable, named however the text builds it, for every later step. GITHUB_PATH only takes
+ * GITHUB_PATH_LINE_RE in SETUP_ACTION_FILE. bash joins a backslash-newline before it parses and
+ * drops quotes and backslashes inside a word, so names are looked for in the joined text and
+ * again with quotes and backslashes removed (follow-up review of 0179e2a). This is a deny rule,
+ * unlike env:'s allow-list, because run text sets ordinary shell variables; names built at run
+ * time, eval and everything else run text can do are for the protected-branch review of .github/.
  */
 function checkRun(run, file, where, out) {
   if (typeof run !== 'string') return;
+  const text = run.replace(/\\\r?\n/g, '');
   const named = new Set();
-  for (const m of run.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
-    const name = m[0];
-    const before = run.slice(Math.max(0, m.index - 3), m.index);
-    const after = run.slice(m.index + name.length);
-    // The whole identifier only (no match inside MY_PATH or PATH_X).
-    if (/[A-Za-z0-9_]$/.test(before)) continue;
-    const braced = /\$\{[#!]?$/.test(before);
-    if (/\$$/.test(before) || (braced && !/^:?=/.test(after))) continue;
-    const deny = ENV_DENY_REASONS.find(([, re]) => re.test(name));
-    if (deny && !named.has(name)) {
-      named.add(name);
-      out.push(
-        v(
-          file,
-          where,
-          `run: may not set or export ${name}: ${deny[2]} (run text may only read it, as $${name})`,
-        ),
-      );
+  for (const scanned of [text, text.replace(/["'\\]/g, '')]) {
+    for (const m of scanned.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
+      const name = m[0];
+      const before = scanned.slice(Math.max(0, m.index - 3), m.index);
+      const after = scanned.slice(m.index + name.length);
+      // The whole identifier only (no match inside MY_PATH or PATH_X).
+      if (/[A-Za-z0-9_]$/.test(before)) continue;
+      // ${NAME=x}, ${NAME:=x} and ${NAME[0]=x} assign; every other ${NAME...} form reads.
+      const braced = /\$\{[#!]?$/.test(before);
+      if (/\$$/.test(before) || (braced && !/^(?:\[[^\]]*\])?:?=/.test(after))) continue;
+      const deny = ENV_DENY_REASONS.find(([, re]) => re.test(name));
+      if (deny && !named.has(name)) {
+        named.add(name);
+        out.push(
+          v(
+            file,
+            where,
+            `run: may only read ${name} (as $${name}); it may not set, export or name it: ${deny[2]}`,
+          ),
+        );
+      }
     }
   }
-  if (/(?<![A-Za-z0-9_])GITHUB_ENV(?![A-Za-z0-9_])/.test(run)) {
+  if (/(?<![A-Za-z0-9_])GITHUB_ENV(?![A-Za-z0-9_])/.test(text)) {
     out.push(
       v(
         file,
@@ -817,17 +827,34 @@ function checkRun(run, file, where, out) {
       ),
     );
   }
-  const pathLines = run
+  const pathLines = text
     .split('\n')
     .filter((line) => /(?<![A-Za-z0-9_])GITHUB_PATH(?![A-Za-z0-9_])/.test(line));
-  if (pathLines.some((line) => !GITHUB_PATH_LINE_RE.test(line))) {
+  if (pathLines.some((line) => !(file === SETUP_ACTION_FILE && GITHUB_PATH_LINE_RE.test(line)))) {
     out.push(
       v(
         file,
         where,
-        'run: may only add a $RUNNER_TEMP directory to GITHUB_PATH, as one line: echo "$RUNNER_TEMP/<dir>" >> "$GITHUB_PATH"',
+        `run: may not write GITHUB_PATH (a PATH entry reaches every later step); only ${SETUP_ACTION_FILE} may add its gitleaks line: echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"`,
       ),
     );
+  }
+}
+
+/**
+ * Every real key of a workflow, job, step, action or runs: mapping is lower-case. How GitHub reads
+ * a key such as Run: or Env: was not verified, and this check would not see one, so it fails
+ * closed (follow-up review of 0179e2a, "not checked"). Names inside env:, with: and jobs: are
+ * not keys of these mappings and keep their case.
+ */
+function checkKeyCase(node, file, where, out) {
+  if (!isObj(node)) return;
+  for (const key of Object.keys(node)) {
+    if (key !== key.toLowerCase()) {
+      out.push(
+        v(file, where, `key ${showKey(key)} must be lower-case (it is not checked as written)`),
+      );
+    }
   }
 }
 
@@ -912,6 +939,7 @@ export function checkWorkflow(doc, file, ctx = {}) {
   }
   checkDefaults(doc.defaults, file, 'defaults', out);
   checkEnv(doc.env, file, 'env', out);
+  checkKeyCase(doc, file, '', out);
   if (!isObj(doc.jobs)) {
     out.push(v(file, 'jobs', 'workflow has no jobs mapping'));
     return out;
@@ -923,6 +951,7 @@ export function checkWorkflow(doc, file, ctx = {}) {
       continue;
     }
     checkDefaults(job.defaults, file, `${where}.defaults`, out);
+    checkKeyCase(job, file, where, out);
     // Job permissions never broader than the workflow's.
     if (job.permissions !== undefined) {
       const jp = job.permissions;
@@ -1147,6 +1176,8 @@ export function checkAction(doc, file, ctx = {}) {
   if (doc.runs.using !== 'composite')
     out.push(v(file, 'runs.using', 'local actions must be composite actions'));
   if (secretRefs(doc).length > 0) out.push(v(file, '', 'a local action may not reference secrets'));
+  checkKeyCase(doc, file, '', out);
+  checkKeyCase(doc.runs, file, 'runs', out);
   const steps = Array.isArray(doc.runs.steps) ? doc.runs.steps : [];
   steps.forEach((s, i) => checkStepCommon(s, file, `runs.steps[${i}]`, out, ctx));
   return out;

@@ -749,12 +749,39 @@ describe('checkWorkflow', () => {
         /runner reads/,
       ],
       ['a workflow command', 'echo "::set-env name=NODE_OPTIONS::x"', 'NODE_OPTIONS', null],
+      // Follow-up review (Medium): bash deletes a backslash-newline before parsing, even inside
+      // a name or a ${...}, so the name is only whole after the lines are joined.
+      ['a split export', 'export NO\\\nDE_OPTIONS=--import=x', 'NODE_OPTIONS', null],
+      ['a split prefix', 'PA\\\nTH=/tmp/evil pnpm test', 'PATH', null],
+      ['a split at the underscore', 'export BASH\\\n_ENV=/x', 'BASH_ENV', null],
+      ['a split loader name', 'LD\\\n_PRELOAD=/x.so pnpm test', 'LD_PRELOAD', null],
+      ['a split := expansion', ': "${NODE_OPTIONS:\\\n=x}"', 'NODE_OPTIONS', null],
+      ['a CRLF split', 'export NO\\\r\nDE_OPTIONS=x', 'NODE_OPTIONS', null],
+      // Follow-up review (Low): array-element defaults and quote or backslash splits.
+      ['an array-element = expansion', ': "${NODE_OPTIONS[0]=x}"', 'NODE_OPTIONS', null],
+      ['an array-element := expansion', ': "${PATH[0]:=x}"', 'PATH', null],
+      ['a double-quote split', 'export NO"DE_OPTIONS=--import=x"', 'NODE_OPTIONS', null],
+      ['a single-quote split', "export N'ODE_OPTIONS'=x", 'NODE_OPTIONS', null],
+      ['a backslash split', 'export PA\\TH=/tmp', 'PATH', null],
+      ['adjacent quoted halves', 'printf -v "PA""TH" %s x', 'PATH', null],
+      // One case per deny class not covered above.
+      ['a runner temp override', 'RUNNER_TEMP=/tmp/x pnpm test', 'RUNNER_TEMP', /runner reads/],
+      ['a github variable override', 'GITHUB_SHA=abc pnpm test', 'GITHUB_SHA', /runner reads/],
+      ['BASHOPTS', 'BASHOPTS=x pnpm test', 'BASHOPTS', /bash reads/],
+      ['a DYLD_ name', 'DYLD_INSERT_LIBRARIES=./x.dylib pnpm test', 'DYLD_INSERT_LIBRARIES', null],
+      ['a yarn config name', 'yarn_config_x=1 pnpm test', 'yarn_config_x', /pnpm and npm/],
+      [
+        'a mention in a comment (fails closed)',
+        '# NODE_OPTIONS is unused\npnpm test',
+        'NODE_OPTIONS',
+        null,
+      ],
     ])('rejects %s', (_label, run, name, reason) => {
       const d = doc();
       typecheck(d).run = run;
       const m = msgs(checkWorkflow(d, 'ci.yml', ctx));
       expect(m).toMatch(
-        new RegExp(`\\(jobs\\.static\\.steps\\[2\\]\\): run: may not set or export ${esc(name)}:`),
+        new RegExp(`\\(jobs\\.static\\.steps\\[2\\]\\): run: may only read ${esc(name)} \\(as`),
       );
       if (reason) expect(m).toMatch(reason);
     });
@@ -770,6 +797,7 @@ describe('checkWorkflow', () => {
       ['a variable line', 'echo "X=1" >> "$GITHUB_ENV"'],
       ['the braced form', 'printf "%s\\n" "X=1" >> "${GITHUB_ENV}"'],
       ['a multi-line value', 'echo "X<<EOF" >> $GITHUB_ENV'],
+      ['a name split by a backslash-newline', 'echo "X=1" >> "$GITHUB_E\\\nNV"'],
     ])('rejects any use of GITHUB_ENV (%s)', (_label, run) => {
       const d = doc();
       typecheck(d).run = run;
@@ -786,18 +814,31 @@ describe('checkWorkflow', () => {
       ['a nested directory', 'echo "$RUNNER_TEMP/a/b" >> "$GITHUB_PATH"'],
       ['tee', 'echo "$RUNNER_TEMP/x" | tee -a "$GITHUB_PATH"'],
       ['a second command', 'echo "$RUNNER_TEMP/x" >> "$GITHUB_PATH"; echo ./bin >> "$GITHUB_PATH"'],
+      ['a split name', 'echo /tmp >> "$GITHUB_PA\\\nTH"'],
+      // Follow-up review (Low): any other $RUNNER_TEMP directory could hold a shim.
+      ['another $RUNNER_TEMP directory', 'echo "$RUNNER_TEMP/shim" >> "$GITHUB_PATH"'],
+      ['the setup line outside the setup action', 'echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"'],
     ])('rejects a GITHUB_PATH write of %s', (_label, run) => {
       const d = doc();
       typecheck(d).run = run;
       expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
-        /\(jobs\.static\.steps\[2\]\): run: may only add a \$RUNNER_TEMP directory to GITHUB_PATH/,
+        /\(jobs\.static\.steps\[2\]\): run: may not write GITHUB_PATH/,
       );
     });
 
-    it('accepts adding one $RUNNER_TEMP directory to GITHUB_PATH', () => {
-      const d = doc();
-      typecheck(d).run = 'set -euo pipefail\n  echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"\n';
-      expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
+    const SETUP = '.github/actions/setup/action.yml';
+    const GITLEAKS_PATH_LINE = 'echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"';
+
+    it('accepts the gitleaks GITHUB_PATH line only in the setup action', () => {
+      const a = parseYaml(ACTION);
+      a.runs.steps[2].run = `set -euo pipefail\n  ${GITLEAKS_PATH_LINE}\npnpm install --frozen-lockfile\n`;
+      expect(checkAction(a, SETUP)).toEqual([]);
+      expect(msgs(checkAction(a, '.github/actions/other/action.yml'))).toMatch(
+        /run: may not write GITHUB_PATH/,
+      );
+      const b = parseYaml(ACTION);
+      b.runs.steps[2].run = 'echo "$RUNNER_TEMP/shim" >> "$GITHUB_PATH"';
+      expect(msgs(checkAction(b, SETUP))).toMatch(/run: may not write GITHUB_PATH/);
     });
 
     it('accepts reading denied names and setting other names', () => {
@@ -809,7 +850,46 @@ describe('checkWorkflow', () => {
         'echo "$PATH" "${PATH}" "${#NODE_OPTIONS}" "${NODE_OPTIONS:-none}" "${!RUNNER_TEMP}"',
         'MY_PATH=./x node_modules/.bin/tsc --env staging',
         'node scripts/smoke-staging.mjs --sha "$GITHUB_SHA" ${{ github.sha }}',
+        // bash names are case-sensitive: these lower-case names are not the denied ones.
+        'bash_env=x path=y pnpm test',
+        'echo "${PATH[0]}" "${NODE_OPTIONS:+set}" "${#PATH[@]}" >> "$GITHUB_OUTPUT"',
+        'curl --proto \'=https\' -fsSL \\\n  "https://example.invalid/$RUNNER_TEMP"',
       ].join('\n');
+      expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
+    });
+
+    // GitHub's handling of a key such as Run: or Env: could not be verified offline, so the
+    // check fails closed on upper-case keys where every real key is lower-case.
+    it.each([
+      [
+        'a step',
+        (d) => (d.jobs.static.steps[2] = { Run: 'export NODE_OPTIONS=x' }),
+        'jobs\\.static\\.steps\\[2\\]',
+        'Run',
+      ],
+      ['a job', (d) => (d.jobs.static.Env = { NODE_OPTIONS: 'x' }), 'jobs\\.static', 'Env'],
+      ['the workflow', (d) => (d.ENV = { NODE_OPTIONS: 'x' }), '', 'ENV'],
+    ])('rejects an upper-case key in %s', (_label, mutate, where, key) => {
+      const d = doc();
+      mutate(d);
+      const at = where === '' ? 'ci\\.yml' : `\\(${where}\\)`;
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+        new RegExp(`${at}: key ${key} must be lower-case`),
+      );
+    });
+
+    it('rejects an upper-case key in a composite-action step or its runs:', () => {
+      const a = parseYaml(ACTION);
+      a.runs.steps[2].Shell = 'true {0}';
+      a.runs.Steps = [];
+      const m = msgs(checkAction(a, 'action.yml'));
+      expect(m).toMatch(/\(runs\.steps\[2\]\): key Shell must be lower-case/);
+      expect(m).toMatch(/\(runs\): key Steps must be lower-case/);
+    });
+
+    it('accepts upper-case names inside env:, with: and the jobs mapping', () => {
+      const d = doc();
+      d.jobs.static.steps[2] = { uses: './.github/actions/setup', with: { Token: 'x' } };
       expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
     });
 
@@ -817,7 +897,7 @@ describe('checkWorkflow', () => {
       const a = parseYaml(ACTION);
       a.runs.steps[2].run = 'export NODE_OPTIONS=x\npnpm install --frozen-lockfile';
       expect(msgs(checkAction(a, 'action.yml'))).toMatch(
-        /action\.yml \(runs\.steps\[2\]\): run: may not set or export NODE_OPTIONS:/,
+        /action\.yml \(runs\.steps\[2\]\): run: may only read NODE_OPTIONS \(as/,
       );
       const b = parseYaml(ACTION);
       b.runs.steps[2].run = 'echo "X=1" >> "$GITHUB_ENV"';
@@ -829,7 +909,7 @@ describe('checkWorkflow', () => {
       const s = d.jobs['deploy-staging'].steps[2];
       s.run = `NODE_OPTIONS=--import=./x.mjs ${s.run}`;
       expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
-        /\(jobs\.deploy-staging\.steps\[2\]\): run: may not set or export NODE_OPTIONS:/,
+        /\(jobs\.deploy-staging\.steps\[2\]\): run: may only read NODE_OPTIONS \(as/,
       );
     });
   });
@@ -1281,7 +1361,7 @@ describe('runChecks over a fixture repository', () => {
         '.github/actions/setup/action.yml': REAL_ACTION,
       });
       expect(msgs(runChecks(root))).toMatch(
-        /ci\.yml \(jobs\.static\.steps\[2\]\): run: may not set or export NODE_OPTIONS:/,
+        /ci\.yml \(jobs\.static\.steps\[2\]\): run: may only read NODE_OPTIONS \(as/,
       );
     });
 
@@ -1296,7 +1376,7 @@ describe('runChecks over a fixture repository', () => {
         ),
       });
       expect(msgs(runChecks(root))).toMatch(
-        /setup\/action\.yml \(runs\.steps\[2\]\): run: may only add a \$RUNNER_TEMP directory/,
+        /setup\/action\.yml \(runs\.steps\[2\]\): run: may not write GITHUB_PATH/,
       );
     });
   });
