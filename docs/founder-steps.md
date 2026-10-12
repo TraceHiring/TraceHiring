@@ -50,7 +50,9 @@ Skip: DigitalOcean (offer ended July 2026), Copilot (Claude Code does the coding
 - Inside your terminal:
   ```bash
   # Node 22 LTS via nvm
-  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash   # then reopen the terminal
+  # Download first, read it, then run it (never pipe a remote script straight into a shell; M0a REVIEW SEC-4)
+  curl -fsSLo nvm-install.sh https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh
+  less nvm-install.sh && bash nvm-install.sh   # then reopen the terminal
   nvm install 22 && corepack enable && corepack prepare pnpm@latest --activate
   sudo apt install -y git gh        # Mac: brew install git gh
   gh auth login                     # log in as AbhayRajGit

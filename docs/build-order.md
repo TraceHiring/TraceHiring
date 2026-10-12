@@ -23,8 +23,8 @@ Split into M0a then M0b (rule 5). The original M0 exit gate is the union of the 
 - CI (GitHub Actions): install, typecheck, lint, unit, RLS-harness tests, build, dependency audit, secret scan, migration checks; deploy to staging from CI.
 - Root scripts: `pnpm verify` (typecheck + lint + unit + RLS tests + build) and `pnpm verify:fast` (typecheck + lint + unit on changed packages; used by the Stop hook in `.claude/settings.json`).
 - Git hooks: pre-commit secret scan, commit-message lint (and the auto-push hook, per the founder's answer to build-notes Q54).
-- Observability skeleton: Sentry, structured logging with PII redaction, health checks (part of ABH-80).
-- H: dev machine ready (build-notes Q5), auto-push decision (build-notes Q54), GitHub repo + `staging` environment (deployment branches limited to `main`) + secrets + branch protection, Cloudflare account + API token, Supabase dev + staging projects (Mumbai), Sentry project(s). Domain deferred to M2 (build-notes deviation 6); AWS single account, unused in M0.
+- Observability skeleton: Sentry, structured logging with PII redaction, health checks (part of ABH-80). *Deviation (founder, 2026-10-11): Sentry is deferred until before D1; M0a ships an `ErrorReporter` interface with a no-op reporter. See build-notes "Autopilot changes" and spec `specs/m0-foundations.md` revision 10.*
+- H: dev machine ready (build-notes Q5), auto-push decision (build-notes Q54), GitHub repo + `staging` environment (deployment branches limited to `main`) + secrets + branch protection, Cloudflare account + API token, Supabase dev + staging projects (Mumbai), Sentry project(s) (deferred until before D1, founder 2026-10-11). Domain deferred to M2 (build-notes deviation 6); AWS single account, unused in M0.
 - **Exit gate:** clean clone → `pnpm i && pnpm verify` green (Linux CI, and once on the founder's Windows machine); `supabase db reset` rebuilds from zero and the pgTAP harness runs (catalog meta-tests pass; `test:rls` fails if Docker is down); staging deploys from CI only and every health endpoint responds with the deployed commit; no secret in repo history (gitleaks clean) and the pre-commit scan blocks a staged secret; PII-redaction tests pass; CI blocks merge on red.
 
 #### M0b · Tenancy, roles, audit and org auth
@@ -32,6 +32,10 @@ Split into M0a then M0b (rule 5). The original M0 exit gate is the union of the 
 - Org auth (Supabase Auth: email OTP / password + TOTP; AAL2 for owner, admin and reviewer). Org creation via an audited operator path. Candidate token design (invite + OTP → Trace-issued token that RLS understands) — spec plus a local spike only, implemented in M3a.
 - Append-only audit log (no UPDATE/DELETE/TRUNCATE for any role, including workers).
 - **Exit gate:** `supabase db reset` rebuilds from zero; ≥50 RLS tests (allowed + denied per role, including cross-org) pass — counted separately from the catalog checks; audit log rejects UPDATE/DELETE/TRUNCATE for every role; an org user can sign in on staging; migrations reach staging from CI only.
+
+### D1 · Demo slice (founder, 2026-10-11)
+D1 — Demo slice (staging, synthetic data only): a recruiter creates a test (written + MCQ), invites a candidate by link; the candidate takes it in the browser with a server-held timer, start photo and autosave; the result shows Answer Quality (0–100, mock grader allowed) and the Integrity band with an evidence timeline as two separate results; a reviewer opens the report. Deployed on `<subdomain>.workers.dev` / Pages. Exit gate: full flow passes an automated E2E test on staging, plus a 5-minute screen recording.
+- *Notes (autopilot):* the `*.workers.dev` subdomain is still to be confirmed by the founder (`docs/infra/environments.md`, H4). Sentry (H6, AT-9-sentry) lands before D1 starts. Where D1 sits was answered (a) by the founder on 2026-10-11: a thin slice right after `m0b-reviewed`, before M1 (`docs/build-notes.md` §0; `docs/progress/FOUNDER-QUEUE.md` Resolved).
 
 ### M1 · Test authoring ∥ M2
 - ABH-5 role templates + JD → blueprint · ABH-10 pools, sections, shuffle, per-section timers, server-side item delivery model · ABH-9 Excel/Word import · ABH-8 AI drafting with human approval (via `LlmGrader`/Bedrock interface) · ABH-7 parameterised quant variants · ABH-6 item-bank tooling (content itself is a human task).

@@ -1,0 +1,16 @@
+pnpm-lock.yaml
+node_modules/
+dist/
+coverage/
+.wrangler/
+.claude/worktrees/
+**/worker-configuration.d.ts
+packages/db-types/src/database.ts
+# Generated from docs/design/tokens.json; `tokens:check` compares bytes (S2-S3-PLAN P3).
+packages/ui/src/generated/
+supabase/.temp/
+# Prose and imported design files are not reformatted (build-notes "Autopilot changes", 2026-10-11):
+# the plan, specs and ADRs are sources of truth, and a mechanical rewrite would bury their history.
+*.md
+docs/
+specs/

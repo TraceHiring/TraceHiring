@@ -1,0 +1,2 @@
+-- Seed data for the local stack. Synthetic data only: never real candidate, recruiter or org data
+-- (CLAUDE.md "No PII in logs, errors, analytics, prompts or test fixtures"). Empty in M0a.

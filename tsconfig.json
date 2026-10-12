@@ -1,0 +1,15 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/config" },
+    { "path": "./packages/shared" },
+    { "path": "./packages/ui" },
+    { "path": "./packages/vendors" },
+    { "path": "./packages/db-types" },
+    { "path": "./apps/candidate" },
+    { "path": "./apps/recruiter" },
+    { "path": "./workers/edge" },
+    { "path": "./workers/jobs" },
+    { "path": "./services/api" }
+  ]
+}

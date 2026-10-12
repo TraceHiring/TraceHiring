@@ -1,0 +1,8 @@
+# osv-scanner config for the CI `security` job (spec specs/m0-foundations.md §7.1). Same decision as
+# `auditConfig.ignoreGhsas` in pnpm-workspace.yaml (docs/build-notes.md "Autopilot changes", 2026-10-11).
+# Every entry needs a reason and an expiry, so it is re-checked instead of forgotten.
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2027-01-11T00:00:00Z
+reason = "braces <= 3.0.3 has no fixed release. Reached only via eslint-plugin-boundaries > micromatch at lint time, with patterns from this repository's own eslint config; never untrusted input, never shipped."

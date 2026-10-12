@@ -1,0 +1,17 @@
+# Synthetic fixture: tests copy it to .github/actions/setup/action.yml in a temp repo. SHAs are made up.
+name: Fixture setup
+description: pnpm, Node, frozen install.
+
+runs:
+  using: composite
+  steps:
+    - name: Set up pnpm
+      uses: pnpm/action-setup@2222222222222222222222222222222222222222 # v6
+    - name: Set up Node
+      uses: actions/setup-node@3333333333333333333333333333333333333333
+      with:
+        node-version-file: .node-version
+        cache: pnpm
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile

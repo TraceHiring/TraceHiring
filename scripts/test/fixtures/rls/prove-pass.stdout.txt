@@ -1,0 +1,10 @@
+/work/trace checkout/supabase/tests/catalog_probe.test.sql .. 
+1..4
+ok 1 - MT-4b: anon, authenticated and service_role get no privilege on a new table in any in-scope schema
+ok 2 - MT-4b: anon, authenticated and service_role get no privilege on a new sequence in any in-scope schema
+ok 3 - MT-4b: anon, authenticated and service_role cannot execute a new function in any in-scope schema
+ok 4 - MT-4b: PUBLIC has no EXECUTE on a new function in any in-scope schema
+ok
+All tests successful.
+Files=1, Tests=4,  0 wallclock secs ( 0.02 usr  0.01 sys +  0.01 cusr  0.00 csys =  0.04 CPU)
+Result: PASS
