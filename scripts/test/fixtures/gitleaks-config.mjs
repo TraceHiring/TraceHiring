@@ -36,6 +36,30 @@ export function copyGitleaksConfig(destRoot) {
 }
 
 /**
+ * The stopwords of the vendored config's `generic-api-key` rule, lower-case. gitleaks drops a match whose
+ * secret contains any of them (case-insensitive), so random test values must avoid them.
+ * @returns {string[]}
+ */
+export function genericApiKeyStopwords(root = REPO_ROOT) {
+  const toml = readFileSync(join(root, ...extendPath(root).split('/')), 'utf8');
+  const rule = toml.slice(toml.indexOf('id = "generic-api-key"'));
+  const block = rule.slice(
+    rule.indexOf('stopwords = ['),
+    rule.indexOf(']', rule.indexOf('stopwords = [')),
+  );
+  return [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1].toLowerCase());
+}
+
+/** `n` random alphanumerics that contain none of `words` (case-insensitive) after `prefix`. */
+const randomAlnumAvoiding = (prefix, n, words) => {
+  for (;;) {
+    const s = `${prefix}${randomAlnum(n)}`;
+    const lower = s.toLowerCase();
+    if (!words.some((w) => lower.includes(w))) return s;
+  }
+};
+
+/**
  * Secrets that gitleaks' default global allowlist regex `(?i)^true|false|null$` hid before the vendored
  * copy anchored it (starts with "true", contains "false", ends in "null", any case).
  * @returns {{ label: string, secret: string, line: string }[]} `line` is a source line that holds `secret`
@@ -52,6 +76,10 @@ export function upstreamAllowlistVictims() {
       asConst,
     ],
     ['an sb_secret_ key ending in "NULL"', sb(`${randomAlnum(30)}NULL`), asConst],
-    ['an api_key value starting with "true"', `true${randomAlnum(30)}`, (s) => `api_key = "${s}"`],
+    [
+      'an api_key value starting with "true"',
+      randomAlnumAvoiding('true', 30, genericApiKeyStopwords()),
+      (s) => `api_key = "${s}"`,
+    ],
   ].map(([label, secret, wrap]) => ({ label, secret, line: wrap(secret) }));
 }
