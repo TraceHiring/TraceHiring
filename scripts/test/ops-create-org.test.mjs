@@ -128,6 +128,21 @@ describe('create-org', () => {
     expect(varsOf(h.sqlCalls()[0].args).p_rid).toBe(GENERATED_ID);
   });
 
+  it('requires TLS for a non-local database and refuses a URL that turns it off (B0-SEC1)', () => {
+    const remote = harness({ env: { TRACE_OPERATOR_DB_URL: REMOTE_URL } });
+    main({ argv: GOOD, deps: remote.deps });
+    expect(remote.sqlCalls()[0].opts.env.PGSSLMODE).toBe('require');
+    for (const mode of ['disable', 'allow', 'prefer']) {
+      const h = harness({ env: { TRACE_OPERATOR_DB_URL: `${REMOTE_URL}?sslmode=${mode}` } });
+      const code = main({ argv: GOOD, deps: h.deps });
+      expect(code, mode).not.toBe(0);
+      expect(h.sqlCalls(), mode).toHaveLength(0);
+    }
+    const local = harness({ env: { TRACE_OPERATOR_DB_URL: LOCAL_URL } });
+    main({ argv: GOOD, deps: local.deps });
+    expect(local.sqlCalls()[0].opts.env.PGSSLMODE).toBeUndefined();
+  });
+
   it('gives the URL to psql through PGDATABASE only', () => {
     const h = harness({ env: { TRACE_OPERATOR_DB_URL: REMOTE_URL, KEEP: 'yes' } });
     main({ argv: GOOD, deps: h.deps });

@@ -130,9 +130,20 @@ export function runSql({ url, sql, vars }, deps) {
   const hasPsql = !probe.error && probe.status === 0;
   let res;
   if (hasPsql) {
+    // A non-local operator URL is the postgres session: TLS is required (B0-SEC1). PGSSLMODE covers a
+    // URL without sslmode; a URL that weakens it is refused before anything runs.
+    const remote = !LOCAL_HOSTS.has(hostOf(url) ?? '');
+    if (remote && /[?&]sslmode=(disable|allow|prefer)(&|$)/i.test(url)) {
+      return { ok: false, why: 'a non-local database URL must not turn TLS off', sqlstate: null };
+    }
     res = deps.spawnSync('psql', [...PSQL_FLAGS, ...varArgs, '-f', '-'], {
       ...opts,
-      env: { ...childEnv, PGDATABASE: url, PGCONNECT_TIMEOUT: '15' },
+      env: {
+        ...childEnv,
+        PGDATABASE: url,
+        PGCONNECT_TIMEOUT: '15',
+        ...(remote ? { PGSSLMODE: 'require' } : {}),
+      },
     });
   } else {
     const host = hostOf(url);
