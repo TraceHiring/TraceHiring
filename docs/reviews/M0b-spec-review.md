@@ -64,3 +64,17 @@ HOW-vs-WHAT (reviewer): every scope call in revision 1 is HOW (no T&S read polic
 Checked clean: DC-1 (policies and CHECKs stored by OID → EXECUTE enough; **not** true for plpgsql/SQL function bodies, see D1); trigger functions need no EXECUTE for the firing role; DC-5 on `audit_log` (row triggers cloned via `tgparentid`; TRUNCATE not cloned; with per-partition triggers direct truncate, delete and cross-partition update all raise P0001); PK incl. `occurred_at` valid; DC-3/DC-4 locally (`create role … nologin`, trigger on `auth.sessions`, FK to `auth.users`); MT-11 compatibility of own-row and helper policies (incl. the proposed `no_caller_reference`); MT-2 `org_id_not_indexed` satisfied by every planned table; `auth.uid()`/`auth.jwt()` read `request.jwt.claims`; multi-statement `throws_ok` works; ≥50 (target ≥120) realistic.
 
 Not checked: hosted staging (DC-3/4/6), GoTrue `amr` values and session update on MFA verify, whether `db reset` keeps cluster-global roles (use `if not exists`), §4 Auth config and app flows.
+
+## Re-review of revision 2 (Sonnet spec-reviewer, 2026-10-12): CHANGES REQUIRED
+All 41 findings (S1–S25, D1–D16) **RESOLVED**. Revision 2 introduced 4 Medium and 4 Low problems, to fix in revision 3 (next session, lead):
+
+| # | Sev | § | Problem | Fix |
+| --- | --- | --- | --- | --- |
+| N1 | Medium | 2.4 vs 3.6 | `audit.repartition` has no org, but `audit_log.org_id` is NOT NULL, in the PK and an FK | Write it to the `trace_internal` org (state it), or drop the event and record repartitions in the M7 job log |
+| N2 | Medium | 3.5 rule 5, 6, 10 | The `invited` persona can't exist (rule 5 forces `active` on insert, also on the operator path) | Test-only path: the operator path may insert `invited` (rule 5 applies to app callers only), or drop the persona until M1 |
+| N3 | Medium | 6, 2.4, AT-B3 | Owner/replica-mode cases fail on the revoked privilege before any trigger fires, so they prove the revoke, not the ALWAYS trigger | Inside the test transaction re-grant the privilege to `postgres`, then assert `P0001` (trigger) in normal and replica mode; keep a separate case for the revoke |
+| N4 | Medium | 2.6 vs 4.4, AT-B8 | `create_org` always makes `{org_owner, admin}`; nothing creates the recruiter-only smoke/OTP user | Add `scripts/ops/add-member.mjs` (operator path, zod args, roles) or a roles argument on `create_org`; use it in AT-B8 and H9 |
+| N5 | Low | 4.4 | Heading says "no service-role key anywhere" but local mode reads the local demo key | Reword: no **staging/production** service-role key; local demo key only, refused for non-127.0.0.1 |
+| N6 | Low | 2.2 vs rls_roles | Own-row exception unstated for a suspended org | State: own rows stay visible, nothing else |
+| N7 | Low | 3.2, 3.9 | No `orgs` guard/audit trigger defined for the column rules and `org.update` | Add `private.orgs_guard()` + audit trigger in §2.8/§3.2 |
+| N8 | Low | 1.3 vs AT-B9 | First staging smoke runs before H9 can create the smoke org | State the order: first run fails at the smoke step, then H9, then re-run |
