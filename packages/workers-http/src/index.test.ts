@@ -1,5 +1,5 @@
-// @trace/workers-http (specs/m0b-tenancy.md §1.1 item 9b). The skeleton's one shared piece; stream B5
-// moves the rest of the Workers' error and 404 handling here with its tests.
+// @trace/workers-http (specs/m0b-tenancy.md §1.1 item 9b). This file covers the shared constants and
+// the static 500; the error and 404 handling (createHttpApp) is tested in error-handling.test.ts.
 import { describe, expect, it } from 'vitest';
 import { NO_STORE, staticInternalError } from './index';
 
