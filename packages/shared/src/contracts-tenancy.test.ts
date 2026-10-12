@@ -12,7 +12,7 @@ import {
   Password,
   SignInEmail,
   TotpCode,
-} from './contracts.js';
+} from './contracts-tenancy.js';
 
 const ID = '00000000-0000-4000-8000-000000000001';
 const ID2 = '00000000-0000-4000-8000-000000000002';
