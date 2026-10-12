@@ -72,3 +72,35 @@ Diff `git diff 91622ee ba3ac88` (`m0a/s3b-fixes`: `4327ca8`, `8ee02c5`, `ba3ac88
 - **`$GITHUB_SHA`:** no `${{` remains in run text, and a test asserts it.
 - **S3B-5:** an accepted residual (owner M8).
 - **Info:** `check-bundle-size` and `check-headers` look only at the non-staging build. The staging bundle is covered by `scan-dist`. No action.
+
+## Lead follow-up: the `check-workflows` run-text gap (2026-10-12)
+- **`0179e2a`** adds `checkRun`: run text may only read the `ENV_DENY_REASONS` names, every `GITHUB_ENV` use fails, and `GITHUB_PATH` is restricted. **`98feb3c`** applies the `container:`/`services:` ban to `deploy-staging` (N10–N13 re-review P2).
+- **Security review of both (Sonnet): PASS WITH FINDINGS.**
+  - Medium: a backslash-newline split a denied name, because bash joins the lines before it parses them. Repros: `export NO\<LF>DE_OPTIONS=x`, `echo "X=1" >> "$GITHUB_E\<LF>NV"`, `echo /tmp >> "$GITHUB_PA\<LF>TH"`.
+  - Low:
+    - `${NAME[0]=x}` was read as a read;
+    - quote and backslash splits passed (`NO"DE_OPTIONS=x"`, `PA\TH=/tmp`);
+    - any `$RUNNER_TEMP/<dir>` could go on PATH (shim risk);
+    - the message said "set or export" for a mere mention;
+    - test gaps (`RUNNER_*`, `BASHOPTS`, `DYLD_*`, a lower-case accept case).
+  - Not checked: how GitHub reads `Run:` or `Env:`.
+  - Residuals: names built at run time, `eval`, `$'\x..'`, `HOME`/`.npmrc` tricks, `github-script`. Accepted: run text is for the protected-branch review (summary L12).
+- **Fixed in `dbb20c7`:**
+  - names are scanned in the joined text, and again with quotes and backslashes removed;
+  - array-element defaults count as assignments;
+  - only `.github/actions/setup/action.yml` may write `GITHUB_PATH`, and only `echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"`;
+  - the message now says the name may only be read;
+  - workflow, job, step, action and `runs:` keys must be lower-case (fails closed on `Run:`/`Env:`).
+  - Tests first: 51 new or changed cases failed on the old code. `verify:fast`: scripts 1289 passed + 1 skipped (K4).
+- **Re-review of `dbb20c7` (Sonnet): PASS WITH FINDINGS** (no Critical, High or Medium). Every earlier repro is now rejected, and `check-workflows` passes on the real files with no new false positive.
+  - Low: `export NO$''DE_OPTIONS=x`, `NO$""DE_…` and brace lists (`NO{,}DE_…`, `NO{,x}DE_…`) still passed.
+  - Low: `defaults: {Run: {Shell: …}}` (workflow or job level) was outside the key-case check.
+  - Info: nested subscripts (`${NODE_OPTIONS[a[0]]=x}`) pass. Accepted: bash does not export arrays.
+  - Info: no test for an action's top-level key case.
+- **Fixed in the next commit:**
+  - the unquoted pass also drops a `$` before a quote;
+  - brace lists are scanned once per alternative position (nested lists stay a residual);
+  - `checkKeyCase` covers `defaults` and `defaults.run` at both levels;
+  - tests cover the action top-level key, the four `defaults` cases and a plain-text accept case (`"it's fine"`, a JSON literal, `{a,b}`).
+  - 10 new cases failed first. `verify:fast`: scripts 1299 passed + 1 skipped (K4). Both Lows were small and were fixed exactly as the reviewer suggested, so there is no further re-review.
+- **AT-1a-local re-run on `dbb20c7`: PASSED** (scripts 1290 passed, 0 skipped; `test:rls` 112/112).

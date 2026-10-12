@@ -794,8 +794,10 @@ const GITHUB_PATH_LINE_RE = /^\s*echo "\$RUNNER_TEMP\/gitleaks" >> "\$GITHUB_PAT
 function checkRun(run, file, where, out) {
   if (typeof run !== 'string') return;
   const text = run.replace(/\\\r?\n/g, '');
+  // An empty $'' or $"" inside a word disappears too (re-review of dbb20c7, Low).
+  const unquoted = text.replace(/\$(?=["'])/g, '').replace(/["'\\]/g, '');
   const named = new Set();
-  for (const scanned of [text, text.replace(/["'\\]/g, '')]) {
+  for (const scanned of [text, unquoted, ...braceVariants(unquoted)]) {
     for (const m of scanned.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
       const name = m[0];
       const before = scanned.slice(Math.max(0, m.index - 3), m.index);
@@ -842,6 +844,26 @@ function checkRun(run, file, where, out) {
 }
 
 /**
+ * bash brace-expands NO{,x}DE_OPTIONS=y into NODE_OPTIONS=y NOxDE_OPTIONS=y before export reads
+ * it (re-review of dbb20c7, Low). Each variant picks the k-th alternative of every brace list (the
+ * last one when a list is shorter); nested lists stay a residual. ${...} is not a brace list.
+ */
+function braceVariants(s) {
+  const re = /(?<!\$)\{([^{}]*,[^{}]*)\}/g;
+  const longest = Math.max(0, ...[...s.matchAll(re)].map((m) => m[1].split(',').length));
+  const out = [];
+  for (let k = 0; k < longest; k++) {
+    out.push(
+      s.replace(re, (_, body) => {
+        const alts = body.split(',');
+        return alts[Math.min(k, alts.length - 1)];
+      }),
+    );
+  }
+  return out;
+}
+
+/**
  * Every real key of a workflow, job, step, action or runs: mapping is lower-case. How GitHub reads
  * a key such as Run: or Env: was not verified, and this check would not see one, so it fails
  * closed (follow-up review of 0179e2a, "not checked"). Names inside env:, with: and jobs: are
@@ -869,6 +891,9 @@ function checkDefaults(defaults, file, where, out) {
     out.push(v(file, where, 'defaults: must be a mapping with a run: mapping'));
     return;
   }
+  // A Run: or Shell: key would hide a shell template from the check below (re-review of dbb20c7).
+  checkKeyCase(defaults, file, where, out);
+  checkKeyCase(defaults.run, file, `${where}.run`, out);
   if (defaults.run?.shell !== undefined && defaults.run.shell !== 'bash') {
     out.push(v(file, where, SHELL_MESSAGE));
   }

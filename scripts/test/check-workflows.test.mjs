@@ -776,6 +776,13 @@ describe('checkWorkflow', () => {
         'NODE_OPTIONS',
         null,
       ],
+      // Re-review of dbb20c7 (Low): empty $'' / $"" strings and brace lists inside a name.
+      ["an empty $'' split", "export NO$''DE_OPTIONS=x", 'NODE_OPTIONS', null],
+      ['an empty $"" split', 'export NO$""DE_OPTIONS=x', 'NODE_OPTIONS', null],
+      ['an empty brace list', 'export NO{,}DE_OPTIONS=x', 'NODE_OPTIONS', null],
+      ['a brace list, first word', 'export NO{,x}DE_OPTIONS=x', 'NODE_OPTIONS', null],
+      ['a brace list, second word', 'export N{x,O}DE_OPTIONS=x', 'NODE_OPTIONS', null],
+      ['a brace list, middle word', 'export PA{x,T,y}H=/tmp', 'PATH', null],
     ])('rejects %s', (_label, run, name, reason) => {
       const d = doc();
       typecheck(d).run = run;
@@ -854,6 +861,8 @@ describe('checkWorkflow', () => {
         'bash_env=x path=y pnpm test',
         'echo "${PATH[0]}" "${NODE_OPTIONS:+set}" "${#PATH[@]}" >> "$GITHUB_OUTPUT"',
         'curl --proto \'=https\' -fsSL \\\n  "https://example.invalid/$RUNNER_TEMP"',
+        // Quote stripping and brace variants must not make a denied name out of plain text.
+        'echo "it\'s fine" {a,b} \'{"k":1,"v":2}\' "${GITHUB_SHA:0:7}"',
       ].join('\n');
       expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
     });
@@ -885,6 +894,39 @@ describe('checkWorkflow', () => {
       const m = msgs(checkAction(a, 'action.yml'));
       expect(m).toMatch(/\(runs\.steps\[2\]\): key Shell must be lower-case/);
       expect(m).toMatch(/\(runs\): key Steps must be lower-case/);
+      const b = parseYaml(ACTION);
+      b.Name = 'x';
+      expect(msgs(checkAction(b, 'action.yml'))).toMatch(
+        /action\.yml: key Name must be lower-case/,
+      );
+    });
+
+    // Re-review of dbb20c7 (Low): a defaults: shell template is the same no-op bypass.
+    it.each([
+      [
+        'workflow defaults:',
+        (d) => (d.defaults = { Run: { shell: 'bash' } }),
+        /\(defaults\): key Run/,
+      ],
+      [
+        'workflow defaults.run',
+        (d) => (d.defaults = { run: { Shell: 'true {0}' } }),
+        /\(defaults\.run\): key Shell/,
+      ],
+      [
+        'job defaults:',
+        (d) => (d.jobs.static.defaults = { Run: { shell: 'bash' } }),
+        /\(jobs\.static\.defaults\): key Run/,
+      ],
+      [
+        'job defaults.run',
+        (d) => (d.jobs.static.defaults = { run: { Shell: 'true {0}' } }),
+        /\(jobs\.static\.defaults\.run\): key Shell/,
+      ],
+    ])('rejects an upper-case key in %s', (_label, mutate, re) => {
+      const d = doc();
+      mutate(d);
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(re);
     });
 
     it('accepts upper-case names inside env:, with: and the jobs mapping', () => {
