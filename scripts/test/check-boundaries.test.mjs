@@ -13,6 +13,9 @@ import {
   checkSupabaseConfig,
   checkTrackedEnvFiles,
   checkViteNames,
+  checkWorkersObservability,
+  parseJsonc,
+  WORKERS_OBSERVABILITY,
   runChecks,
 } from '../check-boundaries.mjs';
 import {
@@ -346,11 +349,116 @@ describe('rule 7: no error reporter or Sentry in the candidate app or the edge W
   });
 });
 
+/** The observability block of specs/m0b-tenancy.md §1.1 item 9 (c), as wrangler.jsonc text. */
+const OBS_JSONC = `"observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "redact_query_string": true,
+    "logs": { "invocation_logs": false },
+    "traces": { "enabled": false },
+  },`;
+
+const wrangler = (observability = OBS_JSONC, env = '') => `// A Worker config.
+{
+  "name": "trace-x", // trailing comment
+  "main": "src/index.ts",
+  /* block
+     comment */
+  ${observability}
+  "vars": { "VERSION": "dev", "URL": "https://example.test/a//b" },
+  "env": { ${env} },
+}
+`;
+
+describe('rule 8: Workers Logs settings in every Worker wrangler.jsonc (M0b §1.1 9c)', () => {
+  const at = (p, content) => checkWorkersObservability([f(p, content)]);
+
+  it('pins exactly the spec values', () => {
+    expect(WORKERS_OBSERVABILITY).toEqual({
+      enabled: true,
+      head_sampling_rate: 1,
+      redact_query_string: true,
+      logs: { invocation_logs: false },
+      traces: { enabled: false },
+    });
+  });
+
+  it.each([
+    'workers/edge/wrangler.jsonc',
+    'workers/jobs/wrangler.jsonc',
+    'services/api/wrangler.jsonc',
+  ])('passes %s with the exact block (comments and trailing commas allowed)', (p) => {
+    expect(at(p, wrangler())).toEqual([]);
+  });
+
+  it('ignores files that are not a Worker wrangler.jsonc', () => {
+    expect(at('workers/edge/src/app.ts', 'observability = false')).toEqual([]);
+    expect(at('apps/recruiter/wrangler.jsonc', '{}')).toEqual([]);
+  });
+
+  it.each([
+    ['missing', ''],
+    ['off', '"observability": { "enabled": false },'],
+    [
+      'invocation logs on',
+      OBS_JSONC.replace('"invocation_logs": false', '"invocation_logs": true'),
+    ],
+    ['invocation logs unset', OBS_JSONC.replace('{ "invocation_logs": false }', '{}')],
+    [
+      'traces on',
+      OBS_JSONC.replace('"traces": { "enabled": false }', '"traces": { "enabled": true }'),
+    ],
+    ['traces unset', OBS_JSONC.replace('"traces": { "enabled": false },', '')],
+    [
+      'query strings kept',
+      OBS_JSONC.replace('"redact_query_string": true', '"redact_query_string": false'),
+    ],
+    ['sampled', OBS_JSONC.replace('"head_sampling_rate": 1', '"head_sampling_rate": 0.5')],
+    ['an extra key', OBS_JSONC.replace('"logs": {', '"logs": { "destinations": ["x"],')],
+  ])('fails when observability is %s', (_label, block) => {
+    const v = at('workers/edge/wrangler.jsonc', wrangler(block));
+    expect(v).toHaveLength(1);
+    expect(v[0].rule).toBe(8);
+    expect(v[0].path).toBe('workers/edge/wrangler.jsonc');
+  });
+
+  it('fails when an env block overrides observability', () => {
+    const env = '"staging": { "observability": { "enabled": false } },';
+    const v = at('workers/jobs/wrangler.jsonc', wrangler(OBS_JSONC, env));
+    expect(v).toHaveLength(1);
+    expect(v[0].message).toMatch(/env\.staging/);
+  });
+
+  it('fails closed on a file it cannot parse', () => {
+    const v = at('services/api/wrangler.jsonc', '{ "observability": ');
+    expect(v).toHaveLength(1);
+    expect(v[0].rule).toBe(8);
+  });
+});
+
+describe('parseJsonc', () => {
+  it('keeps // and /* inside strings and drops real comments and trailing commas', () => {
+    expect(parseJsonc('{ "a": "x//y", "b": "/*z*/", /* c */ "c": [1, 2,], // d\n }')).toEqual({
+      a: 'x//y',
+      b: '/*z*/',
+      c: [1, 2],
+    });
+  });
+
+  it('handles escaped quotes in strings', () => {
+    expect(parseJsonc('{ "a": "q\\"//still string" }')).toEqual({ a: 'q"//still string' });
+  });
+
+  it('throws on invalid input', () => {
+    expect(() => parseJsonc('{ "a": }')).toThrow();
+  });
+});
+
 describe('runChecks over a fixture repository', () => {
   const cleanTree = {
     'env.example': 'SUPABASE_SERVICE_ROLE_KEY=\n',
     'apps/candidate/src/main.tsx': 'export const name = "Trace";\n',
-    'workers/edge/wrangler.jsonc': '{ "name": "trace-edge" }\n',
+    'workers/edge/wrangler.jsonc': wrangler(),
     'workers/jobs/src/index.ts': '// server worker\n',
     'docs/plan.md': 'service_role is server-only\n',
   };
@@ -372,6 +480,7 @@ describe('runChecks over a fixture repository', () => {
       'supabase/migrations/.keep': '',
       'apps/recruiter/src/crlf.ts': 'const a = 1;\r\nconst b = 2;\r\n',
       'services/api/src/c.ts': '/* eslint-disable */\n',
+      'workers/jobs/wrangler.jsonc': '{ "observability": { "enabled": false } }\n',
     });
     commitAll(repo);
     // Untracked (but not ignored) files are checked too, so a new file can't slip through before `git add`.
@@ -386,6 +495,7 @@ describe('runChecks over a fixture repository', () => {
         '4:supabase/config.toml',
         '5:apps/recruiter/src/crlf.ts',
         '6:services/api/src/c.ts',
+        '8:workers/jobs/wrangler.jsonc',
       ].sort(),
     );
   });

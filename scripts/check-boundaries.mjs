@@ -12,10 +12,14 @@
 //   7. an error reporter or Sentry name in non-test source of apps/candidate/ or workers/edge/
 //      (spec §9.2: only the recruiter app, workers/jobs and services/api report errors; S3a review
 //      S3A-3, plan risk 9)
+//   8. a Worker's wrangler.jsonc (workers/*/, services/*/) whose top-level `observability` is not exactly
+//      WORKERS_OBSERVABILITY, or an env block that overrides it (specs/m0b-tenancy.md §1.1 item 9 (c):
+//      Workers Logs on, invocation logs and traces off, query strings redacted)
 // Prints only paths and rule names, never file contents.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 export const CREDENTIAL_NAMES = [
@@ -277,6 +281,94 @@ export function checkNoErrorReporter(files) {
   return out;
 }
 
+// ---------- rule 8 ----------
+/**
+ * Workers Logs settings every Worker must deploy with (specs/m0b-tenancy.md §1.1 item 9 (c), DC-7:
+ * keys checked against wrangler 4.149.0's config-schema.json). Only the redacting logger's lines
+ * are stored: no invocation logs (request URL, headers, client IP), no traces.
+ */
+export const WORKERS_OBSERVABILITY = Object.freeze({
+  enabled: true,
+  head_sampling_rate: 1,
+  redact_query_string: true,
+  logs: Object.freeze({ invocation_logs: false }),
+  traces: Object.freeze({ enabled: false }),
+});
+const WORKER_WRANGLER = /^(?:workers|services)\/[^/]+\/wrangler\.jsonc$/;
+
+/**
+ * Parses JSONC as wrangler reads it: line and block comments and trailing commas are allowed.
+ * Comment markers inside strings are kept. Throws on anything JSON.parse rejects afterwards.
+ * @param {string} text
+ */
+export function parseJsonc(text) {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+    } else if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end === -1) throw new Error('unterminated block comment');
+      i = end + 2;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  // Trailing commas: a comma followed only by whitespace before } or ] (strings are intact here, so
+  // drop them outside strings only).
+  let clean = '';
+  for (let k = 0; k < out.length; k++) {
+    const c = out[k];
+    if (c === '"') {
+      let j = k + 1;
+      while (j < out.length && out[j] !== '"') j += out[j] === '\\' ? 2 : 1;
+      clean += out.slice(k, j + 1);
+      k = j;
+    } else if (c === ',' && /^\s*[}\]]/.test(out.slice(k + 1))) {
+      continue;
+    } else {
+      clean += c;
+    }
+  }
+  return JSON.parse(clean);
+}
+
+/** @param {{path: string, content: string}[]} files repo-relative POSIX paths */
+export function checkWorkersObservability(files) {
+  const out = [];
+  for (const { path: p, content } of files) {
+    if (!WORKER_WRANGLER.test(p)) continue;
+    let config;
+    try {
+      config = parseJsonc(content);
+    } catch {
+      out.push(
+        violation(8, p, 'cannot be parsed as JSONC, so its Workers Logs settings are unknown'),
+      );
+      continue;
+    }
+    const problems = [];
+    if (!isDeepStrictEqual(config?.observability, WORKERS_OBSERVABILITY)) {
+      problems.push('observability is not exactly the M0b Workers Logs block (spec §1.1 9c)');
+    }
+    for (const [name, env] of Object.entries(config?.env ?? {})) {
+      if (env !== null && typeof env === 'object' && 'observability' in env) {
+        problems.push(`env.${name} overrides observability`);
+      }
+    }
+    if (problems.length > 0) out.push(violation(8, p, problems.join('; ')));
+  }
+  return out;
+}
+
 // ---------- repo walk ----------
 function gitOut(root, args) {
   const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
@@ -323,6 +415,7 @@ export function runChecks(root) {
     ...checkCrlf(gitOut(root, ['ls-files', '--eol', '-z'])),
     ...checkEslintDisables(files),
     ...checkNoErrorReporter(files),
+    ...checkWorkersObservability(files),
   ];
 }
 
