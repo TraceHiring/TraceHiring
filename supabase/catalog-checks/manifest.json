@@ -10,7 +10,10 @@
         "foreign_table_in_scope"
       ]
     },
-    { "id": "MT-2", "branches": ["missing_org_id", "org_id_not_uuid", "org_id_nullable"] },
+    {
+      "id": "MT-2",
+      "branches": ["missing_org_id", "org_id_not_uuid", "org_id_nullable", "org_id_not_indexed"]
+    },
     {
       "id": "MT-3",
       "branches": ["banned_column", "integrity_reject_column", "composite_type_column"]
@@ -72,7 +75,8 @@
         "index_expression",
         "column_domain",
         "outside_host_both",
-        "system_table_trigger"
+        "system_table_trigger",
+        "system_relation_policy"
       ]
     },
     {
@@ -133,12 +137,38 @@
         "system_schema_policy",
         "inherited_table_policy",
         "qual_without_column",
-        "auth_only_clause"
+        "auth_only_clause",
+        "no_caller_reference",
+        "system_list_policy"
       ]
     },
     {
       "id": "MT-12",
       "branches": ["global_function_entry_missing", "global_entry_grant", "schema_entry_grant"]
+    },
+    {
+      "id": "MT-13",
+      "branches": [
+        "rls_off",
+        "acl",
+        "owner_dml",
+        "no_row_trigger",
+        "no_truncate_trigger",
+        "not_always",
+        "missing_parent"
+      ]
+    },
+    {
+      "id": "MT-14",
+      "branches": [
+        "attribute",
+        "gateway_edge",
+        "candidate_member",
+        "bypassrls",
+        "supabase_role_membership",
+        "both_schemas",
+        "login_dml"
+      ]
     }
   ]
 }

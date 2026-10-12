@@ -21,6 +21,13 @@
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
+--   no_caller_reference (M0b, M0a review DB-1): a USING or WITH CHECK of a PERMISSIVE policy that refers to a
+--     column of its table but calls no function in private or auth, on a table that is not on the reference list,
+--     such as the soft-delete clause using (deleted_at is null). It never depends on who is asking, so it ORs open
+--     every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--   system_list_policy (M0b, M0a catalog pass C review E3): any policy on any relation in a system-list schema,
+--     whoever owns the relation (supautils lets postgres create policies on auth, storage and realtime tables).
+--     Trace uses R2 and Durable Objects, not Supabase Storage or Realtime, and adds no policy there.
 -- In-scope tables: every relation in public, private, quality and integrity, every relation whose owner postgres
 -- is a member of in a system-list schema where a migration can still create objects (escape_schema below),
 -- and every pg_inherits descendant of those (INHERITS children and partitions, recursively, wherever they live).
@@ -33,8 +40,10 @@ reference_table (schema_name, table_name, adr) as (
   values
     -- One row per reference table whose policies may be literally true, each citing its ADR, e.g.
     -- ('public', 'countries', 'ADR-0NN reference data'),
-    -- Empty in M0a. The null row below only types the columns and is ignored.
-    (null::name, null::name, null::text)
+    -- The null row below only types the columns and is ignored.
+    (null::name, null::name, null::text),
+    -- M0b (spec specs/m0b-tenancy.md §3.8, D6): worker-only table, policies for trace_worker only.
+    ('public', 'idempotency_keys', 'ADR-029 worker-only ledger, no app role has a grant')
 ),
 scope_schema as (
   select n.oid
@@ -297,6 +306,44 @@ finding (oid, branch, detail) as (
     )
   union all
   select distinct
+    pt.oid,
+    'no_caller_reference'::text,
+    format('%s refers to a column but calls no function in private or auth, so it ignores the caller', pt.clause)::text
+  from policy_tree as pt
+  join scope_policy as sp on sp.oid = pt.oid
+  where case pt.clause when 'USING' then sp.using_text else sp.check_text end <> 'true'
+    and sp.polpermissive
+    and not exists (
+      select 1
+      from tree_call as c
+      where c.oid = pt.oid
+        and c.clause = pt.clause
+    )
+    and exists (
+      select 1
+      from tree_node as v
+      where v.oid = pt.oid
+        and v.clause = pt.clause
+        and v.piece like '{VAR %'
+        and substring(v.piece from ':varlevelsup ([0-9]+)')::int = (
+          select count(*)
+          from tree_node as q
+          where q.oid = v.oid
+            and q.clause = v.clause
+            and q.piece like '{QUERY %'
+            and q.ord < v.ord
+            and v.ord < q.end_ord
+        )
+    )
+    and not exists (
+      select 1
+      from reference_table as rt
+      where rt.schema_name = sp.nspname
+        and rt.table_name = sp.relname
+        and rt.adr ~ '^ADR-[0-9]+'
+    )
+  union all
+  select distinct
     f.oid,
     'auth_call_unwrapped'::text,
     format('auth.uid() or auth.jwt() is called outside a scalar sub-select in %s', f.clause)::text
@@ -326,3 +373,25 @@ select
   end::text as detail
 from finding as f
 join scope_policy as sp on sp.oid = f.oid
+union all
+select
+  'system_list_policy'::text,
+  format('%I on %I.%I', pol.polname, n.nspname, c.relname)::text,
+  'a policy on a relation in a system-list schema'::text
+from pg_policy as pol
+join pg_class as c on c.oid = pol.polrelid
+join pg_namespace as n on n.oid = c.relnamespace
+where n.nspname in (
+    'auth', 'storage', 'extensions', 'realtime', '_realtime', 'graphql', 'graphql_public', 'supabase_functions',
+    'supabase_migrations', 'vault', 'pgsodium', 'pgsodium_masks', 'net', 'cron', 'pgbouncer', '_analytics'
+  )
+  and not exists (
+    select 1
+    from pg_depend as d
+    join pg_extension as x on x.oid = d.refobjid
+    where d.classid = 'pg_class'::regclass
+      and d.objid = c.oid
+      and d.refclassid = 'pg_extension'::regclass
+      and d.deptype = 'e'
+      and x.extnamespace = c.relnamespace
+  )

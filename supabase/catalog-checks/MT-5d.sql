@@ -30,6 +30,8 @@
 --     postgres holds TRIGGER), whose code (its WHEN clause and its function) reaches both. Triggers are the one host
 --     a migration can attach to a table it does not own, so trigger hosts are taken from every relation, not only
 --     scope_rel.
+--   system_relation_policy (M0b, M0a catalog pass C review E3): the same for a policy. supautils lets postgres
+--     create policies on auth, storage and realtime tables, so policy hosts are also taken from every relation.
 -- The MT-5a rule is the closure in shared:graph and shared:closure below (the same text in MT-5a, 5b, 5c and 5d).
 -- Extension members are not skipped here: an extension installed in quality or integrity is already an MT-9
 -- violation.
@@ -255,8 +257,8 @@ foreign_key as (
     and src.nspname <> ref.nspname
 ),
 -- host: code attached to an in-scope relation, walked from the host itself (its edges are in code_edge). kind
--- names the branch. Triggers are taken on every relation (system_table_trigger): TRIGGER is a privilege, so a
--- migration can attach one to a table it does not own.
+-- names the branch. Triggers and policies are taken on every relation (system_table_trigger,
+-- system_relation_policy): a migration can attach either to a table it does not own.
 host (classid, oid, relid, name, kind) as (
   select 'pg_trigger'::regclass::oid, tg.oid, tg.tgrelid, format('%I', tg.tgname), 'trigger'::text
   from pg_trigger as tg
@@ -264,7 +266,6 @@ host (classid, oid, relid, name, kind) as (
   union all
   select 'pg_policy'::regclass::oid, pol.oid, pol.polrelid, format('%I', pol.polname), 'policy'::text
   from pg_policy as pol
-  where pol.polrelid in (select s.oid from scope_rel as s)
   union all
   select 'pg_attrdef'::regclass::oid, ad.oid, ad.adrelid, format('default of %I', a.attname), 'default'::text
   from pg_attrdef as ad
@@ -387,8 +388,9 @@ crossing as (
   where rc.nspname <> hr.nspname
   group by h.kind, h.classid, h.oid, h.relid, h.name, hr.nspname, rc.nspname
 ),
--- outside: a host on a relation that reaches neither schema, whose code reaches both (system_table_trigger when the
--- host is a trigger on a relation outside scope_rel, outside_host_both otherwise).
+-- outside: a host on a relation that reaches neither schema, whose code reaches both (system_table_trigger or
+-- system_relation_policy when the host is a trigger or a policy on a relation outside scope_rel, outside_host_both
+-- otherwise).
 outside as (
   select h.kind, h.relid, h.name
   from host as h
@@ -432,6 +434,7 @@ union all
 select
   case
     when o.relid in (select s.oid from scope_rel as s) then 'outside_host_both'
+    when o.kind = 'policy' then 'system_relation_policy'
     else 'system_table_trigger'
   end::text,
   format('%s on %I.%I', o.name, n.nspname, c.relname)::text,
@@ -445,6 +448,7 @@ select
         else o.kind
       end
     )
+    when o.kind = 'policy' then 'policy on a relation outside the catalog-check scope reaches quality and integrity'
     else 'trigger on a relation outside the catalog-check scope reaches quality and integrity'
   end::text
 from outside as o

@@ -11,12 +11,16 @@
 --   system_schema_view: a view or materialized view in a system-list schema that breaks one of the rules above (the
 --     rule is named in the detail).
 with
--- Roles that must never read a materialized view directly. M0b adds the candidate roles here (spec §8.5). A
--- listed role that does not exist makes the check raise an error rather than pass.
+-- Roles that must never read a materialized view directly: the client roles, and from M0b the candidate roles and
+-- the server worker role (specs/m0b-tenancy.md §5). A listed role that does not exist makes the check raise an
+-- error rather than pass.
 client_role (rolname) as (
   values
     ('anon'::name),
-    ('authenticated'::name)
+    ('authenticated'::name),
+    ('trace_candidate'::name),
+    ('trace_candidate_gateway'::name),
+    ('trace_worker'::name)
 ),
 -- shared:escape begin (the same text in MT-5a, MT-5b, MT-5d, MT-10 and MT-11)
 -- escape_schema: system-list schemas where a migration can still create objects (spec §8.5 revision 12): postgres
