@@ -1,7 +1,7 @@
 # Resume prompt — the full procedure for the next Claude Code session (any account)
 
 Written 2026-10-11 09:25 IST by the lead session; updated 20:10 and 23:50 IST, and 2026-10-12 01:45 IST. Everything the next session needs is in git; nothing from Updated 2026-10-12 09:25 IST: M0b on `m0b/integration`.
-earlier chats is available or needed. The short "paste prompt" the founder uses points here.
+earlier chats is available or needed. Updated 2026-10-12 13:05 IST: M0b spec approved, BUILD started. The short "paste prompt" the founder uses points here.
 
 ## 1. What Trace is and where the build stands
 - Trace: an India-first online assessment platform; every integrity flag comes with evidence. CLAUDE.md holds
@@ -12,8 +12,8 @@ earlier chats is available or needed. The short "paste prompt" the founder uses 
   M0a verdict: BLOCK, founder-gated, no code defect (`docs/reviews/M0a.md`): the GitHub plan blocks branch protection
   (SEC-1) and the staging secrets are open; CLOSE (merge to `main`, tag `m0a-reviewed`) is the founder's.
   `milestone/m0a` @ `7dc8c0d` = `cp/m0a-06` (full verify + Linux CI green). M0b started before `m0a-reviewed` by the
-  founder's overnight decision (build-notes §0); it closes only after `m0a-reviewed`. `specs/m0b-tenancy.md` is at
-  revision 2; next is revision 3 (N1–N8 in `docs/reviews/M0b-spec-review.md`), an Opus re-review pair, then BUILD.
+  founder's overnight decision (build-notes §0); it closes only after `m0a-reviewed`. `specs/m0b-tenancy.md` is **approved at
+  revision 5** (13:05 IST); **M0b is in BUILD**: B3 merged, B4 partly done, B5 on `m0b/b5-workers-http` awaiting review.
   No milestone is closed yet. Model policy, CI via draft PRs, and the SessionStart hook reading the newest
   `*/integration` handoff still apply.
 - **Integration branch: `m0b/integration`** (M0b work + this file), cut from `milestone/m0a` @ `7dc8c0d`.
@@ -42,7 +42,8 @@ milestone is complete only after REVIEW PASS: then `docs/milestones/M<X>-summary
 with `--no-ff`, tag `m<X>-reviewed`.
 
 ## 3. Steps
-STEP 1 — Read CLAUDE.md and docs/AUTOPILOT.md in full. Then `git fetch trace` and read
+STEP 1 — Read CLAUDE.md and docs/AUTOPILOT.md in full. Then `git fetch trace` (if it hangs on credentials, as on
+2026-10-12: `git -c credential.helper= -c "credential.helper=!gh auth git-credential" fetch trace`) and read
 `git show m0b/integration:docs/progress/HANDOFF.md` and the review reports it names. Since `d9bf35a` the SessionStart
 hook injects the handoff from the newest `*/integration` branch (older sessions injected a stale copy from `main`);
 the branch still wins over anything injected.
@@ -77,9 +78,8 @@ STEP 3 — Verify, then report in 5 lines whether the repo matches the handoff (
   Draft PR 1 (`m0a/integration` → `main`) shows M0a CI; M0b has no PR yet (open a draft one for CI).
 
 STEP 4 — Do the HANDOFF "Next step" list in order. Summary (HANDOFF and the review reports have the details):
-1. M0b spec revision 3: fix N1–N8 exactly as listed in `docs/reviews/M0b-spec-review.md`; then an Opus
-   spec-reviewer + database-reviewer pair; fix; record "Spec approved by autopilot reviewers".
-2. M0b BUILD per `specs/m0b-tenancy.md` §11 (B0 tests first, then the three migrations; B1; B4; writers B2/B3/B5).
+1. (Done 2026-10-12: spec revision 5 approved.) Review and merge B5 (`m0b/b5-workers-http`), then a full `pnpm verify`.
+2. M0b BUILD per `specs/m0b-tenancy.md` §11 (B0 tests first, then the three migrations; B1; rest of B4; writer B2).
 3. Do not merge into `main`, tag `m0*-reviewed`, or CLOSE M0a: those wait for the founder (FOUNDER-QUEUE).
 Rules learned the hard way:
 - Usage: check it often. **Work until 95% of the 5-hour window, then start STEP 5 (founder, 2026-10-12; was 90%)**,
