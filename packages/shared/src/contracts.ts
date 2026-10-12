@@ -36,3 +36,5 @@ export const LogLine = z
   })
   .strict();
 export type LogLine = z.infer<typeof LogLine>;
+
+export * from './contracts-tenancy.js';
