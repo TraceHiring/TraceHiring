@@ -78,3 +78,36 @@ All 41 findings (S1–S25, D1–D16) **RESOLVED**. Revision 2 introduced 4 Mediu
 | N6 | Low | 2.2 vs rls_roles | Own-row exception unstated for a suspended org | State: own rows stay visible, nothing else |
 | N7 | Low | 3.2, 3.9 | No `orgs` guard/audit trigger defined for the column rules and `org.update` | Add `private.orgs_guard()` + audit trigger in §2.8/§3.2 |
 | N8 | Low | 1.3 vs AT-B9 | First staging smoke runs before H9 can create the smoke org | State the order: first run fails at the smoke step, then H9, then re-run |
+
+## Re-review of revision 3 (Opus spec-reviewer, 2026-10-12): CHANGES REQUIRED — 1 Medium, 7 Low
+No rule 1–9 violation; every revision-3 change is HOW; N1–N8 RESOLVED (N2's gap is R1, N8's timing is R5). Exit gate fully mapped; no PII.
+
+| # | Sev | § | Problem | Fix to apply in revision 4 |
+| --- | --- | --- | --- | --- |
+| R1 | Medium | 3.5 | The guard does not enforce the status table on UPDATE: with `invited` rows now possible (N2), owner/admin could do `invited → active` (M1's RPC) or `active → invited` | Guard rule 6: status changes only active↔suspended, active/suspended→removed; any change to or from `invited` refused for every caller in M0b, operator included; `rls_memberships` cases; `add_member` in the `(none) → active` row |
+| R2 | Low | 2.8 | Operator detection rests on a false premise: a definer function changes only `current_user`; `session_user` stays the login role (`authenticator`, `supabase_auth_admin`, future worker logins), so the predicate alone would treat any login role without SET ROLE and claims as the operator | Predicate `session_user = 'postgres' and current_setting('role') in ('none','postgres') and auth.uid() is null`; fix the sentence; DC-9 (hosted operator URL's `session_user`) via H11 |
+| R3 | Low | 2.4 | `set_config(…, true)` is transaction-local, so `trace.request_id` leaks to later trigger-written rows in the same transaction (forgery: not possible in M0b) | Save and restore the previous value in `create_org`/`add_member`; `rls_memberships` case: a later admin insert in the same transaction has `request_id is null` |
+| R4 | Low | 1.3 H9, 4.4 | The owner smoke user's stated reason is wrong now that `add_member` exists; owner credentials in CI exceed what AT-B9 needs | H9: a second, credential-less `smoke-owner+staging@example.com` owns `smoke-staging`; the smoke user is added as `recruiter`; AT-B9 reads its own row with `user_id=eq.<sub>` |
+| R5 | Low | 1.3, 7 | (a) `STAGING_SMOKE_*` secrets fail `check-workflows` (`STAGING_SECRET_USERS`, `ENV_ALLOW_LIST`) and M0a §7.3 lists two secrets; (b) the N8 "first run" is the push of the CLOSE merge to `main`; H10 says repository variables, M0a §7.3 says `staging` environment variables | Add the three names to both lists bound to the smoke command + a test; M0a §7.3 secrets row; H9 timing and `m0b-reviewed` only after the re-run passes; H10 = `staging` environment variables |
+| R6 | Low | 2.4, 6 | The now()+3 months check fails every CI run from 2027-09 (static partitions to 2027-12, no M7 job on a fresh reset) | `rls_audit_log` asserts the fixed 2026-10…2027-12 range + empty DEFAULT; the horizon check goes to `staging-catalog-checks` and the M7 job's test (owner M7) |
+| R7 | Low | 4.4, 4.5, AT-B8 | "a second synthetic user created the same way" is unimplementable: `enrol-smoke-user` has no email argument or contract | `EnrolSmokeUserArgs { env, email }`; local mode only creates a confirmed user; staging mode enrols TOTP and calls `create-org`/`add-member`; ops test |
+| R8 | Low | 3.6 | `audit_log.candidate_id` (build-notes §4) dropped without a logged deviation | Add `candidate_id uuid null` (always null in M0b; FK in M3a) |
+
+Lead decision: apply all eight in revision 4; R4 as recommended (recruiter-only smoke user, credential-less owner).
+
+## Re-review of revision 3 (Opus database-reviewer, 2026-10-12): CHANGES REQUIRED — 3 Medium, 6 Low
+All probes on the local stack (PG 17.11) inside `begin; … rollback;` in a throwaway schema (none left behind). D1–D16/S1–S25 not broken. **N3 works** (owner re-grant → `P0001` on parent, monthly and DEFAULT, normal and replica mode; direct DML on a partition checks the partition's own ACL). **N1 works** (definer prototype: 3 rows moved, one event per org). **`trace.request_id`:** NULL before any set, `''` after the transaction; `authenticated` can call `set_config` in SQL but PostgREST exposes no `pg_catalog` function, so no forgery in M0b. **N2 clean.**
+
+| # | Sev | § | Problem | Fix to apply in revision 4 |
+| --- | --- | --- | --- | --- |
+| E1 | Medium | 2.4 | Fixed partitions to 2027-12 vs a now()+3 months check: every `db reset` fails from 2027-10 | Lead: R6's fix (fixed range asserted; horizon owned by M7); DC-10 for `gen types` and partitions |
+| E2 | Medium | 2.4 | Bounds and month arithmetic follow the session `TimeZone` (IST: overlapping partition error) | UTC bounds, `set timezone = 'UTC'` on the function, reject non-month-start `p_month`, `date_trunc(…, 'UTC')` everywhere |
+| E3 | Medium | 3.2 | `NEW.org_id` (stored generated) is NULL in a BEFORE trigger on PG 17; a guard check refuses every update; `WHEN` cannot reference it | Drop `org_id` from the guard; it protects itself (`can only be updated to DEFAULT`) |
+| E4 | Low | 5 MT-13 | `owner_dml` misses a partition with a NULL ACL | `coalesce(relacl, acldefault('r', relowner))` (as MT-5c); fixture = partition without the revoke |
+| E5 | Low | 6 | Row triggers do not fire on empty partitions; replica mode stays on to the rollback | Insert a row into the monthly and DEFAULT partitions first; replica cases last, then `set local session_replication_role = origin` |
+| E6 | Low | 2.8 | Same premise as R2; suggests also allowing `supabase_admin` and an MT-14 branch on login roles with DML | Lead: `postgres` only (fail closed); MT-14 (g) `login_dml` added |
+| E7 | Low | 3.5 | `for update` on `orgs` blocks FK `KEY SHARE` locks; deadlock risk | `for no key update` |
+| E8 | Low | 2.4 | Recovery: old DEFAULT keeps its name; new relations start with NULL ACLs; events could land in DEFAULT | Exact step order (rename, create M, new DEFAULT with rules, one routing INSERT, events, drop); require the current month's partition |
+| E9 | Low | 2.4, 2.8 | In replica mode the operator bypasses every non-`audit_log` guard; a data-only restore needs replica mode | State replica mode is owner power like DDL; restore runbook owner M7 (ABH-80) |
+
+Lead decision: all nine applied in revision 4 (E1 and E6 as noted). Not checked by the reviewer: hosted Supabase (H11), two-session concurrency, `gen types` on partitions (DC-10), real GoTrue claims.
