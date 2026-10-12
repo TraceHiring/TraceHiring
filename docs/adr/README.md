@@ -1,6 +1,6 @@
 # Architecture & product decision records
 
-Generated from plan §14. Each ADR is **Accepted**. Agents must not reopen one unless its "Reopen if" condition is met with evidence; propose a new ADR instead.
+Generated from plan §14. Each ADR is **Accepted** unless its row says **Proposed** (a Proposed ADR is not yet binding; it becomes Accepted in the milestone named in its row). Agents must not reopen one unless its "Reopen if" condition is met with evidence; propose a new ADR instead.
 
 | ADR | Decision | Chosen |
 | --- | --- | --- |
@@ -32,3 +32,4 @@ Generated from plan §14. Each ADR is **Accepted**. Agents must not reopen one u
 | [ADR-026](ADR-026-thresholds.md) | Thresholds | Rule families public; exact numbers to recruiters, appellants and the instructions for use |
 | [ADR-027](ADR-027-phase0-compute-on-workers.md) | Phase 0 compute | API and jobs on Cloudflare Workers + Queues; AWS only for Bedrock, SES, KMS/Secrets Manager (supersedes plan §8.1 ECS row) |
 | [ADR-028](ADR-028-m0-runtime-libraries.md) | M0 runtime libraries | zod, Hono, React Router (library mode); no ORM |
+| [ADR-030](ADR-030-candidate-token.md) | Candidate token | **Proposed (implement in M3a):** Trace-issued ES256 token; edge verifies with the public key; RLS through the `trace_candidate_gateway` → `trace_candidate` role (M0b spike) |
