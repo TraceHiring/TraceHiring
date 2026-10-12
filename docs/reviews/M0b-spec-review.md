@@ -110,4 +110,14 @@ All probes on the local stack (PG 17.11) inside `begin; … rollback;` in a thro
 | E8 | Low | 2.4 | Recovery: old DEFAULT keeps its name; new relations start with NULL ACLs; events could land in DEFAULT | Exact step order (rename, create M, new DEFAULT with rules, one routing INSERT, events, drop); require the current month's partition |
 | E9 | Low | 2.4, 2.8 | In replica mode the operator bypasses every non-`audit_log` guard; a data-only restore needs replica mode | State replica mode is owner power like DDL; restore runbook owner M7 (ABH-80) |
 
-Lead decision: all nine applied in revision 4 (E1 and E6 as noted). Not checked by the reviewer: hosted Supabase (H11), two-session concurrency, `gen types` on partitions (DC-10), real GoTrue claims.
+Lead decision: all nine applied in revision 4 (E1 and E6 as noted).
+
+## Confirming re-review of revision 4 (Sonnet spec-reviewer, 2026-10-12): CHANGES REQUIRED — 1 Medium, 1 Low
+R1–R8 and E1–E9 all **RESOLVED** as the lead decided. Re-probed on the local stack (rolled back): E2 (IST session → bounds at 00:00 UTC; mid-month `p_month` refused), E8 (the step order works: 3 rows moved, 1 back to the new DEFAULT, per-org counts 2 and 1; `LOCK TABLE` still works for the owner), the operator premise (`set session authorization` → 42501 for non-superuser `postgres`; a definer reports `session_user = postgres`), MT-14 (g) clean on a fresh stack (no login role holds DML; nobody is in `pg_write_all_data`), DC-6/DC-7 reproduced; cites correct. No rule 1–9 violation, no PII. (The first run stopped on a network error and was resumed.)
+
+| # | Sev | § | Problem | Fix (applied in revision 5) |
+| --- | --- | --- | --- | --- |
+| V1 | Medium | 2.4, 6 | From 2028-01 the persona setup's audit rows land in DEFAULT, so `rls_audit_log`'s "DEFAULT empty" and recovery cases fail | First statement creates the current UTC month's partition (rolled back); fixture months 2099-01/2099-02 |
+| V2 | Low | 2.8, 6 | Only the pure `is_operator_session` is tested; a wrapper passing `current_user` would pass every case and reopen R2/E6 | Source pin on `pg_get_functiondef('private.is_operator()')`: `session_user` and `current_setting('role')`, never `current_user` |
+
+**Spec approved by autopilot reviewers** (revision 5, 2026-10-12). Not checked by the reviewer: hosted Supabase (H11), two-session concurrency, `gen types` on partitions (DC-10), real GoTrue claims.
