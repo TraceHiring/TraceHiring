@@ -22,7 +22,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(65);
+select plan(68);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_candidate to postgres with inherit false, set true;
@@ -233,6 +233,12 @@ select matches(pg_temp.try($$update public.orgs set kind = 'trace_internal' wher
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select matches(pg_temp.try($$update public.orgs set status = 'suspended' where id = 'a1000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'U: admin cannot update status');
+-- B0-SP7 matrix gaps: admin slug and kind; a reviewer can read org A but not update it.
+select matches(pg_temp.try($$update public.orgs set slug = 'org-a-hijack' where id = 'a1000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'U: admin cannot update slug');
+select matches(pg_temp.try($$update public.orgs set kind = 'trace_internal' where id = 'a1000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'U: admin cannot update kind');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$update public.orgs set name = 'Reviewer Edit' where id = 'a1000000-0000-4000-8000-000000000001'$$), 'OK 0', 'U: a reviewer cannot update its org');
 
 -- ===== I and D denied for everyone, owner included =====
 set local role authenticated;

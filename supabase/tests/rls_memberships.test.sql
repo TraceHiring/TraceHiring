@@ -22,7 +22,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(143);
+select plan(144);
 grant trace_candidate to postgres with inherit false, set true;
 grant usage on schema extensions to trace_candidate;
 -- Personas (spec §6): synthetic users, fixed ids, created on the operator path (postgres, no claims).
@@ -400,6 +400,8 @@ set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000006", 
 select is(pg_temp.try($$update public.memberships set display_name = 'Pw Self' where user_id = '00000000-0000-4000-8000-000000000006'$$), 'OK 0', 'U: a password recruiter at aal1 cannot change their own display_name [B0-DB1]');
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000c", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000001}], "role": "authenticated"}';
 select is(pg_temp.try($$update public.memberships set display_name = 'Suspended Self' where user_id = '00000000-0000-4000-8000-00000000000c'$$), 'OK 0', 'U: a suspended member cannot change their own display_name [B0-DB1]');
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000a", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is(pg_temp.try($$update public.memberships set display_name = 'Invited Self' where user_id = '00000000-0000-4000-8000-00000000000a'$$), 'OK 0', 'U: an invited member cannot change their own display_name before accepting [B0-SP7]');
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000d", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000001}], "role": "authenticated"}';
 select is(pg_temp.try($$update public.memberships set display_name = 'S Self' where user_id = '00000000-0000-4000-8000-00000000000d'$$), 'OK 0', 'U: a member of a suspended org cannot change their own display_name [B0-DB1, N6]');
 reset role;

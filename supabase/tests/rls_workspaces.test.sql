@@ -21,7 +21,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(55);
+select plan(57);
 grant trace_candidate to postgres with inherit false, set true;
 grant usage on schema extensions to trace_candidate;
 -- Personas (spec §6): synthetic users, fixed ids, created on the operator path (postgres, no claims).
@@ -178,6 +178,10 @@ select matches(pg_temp.try($$insert into public.workspaces (org_id, name, kind) 
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select matches(pg_temp.try($$insert into public.workspaces (org_id, name, kind) values ('a1000000-0000-4000-8000-000000000001', 'Reviewer Ws', 'client')$$), '^42501', 'I: reviewer cannot add a workspace');
+-- B0-SP7 matrix gap: a hiring_manager cannot add a workspace either.
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select matches(pg_temp.try($$insert into public.workspaces (org_id, name, kind) values ('a1000000-0000-4000-8000-000000000001', 'Hm Ws', 'client')$$), '^42501', 'I: hiring_manager cannot add a workspace');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000004", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
 select matches(pg_temp.try($$insert into public.workspaces (org_id, name, kind) values ('a1000000-0000-4000-8000-000000000001', 'Aal1 Ws', 'client')$$), '^42501', 'I: admin at aal1 cannot add a workspace [AT-B6]');
@@ -208,6 +212,10 @@ select is(pg_temp.try($$update public.workspaces set name = 'Recruiter Rename' w
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000009", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
 select is(pg_temp.try($$update public.workspaces set name = 'Scoped Rename' where id = 'b1000000-0000-4000-8000-000000000002'$$), 'OK 0', 'U: a scoped recruiter cannot rename even its own workspace');
+-- B0-SP7 matrix gap: a reviewer reads every org A workspace but cannot rename one.
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$update public.workspaces set name = 'Reviewer Rename' where org_id = 'a1000000-0000-4000-8000-000000000001'$$), 'OK 0', 'U: reviewer update affects no row');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000004", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
 select is(pg_temp.try($$update public.workspaces set name = 'Aal1 Rename' where org_id = 'a1000000-0000-4000-8000-000000000001'$$), 'OK 0', 'U: admin at aal1 update affects no row [AT-B6]');
