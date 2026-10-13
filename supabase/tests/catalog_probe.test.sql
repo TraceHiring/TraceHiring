@@ -2,11 +2,11 @@
 -- table appears. Inside this rolled-back transaction a throwaway table, sequence and function is created as
 -- postgres in each of the four in-scope schemas. Each assertion also reports any probe object that is missing,
 -- so it can never pass vacuously. Hand-written; not generated.
--- Assertions 5 to 10 are MT-11 controls (W3b database review finding 7, catalog pass C review E2, M0b review
--- M0B-DB-2), 11 to 13 prove, one dynamic-SQL shape at a time, what MT-5b counts as naming a schema, and 14 proves
--- what MT-7 counts as changing the search path (catalog pass C review E1). See below.
+-- Assertions 5 to 11 are MT-11 controls (W3b database review finding 7, catalog pass C review E2, M0b review
+-- M0B-DB-2 and its re-review), 12 to 14 prove, one dynamic-SQL shape at a time, what MT-5b counts as naming a
+-- schema, and 15 proves what MT-7 counts as changing the search path (catalog pass C review E1). See below.
 begin;
-select plan(14);
+select plan(15);
 
 create table public.mt_4b_t (id int);
 create table private.mt_4b_t (id int);
@@ -139,6 +139,14 @@ with check (
   owner_id = (select auth.uid())
   or org_id = any((select private.my_org_ids('{admin}'::public.org_role[]))::uuid[])
 );
+-- FIX re-review: private.is_operator depends on the caller too, so an OR arm that calls it is compliant.
+create policy mt_11_note_org_or_operator on public.mt_11_note
+for insert
+to authenticated
+with check (
+  org_id = any((select private.my_org_ids('{admin}'::public.org_role[]))::uuid[])
+  or (select private.is_operator())
+);
 create policy mt_11_note_scoped_live on public.mt_11_note
 for delete
 to authenticated
@@ -163,17 +171,19 @@ create temp view mt_11_run as
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -253,15 +263,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -649,6 +659,14 @@ select is_empty(
   where v.object = 'mt_11_note_scoped_live on public.mt_11_note'
   $q$,
   'MT-11: no row for a soft-delete clause ANDed with an org check (M0B-DB-2 negative control)'
+);
+select is_empty(
+  $q$
+  select v.branch, v.object, v.detail
+  from mt_11_run as v
+  where v.object = 'mt_11_note_org_or_operator on public.mt_11_note'
+  $q$,
+  'MT-11: no row for an OR arm that calls private.is_operator (FIX re-review negative control)'
 );
 rollback to savepoint mt_11_negative;
 

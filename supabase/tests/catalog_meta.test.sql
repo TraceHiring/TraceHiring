@@ -21870,17 +21870,19 @@ select is_empty($q$
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -21960,15 +21962,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -22336,17 +22338,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -22426,15 +22430,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -22802,17 +22806,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -22892,15 +22898,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -23269,17 +23275,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -23359,15 +23367,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -23736,17 +23744,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -23826,15 +23836,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -24203,17 +24213,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -24293,15 +24305,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -24670,17 +24682,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -24760,15 +24774,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -25138,17 +25152,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -25228,15 +25244,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -25607,17 +25623,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -25697,15 +25715,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -26078,17 +26096,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -26168,15 +26188,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -26546,17 +26566,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -26636,15 +26658,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -27021,17 +27043,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -27111,15 +27135,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -27492,17 +27516,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -27582,15 +27608,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -27958,17 +27984,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -28048,15 +28076,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -28428,17 +28456,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -28518,15 +28548,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -28897,17 +28927,19 @@ select * from (
 --     the reference list below.
 --   auth_only_clause: the same, except that the clause calls a function in schema auth, such as
 --     (select auth.uid()) is not null or auth.role() = 'authenticated'. It only checks that the caller is logged
---     in, so every logged-in user of every org passes. A helper in private, such as (select private.is_staff()),
---     is compliant: only functions in private (matched by schema name) exempt a clause without a column.
+--     in, so every logged-in user of every org passes. A clause without a column that calls a function in private
+--     (matched by schema name) is not reported by these two branches. It still has to call a caller-dependent
+--     helper (the allow-list below), or no_caller_reference reports it.
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
 --   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
 --     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
 --     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
---     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
---     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
---     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--     private.caller_roles, private.is_operator), on a table that is not on the reference list, such as the
+--     soft-delete clause using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It
+--     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
+--     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
 --     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
 --     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
@@ -28987,15 +29019,15 @@ auth_function as (
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
--- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
--- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
--- a caller check. A new caller-dependent helper must be added here.
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+-- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
