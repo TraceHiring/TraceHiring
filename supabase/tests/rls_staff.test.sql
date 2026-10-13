@@ -22,7 +22,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(84);
+select plan(87);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_candidate to postgres with inherit false, set true;
@@ -230,6 +230,10 @@ select matches(pg_temp.try($$select private.grant_staff_access('a1000000-0000-40
 select matches(pg_temp.try($$select private.grant_staff_access('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-00000000000f', '00000000-0000-4000-8000-000000000010', 'x y', 'support_read', now() + interval '1 hour', 'e1000000-0000-4000-8000-000000000026')$$), '^23514', 'grant: a malformed ticket reference violates the CHECK');
 select matches(pg_temp.try($$select private.grant_staff_access('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-00000000000f', '00000000-0000-4000-8000-000000000012', 'TKT-007', 'support_read', now() + interval '1 hour', 'e1000000-0000-4000-8000-000000000027')$$), '^23503', 'grant: the approver must be platform staff');
 select matches(pg_temp.try($$select private.grant_staff_access('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000025', '00000000-0000-4000-8000-000000000010', 'TKT-008', 'support_read', now() + interval '1 hour', 'e1000000-0000-4000-8000-000000000028')$$), '^23503', 'grant: the grantee must be platform staff');
+-- B0-DB7: the grantee and the approver must be active staff, and the grantee must hold the scope as a capability.
+select is(pg_temp.try($$select private.grant_staff_access('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000020', '00000000-0000-4000-8000-000000000010', 'TKT-010', 'support_read', now() + interval '1 hour', 'e1000000-0000-4000-8000-00000000002a')$$), '42501 TRACE_STAFF_INACTIVE', 'grant: an inactive staff member cannot be granted access');
+select is(pg_temp.try($$select private.grant_staff_access('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-00000000000f', '00000000-0000-4000-8000-000000000020', 'TKT-011', 'support_read', now() + interval '1 hour', 'e1000000-0000-4000-8000-00000000002b')$$), '42501 TRACE_STAFF_INACTIVE', 'grant: an inactive staff member cannot approve a grant');
+select is(pg_temp.try($$select private.grant_staff_access('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000010', 'TKT-012', 'support_read', now() + interval '1 hour', 'e1000000-0000-4000-8000-00000000002c')$$), '42501 TRACE_STAFF_SCOPE', 'grant: a staff member without the scope as a capability cannot be granted it');
 select is((select count(*)::int from public.staff_access_grants where org_id = 'a1000000-0000-4000-8000-000000000001'), 3, 'grant: only the three valid grants exist (fixture, TKT-002, TKT-003)');
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select is(pg_temp.try($$select private.grant_staff_access('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-00000000000f', '00000000-0000-4000-8000-000000000010', 'TKT-009', 'support_read', now() + interval '1 hour', 'e1000000-0000-4000-8000-000000000029')$$), '42501 TRACE_OPERATOR_ONLY', 'grant: a session with a user id is not the operator');
