@@ -6,7 +6,7 @@
 //     indented as `Name: value`, `! Name` detaches; no line over Cloudflare's 2,000-character limit
 //   - the `/*` rule sets each managed header exactly once, with the §10.3 value:
 //       Content-Security-Policy  the §10.3 directives exactly; connect-src is 'self' plus only the
-//                                app's allowed origins (CONNECT_SRC_EXTRAS)
+//                                app's allowed origins (CONNECT_SRC_EXTRAS), at most one per entry
 //       Strict-Transport-Security, X-Content-Type-Options, Referrer-Policy  (both apps)
 //       Permissions-Policy       per app
 //   - no other rule sets or detaches a managed header (Pages would merge or drop it for some paths)
@@ -137,6 +137,10 @@ export function checkCsp(app, value) {
           out.push(`CSP connect-src source ${src} is not on the ${app} allow-list (§10.3)`);
       }
       if (new Set(got).size !== got.length) out.push('CSP connect-src repeats a source');
+      for (const re of allowed) {
+        if (got.filter((src) => re.test(src)).length > 1)
+          out.push(`CSP connect-src allows at most one connect-src origin matching ${re} (§10.3)`);
+      }
     } else if (!sameSet(got, expected)) {
       out.push(`CSP ${name} must be exactly "${expected.join(' ')}" (found "${got.join(' ')}")`);
     }
