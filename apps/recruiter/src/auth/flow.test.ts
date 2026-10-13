@@ -721,3 +721,35 @@ describe('steps only run from their own state, one at a time', () => {
     expect(listener).toHaveBeenCalledTimes(count);
   });
 });
+
+describe('the aal2 stage (§4.6: session_aal2 is shown while the org is resolved after TOTP)', () => {
+  /** Every state kind the flow shows, in order, without repeats of the same kind in a row. */
+  function recordKinds(flow: AuthFlow): AuthState['kind'][] {
+    const seen: AuthState['kind'][] = [];
+    flow.subscribe(() => {
+      const next = kind(flow);
+      if (seen[seen.length - 1] !== next) seen.push(next);
+    });
+    return seen;
+  }
+
+  it('shows session_aal2 after a successful TOTP, before signed_in', async () => {
+    const { flow } = setup(RECRUITER_IN_A);
+    await passwordSignIn(flow);
+    const seen = recordKinds(flow);
+    await flow.submitTotp(VALID_TOTP);
+    expect(seen).toContain('session_aal2');
+    expect(seen.slice(seen.indexOf('session_aal2'))).toEqual(['session_aal2', 'signed_in']);
+  });
+
+  it('an org read that fails after TOTP stays at session_aal2 (generic error); retry works', async () => {
+    const { flow, fake } = setup({ ...RECRUITER_IN_A, fail: { 'select:orgs': 'error' } });
+    await passwordSignIn(flow);
+    expect(kind(flow)).toBe('totp_enrol');
+    await flow.submitTotp(VALID_TOTP);
+    expect(flow.getSnapshot().state).toEqual({ kind: 'session_aal2', error: 'generic' });
+    fake.heal();
+    await flow.retry();
+    expect(flow.getSnapshot().state).toEqual({ kind: 'signed_in', org: org(ORG_A, 'Acme') });
+  });
+});
