@@ -1,53 +1,45 @@
-# HANDOFF — 2026-10-13 16:10 IST
-Reason for stopping: usage — the 95% rule (wrap-up started at ~80% of the 5-hour window, Pro plan, resets ~18:20 IST; weekly ~54%).
+# HANDOFF — 2026-10-13 18:55 IST
+Reason for stopping: phase done — **M0b REVIEW is complete**, and AUTOPILOT §2 allows exactly one phase per session (the founder's paste prompt allowed FIX in the same flow only if AUTOPILOT allows). Usage at stop: ~40% of the 5-hour window (Pro plan, resets ~23:20 IST), weekly ~62%.
 The next session may be a new Claude Code on another account: start from `docs/progress/RESUME-PROMPT.md` on **`m0b/integration`** (its §4 paste prompt).
 
 ## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M8 = closed beta → M9 … M13)
-- Milestones closed: **0 of 17** (no `m*-reviewed` tag). Rough share of the whole build done: ~10% (M0 ≈ 1/9 of the effort).
+- Milestones closed: **0 of 17** (no `m*-reviewed` tag). Rough share of the whole build done: ~10%.
 - **M0a: REVIEW + FIX done, stopped before CLOSE** (founder). `milestone/m0a` @ `7dc8c0d` = `cp/m0a-06`.
-- **M0b: BUILD is complete** (B0–B5 all merged into `m0b/integration`). Next phase: **M0b REVIEW** in a fresh session (`trace-milestone-review`). M0b closes only after `m0a-reviewed`.
+- **M0b: BUILD complete, REVIEW done** → verdict **PASS WITH CONDITIONS (code); INCOMPLETE on two founder-gated staging items until CLOSE** (`docs/reviews/M0b.md`). Next phase: **M0b FIX**. M0b closes only after `m0a-reviewed`.
 
 ## Where we are
-- **`m0b/integration`** (worktree `.claude/worktrees/m0b-integration`; enter it with `EnterWorktree` path) tip = this handoff commit on top of `3e5ffbe` (fix(ops): libpq variables). **`3e5ffbe` may not be on the remote yet**: the last push failed on a DNS error at 16:07; the wrap-up push below retries it.
-- `milestone/m0b` @ `fc20864` = `cp/m0b-01` (B0/B1/B3/B5 merged; full verify + Linux CI green). Not moved since: move it to the new tip (and tag `cp/m0b-02`) only after Linux CI is green on it.
-- Draft PR **TraceHiring/TraceHiring#3** (`m0b/integration` → `main`, CI only, never merged; Auto-fix is on in the app). CI on `0fdcf34`: static/security/migrations green, **`rls` red** — AT-B8 `create-org failed` on Linux: libpq ignores a URL in `PGDATABASE`. Fixed in `3e5ffbe` (URL split into PG* variables; proved with a real psql). **First action: push, then confirm `rls` is green.**
-- Full local `pnpm verify` green on `0fdcf34` (16:00, no agent running): scripts 1548 + 1 skipped (Windows symlink), packages all green, test:rls catalog 133 / rls 686 + AT-B8 OK, build + check-headers + scan-dist OK. On `3e5ffbe`: scripts 1552 + 1 skipped and `pnpm test:rls` (with AT-B8) green; the full verify was not re-run (only scripts/ changed).
-- The local stack now runs **db, auth, kong, rest, mailpit** (the harness keeps them on for AT-B8).
-- Stream branches (all merged, keep): `m0b/b0-db` `dc4731a`, `m0b/b2-recruiter-auth` `91092ac`, `m0b/b2-fixes` `8f47fff`, `m0b/b4-smoke-auth` `04013ea`, plus the older `b0-rls-tests`, `b3-token-spike`, `b4-ops-scripts`, `b5-*`.
+- **`m0b/integration`** (worktree `.claude/worktrees/m0b-integration`; enter it with `EnterWorktree` path) tip = this handoff commit on top of `f0ff60a` docs(reviews): m0b milestone review.
+- `milestone/m0b` @ `4cb6775` = `cp/m0b-02` (the reviewed SHA; unchanged this session).
+- Draft PR **TraceHiring/TraceHiring#3** (`m0b/integration` → `main`, CI only, never merged).
+- Stream branches (all merged, keep): `m0b/b0-db` `dc4731a`, `m0b/b2-recruiter-auth` `91092ac`, `m0b/b2-fixes` `8f47fff`, `m0b/b4-smoke-auth` `04013ea`, plus older `b0-rls-tests`, `b3-token-spike`, `b4-ops-scripts`, `b5-*`.
 - `milestone/m0a` @ `7dc8c0d`, `m0a/integration` @ `c619525`, `main` @ `fe77a87` (unchanged).
+- Local stack runs db, auth, kong, rest, mailpit (left up by `pnpm test:rls`).
 
 ## Done this session (verified)
-- Resume check: repo matched the handoff; `verify:fast` red once on an ESLint cold-load timeout (fixed `fc20864`: warm-up in `beforeAll`).
-- B0 Lows DB4, DB6 (`5de28dd`), SEC2, SEC3 (`fd74f50`) fixed test-first; `m0b/b0-db` merged `36d2db5`; full verify green; `cp/m0b-01`; draft PR #3 opened, Linux CI green.
-- B4 (lead): supabase-js 2.117.2 (`70a1f4b`); check-headers one origin per entry (`e884e79`); recruiter `_headers.template` + `@trace/config/vite/headers` plugin (`ab99f5c`); check-workflows `BUILD_ONLY_ENV` + smoke secrets, ci.yml build vars + smoke step, M0a spec rev 18 (`d2a0d42`); AT-B8 `scripts/test-auth-local.mjs` in `test:rls` with kong/postgrest/mailpit (`b9c4173`); **auth config bug found by AT-B8 and fixed**: `[auth.email] enable_signup` is the CLI's email-provider switch (now `true`; sign-ups stay off via `[auth] enable_signup = false`, proved live).
-- B4 smoke (Sonnet writer): `scripts/smoke-staging-auth.mjs` (AT-B9), merged `f3a34ea`.
-- B2 (Opus writer + Sonnet fixer): recruiter sign-in UI, 204 tests; merged `7f64376`. CSS class `.secret` renamed (gitleaks false positive in dist).
-- Reviews (Sonnet): B4 security CHANGES REQUIRED → SEC-1, SEC-2 (Medium) fixed, SEC-3 fixed, SEC-5 fixed with the libpq change; B2 security PWF (5 Low), B2 spec PWF (2 Medium fixed + 3 Low fixed). Record: `docs/reviews/M0b-B2-B4-review.md`.
-- Spec `specs/m0b-tenancy.md` revisions 6 and 7; build-notes autopilot-changes row.
+- Resume check: repo matched the handoff (`ad8d7db` = remote; `milestone/m0b` = `cp/m0b-02` = `4cb6775`); `verify:fast` exit 0 (213 s).
+- Gates (lead): full `pnpm verify` exit 0 on `ad8d7db` (code = `4cb6775`): package tests all green, scripts 1552 + 1 skipped (K4), `test:rls` catalog 133 / rls 686 + AT-B8, build + check-headers + scan-dist OK, gitleaks 364 commits clean. `pnpm audit --prod --audit-level=high` exit 0 (the known `braces` ignore). G10: only K4. G11: 0. Linux CI green on `4cb6775` (runs 38385517985, 38400510847). PII regex scan of the verify + CI rls logs: 0 hits.
+- Reviews (three fresh Opus agents, read-only): spec PASS WITH FINDINGS (1 Low), security PASS WITH FINDINGS (2 Low), database PASS WITH FINDINGS (1 Medium, 3 Low + 1 unproven Low). The Medium (M0B-DB-2) was **reproduced by the lead** (all 18 `MT-*.sql` against a rolled-back `OR auth.uid() is not null` policy: none fires).
+- Report `docs/reviews/M0b.md` (`f0ff60a`). FOUNDER-QUEUE: new FYI row (session timebox/inactivity, the missing "H8 note" of B0-SEC4).
 
-## Next step (in order)
-1. Done at 16:20: `3e5ffbe` and this handoff (`e2e58b3`) pushed; **Linux CI run 38385004124 on `e2e58b3` is green, `rls` with AT-B8 included.**
-2. **Done 18:22 IST:** full `pnpm verify` green on `4cb6775` (no agent running) and Linux CI green on it → `milestone/m0b` fast-forwarded to `4cb6775`, tag **`cp/m0b-02`**, both pushed. (Was: move `milestone/m0b` forward only (never rewrite): `git fetch . m0b/integration:milestone/m0b` (git refuses a non-fast-forward), after a full `pnpm verify` with no agent running and green CI on that SHA; tag `cp/m0b-02` there; push both.
-3. **M0b REVIEW** in a fresh session: `trace-milestone-review` → `docs/reviews/M0b.md` (Opus reviewers for rules 1–9 areas: RLS/tenancy, auth, audit). Open Lows to carry: B0-DB3, DB5, DB7, SEC4(timebox), SEC5–SEC8, SP3–SP7; B4-SEC-4, SEC-6; B2-SEC-1, SEC-4, SEC-5 (owners in the review records).
-4. Do not merge into `main`, tag `m0*-reviewed`, or CLOSE: founder gates (FOUNDER-QUEUE).
+## Next step (in order) — M0b FIX (fresh session; tests first, one commit per finding)
+1. **M0B-DB-2 (Medium, must fix):** `supabase/catalog-checks/MT-11.sql:283,308-321` — replace the "any `auth.*`/`private.*` call" test in `no_caller_reference` with a name allow-list of caller-dependent helpers (`private.my_org_ids`, `private.my_workspace_ids`, `private.valid_roles`, `auth.uid`, `auth.jwt`), and flag a top-level `OR` whose arm has no caller-dependent call. Fixtures first (`fixtures/MT-11.*.violation.sql` for `col or auth.uid() is not null` and `col or private.<caller-independent>()`), seen failing, then the check; manifest + `gen-catalog-tests`; floor up. Lead-only files (catalog checks, scripts).
+2. Cheap Lows the review assigned to M0b FIX: M0B-DB-1 (revoke DELETE/TRUNCATE from `postgres` on memberships/workspaces/staff_access_grants or guard triggers — needs a new migration, check spec §3.5 first; may instead be owned by M7, the report allows either), M0B-DB-5 (two-connection concurrency test for last-owner demotion in `test:rls`; RR case), M0B-SP-1 (tighten `docs/spikes/m0b-candidate-token/spike.mjs:552`, re-run, update README + ADR-030 Evidence, or move to "Open for M3a"), B0-SP3 (spec §2.5 sentence + pgTAP case for suspended-org sign-in), B0-DB7 (staff `active`/capabilities check in `grant_staff_access`), B0-SP7 cheap cases. Everything else carries with the owners in `docs/reviews/M0b.md`.
+3. After FIX: full `pnpm verify` with no agent running, Linux CI green, then a short re-review of the FIX diff (Sonnet database-reviewer is enough for MT-11), record in `docs/reviews/M0b.md` ("Re-review"), move `milestone/m0b` forward (fast-forward only) and tag `cp/m0b-03`.
+4. Do not merge into `main`, tag `m0*-reviewed`, or CLOSE: founder gates (FOUNDER-QUEUE rows 15, 20–21; M0b closes after `m0a-reviewed`).
 
 ## Decisions made this session (HOW-level, AUTOPILOT §4)
-- One full verify on the B0 merge commit instead of before and after (stream tip was already green).
-- CSP template outside `public/`; its plugin in `@trace/config/vite/headers` (config files may not touch fs).
-- Staging smoke script written by a Sonnet writer owning only its two files (scripts/ is lead-only in spec §11; same exception as the ops scripts).
-- B2 reviews and fixes by Sonnet (Opus writer for B2 itself) for budget; B2-SEC-5 (account enumeration on the OTP form) left as spec says, FYI to founder.
-- Redactor timing tests (`packages/shared/src/log/redact.test.ts`, 50 ms budget) failed 6× at 51–62 ms under load at 15:35; pass when idle (141/141). Not weakened.
+- Review base `7dc8c0d` (`milestone/m0a`, where M0b was cut) instead of the merge-base with `main` (M0a is not on `main` yet).
+- Verdict wording: "PASS WITH CONDITIONS (code), INCOMPLETE until the staging gates run at CLOSE" — skill §6 INCOMPLETE applies to the deferred staging items; the code itself has only one Medium.
+- No FIX in this session (AUTOPILOT §2 one phase per session).
 
 ## Open questions for the founder (`docs/progress/FOUNDER-QUEUE.md`)
-- Unchanged: GitHub plan (row 15, blocks M0a CLOSE); H8–H11 (row 20); URGENT Cloudflare token roll, `CLOUDFLARE_API_TOKEN`, `SUPABASE_STAGING_DB_URL`, H4, H5.
-- New (rows added this session): **H8 must keep the email provider ON** with sign-ups OFF on staging; B2-SEC-5 account-enumeration UX (FYI).
+- Unchanged: GitHub plan (row 15, blocks M0a CLOSE); H8–H11 (row 20) + H8 reminder (row 21); URGENT Cloudflare token roll, `CLOUDFLARE_API_TOKEN`, `SUPABASE_STAGING_DB_URL`, H4, H5; B2-SEC-5 FYI (row 22).
+- New: session time-box / inactivity values for H8 (FYI, non-blocking).
 
 ## Gotchas / do not touch
-- Only the lead runs `supabase start/stop`, `db reset`, `test db`, `gen types`, `pnpm verify`, `pnpm test:rls`; full verify **with no agent running** (timing tests).
-- `node scripts/test-auth-local.mjs` standalone needs `pnpm exec supabase db reset --local` first (fixed synthetic users).
-- After a config.toml change: `pnpm exec supabase stop` then `pnpm test:rls` (start reloads config).
-- Worktree guard: no `git -C`, `$(…)`, loops/pipes around git; plain separate commands. Python/node fixers go in the scratchpad (shell quoting mangles backslashes).
-- Run the **full** `vitest --root scripts` after any ci.yml change (deploy-staging-job.test.mjs pins the job).
+- Only the lead runs `supabase start/stop`, `db reset`, `test db`, `gen types`, `pnpm verify`, `pnpm test:rls`; full verify **with no agent running** (timing tests). Reviewers probing the DB must start only after `test:rls` finished (it resets the shared DB).
+- Worktree guard: no `git -C`, `$(…)`, loops/pipes around git, and no `{{…}}`/jq in docker/gh commands; write probe SQL with the Write tool into the scratchpad, then `docker exec -i supabase_db_trace psql … < file`.
+- commitlint: body lines ≤ 100 characters.
 - Push: `git -c credential.helper= -c "credential.helper=!gh auth git-credential" push trace <refs>`; same `-c` pair for fetch.
 
 ## Verify first
