@@ -1,10 +1,14 @@
 // AT-14 (script part): scripts/check-boundaries.mjs over fixture trees (spec §10.2).
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CREDENTIAL_NAMES,
   CREDENTIAL_PATTERN_EXEMPTIONS,
+  REQUIRED_AUTH_CONFIG,
+  SUPABASE_JS_FORBIDDEN_SCOPES,
+  checkAuthConfig,
+  checkSupabaseJsScope,
   checkCredentialNames,
   checkCrlf,
   checkEslintDisables,
@@ -196,6 +200,86 @@ describe('rule 3: forbidden VITE_* names', () => {
   it('checks packages too, since the apps bundle them', () => {
     const v = checkViteNames([f('packages/ui/src/a.ts', 'import.meta.env.VITE_API_KEY')]);
     expect(v).toHaveLength(1);
+  });
+
+  it('allows exactly VITE_SUPABASE_PUBLISHABLE_KEY and no other KEY name (M0b §2.7)', () => {
+    expect(
+      checkViteNames([
+        f('apps/recruiter/src/a.ts', 'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY'),
+      ]),
+    ).toEqual([]);
+    for (const name of [
+      'VITE_SUPABASE_ANON_KEY',
+      'VITE_SUPABASE_SECRET_KEY',
+      'VITE_SUPABASE_PUBLISHABLE_KEY_2',
+      'VITE_SUPABASE_SERVICE_ROLE_KEY',
+      'VITE_PUBLISHABLE_KEY',
+    ]) {
+      const v = checkViteNames([f('apps/recruiter/src/a.ts', `import.meta.env.${name}`)]);
+      expect(v, name).toHaveLength(1);
+    }
+  });
+});
+
+describe('rule 9: Supabase Auth settings in supabase/config.toml (M0b §4.1)', () => {
+  const realConfig = readFileSync(
+    path.join(import.meta.dirname, '..', '..', 'supabase', 'config.toml'),
+    'utf8',
+  );
+  const realTemplate = readFileSync(
+    path.join(import.meta.dirname, '..', '..', 'supabase', 'templates', 'magic_link.html'),
+    'utf8',
+  );
+
+  it('passes the committed config and template', () => {
+    expect(checkAuthConfig({ configToml: realConfig, magicLinkTemplate: realTemplate })).toEqual(
+      [],
+    );
+  });
+
+  it.each(Object.keys(REQUIRED_AUTH_CONFIG))('fails when %s drifts', (key) => {
+    const [table, name] = [key.slice(0, key.lastIndexOf('.')), key.slice(key.lastIndexOf('.') + 1)];
+    const toml = `[${table}]\n${name} = "drifted"\n`;
+    const v = checkAuthConfig({ configToml: toml, magicLinkTemplate: realTemplate });
+    expect(v.map((x) => x.message).join('\n')).toContain(key);
+    expect(v.every((x) => x.rule === 9)).toBe(true);
+  });
+
+  it('fails when a required key is missing', () => {
+    const v = checkAuthConfig({ configToml: '[auth]\n', magicLinkTemplate: realTemplate });
+    expect(v.length).toBe(Object.keys(REQUIRED_AUTH_CONFIG).length);
+  });
+
+  it('fails when the magic-link template carries no {{ .Token }} code, or is missing', () => {
+    const noCode = checkAuthConfig({
+      configToml: realConfig,
+      magicLinkTemplate: '<a href="{{ .ConfirmationURL }}">Sign in</a>',
+    });
+    expect(noCode.map((x) => x.rule)).toEqual([9]);
+    const missing = checkAuthConfig({ configToml: realConfig, magicLinkTemplate: null });
+    expect(missing.map((x) => x.rule)).toEqual([9]);
+  });
+});
+
+describe('rule 10: supabase-js only in the recruiter app (M0b §4.3)', () => {
+  it.each(SUPABASE_JS_FORBIDDEN_SCOPES)('flags an import under %s', (scope) => {
+    const v = checkSupabaseJsScope([
+      f(`${scope}src/a.ts`, "import { createClient } from '@supabase/supabase-js';"),
+    ]);
+    expect(v).toHaveLength(1);
+    expect(v[0].rule).toBe(10);
+  });
+
+  it('allows the recruiter app and ignores markdown', () => {
+    expect(
+      checkSupabaseJsScope([
+        f(
+          'apps/recruiter/src/supabase.ts',
+          "import { createClient } from '@supabase/supabase-js';",
+        ),
+        f('packages/shared/README.md', '@supabase/supabase-js is used by the recruiter app'),
+      ]),
+    ).toEqual([]);
   });
 });
 
