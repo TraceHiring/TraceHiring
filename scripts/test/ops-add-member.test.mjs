@@ -120,7 +120,15 @@ describe('add-member', () => {
     const h = harness({ env: { TRACE_OPERATOR_DB_URL: REMOTE_URL } });
     main({ argv: GOOD, deps: h.deps });
     const [call] = h.sqlCalls();
-    expect(call.opts.env.PGDATABASE).toBe(REMOTE_URL);
+    expect(call.opts.env).toMatchObject({
+      PGHOST: 'db.example.test',
+      PGPORT: '5432',
+      PGUSER: 'postgres',
+      PGPASSWORD: FAKE_PASSWORD,
+      PGDATABASE: 'postgres',
+    });
+    // libpq does not expand a URL in PGDATABASE (it connected over the socket instead; Linux CI)
+    for (const v of Object.values(call.opts.env)) expect(String(v)).not.toContain('://');
     expect(call.opts.env.TRACE_OPERATOR_DB_URL).toBeUndefined();
     expect(call.args.join(' ')).not.toContain(FAKE_PASSWORD);
   });
@@ -128,7 +136,7 @@ describe('add-member', () => {
   it("uses the local stack's DB_URL when TRACE_OPERATOR_DB_URL is unset, and never prints it", () => {
     const h = harness();
     expect(main({ argv: GOOD, deps: h.deps })).toBe(0);
-    expect(h.sqlCalls()[0].opts.env.PGDATABASE).toBe(LOCAL_URL);
+    expect(h.sqlCalls()[0].opts.env).toMatchObject({ PGHOST: '127.0.0.1', PGPORT: '54322' });
     expect(h.stdout() + h.stderr()).not.toContain(FAKE_PASSWORD);
   });
 

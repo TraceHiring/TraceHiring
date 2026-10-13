@@ -88,7 +88,11 @@ async function operator(step, main, argv, deps, extraEnv = {}) {
     },
   });
   const id = out.join('').trim();
-  if (code !== 0 || !isUuid(id)) fail(step, `exit ${code}`);
+  if (code !== 0 || !isUuid(id)) {
+    // The operator scripts print only fixed messages and a SQLSTATE or HTTP status (never a value).
+    const why = err.join('').trim().split(/\r?\n/)[0] ?? '';
+    fail(step, `exit ${code}${why ? `; ${why}` : ''}`);
+  }
   return id.toLowerCase();
 }
 

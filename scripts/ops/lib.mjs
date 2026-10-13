@@ -116,18 +116,60 @@ function hostOf(url) {
 }
 
 const PSQL_FLAGS = ['-X', '-q', '-At', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=sqlstate'];
+const STRONG_SSLMODES = new Set(['require', 'verify-ca', 'verify-full']);
+
+/**
+ * The libpq variables for a postgres URL: PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE, and
+ * PGSSLMODE for a non-local host. libpq does not expand a URL given in PGDATABASE (it took it as a
+ * database name and connected over the default socket; Linux CI, AT-B8), so the URL is split here.
+ * The only query parameter accepted is sslmode, read decoded; a non-local host needs require or
+ * stronger (B0-SEC1) and defaults to require. Anything else (host or hostaddr overrides, options) is
+ * refused before psql starts (B4-SEC-5). Messages never contain the URL.
+ * @returns {{ ok: true, env: Record<string, string> } | { ok: false, why: string }}
+ */
+export function pgEnvOf(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return { ok: false, why: 'the database URL cannot be parsed' };
+  }
+  if ((u.protocol !== 'postgres:' && u.protocol !== 'postgresql:') || !u.hostname || !u.username) {
+    return { ok: false, why: 'the database URL must be postgresql://user:password@host/db' };
+  }
+  const params = [...u.searchParams.keys()];
+  if (params.some((k) => k !== 'sslmode') || u.searchParams.getAll('sslmode').length > 1) {
+    return { ok: false, why: 'the database URL may carry no query parameter but sslmode' };
+  }
+  const remote = !LOCAL_HOSTS.has(u.hostname.toLowerCase());
+  const sslmode = u.searchParams.get('sslmode');
+  if (remote && sslmode !== null && !STRONG_SSLMODES.has(sslmode)) {
+    return { ok: false, why: 'a non-local database URL must not turn TLS off' };
+  }
+  const decode = (s) => decodeURIComponent(s);
+  const env = {
+    PGHOST: u.hostname.replace(/^\[(.*)\]$/, '$1'),
+    PGPORT: u.port || '5432',
+    PGUSER: decode(u.username),
+    PGPASSWORD: decode(u.password),
+    PGDATABASE: decode(u.pathname.replace(/^\//, '')) || 'postgres',
+  };
+  if (remote) env.PGSSLMODE = sslmode ?? 'require';
+  else if (sslmode !== null) env.PGSSLMODE = sslmode;
+  return { ok: true, env };
+}
 
 /**
  * Runs one SQL statement through psql. The SQL text goes on stdin (`-f -`, the only way psql
  * interpolates `-v` variables); argument values travel only as `-v name=value`, never inside the
- * SQL. The URL goes to psql through the environment (PGDATABASE), never through argv. Without a
+ * SQL. The URL goes to psql as libpq variables (pgEnvOf), never through argv. Without a
  * psql binary and with the local stack's own URL (TRACE_OPERATOR_DB_URL unset), the statement runs
  * in the local stack's Postgres container (`docker exec -i`, no URL at all).
  * @returns {{ ok: true, out: string } | { ok: false, why: string, sqlstate: string | null }}
  */
 export function runSql({ url, sql, vars }, deps) {
   const varArgs = Object.entries(vars).flatMap(([k, v]) => ['-v', `${k}=${v}`]);
-  // the child needs none of the scrubbed names (the URL travels as PGDATABASE, only for a real psql)
+  // the child needs none of the scrubbed names (the URL travels as libpq variables, real psql only)
   const childEnv = childEnvOf(deps.env);
   const opts = {
     input: sql,
@@ -140,20 +182,11 @@ export function runSql({ url, sql, vars }, deps) {
   const hasPsql = !probe.error && probe.status === 0;
   let res;
   if (hasPsql) {
-    // A non-local operator URL is the postgres session: TLS is required (B0-SEC1). PGSSLMODE covers a
-    // URL without sslmode; a URL that weakens it is refused before anything runs.
-    const remote = !LOCAL_HOSTS.has(hostOf(url) ?? '');
-    if (remote && /[?&]sslmode=(disable|allow|prefer)(&|$)/i.test(url)) {
-      return { ok: false, why: 'a non-local database URL must not turn TLS off', sqlstate: null };
-    }
+    const pg = pgEnvOf(url);
+    if (!pg.ok) return { ok: false, why: pg.why, sqlstate: null };
     res = deps.spawnSync('psql', [...PSQL_FLAGS, ...varArgs, '-f', '-'], {
       ...opts,
-      env: {
-        ...childEnv,
-        PGDATABASE: url,
-        PGCONNECT_TIMEOUT: '15',
-        ...(remote ? { PGSSLMODE: 'require' } : {}),
-      },
+      env: { ...childEnv, ...pg.env, PGCONNECT_TIMEOUT: '15' },
     });
   } else {
     const host = hostOf(url);

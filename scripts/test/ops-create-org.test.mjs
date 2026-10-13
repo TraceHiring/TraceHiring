@@ -128,6 +128,18 @@ describe('create-org', () => {
     expect(varsOf(h.sqlCalls()[0].args).p_rid).toBe(GENERATED_ID);
   });
 
+  it.each([
+    ['a host override', '?host=127.0.0.1'],
+    ['a hostaddr override', '?hostaddr=10.0.0.1'],
+    ['a percent-encoded sslmode', '?sslmode=dis%61ble'],
+    ['an unknown parameter', '?options=-c%20x%3Dy'],
+  ])('refuses a URL with %s before anything runs (B4-SEC-5)', (_label, query) => {
+    const h = harness({ env: { TRACE_OPERATOR_DB_URL: `${REMOTE_URL}${query}` } });
+    expect(main({ argv: GOOD, deps: h.deps })).not.toBe(0);
+    expect(h.sqlCalls()).toHaveLength(0);
+    expect(h.stderr()).not.toContain(FAKE_PASSWORD);
+  });
+
   it('requires TLS for a non-local database and refuses a URL that turns it off (B0-SEC1)', () => {
     const remote = harness({ env: { TRACE_OPERATOR_DB_URL: REMOTE_URL } });
     main({ argv: GOOD, deps: remote.deps });
@@ -143,11 +155,19 @@ describe('create-org', () => {
     expect(local.sqlCalls()[0].opts.env.PGSSLMODE).toBeUndefined();
   });
 
-  it('gives the URL to psql through PGDATABASE only', () => {
+  it('gives the URL to psql as libpq variables only, never argv or a URL in PGDATABASE', () => {
     const h = harness({ env: { TRACE_OPERATOR_DB_URL: REMOTE_URL, KEEP: 'yes' } });
     main({ argv: GOOD, deps: h.deps });
     const [call] = h.sqlCalls();
-    expect(call.opts.env.PGDATABASE).toBe(REMOTE_URL);
+    expect(call.opts.env).toMatchObject({
+      PGHOST: 'db.example.test',
+      PGPORT: '5432',
+      PGUSER: 'postgres',
+      PGPASSWORD: FAKE_PASSWORD,
+      PGDATABASE: 'postgres',
+    });
+    // libpq does not expand a URL in PGDATABASE (it connected over the socket instead; Linux CI)
+    for (const v of Object.values(call.opts.env)) expect(String(v)).not.toContain('://');
     expect(call.opts.env.TRACE_OPERATOR_DB_URL).toBeUndefined();
     expect(call.opts.env.KEEP).toBe('yes');
     expect(call.args.join(' ')).not.toContain(FAKE_PASSWORD);
@@ -158,7 +178,11 @@ describe('create-org', () => {
     const h = harness();
     expect(main({ argv: GOOD, deps: h.deps })).toBe(0);
     expect(h.calls[0].cmd).toBe('pnpm');
-    expect(h.sqlCalls()[0].opts.env.PGDATABASE).toBe(LOCAL_URL);
+    expect(h.sqlCalls()[0].opts.env).toMatchObject({
+      PGHOST: '127.0.0.1',
+      PGPORT: '54322',
+      PGDATABASE: 'postgres',
+    });
     expect(h.stdout() + h.stderr()).not.toContain(FAKE_PASSWORD);
   });
 

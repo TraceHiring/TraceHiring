@@ -332,7 +332,11 @@ describe('enrol-smoke-user: --env staging', () => {
     expect(calls).toHaveLength(4);
     for (const c of calls) {
       expect(c.cmd).toBe('psql');
-      expect(c.opts.env.PGDATABASE).toBe(STAGING_DB_URL);
+      expect(c.opts.env).toMatchObject({
+        PGHOST: 'db.example.test',
+        PGPASSWORD: DB_PASSWORD,
+        PGDATABASE: 'postgres',
+      });
       expect(JSON.stringify(c.args)).not.toContain(PASSWORD);
       expect(JSON.stringify(c.args)).not.toContain(DB_PASSWORD);
       expect(JSON.stringify(c.args)).not.toContain(PUBLISHABLE_KEY);
