@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEPLOY_IF,
+  BUILD_ONLY_ENV,
   ENV_ALLOW_LIST,
   REQUIRED_JOBS,
   YamlError,
@@ -637,12 +638,23 @@ describe('checkWorkflow', () => {
           'SUPABASE_STAGING_DB_URL',
           'CLOUDFLARE_API_TOKEN',
           'CLOUDFLARE_ACCOUNT_ID',
+          // m0b: the staging build and the org sign-in smoke step (specs/m0b-tenancy.md §2.7, AT-B9)
+          'VITE_SUPABASE_URL',
+          'VITE_SUPABASE_PUBLISHABLE_KEY',
+          'SUPABASE_STAGING_URL',
+          'SUPABASE_STAGING_PUBLISHABLE_KEY',
+          'STAGING_SMOKE_EMAIL',
+          'STAGING_SMOKE_PASSWORD',
+          'STAGING_SMOKE_TOTP_SECRET',
         ].sort(),
       );
     });
 
     it('accepts every listed name at every level', () => {
-      const all = Object.fromEntries(ENV_ALLOW_LIST.map((n) => [n, 'x']));
+      // the build-only names have their own rule (deploy build step only), tested below
+      const all = Object.fromEntries(
+        ENV_ALLOW_LIST.filter((n) => !Object.hasOwn(BUILD_ONLY_ENV, n)).map((n) => [n, 'x']),
+      );
       const d = doc();
       d.env = { ...all, MIGRATIONS_BASE: 'origin/main' };
       d.jobs.static.env = { ...all, MIGRATIONS_BASE: 'origin/main' };
@@ -1013,6 +1025,18 @@ describe('checkWorkflow', () => {
       expect(m).toMatch(/steps\[6\].*SOME_OTHER_SECRET/);
     });
 
+    it('binds the smoke secrets to the org sign-in smoke command (m0b R5)', () => {
+      const d = doc();
+      const smoke = d.jobs['deploy-staging'].steps.length - 1;
+      d.jobs['deploy-staging'].steps[6].env.STAGING_SMOKE_PASSWORD =
+        '${{ secrets.STAGING_SMOKE_PASSWORD }}';
+      d.jobs['deploy-staging'].steps[smoke].run = 'node scripts/smoke-staging.mjs';
+      const m = msgs(checkWorkflow(d, 'ci.yml', ctx));
+      expect(m).toMatch(/steps\[6\].*STAGING_SMOKE_PASSWORD.*does not use it/);
+      for (const name of ['STAGING_SMOKE_EMAIL', 'STAGING_SMOKE_TOTP_SECRET'])
+        expect(m).toMatch(new RegExp(`steps\\[${smoke}\\].*${name}.*does not use it`));
+    });
+
     it('treats github.token like secrets.GITHUB_TOKEN', () => {
       const d = doc();
       d.jobs.static.steps[2].env = { T: '${{ github.token }}' };
@@ -1101,6 +1125,54 @@ describe('checkWorkflow', () => {
     });
   });
 
+  describe('VITE_SUPABASE_* only on the deploy build step (m0b §2.7)', () => {
+    it('lists exactly the two build variables and their public vars sources', () => {
+      expect(BUILD_ONLY_ENV).toEqual({
+        VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
+        VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+      });
+    });
+
+    it.each([
+      ['workflow env', (d) => (d.env.VITE_SUPABASE_URL = '${{ vars.SUPABASE_STAGING_URL }}')],
+      [
+        'deploy-staging job env',
+        (d) =>
+          (d.jobs['deploy-staging'].env = {
+            VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
+          }),
+      ],
+      [
+        'a static step',
+        (d) =>
+          (d.jobs.static.steps[2].env = {
+            VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+          }),
+      ],
+      [
+        'a deploy step that does not build',
+        (d) =>
+          (d.jobs['deploy-staging'].steps[3].env = {
+            VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
+          }),
+      ],
+    ])('rejects them in %s', (_label, mutate) => {
+      const d = doc();
+      mutate(d);
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/VITE_SUPABASE_\w+ may be set only/);
+    });
+
+    it.each([
+      ['a literal', 'https://abcdefghijklmnopqrst.supabase.co'],
+      ['a secret', '${{ secrets.SUPABASE_STAGING_URL }}'],
+      ['another variable', '${{ vars.OTHER }}'],
+    ])('rejects %s as the value on the build step', (_label, value) => {
+      const d = doc();
+      d.jobs['deploy-staging'].steps[2].env.VITE_SUPABASE_URL = value;
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/VITE_SUPABASE_URL must be/);
+    });
+  });
+
   describe('deploy-staging gate (§7.2)', () => {
     const deploy = (mutate) => {
       const d = doc();
@@ -1155,6 +1227,15 @@ describe('checkAction (local composite actions)', () => {
   });
 });
 
+// The fixture's setup step and the build step after it (which carries the §2.7 build variables).
+const BUILD_STEP = [
+  '      - uses: ./.github/actions/setup',
+  '      - env:',
+  '          VITE_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}',
+  '          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+  '        run: pnpm build',
+].join('\n');
+
 describe('runChecks over a fixture repository', () => {
   const repo = (files) => {
     const root = makeTempDir();
@@ -1195,7 +1276,7 @@ describe('runChecks over a fixture repository', () => {
 
   it('counts an install inside a local action, so a secret passed to it fails', () => {
     const d = CI.replace(
-      '      - uses: ./.github/actions/setup\n      - run: pnpm build',
+      BUILD_STEP,
       // No build step after it: only the install inside the action makes step 1 an install step.
       '      - uses: ./.github/actions/setup\n        env:\n          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
     );
@@ -1317,7 +1398,7 @@ describe('runChecks over a fixture repository', () => {
 
     it('counts an install in a nested action, so a secret on a step using the outer one fails', () => {
       const d = CI.replace(
-        '      - uses: ./.github/actions/setup\n      - run: pnpm build',
+        BUILD_STEP,
         '      - uses: ./.github/actions/outer\n        env:\n          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
       );
       expect(d).not.toBe(CI);

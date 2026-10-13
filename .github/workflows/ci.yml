@@ -139,8 +139,12 @@ jobs:
       # Includes the bundle budget, header checks and the dist/ secret scan. The apps write
       # dist/version.json from VITE_APP_VERSION (§9.3). The loop then rebuilds each Worker under
       # --env staging into the same dist/, so the next step scans, and the Workers step deploys,
-      # the staging bytes (an env.staging define or alias cannot ship unscanned). No secret here.
+      # the staging bytes (an env.staging define or alias cannot ship unscanned). No secret here:
+      # the recruiter's Supabase URL and publishable key are public staging variables (m0b §2.7, H10).
       - name: Build
+        env:
+          VITE_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
         run: |
           set -euo pipefail
           VITE_APP_VERSION="$GITHUB_SHA" pnpm build
@@ -202,3 +206,15 @@ jobs:
       - name: Smoke test
         timeout-minutes: 8
         run: node scripts/smoke-staging.mjs --wrangler-output "$RUNNER_TEMP/wrangler-output.ndjson" --sha "$GITHUB_SHA"
+      # m0b AT-B9: the H9 recruiter signs in with password + TOTP and sees exactly its membership and
+      # org; sign-ups are disabled; the recruiter CSP names the Supabase origin. Fails until H9 is
+      # done (expected on the first M0b CLOSE run, then re-run; specs/m0b-tenancy.md §1.3).
+      - name: Smoke test, org sign-in
+        timeout-minutes: 3
+        env:
+          SUPABASE_STAGING_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          STAGING_SMOKE_EMAIL: ${{ secrets.STAGING_SMOKE_EMAIL }}
+          STAGING_SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
+          STAGING_SMOKE_TOTP_SECRET: ${{ secrets.STAGING_SMOKE_TOTP_SECRET }}
+        run: node scripts/smoke-staging-auth.mjs
