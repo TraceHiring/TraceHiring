@@ -2,11 +2,11 @@
 -- table appears. Inside this rolled-back transaction a throwaway table, sequence and function is created as
 -- postgres in each of the four in-scope schemas. Each assertion also reports any probe object that is missing,
 -- so it can never pass vacuously. Hand-written; not generated.
--- Assertions 5 to 7 are MT-11 controls (W3b database review finding 7 and catalog pass C review E2), 8 to 10 prove,
--- one dynamic-SQL shape at a time, what MT-5b counts as naming a schema, and 11 proves what MT-7 counts as
--- changing the search path (catalog pass C review E1). See below.
+-- Assertions 5 to 10 are MT-11 controls (W3b database review finding 7, catalog pass C review E2, M0b review
+-- M0B-DB-2), 11 to 13 prove, one dynamic-SQL shape at a time, what MT-5b counts as naming a schema, and 14 proves
+-- what MT-7 counts as changing the search path (catalog pass C review E1). See below.
 begin;
-select plan(12);
+select plan(14);
 
 create table public.mt_4b_t (id int);
 create table private.mt_4b_t (id int);
@@ -126,6 +126,23 @@ as restrictive
 for select
 to authenticated
 using (deleted_at is null);
+-- M0b review M0B-DB-2: an OR whose arms both depend on the caller, and a soft-delete clause ANDed with an org
+-- check, are compliant; neither may hit or_arm_without_caller, caller_only_null_tested or no_caller_reference.
+create policy mt_11_note_mine_or_admin on public.mt_11_note
+for update
+to authenticated
+using (
+  owner_id = (select auth.uid())
+  or org_id = any((select private.my_org_ids('{admin}'::public.org_role[]))::uuid[])
+)
+with check (
+  owner_id = (select auth.uid())
+  or org_id = any((select private.my_org_ids('{admin}'::public.org_role[]))::uuid[])
+);
+create policy mt_11_note_scoped_live on public.mt_11_note
+for delete
+to authenticated
+using (deleted_at is null and org_id = any((select private.my_org_ids('{admin}'::public.org_role[]))::uuid[]));
 create temp view mt_11_run as
 -- MT-11 copy begin
 -- MT-11 (spec specs/m0-foundations.md §8.5, separate per-operation policies, CLAUDE.md): a policy on an in-scope
@@ -151,10 +168,20 @@ create temp view mt_11_run as
 --     Neither qual_without_column nor auth_only_clause looks at a RESTRICTIVE policy (as restrictive), which only
 --     narrows what the permissive policies allow: Supabase's MFA pattern, as restrictive for select to
 --     authenticated using ((select auth.jwt() ->> 'aal') = 'aal2'), is compliant.
---   no_caller_reference (M0b, M0a review DB-1): a USING or WITH CHECK of a PERMISSIVE policy that refers to a
---     column of its table but calls no function in private or auth, on a table that is not on the reference list,
---     such as the soft-delete clause using (deleted_at is null). It never depends on who is asking, so it ORs open
---     every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--   no_caller_reference (M0b, M0a review DB-1, M0b review M0B-DB-2): a USING or WITH CHECK of a PERMISSIVE policy
+--     that refers to a column of its table or calls a function in private, but calls none of the caller-dependent
+--     helpers (the allow-list in helper_function: auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
+--     private.caller_roles), on a table that is not on the reference list, such as the soft-delete clause
+--     using (deleted_at is null) or deleted_at is null or (select private.valid_roles(...)). It never depends on
+--     who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only narrows and passes.
+--   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
+--     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
+--     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
+--     signed-in user of every org through.
+--   caller_only_null_tested (M0b review M0B-DB-2): the same, with no OR at the root: every caller-dependent call
+--     sits inside an IS [NOT] NULL test, such as deleted_at is null and (select auth.uid()) is not null, which only
+--     asks whether someone is signed in. An OR below an AND or a NOT is not followed: the check is a net, and each
+--     table's rls_* tests (allowed and denied cases per role) remain the proof.
 --   system_list_policy (M0b, M0a catalog pass C review E3): any policy on any relation in a system-list schema,
 --     whoever owns the relation (supautils lets postgres create policies on auth, storage and realtime tables).
 --     Trace uses R2 and Durable Objects, not Supabase Storage or Realtime, and adds no policy there.
@@ -225,9 +252,16 @@ auth_function as (
     and p.proname in ('uid', 'jwt')
 ),
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
--- would raise an error if the schema were missing).
-helper_function (oid, nspname) as (
-  select p.oid, n.nspname::text
+-- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
+-- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids and
+-- private.caller_roles. Any other function there, such as auth.role or the immutable private.valid_roles, is not
+-- a caller check. A new caller-dependent helper must be added here.
+helper_function (oid, nspname, caller) as (
+  select
+    p.oid,
+    n.nspname::text,
+    (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles'))
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -292,8 +326,8 @@ tree_piece (oid, clause, ord, piece, depth) as (
 ),
 -- tree_node: one row per node ({NODE ...), with end_ord, the piece that closes it. Opens at one level and the closes
 -- back from that level alternate, so the n-th of each pair up.
-tree_node (oid, clause, ord, piece, end_ord) as (
-  select o.oid, o.clause, o.ord, o.piece, c.ord
+tree_node (oid, clause, ord, piece, end_ord, depth) as (
+  select o.oid, o.clause, o.ord, o.piece, c.ord, o.depth
   from (
     select
       p.oid,
@@ -317,9 +351,24 @@ tree_node (oid, clause, ord, piece, end_ord) as (
   ) as c on c.oid = o.oid and c.clause = o.clause and c.lvl = o.depth and c.rn = o.rn
 ),
 -- tree_call: each function a clause calls (a function, an operator's function, an aggregate or a window function)
--- that is in private or auth, with its schema.
-tree_call (oid, clause, nspname) as (
-  select fn.oid, fn.clause, hf.nspname
+-- that is in private or auth, with its schema, its node, whether it depends on the caller and whether it sits
+-- inside an IS [NOT] NULL test (a NULLTEST node), which only asks whether there is a caller.
+tree_call (oid, clause, nspname, ord, caller, null_tested) as (
+  select
+    fn.oid,
+    fn.clause,
+    hf.nspname,
+    fn.ord,
+    hf.caller,
+    exists (
+      select 1
+      from tree_node as t
+      where t.oid = fn.oid
+        and t.clause = fn.clause
+        and t.piece like '{NULLTEST %'
+        and t.ord < fn.ord
+        and fn.ord < t.end_ord
+    )
   from tree_node as fn
   join helper_function as hf on hf.oid = coalesce(
       substring(fn.piece from '^\{FUNCEXPR :funcid ([0-9]+) '),
@@ -327,6 +376,71 @@ tree_call (oid, clause, nspname) as (
       substring(fn.piece from '^\{AGGREF :aggfnoid ([0-9]+) '),
       substring(fn.piece from '^\{WINDOWFUNC :winfnoid ([0-9]+) ')
     )::oid
+),
+-- clause_fact: per USING or WITH CHECK of a scope policy, whether it refers to a column of its table (a VAR whose
+-- varlevelsup equals the number of QUERY nodes around it), whether it calls a function in private or in auth,
+-- whether it calls a caller-dependent helper, whether its root is an OR, and whether it is open: some arm reached
+-- from the root through OR nodes only (the root itself when it is not an OR) has no caller-dependent call outside
+-- a NULLTEST, so that arm alone lets any signed-in user of any org through. An OR below an AND or a NOT is not
+-- followed (the catalog checks are a net, and every table's rls_* tests are the proof).
+clause_fact (oid, clause, has_column, calls_private, calls_auth, calls_caller, root_is_or, open) as (
+  select
+    pt.oid,
+    pt.clause,
+    exists (
+      select 1
+      from tree_node as v
+      where v.oid = pt.oid
+        and v.clause = pt.clause
+        and v.piece like '{VAR %'
+        and substring(v.piece from ':varlevelsup ([0-9]+)')::int = (
+          select count(*)
+          from tree_node as q
+          where q.oid = v.oid
+            and q.clause = v.clause
+            and q.piece like '{QUERY %'
+            and q.ord < v.ord
+            and v.ord < q.end_ord
+        )
+    ),
+    exists (select 1 from tree_call as c where c.oid = pt.oid and c.clause = pt.clause and c.nspname = 'private'),
+    exists (select 1 from tree_call as c where c.oid = pt.oid and c.clause = pt.clause and c.nspname = 'auth'),
+    exists (select 1 from tree_call as c where c.oid = pt.oid and c.clause = pt.clause and c.caller),
+    exists (
+      select 1
+      from tree_node as r
+      where r.oid = pt.oid
+        and r.clause = pt.clause
+        and r.depth = 1
+        and r.piece like '{BOOLEXPR :boolop or %'
+    ),
+    exists (
+      select 1
+      from tree_node as a
+      where a.oid = pt.oid
+        and a.clause = pt.clause
+        and a.piece not like '{BOOLEXPR :boolop or %'
+        and not exists (
+          select 1
+          from tree_node as up
+          where up.oid = a.oid
+            and up.clause = a.clause
+            and up.ord < a.ord
+            and a.ord < up.end_ord
+            and up.piece not like '{BOOLEXPR :boolop or %'
+        )
+        and not exists (
+          select 1
+          from tree_call as c
+          where c.oid = a.oid
+            and c.clause = a.clause
+            and c.caller
+            and not c.null_tested
+            and a.ord <= c.ord
+            and c.ord < a.end_ord
+        )
+    )
+  from policy_tree as pt
 ),
 finding (oid, branch, detail) as (
   select
@@ -388,82 +502,42 @@ finding (oid, branch, detail) as (
         and rt.adr ~ '^ADR-[0-9]+'
     )
   union all
-  select distinct
-    pt.oid,
-    case when tc.calls_auth then 'auth_only_clause' else 'qual_without_column' end::text,
+  select
+    cf.oid,
     case
-      when tc.calls_auth then format(
+      when not cf.has_column and not cf.calls_private and cf.calls_auth then 'auth_only_clause'
+      when not cf.has_column and not cf.calls_private then 'qual_without_column'
+      when not cf.calls_caller then 'no_caller_reference'
+      when cf.root_is_or then 'or_arm_without_caller'
+      else 'caller_only_null_tested'
+    end::text,
+    case
+      when not cf.has_column and not cf.calls_private and cf.calls_auth then format(
         '%s refers to no column of its table and calls no function in private, only auth functions',
-        pt.clause
+        cf.clause
       )
-      else format('%s refers to no column of its table and calls no function in private or auth', pt.clause)
+      when not cf.has_column and not cf.calls_private then format(
+        '%s refers to no column of its table and calls no function in private or auth',
+        cf.clause
+      )
+      when not cf.calls_caller then format(
+        '%s calls no caller-dependent helper such as auth.uid or private.my_org_ids, so it ignores the caller',
+        cf.clause
+      )
+      when cf.root_is_or then format(
+        '%s has an OR arm with no caller-dependent call outside IS NULL, so that arm ignores the caller',
+        cf.clause
+      )
+      else format('%s only tests that a caller exists (IS NULL), so it ignores who the caller is', cf.clause)
     end::text
-  from policy_tree as pt
-  join scope_policy as sp on sp.oid = pt.oid
-  cross join lateral (
-    select
-      coalesce(bool_or(c.nspname = 'auth'), false) as calls_auth,
-      coalesce(bool_or(c.nspname = 'private'), false) as calls_private
-    from tree_call as c
-    where c.oid = pt.oid
-      and c.clause = pt.clause
-  ) as tc
-  where case pt.clause when 'USING' then sp.using_text else sp.check_text end <> 'true'
+  from clause_fact as cf
+  join scope_policy as sp on sp.oid = cf.oid
+  where case cf.clause when 'USING' then sp.using_text else sp.check_text end <> 'true'
     and sp.polpermissive
-    and not tc.calls_private
-    and not exists (
-      select 1
-      from tree_node as v
-      where v.oid = pt.oid
-        and v.clause = pt.clause
-        and v.piece like '{VAR %'
-        and substring(v.piece from ':varlevelsup ([0-9]+)')::int = (
-          select count(*)
-          from tree_node as q
-          where q.oid = v.oid
-            and q.clause = v.clause
-            and q.piece like '{QUERY %'
-            and q.ord < v.ord
-            and v.ord < q.end_ord
-        )
-    )
-    and not exists (
-      select 1
-      from reference_table as rt
-      where rt.schema_name = sp.nspname
-        and rt.table_name = sp.relname
-        and rt.adr ~ '^ADR-[0-9]+'
-    )
-  union all
-  select distinct
-    pt.oid,
-    'no_caller_reference'::text,
-    format('%s refers to a column but calls no function in private or auth, so it ignores the caller', pt.clause)::text
-  from policy_tree as pt
-  join scope_policy as sp on sp.oid = pt.oid
-  where case pt.clause when 'USING' then sp.using_text else sp.check_text end <> 'true'
-    and sp.polpermissive
-    and not exists (
-      select 1
-      from tree_call as c
-      where c.oid = pt.oid
-        and c.clause = pt.clause
-    )
-    and exists (
-      select 1
-      from tree_node as v
-      where v.oid = pt.oid
-        and v.clause = pt.clause
-        and v.piece like '{VAR %'
-        and substring(v.piece from ':varlevelsup ([0-9]+)')::int = (
-          select count(*)
-          from tree_node as q
-          where q.oid = v.oid
-            and q.clause = v.clause
-            and q.piece like '{QUERY %'
-            and q.ord < v.ord
-            and v.ord < q.end_ord
-        )
+    and (
+      (not cf.has_column and not cf.calls_private)
+      or not cf.calls_caller
+      or cf.open
     )
     and not exists (
       select 1
@@ -559,6 +633,22 @@ select is_empty(
   where v.object = 'mt_11_note_live on public.mt_11_note'
   $q$,
   'MT-11: no row for a RESTRICTIVE soft-delete policy (DB-1 negative control)'
+);
+select is_empty(
+  $q$
+  select v.branch, v.object, v.detail
+  from mt_11_run as v
+  where v.object = 'mt_11_note_mine_or_admin on public.mt_11_note'
+  $q$,
+  'MT-11: no row for an OR whose arms both depend on the caller (M0B-DB-2 negative control)'
+);
+select is_empty(
+  $q$
+  select v.branch, v.object, v.detail
+  from mt_11_run as v
+  where v.object = 'mt_11_note_scoped_live on public.mt_11_note'
+  $q$,
+  'MT-11: no row for a soft-delete clause ANDed with an org check (M0B-DB-2 negative control)'
 );
 rollback to savepoint mt_11_negative;
 
