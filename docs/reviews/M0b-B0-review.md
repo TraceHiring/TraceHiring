@@ -18,13 +18,13 @@ Spec: `specs/m0b-tenancy.md` revision 5. Reviewers ran read-only; DB probes only
 | B0-DB1 | Medium | `memberships_update_own` let a non-counting membership (aal1 privileged, password aal1, suspended, suspended org) edit its own `display_name` | **Fixed** (policy needs `my_org_ids(all 5)`; 4 denied cases in `rls_memberships`, seen failing first) |
 | B0-DB2 | Medium | write-skew lock taken after the guard's role checks (READ COMMITTED) | **Fixed** (lock first, INSERT and UPDATE); no two-session test yet — add a manual or scripted concurrency check |
 | B0-DB3 | Low | archive+rename or remove+role change in one UPDATE audits only one event | Open |
-| B0-DB4 | Low | MT-13 counts a `WHEN (false)` / `UPDATE OF col` trigger as the append-only trigger | Open (add `tgqual is null and tgattr = '{}'` + fixture) |
+| B0-DB4 | Low | MT-13 counts a `WHEN (false)` / `UPDATE OF col` trigger as the append-only trigger | **Fixed** `5de28dd` (a guard trigger needs `tgqual is null` and no column list; the fixture with a WHEN (false) and an UPDATE OF trigger failed first) |
 | B0-DB5 | Low | MT-11 `no_caller_reference` accepts any `auth.*`/`private.*` call, even caller-independent ones | Open (needs a spec §5 wording change) |
-| B0-DB6 | Low | MT-2 `org_id_not_indexed` accepts a partial index | Open (add `ix.indpred is null`) |
+| B0-DB6 | Low | MT-2 `org_id_not_indexed` accepts a partial index | **Fixed** `5de28dd` (`ix.indpred is null`; the fixture adds a partial index and failed first) |
 | B0-DB7 | Low | `grant_staff_access` does not check staff/approver `active` or `capabilities` | Open |
 | B0-SEC1 | Medium | operator DB URL could connect without TLS | **Fixed** (`PGSSLMODE=require` for non-local; weak `sslmode` refused; test first) |
-| B0-SEC2 | Low | docker fallback runs locally when `TRACE_OPERATOR_DB_URL` is a loopback tunnel | Open (fallback only when the URL came from the local stack) |
-| B0-SEC3 | Low | `supabase status` child inherits SMOKE_PASSWORD etc. | Open (scrub env there too) |
+| B0-SEC2 | Low | docker fallback runs locally when `TRACE_OPERATOR_DB_URL` is a loopback tunnel | **Fixed** `fd74f50` (without psql, a set `TRACE_OPERATOR_DB_URL` is refused; tests first) |
+| B0-SEC3 | Low | `supabase status` child inherits SMOKE_PASSWORD etc. | **Fixed** `fd74f50` (one `childEnvOf` scrub for both child processes; test first) |
 | B0-SEC4 | Low | smoke session not logged out; no session timebox/inactivity | Open (logout; timebox → founder H8 note) |
 | B0-SEC5 | Low | auth keys not pinned: `sms.enable_signup`, `max_frequency` "1s", redirect URLs | Open |
 | B0-SEC6 | Low | rule 3 name-only exemption; rule 10 misses transitive packages | Open |
