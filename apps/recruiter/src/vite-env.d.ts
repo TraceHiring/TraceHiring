@@ -2,4 +2,8 @@
 interface ImportMetaEnv {
   /** The commit SHA of this build, set by CI; absent locally (spec §9.3). */
   readonly VITE_APP_VERSION?: string;
+  /** The Supabase project URL; set only for the staging build (specs/m0b-tenancy.md §2.7). */
+  readonly VITE_SUPABASE_URL?: string;
+  /** The public `sb_publishable_…` key; set only for the staging build (m0b §2.7). */
+  readonly VITE_SUPABASE_PUBLISHABLE_KEY?: string;
 }
