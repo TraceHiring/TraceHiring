@@ -67,7 +67,7 @@
   background: var(--color-bg-surface);
 }
 
-.secret {
+.manualKey {
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
 }

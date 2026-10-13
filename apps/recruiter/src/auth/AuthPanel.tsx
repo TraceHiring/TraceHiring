@@ -264,7 +264,7 @@ export function AuthView({
             />
           )}
           <p>
-            Key: <code className={styles.secret}>{state.secret}</code>
+            Key: <code className={styles.manualKey}>{state.secret}</code>
           </p>
           <ErrorLine error={state.error} />
           <CodeForm
