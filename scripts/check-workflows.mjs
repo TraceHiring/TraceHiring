@@ -539,14 +539,18 @@ export const ALLOWED_TRIGGERS = ['pull_request', 'push'];
 export const FULL_HISTORY_JOBS = ['static', 'security', 'migrations'];
 export const MIGRATIONS_BASE = 'origin/main';
 
+/** The org sign-in smoke step's entire run text (m0b AT-B9). */
+const SMOKE_AUTH_RUN = /^\s*node scripts\/smoke-staging-auth\.mjs\s*$/;
+
 /** §7.3 staging secrets and the commands a step must run to be allowed to hold each one (§7.2). */
 export const STAGING_SECRET_USERS = {
   SUPABASE_STAGING_DB_URL: [/\bsupabase\s+db\s+push\b/, /\bpsql\b/],
   CLOUDFLARE_API_TOKEN: [/\bwrangler\b/, /\bcheck-staging-secrets\b/],
-  // specs/m0b-tenancy.md AT-B9, AT-B10 [R5]: the org sign-in smoke step only.
-  STAGING_SMOKE_EMAIL: [/\bnode\s+scripts\/smoke-staging-auth\.mjs\b/],
-  STAGING_SMOKE_PASSWORD: [/\bnode\s+scripts\/smoke-staging-auth\.mjs\b/],
-  STAGING_SMOKE_TOTP_SECRET: [/\bnode\s+scripts\/smoke-staging-auth\.mjs\b/],
+  // specs/m0b-tenancy.md AT-B9, AT-B10 [R5]: the org sign-in smoke step only, whose whole run text
+  // is that one command (no other line, comment or argument can read the secrets; B4-SEC-2).
+  STAGING_SMOKE_EMAIL: [SMOKE_AUTH_RUN],
+  STAGING_SMOKE_PASSWORD: [SMOKE_AUTH_RUN],
+  STAGING_SMOKE_TOTP_SECRET: [SMOKE_AUTH_RUN],
 };
 
 /**
@@ -752,6 +756,12 @@ const ENV_DENY_REASONS = [
   ],
   [/^path$/i, /^PATH$/, 'it decides which program every command runs'],
   [/^(?:actions|github|runner)_/i, /^(?:ACTIONS|GITHUB|RUNNER)_/, 'the runner reads it'],
+  // m0b §2.7, B4-SEC-2: BUILD_ONLY_ENV values come only from env: on the deploy build step.
+  [
+    /^vite_supabase_/i,
+    /^VITE_SUPABASE_/,
+    'it is set only through env: on the deploy build step (m0b §2.7)',
+  ],
 ];
 
 /** null when an env: key may be set, else the reason it may not. */
@@ -1266,7 +1276,20 @@ export function checkAction(doc, file, ctx = {}) {
   checkKeyCase(doc, file, '', out);
   checkKeyCase(doc.runs, file, 'runs', out);
   const steps = Array.isArray(doc.runs.steps) ? doc.runs.steps : [];
-  steps.forEach((s, i) => checkStepCommon(s, file, `runs.steps[${i}]`, out, ctx));
+  steps.forEach((s, i) => {
+    checkStepCommon(s, file, `runs.steps[${i}]`, out, ctx);
+    if (!isObj(s) || !isObj(s.env)) return;
+    for (const n of Object.keys(BUILD_ONLY_ENV)) {
+      if (Object.hasOwn(s.env, n))
+        out.push(
+          v(
+            file,
+            `runs.steps[${i}]`,
+            `${n} may be set only on the ${DEPLOY_JOB} build step (§2.7)`,
+          ),
+        );
+    }
+  });
   return out;
 }
 
