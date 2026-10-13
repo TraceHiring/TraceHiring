@@ -29,7 +29,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(193);
+select plan(195);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -257,6 +257,12 @@ insert into auth.sessions (id, user_id, aal) values ('51000000-0000-4000-8000-00
 select is((select pg_temp.keys(details) || '|' || (details ->> 'aal') || '|' || actor_kind::text || '|' || actor_user_id::text || '|' || array_to_string(actor_roles, '+') from public.audit_log where action = 'auth.sign_in' and object_id = '51000000-0000-4000-8000-000000000001'), 'aal|aal1|org_user|00000000-0000-4000-8000-000000000003|admin', 'event auth.sign_in: exact keys, one row per active membership, the actor and roles at event time');
 insert into auth.sessions (id, user_id, aal) values ('51000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-00000000000c', 'aal1'), ('51000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000011', 'aal1');
 select is((select count(*)::int from public.audit_log where action = 'auth.sign_in' and object_id in ('51000000-0000-4000-8000-000000000002', '51000000-0000-4000-8000-000000000003')), 0, 'event auth.sign_in: a suspended member and a user without a membership write no event');
+-- B0-SP3 (spec §2.5): an active membership in a suspended org writes no sign-in event; the same user did while the org was active.
+insert into auth.sessions (id, user_id, aal) values ('51000000-0000-4000-8000-000000000004', '00000000-0000-4000-8000-000000000012', 'aal1');
+select is((select count(*)::int from public.audit_log where action = 'auth.sign_in' and object_id = '51000000-0000-4000-8000-000000000004' and org_id = 'a1000000-0000-4000-8000-000000000002'), 1, 'event auth.sign_in: an active member of an active org writes one event (control for the suspended-org case)');
+update public.orgs set status = 'suspended' where id = 'a1000000-0000-4000-8000-000000000002';
+insert into auth.sessions (id, user_id, aal) values ('51000000-0000-4000-8000-000000000005', '00000000-0000-4000-8000-000000000012', 'aal1');
+select is((select count(*)::int from public.audit_log where action = 'auth.sign_in' and object_id = '51000000-0000-4000-8000-000000000005'), 0, 'event auth.sign_in: an active member of a suspended org writes no event');
 update auth.sessions set aal = 'aal2' where id = '51000000-0000-4000-8000-000000000001';
 select is((select pg_temp.keys(details) || '|' || (details ->> 'aal') || '|' || actor_kind::text from public.audit_log where action = 'auth.step_up' and object_id = '51000000-0000-4000-8000-000000000001'), 'aal|aal2|org_user', 'event auth.step_up: exact keys, written when aal changes');
 update auth.sessions set aal = 'aal2', updated_at = now() where id = '51000000-0000-4000-8000-000000000001';

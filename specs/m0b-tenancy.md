@@ -110,7 +110,7 @@ Concretely:
 - **Events (each with one pgTAP case, §6) [S7]:** `org.create`, `org.update` (owner/admin settings changes, Q11), `workspace.create`, `workspace.update`, `workspace.archive`, `team.create`, `team.update`, `team.delete`, `membership.create`, `membership.update`, `membership.remove`, `staff_grant.create`, `staff_grant.revoke`, `auth.sign_in`, `auth.step_up`, `audit.repartition`.
 
 ### 2.5 Sign-in audit events
-- `auth.sign_in`: `AFTER INSERT ON auth.sessions` → one row per active membership of that user (`actor_kind = 'org_user'`, `details = {"aal": …}`).
+- `auth.sign_in`: `AFTER INSERT ON auth.sessions` → one row per active membership of that user **in an active org** (`actor_kind = 'org_user'`, `details = {"aal": …}`). A membership in a suspended org writes no event, for `auth.sign_in` and `auth.step_up` alike: the org is closed, and its owners cannot read its log (`private.my_org_ids` skips suspended orgs) [B0-SP3, pinned in `rls_audit_log`].
 - `auth.step_up` [S19, D12]: GoTrue raises a session from aal1 to aal2 by **updating** `auth.sessions.aal`, so a second trigger `AFTER UPDATE OF aal ON auth.sessions … WHEN (new.aal is distinct from old.aal)` writes `auth.step_up` with `{"aal": "aal2"}`. AT-B8 pins both on a real GoTrue session.
 - No IP, no user agent. Both trigger functions are `private` SECURITY DEFINER (`search_path = ''`); MT-5d's `system_table_trigger` branch keeps checking them. A failure aborts the sign-in (fail closed).
 - Local DC-4 passed (database-reviewer 2026-10-12: `postgres` can create a trigger on `auth.sessions`). Hosted: H11 on `trace-dev`. If hosted refuses, the event moves to the API layer (owner M1) and the change goes to FOUNDER-QUEUE (it changes *when* a Q11 event is recorded).
