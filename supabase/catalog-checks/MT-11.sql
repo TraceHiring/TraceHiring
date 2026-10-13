@@ -30,13 +30,18 @@
 --     never depends on who is asking, so it ORs open every org's rows. The same clause in a RESTRICTIVE policy only
 --     narrows and passes.
 --   or_arm_without_caller (M0b review M0B-DB-2): the same kind of clause calls a caller-dependent helper, but its
---     root is an OR with an arm (followed through nested ORs) that has no caller-dependent call outside an
---     IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not null: that arm alone lets every
---     signed-in user of every org through.
+--     root is an OR with an arm (followed through nested ORs) that has no bound caller-dependent call (see
+--     tree_call.bound) outside an IS [NOT] NULL test, such as deleted_at is null or (select auth.uid()) is not
+--     null: that arm alone lets every signed-in user of every org through.
 --   caller_only_null_tested (M0b review M0B-DB-2): the same, with no OR at the root: every caller-dependent call
 --     sits inside an IS [NOT] NULL test, such as deleted_at is null and (select auth.uid()) is not null, which only
---     asks whether someone is signed in. An OR below an AND or a NOT is not followed: the check is a net, and each
---     table's rls_* tests (allowed and denied cases per role) remain the proof.
+--     asks whether someone is signed in.
+--   caller_unbound (M0b FIX re-review FR-1): the same, with no OR at the root, but some caller call is outside a
+--     null test and none is bound to a column: deleted_at is null and (select auth.jwt() ->> 'role') =
+--     'authenticated', or (select auth.uid()) = (select auth.uid()). Still not followed (the check is a net, and
+--     each table's rls_* tests, allowed and denied cases per role, remain the proof): an OR below an AND, a NOT, a
+--     CASE or a COALESCE whose caller call is bound in one branch only, such as
+--     coalesce(owner_id = (select auth.uid()), true).
 --   system_list_policy (M0b, M0a catalog pass C review E3): any policy on any relation in a system-list schema,
 --     whoever owns the relation (supautils lets postgres create policies on auth, storage and realtime tables).
 --     Trace uses R2 and Durable Objects, not Supabase Storage or Realtime, and adds no policy there.
@@ -111,12 +116,13 @@ auth_function as (
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
 -- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
-helper_function (oid, nspname, caller) as (
+helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator'))
+    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
   where n.nspname in ('private', 'auth')
@@ -207,8 +213,12 @@ tree_node (oid, clause, ord, piece, end_ord, depth) as (
 ),
 -- tree_call: each function a clause calls (a function, an operator's function, an aggregate or a window function)
 -- that is in private or auth, with its schema, its node, whether it depends on the caller and whether it sits
--- inside an IS [NOT] NULL test (a NULLTEST node), which only asks whether there is a caller.
-tree_call (oid, clause, nspname, ord, caller, null_tested) as (
+-- inside an IS [NOT] NULL test (a NULLTEST node), which only asks whether there is a caller. bound (FIX re-review
+-- FR-1): the helper returns boolean itself (a predicate on the caller, such as private.is_operator), or the call
+-- sits inside an operator (OPEXPR, SCALARARRAYOPEXPR) or an ANY/IN sub-select that also reads a column (any VAR),
+-- such as org_id = any((select private.my_org_ids(...))). A call compared only to a constant, such as
+-- (select auth.jwt() ->> 'role') = 'authenticated', or to itself, is not bound: it does not pick rows.
+tree_call (oid, clause, nspname, ord, caller, null_tested, bound) as (
   select
     fn.oid,
     fn.clause,
@@ -223,6 +233,25 @@ tree_call (oid, clause, nspname, ord, caller, null_tested) as (
         and t.piece like '{NULLTEST %'
         and t.ord < fn.ord
         and fn.ord < t.end_ord
+    ),
+    hf.returns_bool
+    or exists (
+      select 1
+      from tree_node as op
+      join tree_node as v on v.oid = op.oid
+        and v.clause = op.clause
+        and v.piece like '{VAR %'
+        and op.ord < v.ord
+        and v.ord < op.end_ord
+      where op.oid = fn.oid
+        and op.clause = fn.clause
+        and (
+          op.piece like '{OPEXPR %'
+          or op.piece like '{SCALARARRAYOPEXPR %'
+          or op.piece like '{SUBLINK :subLinkType 2 %'
+        )
+        and op.ord < fn.ord
+        and fn.ord < op.end_ord
     )
   from tree_node as fn
   join helper_function as hf on hf.oid = coalesce(
@@ -235,10 +264,11 @@ tree_call (oid, clause, nspname, ord, caller, null_tested) as (
 -- clause_fact: per USING or WITH CHECK of a scope policy, whether it refers to a column of its table (a VAR whose
 -- varlevelsup equals the number of QUERY nodes around it), whether it calls a function in private or in auth,
 -- whether it calls a caller-dependent helper, whether its root is an OR, and whether it is open: some arm reached
--- from the root through OR nodes only (the root itself when it is not an OR) has no caller-dependent call outside
--- a NULLTEST, so that arm alone lets any signed-in user of any org through. An OR below an AND or a NOT is not
--- followed (the catalog checks are a net, and every table's rls_* tests are the proof).
-clause_fact (oid, clause, has_column, calls_private, calls_auth, calls_caller, root_is_or, open) as (
+-- from the root through OR nodes only (the root itself when it is not an OR) has no bound caller-dependent call
+-- outside a NULLTEST (tree_call.bound), so that arm alone lets any signed-in user of any org through. An OR below
+-- an AND or a NOT is not followed (the catalog checks are a net, and every table's rls_* tests are the proof).
+-- calls_unnulled: some caller-dependent call sits outside a NULLTEST.
+clause_fact (oid, clause, has_column, calls_private, calls_auth, calls_caller, calls_unnulled, root_is_or, open) as (
   select
     pt.oid,
     pt.clause,
@@ -261,6 +291,14 @@ clause_fact (oid, clause, has_column, calls_private, calls_auth, calls_caller, r
     exists (select 1 from tree_call as c where c.oid = pt.oid and c.clause = pt.clause and c.nspname = 'private'),
     exists (select 1 from tree_call as c where c.oid = pt.oid and c.clause = pt.clause and c.nspname = 'auth'),
     exists (select 1 from tree_call as c where c.oid = pt.oid and c.clause = pt.clause and c.caller),
+    exists (
+      select 1
+      from tree_call as c
+      where c.oid = pt.oid
+        and c.clause = pt.clause
+        and c.caller
+        and not c.null_tested
+    ),
     exists (
       select 1
       from tree_node as r
@@ -291,6 +329,7 @@ clause_fact (oid, clause, has_column, calls_private, calls_auth, calls_caller, r
             and c.clause = a.clause
             and c.caller
             and not c.null_tested
+            and c.bound
             and a.ord <= c.ord
             and c.ord < a.end_ord
         )
@@ -364,7 +403,8 @@ finding (oid, branch, detail) as (
       when not cf.has_column and not cf.calls_private then 'qual_without_column'
       when not cf.calls_caller then 'no_caller_reference'
       when cf.root_is_or then 'or_arm_without_caller'
-      else 'caller_only_null_tested'
+      when not cf.calls_unnulled then 'caller_only_null_tested'
+      else 'caller_unbound'
     end::text,
     case
       when not cf.has_column and not cf.calls_private and cf.calls_auth then format(
@@ -383,7 +423,11 @@ finding (oid, branch, detail) as (
         '%s has an OR arm with no caller-dependent call outside IS NULL, so that arm ignores the caller',
         cf.clause
       )
-      else format('%s only tests that a caller exists (IS NULL), so it ignores who the caller is', cf.clause)
+      when not cf.calls_unnulled then format(
+        '%s only tests that a caller exists (IS NULL), so it ignores who the caller is',
+        cf.clause
+      )
+      else format('%s compares the caller only to constants, never to a column, so it picks no rows', cf.clause)
     end::text
   from clause_fact as cf
   join scope_policy as sp on sp.oid = cf.oid

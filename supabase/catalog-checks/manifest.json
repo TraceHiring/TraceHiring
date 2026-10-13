@@ -141,7 +141,8 @@
         "no_caller_reference",
         "system_list_policy",
         "or_arm_without_caller",
-        "caller_only_null_tested"
+        "caller_only_null_tested",
+        "caller_unbound"
       ]
     },
     {
