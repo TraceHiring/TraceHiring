@@ -6,6 +6,7 @@
 --     coalesce(relacl, acldefault('r', relowner)), because a relation created without the revokes has a NULL ACL,
 --     which means every privilege for its owner (E4).
 --   no_row_trigger: no BEFORE UPDATE OR DELETE row trigger calling private.audit_log_append_only().
+--     A trigger with a WHEN condition or an UPDATE OF column list does not count, for either branch (B0-DB4).
 --   no_truncate_trigger: no BEFORE TRUNCATE statement trigger calling it (TRUNCATE triggers are not inherited).
 --   not_always: such a trigger exists but is not ENABLE ALWAYS (tgenabled A), so replica mode would skip it (D3).
 --   missing_parent: public.audit_log is missing or is not a partitioned table.
@@ -30,6 +31,8 @@ guard_trigger as (
   from part as p
   join pg_trigger as tg on tg.tgrelid = p.oid
   where tg.tgfoid = to_regprocedure('private.audit_log_append_only()')
+    and tg.tgqual is null
+    and cardinality(tg.tgattr::int2[]) = 0
 )
 select
   'missing_parent'::text as branch,

@@ -391,9 +391,9 @@ select is_empty($q$
 -- as MT-1. The three branches are independent: a column that is missing, of another type, or nullable. Tables on
 -- the exemption list below are not checked. An entry exempts only the exact table it names, and only while its adr
 -- starts with ADR-<number>. An entry that names no in-scope table is itself reported under missing_org_id (the
--- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2): no valid index on the
--- table (or on its partitioned parent) has org_id as its first key column, so every tenant-scoped scan is a full
--- scan.
+-- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2, B0-DB6): no valid,
+-- non-partial index on the table (or on its partitioned parent) has org_id as its first key column, so every
+-- tenant-scoped scan is a full scan.
 with recursive exemption (schema_name, table_name, adr) as (
   values
     -- One row per exempt table, each citing its ADR, e.g. ('public', 'countries', 'ADR-0NN reference data'),
@@ -497,7 +497,7 @@ union all
 select
   'org_id_not_indexed'::text,
   format('%I.%I', o.nspname, o.relname)::text,
-  'no valid index on the table or its partitioned parent has org_id as its first key column'::text
+  'no valid, non-partial index on the table or its partitioned parent has org_id as its first key column'::text
 from org_id as o
 join checked_table as t on t.nspname = o.nspname and t.relname = o.relname
 where not exists (
@@ -505,6 +505,7 @@ where not exists (
   from pg_index as ix
   join pg_attribute as ia on ia.attrelid = ix.indrelid and ia.attnum = ix.indkey[0]
   where ix.indisvalid
+    and ix.indpred is null
     and ia.attname = 'org_id'
     and (
       ix.indrelid = t.oid
@@ -535,9 +536,9 @@ select * from (
 -- as MT-1. The three branches are independent: a column that is missing, of another type, or nullable. Tables on
 -- the exemption list below are not checked. An entry exempts only the exact table it names, and only while its adr
 -- starts with ADR-<number>. An entry that names no in-scope table is itself reported under missing_org_id (the
--- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2): no valid index on the
--- table (or on its partitioned parent) has org_id as its first key column, so every tenant-scoped scan is a full
--- scan.
+-- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2, B0-DB6): no valid,
+-- non-partial index on the table (or on its partitioned parent) has org_id as its first key column, so every
+-- tenant-scoped scan is a full scan.
 with recursive exemption (schema_name, table_name, adr) as (
   values
     -- One row per exempt table, each citing its ADR, e.g. ('public', 'countries', 'ADR-0NN reference data'),
@@ -641,7 +642,7 @@ union all
 select
   'org_id_not_indexed'::text,
   format('%I.%I', o.nspname, o.relname)::text,
-  'no valid index on the table or its partitioned parent has org_id as its first key column'::text
+  'no valid, non-partial index on the table or its partitioned parent has org_id as its first key column'::text
 from org_id as o
 join checked_table as t on t.nspname = o.nspname and t.relname = o.relname
 where not exists (
@@ -649,6 +650,7 @@ where not exists (
   from pg_index as ix
   join pg_attribute as ia on ia.attrelid = ix.indrelid and ia.attnum = ix.indkey[0]
   where ix.indisvalid
+    and ix.indpred is null
     and ia.attname = 'org_id'
     and (
       ix.indrelid = t.oid
@@ -681,9 +683,9 @@ select * from (
 -- as MT-1. The three branches are independent: a column that is missing, of another type, or nullable. Tables on
 -- the exemption list below are not checked. An entry exempts only the exact table it names, and only while its adr
 -- starts with ADR-<number>. An entry that names no in-scope table is itself reported under missing_org_id (the
--- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2): no valid index on the
--- table (or on its partitioned parent) has org_id as its first key column, so every tenant-scoped scan is a full
--- scan.
+-- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2, B0-DB6): no valid,
+-- non-partial index on the table (or on its partitioned parent) has org_id as its first key column, so every
+-- tenant-scoped scan is a full scan.
 with recursive exemption (schema_name, table_name, adr) as (
   values
     -- One row per exempt table, each citing its ADR, e.g. ('public', 'countries', 'ADR-0NN reference data'),
@@ -787,7 +789,7 @@ union all
 select
   'org_id_not_indexed'::text,
   format('%I.%I', o.nspname, o.relname)::text,
-  'no valid index on the table or its partitioned parent has org_id as its first key column'::text
+  'no valid, non-partial index on the table or its partitioned parent has org_id as its first key column'::text
 from org_id as o
 join checked_table as t on t.nspname = o.nspname and t.relname = o.relname
 where not exists (
@@ -795,6 +797,7 @@ where not exists (
   from pg_index as ix
   join pg_attribute as ia on ia.attrelid = ix.indrelid and ia.attnum = ix.indkey[0]
   where ix.indisvalid
+    and ix.indpred is null
     and ia.attname = 'org_id'
     and (
       ix.indrelid = t.oid
@@ -827,9 +830,9 @@ select * from (
 -- as MT-1. The three branches are independent: a column that is missing, of another type, or nullable. Tables on
 -- the exemption list below are not checked. An entry exempts only the exact table it names, and only while its adr
 -- starts with ADR-<number>. An entry that names no in-scope table is itself reported under missing_org_id (the
--- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2): no valid index on the
--- table (or on its partitioned parent) has org_id as its first key column, so every tenant-scoped scan is a full
--- scan.
+-- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2, B0-DB6): no valid,
+-- non-partial index on the table (or on its partitioned parent) has org_id as its first key column, so every
+-- tenant-scoped scan is a full scan.
 with recursive exemption (schema_name, table_name, adr) as (
   values
     -- One row per exempt table, each citing its ADR, e.g. ('public', 'countries', 'ADR-0NN reference data'),
@@ -933,7 +936,7 @@ union all
 select
   'org_id_not_indexed'::text,
   format('%I.%I', o.nspname, o.relname)::text,
-  'no valid index on the table or its partitioned parent has org_id as its first key column'::text
+  'no valid, non-partial index on the table or its partitioned parent has org_id as its first key column'::text
 from org_id as o
 join checked_table as t on t.nspname = o.nspname and t.relname = o.relname
 where not exists (
@@ -941,6 +944,7 @@ where not exists (
   from pg_index as ix
   join pg_attribute as ia on ia.attrelid = ix.indrelid and ia.attnum = ix.indkey[0]
   where ix.indisvalid
+    and ix.indpred is null
     and ia.attname = 'org_id'
     and (
       ix.indrelid = t.oid
@@ -963,9 +967,11 @@ where not exists (
 $q$, 'MT-2.org_id_nullable: fires');
 rollback to savepoint mt;
 savepoint mt;
--- MT-2.org_id_not_indexed: a tenant table whose org_id leads no index (M0a review DB-2).
+-- MT-2.org_id_not_indexed: a tenant table whose org_id leads no index (M0a review DB-2); a partial index on org_id
+-- does not count, because it serves only the rows its predicate matches (B0-DB6).
 create table public.mt_2_unindexed (org_id uuid not null, id bigint not null);
 alter table public.mt_2_unindexed enable row level security;
+create index mt_2_unindexed_partial on public.mt_2_unindexed (org_id) where id > 0;
 reset role;
 select isnt_empty($q$
 select * from (
@@ -974,9 +980,9 @@ select * from (
 -- as MT-1. The three branches are independent: a column that is missing, of another type, or nullable. Tables on
 -- the exemption list below are not checked. An entry exempts only the exact table it names, and only while its adr
 -- starts with ADR-<number>. An entry that names no in-scope table is itself reported under missing_org_id (the
--- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2): no valid index on the
--- table (or on its partitioned parent) has org_id as its first key column, so every tenant-scoped scan is a full
--- scan.
+-- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2, B0-DB6): no valid,
+-- non-partial index on the table (or on its partitioned parent) has org_id as its first key column, so every
+-- tenant-scoped scan is a full scan.
 with recursive exemption (schema_name, table_name, adr) as (
   values
     -- One row per exempt table, each citing its ADR, e.g. ('public', 'countries', 'ADR-0NN reference data'),
@@ -1080,7 +1086,7 @@ union all
 select
   'org_id_not_indexed'::text,
   format('%I.%I', o.nspname, o.relname)::text,
-  'no valid index on the table or its partitioned parent has org_id as its first key column'::text
+  'no valid, non-partial index on the table or its partitioned parent has org_id as its first key column'::text
 from org_id as o
 join checked_table as t on t.nspname = o.nspname and t.relname = o.relname
 where not exists (
@@ -1088,6 +1094,7 @@ where not exists (
   from pg_index as ix
   join pg_attribute as ia on ia.attrelid = ix.indrelid and ia.attnum = ix.indkey[0]
   where ix.indisvalid
+    and ix.indpred is null
     and ia.attname = 'org_id'
     and (
       ix.indrelid = t.oid
@@ -27888,6 +27895,7 @@ select is_empty($q$
 --     coalesce(relacl, acldefault('r', relowner)), because a relation created without the revokes has a NULL ACL,
 --     which means every privilege for its owner (E4).
 --   no_row_trigger: no BEFORE UPDATE OR DELETE row trigger calling private.audit_log_append_only().
+--     A trigger with a WHEN condition or an UPDATE OF column list does not count, for either branch (B0-DB4).
 --   no_truncate_trigger: no BEFORE TRUNCATE statement trigger calling it (TRUNCATE triggers are not inherited).
 --   not_always: such a trigger exists but is not ENABLE ALWAYS (tgenabled A), so replica mode would skip it (D3).
 --   missing_parent: public.audit_log is missing or is not a partitioned table.
@@ -27912,6 +27920,8 @@ guard_trigger as (
   from part as p
   join pg_trigger as tg on tg.tgrelid = p.oid
   where tg.tgfoid = to_regprocedure('private.audit_log_append_only()')
+    and tg.tgqual is null
+    and cardinality(tg.tgattr::int2[]) = 0
 )
 select
   'missing_parent'::text as branch,
@@ -27995,6 +28005,7 @@ select * from (
 --     coalesce(relacl, acldefault('r', relowner)), because a relation created without the revokes has a NULL ACL,
 --     which means every privilege for its owner (E4).
 --   no_row_trigger: no BEFORE UPDATE OR DELETE row trigger calling private.audit_log_append_only().
+--     A trigger with a WHEN condition or an UPDATE OF column list does not count, for either branch (B0-DB4).
 --   no_truncate_trigger: no BEFORE TRUNCATE statement trigger calling it (TRUNCATE triggers are not inherited).
 --   not_always: such a trigger exists but is not ENABLE ALWAYS (tgenabled A), so replica mode would skip it (D3).
 --   missing_parent: public.audit_log is missing or is not a partitioned table.
@@ -28019,6 +28030,8 @@ guard_trigger as (
   from part as p
   join pg_trigger as tg on tg.tgrelid = p.oid
   where tg.tgfoid = to_regprocedure('private.audit_log_append_only()')
+    and tg.tgqual is null
+    and cardinality(tg.tgattr::int2[]) = 0
 )
 select
   'missing_parent'::text as branch,
@@ -28104,6 +28117,7 @@ select * from (
 --     coalesce(relacl, acldefault('r', relowner)), because a relation created without the revokes has a NULL ACL,
 --     which means every privilege for its owner (E4).
 --   no_row_trigger: no BEFORE UPDATE OR DELETE row trigger calling private.audit_log_append_only().
+--     A trigger with a WHEN condition or an UPDATE OF column list does not count, for either branch (B0-DB4).
 --   no_truncate_trigger: no BEFORE TRUNCATE statement trigger calling it (TRUNCATE triggers are not inherited).
 --   not_always: such a trigger exists but is not ENABLE ALWAYS (tgenabled A), so replica mode would skip it (D3).
 --   missing_parent: public.audit_log is missing or is not a partitioned table.
@@ -28128,6 +28142,8 @@ guard_trigger as (
   from part as p
   join pg_trigger as tg on tg.tgrelid = p.oid
   where tg.tgfoid = to_regprocedure('private.audit_log_append_only()')
+    and tg.tgqual is null
+    and cardinality(tg.tgattr::int2[]) = 0
 )
 select
   'missing_parent'::text as branch,
@@ -28214,6 +28230,7 @@ select * from (
 --     coalesce(relacl, acldefault('r', relowner)), because a relation created without the revokes has a NULL ACL,
 --     which means every privilege for its owner (E4).
 --   no_row_trigger: no BEFORE UPDATE OR DELETE row trigger calling private.audit_log_append_only().
+--     A trigger with a WHEN condition or an UPDATE OF column list does not count, for either branch (B0-DB4).
 --   no_truncate_trigger: no BEFORE TRUNCATE statement trigger calling it (TRUNCATE triggers are not inherited).
 --   not_always: such a trigger exists but is not ENABLE ALWAYS (tgenabled A), so replica mode would skip it (D3).
 --   missing_parent: public.audit_log is missing or is not a partitioned table.
@@ -28238,6 +28255,8 @@ guard_trigger as (
   from part as p
   join pg_trigger as tg on tg.tgrelid = p.oid
   where tg.tgfoid = to_regprocedure('private.audit_log_append_only()')
+    and tg.tgqual is null
+    and cardinality(tg.tgattr::int2[]) = 0
 )
 select
   'missing_parent'::text as branch,
@@ -28310,8 +28329,13 @@ where (g.is_row or g.is_truncate)
 $q$, 'MT-13.owner_dml: fires');
 rollback to savepoint mt;
 savepoint mt;
--- MT-13.no_row_trigger: the parent's row trigger (cloned to every partition) dropped.
+-- MT-13.no_row_trigger: the parent's row trigger (cloned to every partition) dropped and replaced by two that do not
+-- guard every UPDATE or DELETE (B0-DB4): one with WHEN (false), one limited to UPDATE OF a column. Neither counts.
 drop trigger audit_log_no_update_delete on public.audit_log;
+create trigger mt_13_when_false before update or delete on public.audit_log
+  for each row when (false) execute function private.audit_log_append_only();
+create trigger mt_13_update_of before update of details or delete on public.audit_log
+  for each row execute function private.audit_log_append_only();
 reset role;
 select isnt_empty($q$
 select * from (
@@ -28323,6 +28347,7 @@ select * from (
 --     coalesce(relacl, acldefault('r', relowner)), because a relation created without the revokes has a NULL ACL,
 --     which means every privilege for its owner (E4).
 --   no_row_trigger: no BEFORE UPDATE OR DELETE row trigger calling private.audit_log_append_only().
+--     A trigger with a WHEN condition or an UPDATE OF column list does not count, for either branch (B0-DB4).
 --   no_truncate_trigger: no BEFORE TRUNCATE statement trigger calling it (TRUNCATE triggers are not inherited).
 --   not_always: such a trigger exists but is not ENABLE ALWAYS (tgenabled A), so replica mode would skip it (D3).
 --   missing_parent: public.audit_log is missing or is not a partitioned table.
@@ -28347,6 +28372,8 @@ guard_trigger as (
   from part as p
   join pg_trigger as tg on tg.tgrelid = p.oid
   where tg.tgfoid = to_regprocedure('private.audit_log_append_only()')
+    and tg.tgqual is null
+    and cardinality(tg.tgattr::int2[]) = 0
 )
 select
   'missing_parent'::text as branch,
@@ -28432,6 +28459,7 @@ select * from (
 --     coalesce(relacl, acldefault('r', relowner)), because a relation created without the revokes has a NULL ACL,
 --     which means every privilege for its owner (E4).
 --   no_row_trigger: no BEFORE UPDATE OR DELETE row trigger calling private.audit_log_append_only().
+--     A trigger with a WHEN condition or an UPDATE OF column list does not count, for either branch (B0-DB4).
 --   no_truncate_trigger: no BEFORE TRUNCATE statement trigger calling it (TRUNCATE triggers are not inherited).
 --   not_always: such a trigger exists but is not ENABLE ALWAYS (tgenabled A), so replica mode would skip it (D3).
 --   missing_parent: public.audit_log is missing or is not a partitioned table.
@@ -28456,6 +28484,8 @@ guard_trigger as (
   from part as p
   join pg_trigger as tg on tg.tgrelid = p.oid
   where tg.tgfoid = to_regprocedure('private.audit_log_append_only()')
+    and tg.tgqual is null
+    and cardinality(tg.tgattr::int2[]) = 0
 )
 select
   'missing_parent'::text as branch,
@@ -28541,6 +28571,7 @@ select * from (
 --     coalesce(relacl, acldefault('r', relowner)), because a relation created without the revokes has a NULL ACL,
 --     which means every privilege for its owner (E4).
 --   no_row_trigger: no BEFORE UPDATE OR DELETE row trigger calling private.audit_log_append_only().
+--     A trigger with a WHEN condition or an UPDATE OF column list does not count, for either branch (B0-DB4).
 --   no_truncate_trigger: no BEFORE TRUNCATE statement trigger calling it (TRUNCATE triggers are not inherited).
 --   not_always: such a trigger exists but is not ENABLE ALWAYS (tgenabled A), so replica mode would skip it (D3).
 --   missing_parent: public.audit_log is missing or is not a partitioned table.
@@ -28565,6 +28596,8 @@ guard_trigger as (
   from part as p
   join pg_trigger as tg on tg.tgrelid = p.oid
   where tg.tgfoid = to_regprocedure('private.audit_log_append_only()')
+    and tg.tgqual is null
+    and cardinality(tg.tgattr::int2[]) = 0
 )
 select
   'missing_parent'::text as branch,
@@ -28650,6 +28683,7 @@ select * from (
 --     coalesce(relacl, acldefault('r', relowner)), because a relation created without the revokes has a NULL ACL,
 --     which means every privilege for its owner (E4).
 --   no_row_trigger: no BEFORE UPDATE OR DELETE row trigger calling private.audit_log_append_only().
+--     A trigger with a WHEN condition or an UPDATE OF column list does not count, for either branch (B0-DB4).
 --   no_truncate_trigger: no BEFORE TRUNCATE statement trigger calling it (TRUNCATE triggers are not inherited).
 --   not_always: such a trigger exists but is not ENABLE ALWAYS (tgenabled A), so replica mode would skip it (D3).
 --   missing_parent: public.audit_log is missing or is not a partitioned table.
@@ -28674,6 +28708,8 @@ guard_trigger as (
   from part as p
   join pg_trigger as tg on tg.tgrelid = p.oid
   where tg.tgfoid = to_regprocedure('private.audit_log_append_only()')
+    and tg.tgqual is null
+    and cardinality(tg.tgattr::int2[]) = 0
 )
 select
   'missing_parent'::text as branch,

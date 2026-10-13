@@ -3,9 +3,9 @@
 -- as MT-1. The three branches are independent: a column that is missing, of another type, or nullable. Tables on
 -- the exemption list below are not checked. An entry exempts only the exact table it names, and only while its adr
 -- starts with ADR-<number>. An entry that names no in-scope table is itself reported under missing_org_id (the
--- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2): no valid index on the
--- table (or on its partitioned parent) has org_id as its first key column, so every tenant-scoped scan is a full
--- scan.
+-- branch it exempts from), so a stale entry fails. org_id_not_indexed (M0b, M0a review DB-2, B0-DB6): no valid,
+-- non-partial index on the table (or on its partitioned parent) has org_id as its first key column, so every
+-- tenant-scoped scan is a full scan.
 with recursive exemption (schema_name, table_name, adr) as (
   values
     -- One row per exempt table, each citing its ADR, e.g. ('public', 'countries', 'ADR-0NN reference data'),
@@ -109,7 +109,7 @@ union all
 select
   'org_id_not_indexed'::text,
   format('%I.%I', o.nspname, o.relname)::text,
-  'no valid index on the table or its partitioned parent has org_id as its first key column'::text
+  'no valid, non-partial index on the table or its partitioned parent has org_id as its first key column'::text
 from org_id as o
 join checked_table as t on t.nspname = o.nspname and t.relname = o.relname
 where not exists (
@@ -117,6 +117,7 @@ where not exists (
   from pg_index as ix
   join pg_attribute as ia on ia.attrelid = ix.indrelid and ia.attnum = ix.indkey[0]
   where ix.indisvalid
+    and ix.indpred is null
     and ia.attname = 'org_id'
     and (
       ix.indrelid = t.oid
