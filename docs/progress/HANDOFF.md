@@ -27,7 +27,7 @@ The next session may be a new Claude Code on another account: start from `docs/p
 
 ## Next step (in order)
 1. Done at 16:20: `3e5ffbe` and this handoff (`e2e58b3`) pushed; **Linux CI run 38385004124 on `e2e58b3` is green, `rls` with AT-B8 included.**
-2. Move `milestone/m0b` forward only (never rewrite): `git fetch . m0b/integration:milestone/m0b` (git refuses a non-fast-forward), after a full `pnpm verify` with no agent running and green CI on that SHA; tag `cp/m0b-02` there; push both.
+2. **Done 18:22 IST:** full `pnpm verify` green on `4cb6775` (no agent running) and Linux CI green on it → `milestone/m0b` fast-forwarded to `4cb6775`, tag **`cp/m0b-02`**, both pushed. (Was: move `milestone/m0b` forward only (never rewrite): `git fetch . m0b/integration:milestone/m0b` (git refuses a non-fast-forward), after a full `pnpm verify` with no agent running and green CI on that SHA; tag `cp/m0b-02` there; push both.
 3. **M0b REVIEW** in a fresh session: `trace-milestone-review` → `docs/reviews/M0b.md` (Opus reviewers for rules 1–9 areas: RLS/tenancy, auth, audit). Open Lows to carry: B0-DB3, DB5, DB7, SEC4(timebox), SEC5–SEC8, SP3–SP7; B4-SEC-4, SEC-6; B2-SEC-1, SEC-4, SEC-5 (owners in the review records).
 4. Do not merge into `main`, tag `m0*-reviewed`, or CLOSE: founder gates (FOUNDER-QUEUE).
 
