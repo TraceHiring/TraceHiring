@@ -97,6 +97,26 @@ describe('headersTemplatePlugin', () => {
     expect(file?.source).toContain("connect-src 'self'; object-src");
   });
 
+  it('fails the build when the publishable-key variable is not an sb_publishable_ key (B4-SEC-3)', () => {
+    const plugin = headersTemplatePlugin();
+    const secretShaped = ['sb', 'secret', 'x'.repeat(30)].join('_');
+    const jwtShaped = ['eyJhbGciOiJIUzI1NiJ9', 'eyJyb2xlIjoic2VydmljZV9yb2xlIn0', 'sig'].join('.');
+    for (const value of [secretShaped, jwtShaped, 'sb_publishable_short']) {
+      let message = '';
+      try {
+        plugin.configResolved({ root: tmpdir(), env: { VITE_SUPABASE_PUBLISHABLE_KEY: value } });
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toMatch(/VITE_SUPABASE_PUBLISHABLE_KEY/);
+      expect(message).not.toContain(value);
+    }
+    const ok = ['sb', 'publishable', 'a'.repeat(30)].join('_');
+    expect(() =>
+      plugin.configResolved({ root: tmpdir(), env: { VITE_SUPABASE_PUBLISHABLE_KEY: ok } }),
+    ).not.toThrow();
+  });
+
   it('fails in configResolved for a bad URL, before anything is built', () => {
     const plugin = headersTemplatePlugin();
     expect(() =>

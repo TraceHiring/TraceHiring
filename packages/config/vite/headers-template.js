@@ -26,6 +26,22 @@ function supabaseOrigin(value) {
   return value.replace(/\/$/, '');
 }
 
+const PUBLISHABLE_KEY = /^sb_publishable_[A-Za-z0-9_-]{20,}$/;
+
+/**
+ * The recruiter bundle inlines VITE_SUPABASE_PUBLISHABLE_KEY, so anything but a publishable key
+ * (a secret key, a service-role JWT) fails the build here, before scan-dist (B4-SEC-3, H10).
+ * @param {unknown} value
+ */
+function checkPublishableKey(value) {
+  if (value === undefined || value === null || value === '') return;
+  if (typeof value !== 'string' || !PUBLISHABLE_KEY.test(value)) {
+    throw new Error(
+      'VITE_SUPABASE_PUBLISHABLE_KEY must be an sb_publishable_ key (value not shown)',
+    );
+  }
+}
+
 /**
  * The `_headers` text for one build.
  * @param {string} template
@@ -57,6 +73,7 @@ export function headersTemplatePlugin(options = {}) {
       root = config.root;
       supabaseUrl = config.env['VITE_SUPABASE_URL'];
       supabaseOrigin(supabaseUrl);
+      checkPublishableKey(config.env['VITE_SUPABASE_PUBLISHABLE_KEY']);
     },
     /** @this {{ emitFile(file: { type: 'asset', fileName: string, source: string }): unknown }} */
     generateBundle() {
