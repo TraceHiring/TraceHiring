@@ -12,7 +12,7 @@ const REF = 'abcdefghij0123456789';
 const ORIGIN = `https://${REF}.supabase.co`;
 const PAGE_URL = 'https://trace-recruiter-staging.pages.dev/';
 const PASSWORD = `${enc('synthetic-smoke')}-Aa1`;
-const KEY = `${enc('synthetic-publishable-key')}.${enc('part-two')}`;
+const KEY = `sb_publishable_${enc('synthetic-publishable-key')}`;
 const EMAIL = 'marker-smoke@example.test';
 const TOTP_SECRET = base32Encode(Buffer.from('synthetic-totp-secret'));
 const BODY_MARKER = enc('synthetic-response-body-marker');
@@ -28,6 +28,7 @@ const CHALLENGE_ID = '66666666-6666-4666-8666-666666666666';
 
 const AAL1_TOKEN = jwt({ sub: USER_ID, aal: 'aal1', marker: enc('aal1-token') });
 const AAL2_TOKEN = jwt({ sub: USER_ID, aal: 'aal2', marker: enc('aal2-token') });
+const WRONG_SUB_TOKEN = jwt({ sub: OTHER_ID, aal: 'aal2', marker: enc('wrong-sub-token') });
 const CODE = await totp({ secret: TOTP_SECRET, timeMs: NOW });
 
 const ENV = Object.freeze({
@@ -47,6 +48,7 @@ const SENSITIVE = [
   CODE,
   AAL1_TOKEN,
   AAL2_TOKEN,
+  WRONG_SUB_TOKEN,
   USER_ID,
   ORG_ID,
   MEMBERSHIP_ID,
@@ -84,14 +86,14 @@ const happy = () => ({
 });
 
 /** Runs main() with scripted deps. `handlers` replace happy-path entries by key. */
-async function run({ env = ENV, handlers = {}, argv = [] } = {}) {
+async function run({ env = ENV, handlers = {}, argv = [], now = () => NOW } = {}) {
   const calls = [];
   const out = [];
   const err = [];
   const table = { ...happy(), ...handlers };
   const deps = {
     env,
-    now: () => NOW,
+    now,
     stdout: { write: (s) => out.push(s) },
     stderr: { write: (s) => err.push(s) },
     async fetch(url, init = {}) {
@@ -387,19 +389,96 @@ describe('failure branches', () => {
     ],
     [
       'verify token has another sub',
-      { [VERIFY]: () => reply(200, { access_token: jwt({ sub: OTHER_ID, aal: 'aal2' }) }) },
+      { [VERIFY]: () => reply(200, { access_token: WRONG_SUB_TOKEN }) },
       'TOTP verification failed (unexpected response)',
       4,
     ],
   ];
 
-  it.each(cases)('%s', async (_name, handlers, expected, requests) => {
+  // Failures before a session exists (no sign-in token): nothing to sign out.
+  const NO_SESSION = new Set([
+    'settings HTTP 500',
+    'sign-ups enabled',
+    'settings without the flag',
+    'settings network error',
+    'sign-in HTTP 400',
+    'sign-in network error',
+    'sign-in without a token',
+  ]);
+  const noSession = cases.filter(([name]) => NO_SESSION.has(name));
+  const withSession = cases.filter(([name]) => !NO_SESSION.has(name));
+  // verify answers with a token that then fails the claim check: that token is the session
+  const LATEST_TOKEN = {
+    'verify token is not a JWT': 'not-a-jwt',
+    'verify token is aal1': AAL1_TOKEN,
+    'verify token has another sub': WRONG_SUB_TOKEN,
+  };
+
+  it.each(noSession)('%s: no session, no sign-out', async (_name, handlers, expected, requests) => {
     const r = await run({ handlers });
     expect(r.code).toBe(1);
     expect(r.err).toBe(`smoke-staging-auth: ${expected}\n`);
     expect(r.out).toBe('');
     expect(r.calls).toHaveLength(requests);
     expect(r.keys).not.toContain(LOGOUT);
+    expectNoLeak(r);
+  });
+
+  // B4-SEC-1: once step 2 succeeded, whatever fails, the session is signed out with the latest token.
+  it.each(withSession)(
+    '%s: signs out with the latest token',
+    async (name, handlers, expected, requests) => {
+      const r = await run({ handlers });
+      expect(r.code).toBe(1);
+      expect(r.err).toBe(`smoke-staging-auth: ${expected}\n`);
+      expect(r.out).toBe('');
+      expect(r.calls).toHaveLength(requests + 1);
+      expect(r.keys.filter((k) => k === LOGOUT)).toHaveLength(1);
+      const last = r.calls.at(-1);
+      expect(last.key).toBe(LOGOUT);
+      expect(last.headers.Authorization).toBe(`Bearer ${LATEST_TOKEN[name] ?? AAL1_TOKEN}`);
+      expect(last.headers.apikey).toBe(KEY);
+      expectNoLeak(r);
+    },
+  );
+
+  it('signs out when a fetch handler throws mid-flow', async () => {
+    const r = await run({
+      handlers: {
+        [VERIFY]: () => {
+          throw new Error(BODY_MARKER);
+        },
+      },
+    });
+    expect(r.code).toBe(1);
+    expect(r.err).toBe('smoke-staging-auth: TOTP verification failed (network error)\n');
+    expect(r.keys.at(-1)).toBe(LOGOUT);
+    expect(r.calls.at(-1).headers.Authorization).toBe(`Bearer ${AAL1_TOKEN}`);
+    expectNoLeak(r);
+  });
+
+  it('signs out when computing the TOTP code throws', async () => {
+    // A clock that is not a number makes totp() throw after the challenge was issued.
+    const r = await run({ now: () => Number.NaN });
+    expect(r.code).toBe(1);
+    expect(r.err).toBe('smoke-staging-auth: TOTP verification failed (unexpected response)\n');
+    expect(r.keys.at(-1)).toBe(LOGOUT);
+    expect(r.calls.at(-1).headers.Authorization).toBe(`Bearer ${AAL1_TOKEN}`);
+    expectNoLeak(r);
+  });
+
+  it('signs out with the verify token when a later step throws', async () => {
+    const r = await run({
+      handlers: {
+        [MEMBERSHIPS]: () => {
+          throw new Error(BODY_MARKER);
+        },
+      },
+    });
+    expect(r.code).toBe(1);
+    expect(r.err).toBe('smoke-staging-auth: memberships failed (network error)\n');
+    expect(r.calls.at(-1).key).toBe(LOGOUT);
+    expect(r.calls.at(-1).headers.Authorization).toBe(`Bearer ${AAL2_TOKEN}`);
     expectNoLeak(r);
   });
 
@@ -627,6 +706,24 @@ describe('arguments and environment', () => {
       'smoke-staging-auth: SUPABASE_STAGING_URL must be https://<20-character project ref>.supabase.co\n',
     );
     expect(r.err).not.toContain(url);
+    expectNoLeak(r);
+  });
+
+  it.each([
+    ['an sb_secret_ key', () => `sb_secret_${enc('synthetic-secret-key-marker')}`],
+    ['a JWT-shaped key', () => jwt({ role: 'anon', marker: enc('synthetic-anon') })],
+    ['a too-short publishable key', () => 'sb_publishable_short'],
+    ['a key with a stray character', () => `${KEY}!`],
+    ['a key with an inner space', () => `${KEY.slice(0, 20)} ${KEY.slice(20)}`],
+  ])('rejects %s without echoing it', async (_name, make) => {
+    const key = make();
+    const r = await run({ env: { ...ENV, SUPABASE_STAGING_PUBLISHABLE_KEY: key } });
+    expect(r.code).toBe(2);
+    expect(r.calls).toHaveLength(0);
+    expect(r.err).toBe(
+      'smoke-staging-auth: SUPABASE_STAGING_PUBLISHABLE_KEY must be an sb_publishable_ key\n',
+    );
+    expect(r.err).not.toContain(key);
     expectNoLeak(r);
   });
 

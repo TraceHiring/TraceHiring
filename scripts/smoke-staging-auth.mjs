@@ -9,7 +9,8 @@
 //   2. POST /auth/v1/token?grant_type=password      password sign-in; exactly one verified TOTP factor
 //   3. POST /auth/v1/factors/<id>/challenge + /verify   step up to aal2 (token claims checked)
 //   4. GET  /rest/v1/memberships?...user_id=eq.<sub>, GET /rest/v1/orgs   exactly 1 row each, same org
-//   5. POST /auth/v1/logout                         runs even when step 4 failed (finding B0-SEC4)
+//   5. POST /auth/v1/logout                         sent with the latest session token whatever fails once
+//      step 2 succeeded, also on a thrown error (findings B0-SEC4, B4-SEC-1)
 //   6. GET  the deployed recruiter page             its CSP connect-src names the Supabase origin
 // Exit codes: 0 ok, 1 a check failed, 2 bad arguments or environment.
 // Output: one line. Never a response body, token, email, password, TOTP secret or code, the
@@ -28,6 +29,7 @@ const REQUIRED_ENV = [
   'STAGING_SMOKE_TOTP_SECRET',
 ];
 const SUPABASE_URL_RE = /^https:\/\/([a-z0-9]{20})\.supabase\.co\/?$/;
+const PUBLISHABLE_KEY_RE = /^sb_publishable_[A-Za-z0-9_-]{20,}$/;
 const BASE32_RE = /^[A-Z2-7]{16,128}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -116,6 +118,12 @@ function readEnv(env) {
       message: 'SUPABASE_STAGING_URL must be https://<20-character project ref>.supabase.co',
     };
   }
+  if (!PUBLISHABLE_KEY_RE.test(value('SUPABASE_STAGING_PUBLISHABLE_KEY'))) {
+    return {
+      ok: false,
+      message: 'SUPABASE_STAGING_PUBLISHABLE_KEY must be an sb_publishable_ key',
+    };
+  }
   const secret = value('STAGING_SMOKE_TOTP_SECRET');
   if (!BASE32_RE.test(secret)) {
     return { ok: false, message: 'STAGING_SMOKE_TOTP_SECRET must be a base32 secret' };
@@ -134,121 +142,154 @@ function readEnv(env) {
 }
 
 /**
- * Runs the six steps. Returns { failed: <step label> | null, reason, checks, logoutFailure }.
- * `reason` is `HTTP <status>`, `network error` or `unexpected response`.
+ * Steps 2 (after the token arrived) to 4. Returns null when they pass, else { step, reason }.
+ * `state.token` always holds the latest session token (B4-SEC-1); `state.step` names the step in
+ * progress, for a thrown error.
  */
-async function runChecks(deps, cfg) {
-  let checks = 0;
-  const fail = (step, reason) => ({ failed: step, reason, checks, logoutFailure: null });
+async function readOwnRows(deps, cfg, state, signIn) {
   const url = (path) => `${cfg.origin}${path}`;
-  const anon = { apikey: cfg.key };
   const bearer = (token) => ({ apikey: cfg.key, Authorization: `Bearer ${token}` });
-
-  // 1. Sign-ups are disabled.
-  const settings = await request(deps, 'GET', url('/auth/v1/settings'), anon);
-  if (settings.status !== 200) return fail('auth settings', httpReason(settings));
-  if (settings.data?.disable_signup !== true) return fail('auth settings', 'unexpected response');
-  checks += 1;
-
-  // 2. Password sign-in.
-  const signIn = await request(deps, 'POST', url('/auth/v1/token?grant_type=password'), anon, {
-    body: { email: cfg.email, password: cfg.password },
-  });
-  if (signIn.status !== 200) return fail('sign-in', httpReason(signIn));
-  const aal1Token = signIn.data?.access_token;
   const userId = signIn.data?.user?.id;
-  if (!nonEmptyString(aal1Token) || typeof userId !== 'string' || !UUID_RE.test(userId)) {
-    return fail('sign-in', 'unexpected response');
+  if (typeof userId !== 'string' || !UUID_RE.test(userId)) {
+    return { step: 'sign-in', reason: 'unexpected response' };
   }
-  checks += 1;
+  state.checks += 1;
 
+  state.step = 'TOTP factor';
   const factors = Array.isArray(signIn.data.user.factors) ? signIn.data.user.factors : [];
   const verified = factors.filter(
     (f) => f?.factor_type === 'totp' && f?.status === 'verified' && typeof f?.id === 'string',
   );
   if (verified.length !== 1 || !UUID_RE.test(verified[0].id)) {
-    return fail('TOTP factor', 'unexpected response');
+    return { step: 'TOTP factor', reason: 'unexpected response' };
   }
   const factorId = verified[0].id;
-  checks += 1;
+  state.checks += 1;
 
   // 3. Step up to aal2.
+  state.step = 'TOTP challenge';
   const challenge = await request(
     deps,
     'POST',
     url(`/auth/v1/factors/${factorId}/challenge`),
-    bearer(aal1Token),
+    bearer(state.token),
     { body: {} },
   );
-  if (challenge.status !== 200) return fail('TOTP challenge', httpReason(challenge));
+  if (challenge.status !== 200) return { step: 'TOTP challenge', reason: httpReason(challenge) };
   const challengeId = challenge.data?.id;
-  if (!nonEmptyString(challengeId)) return fail('TOTP challenge', 'unexpected response');
-  checks += 1;
+  if (!nonEmptyString(challengeId))
+    return { step: 'TOTP challenge', reason: 'unexpected response' };
+  state.checks += 1;
 
+  state.step = 'TOTP verification';
   const code = await totp({ secret: cfg.secret, timeMs: deps.now() });
   const verify = await request(
     deps,
     'POST',
     url(`/auth/v1/factors/${factorId}/verify`),
-    bearer(aal1Token),
+    bearer(state.token),
     { body: { challenge_id: challengeId, code } },
   );
-  if (verify.status !== 200) return fail('TOTP verification', httpReason(verify));
+  if (verify.status !== 200) return { step: 'TOTP verification', reason: httpReason(verify) };
+  // Any token verify returns is a session and is the one to sign out, even if it fails the checks.
   const aal2Token = verify.data?.access_token;
+  if (nonEmptyString(aal2Token)) state.token = aal2Token;
   const claims = jwtClaims(aal2Token);
   if (
     claims === null ||
     claims.aal !== 'aal2' ||
     String(claims.sub).toLowerCase() !== userId.toLowerCase()
   ) {
-    return fail('TOTP verification', 'unexpected response');
+    return { step: 'TOTP verification', reason: 'unexpected response' };
   }
-  checks += 1;
+  state.checks += 1;
 
-  // 4. The user's own membership and organisation, read with the aal2 token. A failure here is
-  //    held until the session is signed out (step 5).
+  // 4. The user's own membership and organisation, read with the aal2 token.
   const rest = { ...bearer(aal2Token), Accept: 'application/json' };
-  let problem = null;
-  let orgId = null;
+  state.step = 'memberships';
   const memberships = await request(
     deps,
     'GET',
     url(`/rest/v1/memberships?select=id,org_id&user_id=eq.${claims.sub}`),
     rest,
   );
-  if (memberships.status !== 200)
-    problem = { step: 'memberships', reason: httpReason(memberships) };
-  else if (
+  if (memberships.status !== 200) return { step: 'memberships', reason: httpReason(memberships) };
+  if (
     !Array.isArray(memberships.data) ||
     memberships.data.length !== 1 ||
     !nonEmptyString(memberships.data[0]?.org_id)
   ) {
-    problem = { step: 'memberships', reason: 'unexpected response' };
-  } else {
-    orgId = memberships.data[0].org_id;
-    checks += 1;
-    const orgs = await request(deps, 'GET', url('/rest/v1/orgs?select=id'), rest);
-    if (orgs.status !== 200) problem = { step: 'orgs', reason: httpReason(orgs) };
-    else if (!Array.isArray(orgs.data) || orgs.data.length !== 1 || orgs.data[0]?.id !== orgId) {
-      problem = { step: 'orgs', reason: 'unexpected response' };
-    } else checks += 1;
+    return { step: 'memberships', reason: 'unexpected response' };
+  }
+  const orgId = memberships.data[0].org_id;
+  state.checks += 1;
+
+  state.step = 'orgs';
+  const orgs = await request(deps, 'GET', url('/rest/v1/orgs?select=id'), rest);
+  if (orgs.status !== 200) return { step: 'orgs', reason: httpReason(orgs) };
+  if (!Array.isArray(orgs.data) || orgs.data.length !== 1 || orgs.data[0]?.id !== orgId) {
+    return { step: 'orgs', reason: 'unexpected response' };
+  }
+  state.checks += 1;
+  return null;
+}
+
+/**
+ * Runs the six steps. Returns { failed: <step label> | null, reason, checks, logoutFailure }.
+ * `reason` is `HTTP <status>`, `network error` or `unexpected response`.
+ */
+async function runChecks(deps, cfg) {
+  const state = { checks: 0, token: null, step: 'sign-in' };
+  const fail = (step, reason) => ({
+    failed: step,
+    reason,
+    checks: state.checks,
+    logoutFailure: null,
+  });
+  const url = (path) => `${cfg.origin}${path}`;
+  const anon = { apikey: cfg.key };
+
+  // 1. Sign-ups are disabled.
+  const settings = await request(deps, 'GET', url('/auth/v1/settings'), anon);
+  if (settings.status !== 200) return fail('auth settings', httpReason(settings));
+  if (settings.data?.disable_signup !== true) return fail('auth settings', 'unexpected response');
+  state.checks += 1;
+
+  // 2. Password sign-in.
+  const signIn = await request(deps, 'POST', url('/auth/v1/token?grant_type=password'), anon, {
+    body: { email: cfg.email, password: cfg.password },
+  });
+  if (signIn.status !== 200) return fail('sign-in', httpReason(signIn));
+  if (!nonEmptyString(signIn.data?.access_token)) return fail('sign-in', 'unexpected response');
+  // From here a session exists: it is signed out whatever happens next (B4-SEC-1, B0-SEC4).
+  state.token = signIn.data.access_token;
+
+  let problem;
+  try {
+    problem = await readOwnRows(deps, cfg, state, signIn);
+  } catch {
+    problem = { step: state.step, reason: 'unexpected response' };
   }
 
-  // 5. Sign out, whatever step 4 found.
-  const logout = await request(deps, 'POST', url('/auth/v1/logout'), bearer(aal2Token), {
-    json: false,
-  });
+  // 5. Sign out with the latest session token. request() never throws.
+  const logout = await request(
+    deps,
+    'POST',
+    url('/auth/v1/logout'),
+    { apikey: cfg.key, Authorization: `Bearer ${state.token}` },
+    { json: false },
+  );
   const logoutOk = logout.status !== null && logout.status >= 200 && logout.status < 300;
   if (problem !== null) {
     return {
       failed: problem.step,
       reason: problem.reason,
-      checks,
+      checks: state.checks,
       logoutFailure: logoutOk ? null : httpReason(logout),
     };
   }
   if (!logoutOk) return fail('sign-out', httpReason(logout));
-  checks += 1;
+  state.checks += 1;
 
   // 6. The deployed recruiter page lets the browser reach this Supabase project.
   const page = await request(
@@ -262,9 +303,9 @@ async function runChecks(deps, cfg) {
   if (!connectSrcHas(page.headers?.get?.('content-security-policy'), cfg.origin)) {
     return fail('recruiter page', 'unexpected response');
   }
-  checks += 1;
+  state.checks += 1;
 
-  return { failed: null, reason: null, checks, logoutFailure: null };
+  return { failed: null, reason: null, checks: state.checks, logoutFailure: null };
 }
 
 /** Returns the exit code: 0 ok, 1 a check failed, 2 bad arguments or environment. */
