@@ -10,7 +10,7 @@
 //      failure; a holder whose PID is dead is taken over with a warning (the stale file is moved
 //      aside by an atomic rename and checked, so two runs taking it over at once never delete
 //      each other's fresh lock). The lock is released on exit, on failure and on a signal.
-//   3. `pnpm exec supabase start -x <services M0a does not need>`; auth (gotrue) stays on.
+//   3. `pnpm exec supabase start -x <services not needed>`; gotrue, kong, postgrest, mailpit stay on.
 //   4. `pnpm exec supabase db reset --local` rebuilds the database from zero.
 //   5. `pnpm exec supabase test db --local --debug`: --debug makes pg_prove print every
 //      assertion. The TAP is parsed from stdout. It fails on any `not ok` (or TODO/SKIP), a plan
@@ -20,6 +20,9 @@
 //      `not ok N` lines are counted here against each file's `1..N` plan; pgTAP's own finish() and
 //      num_failed() diagnostics (`# Looks like …`) are never read: catalog_meta's
 //      `rollback to savepoint` rolls back pgTAP's counters too, so they are wrong there.
+//   5b. `node scripts/test-auth-local.mjs` (specs/m0b-tenancy.md AT-B8): local org sign-in end to end
+//      through kong, PostgREST and mailpit, which step 3 keeps on. Only its `test-auth-local: `
+//      stdout lines are printed on failure; its stderr never is.
 //   6. db-types drift: `supabase gen types typescript --local --schema public` goes to a temp
 //      file, compared byte for byte with packages/db-types/src/database.ts (never overwritten;
 //      `pnpm db:types` regenerates it on purpose).
@@ -66,11 +69,17 @@ export const SUPABASE_CONTAINERS = Object.freeze([
   'supavisor',
 ]);
 /**
- * Everything except auth (gotrue): M0a needs only Postgres, and auth keeps the `auth` schema the
- * RLS tests of M0b rely on (spec §8.3 step 3). `gen types --local` works without postgres-meta
- * (revision 11 day-one result).
+ * Services the harness keeps on: auth (gotrue) for the `auth` schema the RLS tests rely on (spec
+ * §8.3 step 3), and, from M0b, the API gateway (kong), PostgREST and the mail catcher (mailpit)
+ * that the local org sign-in test needs (specs/m0b-tenancy.md AT-B8 [S3]). Everything else stays
+ * off. `gen types --local` works without postgres-meta (revision 11 day-one result).
  */
-export const EXCLUDED_SERVICES = Object.freeze(SUPABASE_CONTAINERS.filter((c) => c !== 'gotrue'));
+export const KEPT_SERVICES = Object.freeze(['gotrue', 'kong', 'postgrest', 'mailpit']);
+export const EXCLUDED_SERVICES = Object.freeze(
+  SUPABASE_CONTAINERS.filter((c) => !KEPT_SERVICES.includes(c)),
+);
+/** AT-B8: local org sign-in end to end, run with node from the repository root after pgTAP. */
+export const AUTH_TEST_ARGS = Object.freeze(['scripts/test-auth-local.mjs']);
 
 export const START_ARGS = Object.freeze([
   'exec',
@@ -696,6 +705,19 @@ export async function main(options) {
       });
       problems.push(...evaluation.problems);
       summary = { files: evaluation.files.length, counts: evaluation.counts, floors };
+    }
+    // AT-B8: its stdout holds only fixed messages and HTTP statuses; stderr is never printed.
+    log('test-rls: running the local org sign-in test (AT-B8)');
+    const auth = await run('node', AUTH_TEST_ARGS, { cwd: root });
+    if (auth.status !== 0) {
+      const lines = toText(auth.stdout)
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('test-auth-local: '))
+        .map((l) => `  | ${redact(l)}`);
+      problems.push(
+        `the local org sign-in test failed (AT-B8${auth.error ? `, ${auth.error.code ?? 'error'}` : ''})`,
+        ...lines,
+      );
     }
     log('test-rls: checking packages/db-types against supabase gen types');
     problems.push(...(await checkDbTypes({ root, run, tmpDir })));

@@ -92,6 +92,7 @@ const KEYS = [
   ['reset', (l) => l.startsWith('pnpm exec supabase db reset')],
   ['test', (l) => l.startsWith('pnpm exec supabase test db')],
   ['gen', (l) => l.startsWith('pnpm exec supabase gen types')],
+  ['auth', (l) => l.startsWith('node scripts/test-auth-local.mjs')],
   ['stop', (l) => l.startsWith('pnpm exec supabase stop')],
 ];
 
