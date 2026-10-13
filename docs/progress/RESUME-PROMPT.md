@@ -8,6 +8,9 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
+- **Update 2026-10-13 16:10 IST (newest; wins over the lines below):** **M0b BUILD is complete** — B0–B5 all merged into
+  `m0b/integration`. First confirm Linux CI `rls` is green on PR #3 after the `3e5ffbe` push (HANDOFF "Next step" 1–2),
+  then the next phase is **M0b REVIEW** (`trace-milestone-review`, fresh session). Draft PR for M0b CI: TraceHiring/TraceHiring#3.
 - **Update 2026-10-12 14:40 IST:** M0b BUILD continues. B5 is merged; B0 + B1 + most of B4 sit reviewed and
   fully verified on stream branch `m0b/b0-db` (`f727d0a`), **not merged yet** — HANDOFF "Next step" 1–3 merges it.
 - **Now (2026-10-12 09:25 IST): M0a REVIEW and FIX are done; M0a stops before CLOSE (founder). M0b is in SPEC.**

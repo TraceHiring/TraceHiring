@@ -1,54 +1,54 @@
-# HANDOFF — 2026-10-12 14:40 IST
-Reason for stopping: usage — the 95% rule (wrap-up started at 84–86% of the 5-hour window, Pro plan, resets ~18:20 IST; weekly 85%).
+# HANDOFF — 2026-10-13 16:10 IST
+Reason for stopping: usage — the 95% rule (wrap-up started at ~80% of the 5-hour window, Pro plan, resets ~18:20 IST; weekly ~54%).
 The next session may be a new Claude Code on another account: start from `docs/progress/RESUME-PROMPT.md` on **`m0b/integration`** (its §4 paste prompt).
 
 ## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M8 = closed beta → M9 … M13)
-- Milestones closed: **0 of 17** (no `m*-reviewed` tag).
+- Milestones closed: **0 of 17** (no `m*-reviewed` tag). Rough share of the whole build done: ~10% (M0 ≈ 1/9 of the effort).
 - **M0a: REVIEW + FIX done, stopped before CLOSE** (founder). `milestone/m0a` @ `7dc8c0d` = `cp/m0a-06`.
-- **M0b: BUILD.** Done: B3 (merged), B5 (merged this session), B0 + B1 + most of B4 on stream branch **`m0b/b0-db`** (reviewed, Mediums fixed, NOT yet merged). Not started: B2 (recruiter auth UI), rest of B4 (CSP template + Vite plugin, check-headers, check-workflows smoke secrets, test-auth-local / AT-B8, supabase-js dep, staging smoke step). M0b closes only after `m0a-reviewed`.
+- **M0b: BUILD is complete** (B0–B5 all merged into `m0b/integration`). Next phase: **M0b REVIEW** in a fresh session (`trace-milestone-review`). M0b closes only after `m0a-reviewed`.
 
 ## Where we are
-- **`m0b/integration`** (worktree `.claude/worktrees/m0b-integration`; enter it with `EnterWorktree` path) = handoff commit on top of ``ab60e52`` (merge of B5 with review fixes). **The worktree is checked out on `m0b/integration`** at the end of this session.
-- **`m0b/b0-db`** tip ``f727d0a``, cut from `4ba26ec`. Holds: the three migrations (`supabase/migrations/20261012075543_m0b_roles.sql`, `…075545_m0b_tenancy.sql`, `…075547_m0b_auth_audit.sql`), eight `rls_*` files (686 assertions), MT-13/MT-14 + MT-2/5d/10/11 changes (catalog 133), Auth config + `supabase/templates/magic_link.html`, `@trace/shared/contracts/tenancy`, `scripts/lib/totp.mjs`, check-boundaries rules 3/9/10, scan-dist test, ADR-029, `scripts/ops/*` (create-org, add-member, enrol-smoke-user), the plain-node import test, `docs/reviews/M0b-B0-review.md`.
-- Full `pnpm verify` on `m0b/b0-db`: **green on `f727d0a`** (exit 0, no agent running): scripts+packages 1434 passed, 1 skipped (Windows symlink); test:rls catalog 133, rls 686, db-types current; builds ok. Merge it next.
-- `pnpm test:rls` green on the tip before the review fixes (catalog 133/133, rls 682/682, db-types current); after the fixes `rls_memberships` 143/143 (floor 686).
-- Other stream branches (all merged, keep): `m0b/b3-token-spike`, `m0b/b5-workers-http`, `m0b/b5-fixes`, `m0b/b0-rls-tests`, `m0b/b4-ops-scripts`.
-- `milestone/m0a` @ `7dc8c0d`, `m0a/integration` @ `c619525`, `main` @ `fe77a87` (unchanged). No `milestone/m0b`, no `cp/m0b-*` yet.
+- **`m0b/integration`** (worktree `.claude/worktrees/m0b-integration`; enter it with `EnterWorktree` path) tip = this handoff commit on top of `3e5ffbe` (fix(ops): libpq variables). **`3e5ffbe` may not be on the remote yet**: the last push failed on a DNS error at 16:07; the wrap-up push below retries it.
+- `milestone/m0b` @ `fc20864` = `cp/m0b-01` (B0/B1/B3/B5 merged; full verify + Linux CI green). Not moved since: move it to the new tip (and tag `cp/m0b-02`) only after Linux CI is green on it.
+- Draft PR **TraceHiring/TraceHiring#3** (`m0b/integration` → `main`, CI only, never merged; Auto-fix is on in the app). CI on `0fdcf34`: static/security/migrations green, **`rls` red** — AT-B8 `create-org failed` on Linux: libpq ignores a URL in `PGDATABASE`. Fixed in `3e5ffbe` (URL split into PG* variables; proved with a real psql). **First action: push, then confirm `rls` is green.**
+- Full local `pnpm verify` green on `0fdcf34` (16:00, no agent running): scripts 1548 + 1 skipped (Windows symlink), packages all green, test:rls catalog 133 / rls 686 + AT-B8 OK, build + check-headers + scan-dist OK. On `3e5ffbe`: scripts 1552 + 1 skipped and `pnpm test:rls` (with AT-B8) green; the full verify was not re-run (only scripts/ changed).
+- The local stack now runs **db, auth, kong, rest, mailpit** (the harness keeps them on for AT-B8).
+- Stream branches (all merged, keep): `m0b/b0-db` `dc4731a`, `m0b/b2-recruiter-auth` `91092ac`, `m0b/b2-fixes` `8f47fff`, `m0b/b4-smoke-auth` `04013ea`, plus the older `b0-rls-tests`, `b3-token-spike`, `b4-ops-scripts`, `b5-*`.
+- `milestone/m0a` @ `7dc8c0d`, `m0a/integration` @ `c619525`, `main` @ `fe77a87` (unchanged).
 
 ## Done this session (verified)
-- Resume check: repo matched the handoff; `verify:fast` exit 0 on `4ba26ec` idle (1320 tests, 388 s) — the redactor timing failures were load.
-- B5 reviews (Sonnet spec + security, PASS WITH FINDINGS) → fixes `1347532`, `fc07cd8`, `a4dc4c2`, `9f639d8` → merged into integration.
-- B0 (lead): migrations; DC-3 (db reset run 6+ times with existing roles: PASS); DC-10 (gen types lists the 16 audit partitions as tables). RLS tests by a Sonnet writer from spec §6 (682) — they found the `text[] || 'x'` audit bug (fixed).
-- B1 (lead): MT-13 (7 branches), MT-14 (7), MT-11 `no_caller_reference` + `system_list_policy`, MT-5d `system_relation_policy`, MT-2 `org_id_not_indexed`, MT-10 candidate roles; every fixture fires its branch; probe 12/12.
-- B4 (lead + Sonnet writer): contracts, TOTP (RFC 6238 vectors), check-boundaries 3/9/10, scan-dist publishable test, ADR-029, ops scripts (82 tests; `create-org` run live on the local stack via the docker fallback).
-- Reviews of `m0b/b0-db`: database (Opus) CHANGES REQUIRED → B0-DB1, B0-DB2 fixed; security (Sonnet) PASS WITH FINDINGS → B0-SEC1 fixed; Lows open (record: `docs/reviews/M0b-B0-review.md`). Spec-reviewer (Sonnet) PASS WITH FINDINGS (B0-SP1 Medium = missing evidence, resolved by record; SP2 = DB1; SP3–SP7 Low open).
+- Resume check: repo matched the handoff; `verify:fast` red once on an ESLint cold-load timeout (fixed `fc20864`: warm-up in `beforeAll`).
+- B0 Lows DB4, DB6 (`5de28dd`), SEC2, SEC3 (`fd74f50`) fixed test-first; `m0b/b0-db` merged `36d2db5`; full verify green; `cp/m0b-01`; draft PR #3 opened, Linux CI green.
+- B4 (lead): supabase-js 2.117.2 (`70a1f4b`); check-headers one origin per entry (`e884e79`); recruiter `_headers.template` + `@trace/config/vite/headers` plugin (`ab99f5c`); check-workflows `BUILD_ONLY_ENV` + smoke secrets, ci.yml build vars + smoke step, M0a spec rev 18 (`d2a0d42`); AT-B8 `scripts/test-auth-local.mjs` in `test:rls` with kong/postgrest/mailpit (`b9c4173`); **auth config bug found by AT-B8 and fixed**: `[auth.email] enable_signup` is the CLI's email-provider switch (now `true`; sign-ups stay off via `[auth] enable_signup = false`, proved live).
+- B4 smoke (Sonnet writer): `scripts/smoke-staging-auth.mjs` (AT-B9), merged `f3a34ea`.
+- B2 (Opus writer + Sonnet fixer): recruiter sign-in UI, 204 tests; merged `7f64376`. CSS class `.secret` renamed (gitleaks false positive in dist).
+- Reviews (Sonnet): B4 security CHANGES REQUIRED → SEC-1, SEC-2 (Medium) fixed, SEC-3 fixed, SEC-5 fixed with the libpq change; B2 security PWF (5 Low), B2 spec PWF (2 Medium fixed + 3 Low fixed). Record: `docs/reviews/M0b-B2-B4-review.md`.
+- Spec `specs/m0b-tenancy.md` revisions 6 and 7; build-notes autopilot-changes row.
 
 ## Next step (in order)
-1. Read the B0 spec-review result if it is not in `docs/reviews/M0b-B0-review.md` (re-run a Sonnet spec-reviewer on `git diff 4ba26ec m0b/b0-db` if lost); fix any Blocking/Medium test-first.
-2. Fix the open Lows that are one-liners (B0-DB4, B0-DB6, B0-SEC2, B0-SEC3) test-first; leave the rest in the review record with an owner.
-3. Full `pnpm verify` on `m0b/b0-db` with no agent running → merge `--no-ff` into `m0b/integration` (subject e.g. `chore(db): merge m0b b0 schema, catalog checks and ops scripts`) → full verify on the merge → `git branch milestone/m0b <sha>` + tag `cp/m0b-01`.
-4. Open a draft PR `m0b/integration` → `main` for Linux CI (never merged); fix CI first.
-5. Rest of B4: supabase-js (lockfile, lead), CSP `_headers.template` + Vite plugin, check-headers, check-workflows smoke secrets (R5) + M0a spec §7.3 row, `scripts/test-auth-local.mjs` + harness `-x` change (AT-B8; needs `supabase stop/start` so the new Auth config loads), staging smoke step. Then B2 (Opus writer).
-6. Spec housekeeping: record DC-3/DC-10 results and the deviations below in spec §9 (revision 6) and build-notes "Autopilot changes".
+1. Push `m0b/integration` (retry; DNS failed). Confirm CI on PR #3 is fully green (`rls` with AT-B8). If red, fix first.
+2. Move `milestone/m0b` forward only (never rewrite): `git fetch . m0b/integration:milestone/m0b` (git refuses a non-fast-forward), after a full `pnpm verify` with no agent running and green CI on that SHA; tag `cp/m0b-02` there; push both.
+3. **M0b REVIEW** in a fresh session: `trace-milestone-review` → `docs/reviews/M0b.md` (Opus reviewers for rules 1–9 areas: RLS/tenancy, auth, audit). Open Lows to carry: B0-DB3, DB5, DB7, SEC4(timebox), SEC5–SEC8, SP3–SP7; B4-SEC-4, SEC-6; B2-SEC-1, SEC-4, SEC-5 (owners in the review records).
+4. Do not merge into `main`, tag `m0*-reviewed`, or CLOSE: founder gates (FOUNDER-QUEUE).
 
 ## Decisions made this session (HOW-level, AUTOPILOT §4)
-- rls_* tests written by a Sonnet writer in parallel from the spec (not by the lead first); the lead's migrations were committed before the tests landed. Tests found 1 migration bug.
-- `scripts/ops/*` written by a Sonnet writer (spec §11 lists scripts/ as lead-only; no other writer touched scripts/).
-- MT-11 reference reason uses a comma, not the spec's `;` (check-file rule 1 forbids `;`).
-- Tenancy contracts live at `@trace/shared/contracts/tenancy` (a re-export from contracts.ts breaks plain-node scripts).
-- Tests insert orgs directly on the operator path (fixed ids); `create_org` is exercised explicitly.
-- Review economy: Sonnet for B5 reviews, B0 spec and security reviews; Opus for the B0 database review.
+- One full verify on the B0 merge commit instead of before and after (stream tip was already green).
+- CSP template outside `public/`; its plugin in `@trace/config/vite/headers` (config files may not touch fs).
+- Staging smoke script written by a Sonnet writer owning only its two files (scripts/ is lead-only in spec §11; same exception as the ops scripts).
+- B2 reviews and fixes by Sonnet (Opus writer for B2 itself) for budget; B2-SEC-5 (account enumeration on the OTP form) left as spec says, FYI to founder.
+- Redactor timing tests (`packages/shared/src/log/redact.test.ts`, 50 ms budget) failed 6× at 51–62 ms under load at 15:35; pass when idle (141/141). Not weakened.
 
 ## Open questions for the founder (`docs/progress/FOUNDER-QUEUE.md`)
-- Unchanged: GitHub plan (row 15, blocks M0a CLOSE); H8–H11 (row 20); URGENT Cloudflare token roll, `CLOUDFLARE_API_TOKEN`, `SUPABASE_STAGING_DB_URL`, H4, H5. New FYI (no row yet): B0-SEC4 org-user session timebox/inactivity for H8.
+- Unchanged: GitHub plan (row 15, blocks M0a CLOSE); H8–H11 (row 20); URGENT Cloudflare token roll, `CLOUDFLARE_API_TOKEN`, `SUPABASE_STAGING_DB_URL`, H4, H5.
+- New (rows added this session): **H8 must keep the email provider ON** with sign-ups OFF on staging; B2-SEC-5 account-enumeration UX (FYI).
 
 ## Gotchas / do not touch
-- Only the lead runs `supabase start/stop`, `db reset`, `test db`, `gen types`, `pnpm verify`, `pnpm test:rls`; full verify **with no agent running**.
-- The local DB currently has the `m0b/b0-db` migrations applied; `pnpm test:rls` resets it anyway.
-- No `psql` on this Windows machine; ops scripts fall back to `docker exec supabase_db_trace psql` for a local URL.
-- Worktree guard: no `git -C`, `$(…)`, loops/pipes around git or docker; write scripts to the scratchpad and run them with `sh <file>`.
-- `pnpm db:types` resets the local DB.
+- Only the lead runs `supabase start/stop`, `db reset`, `test db`, `gen types`, `pnpm verify`, `pnpm test:rls`; full verify **with no agent running** (timing tests).
+- `node scripts/test-auth-local.mjs` standalone needs `pnpm exec supabase db reset --local` first (fixed synthetic users).
+- After a config.toml change: `pnpm exec supabase stop` then `pnpm test:rls` (start reloads config).
+- Worktree guard: no `git -C`, `$(…)`, loops/pipes around git; plain separate commands. Python/node fixers go in the scratchpad (shell quoting mangles backslashes).
+- Run the **full** `vitest --root scripts` after any ci.yml change (deploy-staging-job.test.mjs pins the job).
 - Push: `git -c credential.helper= -c "credential.helper=!gh auth git-credential" push trace <refs>`; same `-c` pair for fetch.
 
 ## Verify first
-- `git fetch trace` (with the `-c` pair) · `git log --oneline -3 m0b/integration` · `git log --oneline -3 m0b/b0-db` · `git status` · `docker ps` · `pnpm -s verify:fast`
+- `git fetch trace` (with the `-c` pair) · `git log --oneline -3 m0b/integration` · `git status` · `docker ps` · `pnpm -s verify:fast` · PR #3 checks
