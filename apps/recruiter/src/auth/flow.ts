@@ -322,7 +322,8 @@ export class AuthFlow {
     const active = memberships.filter((m) => m.status === 'active' && m.user_id === userId);
     if (active.length === 0) return { kind: 'no_org' };
 
-    const otpOnly = methods.some((m) => OTP_METHODS.has(m)) && !methods.includes('password');
+    // Fails closed: an empty list or any method that is not a known OTP method needs TOTP.
+    const otpOnly = methods.length > 0 && methods.every((m) => OTP_METHODS.has(m));
     const privileged = active.some((m) => m.roles.some((role) => PRIVILEGED_ROLES.has(role)));
     if (!current()) return STALE; // covers the factor calls and the orgs read below
     if (!aal2 && (privileged || !otpOnly)) return this.totp(client, current, failed);

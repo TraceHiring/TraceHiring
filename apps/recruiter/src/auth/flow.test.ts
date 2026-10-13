@@ -792,6 +792,35 @@ describe('a step that finishes after sign-out makes no further network call (B2-
   });
 });
 
+describe('otpOnly fails closed (B2-SEC-2: only known OTP methods keep a recruiter at aal1)', () => {
+  const unknownMixes: string[][] = [
+    ['otp', 'recovery'],
+    ['otp', 'sso/saml'],
+    ['magiclink', 'oauth'],
+    [],
+  ];
+  for (const methods of unknownMixes)
+    it(`a recruiter session with methods [${methods.join(', ')}] needs TOTP`, async () => {
+      const { flow, fake } = setup({
+        ...RECRUITER_IN_A,
+        session: { methods, aal: 'aal1' },
+        verifiedFactors: [FACTOR_ID],
+      });
+      await flow.start();
+      expect(flow.getSnapshot().state).toEqual({ kind: 'totp_challenge', factorId: FACTOR_ID });
+      expect(fake.callsOf('select:orgs')).toEqual([]);
+    });
+
+  it('otp and magiclink together still count as OTP-only', async () => {
+    const { flow } = setup({
+      ...RECRUITER_IN_A,
+      session: { methods: ['otp', 'magiclink'], aal: 'aal1' },
+    });
+    await flow.start();
+    expect(kind(flow)).toBe('signed_in');
+  });
+});
+
 describe('the aal2 stage (§4.6: session_aal2 is shown while the org is resolved after TOTP)', () => {
   /** Every state kind the flow shows, in order, without repeats of the same kind in a row. */
   function recordKinds(flow: AuthFlow): AuthState['kind'][] {
