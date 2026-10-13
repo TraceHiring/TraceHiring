@@ -2,7 +2,9 @@
 // no client unless both build variables are set, and the exact auth options when they are.
 import { describe, expect, it, vi } from 'vitest';
 import {
+  browserSessionStorage,
   CLIENT_AUTH_OPTIONS,
+  createMemoryStorage,
   createRecruiterSupabase,
   readSupabaseConfig,
   type ClientStorage,
@@ -104,5 +106,28 @@ describe('createRecruiterSupabase', () => {
       detectSessionInUrl: false,
       flowType: 'pkce',
     });
+  });
+});
+
+describe('storage', () => {
+  it('uses the browser sessionStorage when it is available', () => {
+    const storage = createMemoryStorage() as unknown as Storage;
+    expect(browserSessionStorage({ sessionStorage: storage })).toBe(storage);
+  });
+
+  it('falls back to memory when sessionStorage access throws (blocked storage)', () => {
+    const source = {
+      get sessionStorage(): Storage {
+        throw new Error('blocked');
+      },
+    };
+    const storage = browserSessionStorage(source);
+    storage.setItem('a', '1');
+    expect(storage.getItem('a')).toBe('1');
+    storage.removeItem('a');
+    expect(storage.getItem('a')).toBeNull();
+    storage.setItem('b', '2');
+    storage.clear();
+    expect(storage.getItem('b')).toBeNull();
   });
 });

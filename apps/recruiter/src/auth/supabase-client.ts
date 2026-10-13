@@ -23,6 +23,32 @@ export interface ClientStorage {
   clear(): void;
 }
 
+/** A storage that lives only in memory: used when `sessionStorage` is unavailable. */
+export function createMemoryStorage(): ClientStorage {
+  const items = new Map<string, string>();
+  return {
+    getItem: (key) => items.get(key) ?? null,
+    setItem: (key, value) => {
+      items.set(key, value);
+    },
+    removeItem: (key) => {
+      items.delete(key);
+    },
+    clear: () => {
+      items.clear();
+    },
+  };
+}
+
+/** The browser's `sessionStorage`, or memory when it is blocked (the session then ends on reload). */
+export function browserSessionStorage(source: { readonly sessionStorage: Storage }): ClientStorage {
+  try {
+    return source.sessionStorage;
+  } catch {
+    return createMemoryStorage();
+  }
+}
+
 /** Spec §2.7, exactly: the session lives in `sessionStorage` (passed as `storage`). */
 export const CLIENT_AUTH_OPTIONS = {
   persistSession: true,

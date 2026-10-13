@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Outlet, useRouteError } from 'react-router';
 import { PRODUCT_NAME } from '@trace/shared';
 import styles from './App.module.css';
+import { AuthPanel } from './auth/AuthPanel';
 import { reportAppError } from './error-reporting';
 import { APP_VERSION } from './version';
 
@@ -20,8 +21,14 @@ export function App() {
   );
 }
 
+/** The home route: the workspace label and the sign-in flow (specs/m0b-tenancy.md §4.6). */
 export function HomePage() {
-  return <p>Recruiter workspace</p>;
+  return (
+    <>
+      <p>Recruiter workspace</p>
+      <AuthPanel />
+    </>
+  );
 }
 
 export function HealthPage() {
