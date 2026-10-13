@@ -619,6 +619,29 @@ describe('sign-out (§4.6: any state → signed_out, clears sessionStorage)', ()
     expect(storage.map.size).toBe(0);
   });
 
+  it('a late sign-in is discarded even when a newer step is already running (B2-SEC-3)', async () => {
+    const { flow, fake, storage } = setup(RECRUITER_IN_A);
+    await flow.start();
+    await flow.submitEmail(EMAIL);
+    const releaseVerify = fake.hold('verifyOtp');
+    const stale = flow.submitOtp(VALID_OTP);
+    await flow.signOut();
+    expect(fake.callsOf('signOut')).toHaveLength(1);
+    // A newer step is busy (state signed_out, no session of its own) when the old call lands.
+    const releaseSend = fake.hold('signInWithOtp');
+    const newer = flow.submitEmail(EMAIL);
+    expect(flow.getSnapshot()).toEqual({ state: { kind: 'signed_out' }, busy: true });
+    releaseVerify();
+    storage.setItem('sb-synthetic-auth-token', '{}');
+    await stale;
+    expect(fake.callsOf('signOut')).toHaveLength(2);
+    expect(fake.signedIn).toBe(false);
+    expect(storage.map.size).toBe(0);
+    releaseSend();
+    await newer;
+    expect(flow.getSnapshot()).toEqual({ state: { kind: 'code_sent', email: EMAIL }, busy: false });
+  });
+
   it('works while another step is still running', async () => {
     const { flow, storage } = setup(RECRUITER_IN_A);
     await flow.start();

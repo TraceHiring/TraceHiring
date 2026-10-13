@@ -158,10 +158,13 @@ export class AuthFlow {
 
   /**
    * A sign-in call that was still running when the person signed out may have stored a session
-   * after sign-out cleared storage. Clear it again, unless a new step has started since.
+   * after sign-out cleared storage. Clear it again whenever the current state holds no session
+   * (signed_out, code_sent, unconfigured), even if a newer step is already running: that step
+   * is a pre-session one (an email code) or must create its own session anyway.
    */
   private async discardLateSession(client: RecruiterSupabase): Promise<void> {
-    if (this.snapshot.busy || this.snapshot.state.kind !== 'signed_out') return;
+    const kind = this.snapshot.state.kind;
+    if (kind !== 'signed_out' && kind !== 'code_sent' && kind !== 'unconfigured') return;
     await attempt(async () => ({ data: null, ...(await client.auth.signOut()) }));
     this.clearStorage();
   }
