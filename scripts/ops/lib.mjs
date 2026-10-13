@@ -67,6 +67,15 @@ export function parseEnvOutput(text) {
 
 const STATUS_ARGS = ['exec', 'supabase', 'status', '-o', 'env'];
 
+/** The parent environment minus the names no child process needs (B0-SEC3). */
+function childEnvOf(env) {
+  const out = { ...env };
+  for (const name of [DB_URL_ENV, 'SMOKE_PASSWORD', 'SUPABASE_STAGING_PUBLISHABLE_KEY']) {
+    delete out[name];
+  }
+  return out;
+}
+
 /**
  * The local stack's variables (`DB_URL`, `API_URL`, `SERVICE_ROLE_KEY`, ...), or null when the
  * stack is not running. The values are never printed by this module.
@@ -79,9 +88,13 @@ export function localStackEnv(deps) {
     ? deps.spawnSync(['pnpm', ...STATUS_ARGS].join(' '), [], {
         encoding: 'utf8',
         shell: true,
-        env: deps.env,
+        env: childEnvOf(deps.env),
       })
-    : deps.spawnSync('pnpm', STATUS_ARGS, { encoding: 'utf8', shell: false, env: deps.env });
+    : deps.spawnSync('pnpm', STATUS_ARGS, {
+        encoding: 'utf8',
+        shell: false,
+        env: childEnvOf(deps.env),
+      });
   if (res.error || res.status !== 0) return null;
   const parsed = parseEnvOutput(res.stdout ?? '');
   return Object.keys(parsed).length > 0 ? parsed : null;
@@ -108,17 +121,14 @@ const PSQL_FLAGS = ['-X', '-q', '-At', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY
  * Runs one SQL statement through psql. The SQL text goes on stdin (`-f -`, the only way psql
  * interpolates `-v` variables); argument values travel only as `-v name=value`, never inside the
  * SQL. The URL goes to psql through the environment (PGDATABASE), never through argv. Without a
- * psql binary and with a local URL, the statement runs in the local stack's Postgres container
- * (`docker exec -i`, no URL at all).
+ * psql binary and with the local stack's own URL (TRACE_OPERATOR_DB_URL unset), the statement runs
+ * in the local stack's Postgres container (`docker exec -i`, no URL at all).
  * @returns {{ ok: true, out: string } | { ok: false, why: string, sqlstate: string | null }}
  */
 export function runSql({ url, sql, vars }, deps) {
   const varArgs = Object.entries(vars).flatMap(([k, v]) => ['-v', `${k}=${v}`]);
-  const childEnv = { ...deps.env };
-  // the child needs none of these (the URL travels as PGDATABASE, only for a real psql)
-  for (const name of [DB_URL_ENV, 'SMOKE_PASSWORD', 'SUPABASE_STAGING_PUBLISHABLE_KEY']) {
-    delete childEnv[name];
-  }
+  // the child needs none of the scrubbed names (the URL travels as PGDATABASE, only for a real psql)
+  const childEnv = childEnvOf(deps.env);
   const opts = {
     input: sql,
     encoding: 'utf8',
@@ -151,6 +161,15 @@ export function runSql({ url, sql, vars }, deps) {
       return {
         ok: false,
         why: 'psql is not installed and the database is not local',
+        sqlstate: null,
+      };
+    }
+    // A loopback TRACE_OPERATOR_DB_URL can be a tunnel to another database, which the container would
+    // never reach: the fallback serves only the URL read from the local stack itself (B0-SEC2).
+    if ((deps.env[DB_URL_ENV] ?? '').trim()) {
+      return {
+        ok: false,
+        why: `psql is not installed; without it only the local stack works (unset ${DB_URL_ENV})`,
         sqlstate: null,
       };
     }

@@ -257,7 +257,7 @@ describe('create-org', () => {
 
   describe('docker fallback (no psql binary)', () => {
     it('runs psql in the local stack container, with no URL anywhere', () => {
-      const h = harness({ env: { TRACE_OPERATOR_DB_URL: LOCAL_URL }, hasPsql: false });
+      const h = harness({ hasPsql: false });
       expect(main({ argv: GOOD, deps: h.deps })).toBe(0);
       expect(h.stdout()).toBe(`${ORG_ID}\n`);
       const [call] = h.sqlCalls();
@@ -273,14 +273,12 @@ describe('create-org', () => {
       expect(call.opts.input).toContain('private.create_org');
     });
 
-    it('also works for localhost and the default local URL', () => {
-      for (const env of [
-        { TRACE_OPERATOR_DB_URL: LOCAL_URL.replace('127.0.0.1', 'localhost') },
-        {},
-      ]) {
-        const h = harness({ env, hasPsql: false });
-        expect(main({ argv: GOOD, deps: h.deps })).toBe(0);
-        expect(h.sqlCalls()[0].cmd).toBe('docker');
+    it('refuses a loopback TRACE_OPERATOR_DB_URL: it can be a tunnel to another database (B0-SEC2)', () => {
+      for (const url of [LOCAL_URL, LOCAL_URL.replace('127.0.0.1', 'localhost')]) {
+        const h = harness({ env: { TRACE_OPERATOR_DB_URL: url }, hasPsql: false });
+        expect(main({ argv: GOOD, deps: h.deps })).toBe(1);
+        expect(h.sqlCalls()).toHaveLength(0);
+        expect(h.stdout()).toBe('');
       }
     });
 

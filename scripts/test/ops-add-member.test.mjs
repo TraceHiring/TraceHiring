@@ -132,6 +132,21 @@ describe('add-member', () => {
     expect(h.stdout() + h.stderr()).not.toContain(FAKE_PASSWORD);
   });
 
+  it('starts `supabase status` without the secrets of the parent environment (B0-SEC3)', () => {
+    const h = harness({
+      env: {
+        SMOKE_PASSWORD: FAKE_PASSWORD,
+        SUPABASE_STAGING_PUBLISHABLE_KEY: FAKE_PASSWORD,
+        KEEP: 'x',
+      },
+    });
+    expect(main({ argv: GOOD, deps: h.deps })).toBe(0);
+    const status = h.calls.find((c) => c.cmd === 'pnpm' || c.cmd.startsWith('pnpm '));
+    expect(status.opts.env.SMOKE_PASSWORD).toBeUndefined();
+    expect(status.opts.env.SUPABASE_STAGING_PUBLISHABLE_KEY).toBeUndefined();
+    expect(status.opts.env.KEEP).toBe('x');
+  });
+
   it('fails (exit 1) when there is no URL and the local stack is not running', () => {
     const h = harness({ stack: null });
     expect(main({ argv: GOOD, deps: h.deps })).toBe(1);
@@ -205,7 +220,7 @@ describe('add-member', () => {
 
   describe('docker fallback (no psql binary)', () => {
     it('runs psql in the local stack container, with no URL anywhere', () => {
-      const h = harness({ env: { TRACE_OPERATOR_DB_URL: LOCAL_URL }, hasPsql: false });
+      const h = harness({ hasPsql: false });
       expect(main({ argv: GOOD, deps: h.deps })).toBe(0);
       expect(h.stdout()).toBe(`${MEMBERSHIP_ID}\n`);
       const [call] = h.sqlCalls();
@@ -217,6 +232,14 @@ describe('add-member', () => {
       expect(varsOf(call.args).p_user).toBe(USER_ID);
       expect(call.args.slice(-2)).toEqual(['-f', '-']);
       expect(call.opts.input).toContain('private.add_member');
+    });
+
+    it('refuses to fall back for a loopback TRACE_OPERATOR_DB_URL (it can be a tunnel, B0-SEC2)', () => {
+      const h = harness({ env: { TRACE_OPERATOR_DB_URL: LOCAL_URL }, hasPsql: false });
+      expect(main({ argv: GOOD, deps: h.deps })).toBe(1);
+      expect(h.sqlCalls()).toHaveLength(0);
+      expect(h.stdout()).toBe('');
+      expect(h.stderr()).not.toContain(FAKE_PASSWORD);
     });
 
     it('refuses to fall back for a non-local URL', () => {
