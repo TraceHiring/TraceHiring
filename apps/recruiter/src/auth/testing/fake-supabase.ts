@@ -69,6 +69,7 @@ export class FakeSupabase {
   readonly calls: RecordedCall[] = [];
   private session: { methods: string[]; aal: 'aal1' | 'aal2' } | null;
   private options: FakeOptions;
+  private readonly gates = new Map<FakeCall, Promise<void>>();
 
   constructor(options: FakeOptions = {}) {
     this.options = options;
@@ -84,6 +85,18 @@ export class FakeSupabase {
     this.options = { ...this.options, fail: {} };
   }
 
+  /** Holds the next answers to `call` until the returned function is called. */
+  hold(call: FakeCall): () => void {
+    let release = (): void => undefined;
+    this.gates.set(
+      call,
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    return () => release();
+  }
+
   get signedIn(): boolean {
     return this.session !== null;
   }
@@ -92,6 +105,7 @@ export class FakeSupabase {
   private async run<T>(call: FakeCall, args: unknown[], ok: () => Outcome<T>): Promise<Outcome<T>> {
     this.calls.push({ call, args });
     await Promise.resolve();
+    await this.gates.get(call);
     const mode = this.options.fail?.[call];
     if (mode === 'throw') throw new Error(markerError(call).message);
     if (mode === 'error') return { data: null as T, error: markerError(call) };

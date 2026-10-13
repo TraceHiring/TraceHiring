@@ -138,6 +138,32 @@ describe('email OTP path (§4.2)', () => {
     });
   }
 
+  it('needs TOTP when the session used a password at all, even next to an OTP method', async () => {
+    const { flow } = setup({
+      ...RECRUITER_IN_A,
+      session: { methods: ['otp', 'password'], aal: 'aal1' },
+      verifiedFactors: [FACTOR_ID],
+    });
+    await flow.start();
+    expect(kind(flow)).toBe('totp_challenge');
+  });
+
+  it('needs TOTP when no OTP method is present (an unknown first factor)', async () => {
+    const { flow } = setup({
+      ...RECRUITER_IN_A,
+      session: { methods: ['oauth'], aal: 'aal1' },
+      verifiedFactors: [FACTOR_ID],
+    });
+    await flow.start();
+    expect(kind(flow)).toBe('totp_challenge');
+  });
+
+  it('a magiclink first factor counts like OTP (§2.2)', async () => {
+    const { flow } = setup({ ...RECRUITER_IN_A, session: { methods: ['magiclink'], aal: 'aal1' } });
+    await flow.start();
+    expect(kind(flow)).toBe('signed_in');
+  });
+
   it('needs TOTP when any one membership is privileged', async () => {
     const { flow } = setup({
       memberships: [membership(ORG_A, ['recruiter']), membership(ORG_B, ['reviewer'])],
@@ -576,6 +602,22 @@ describe('sign-out (§4.6: any state → signed_out, clears sessionStorage)', ()
       expect(flow.getSnapshot().state).toEqual({ kind: 'signed_out' });
       expect(storage.map.size).toBe(0);
     });
+
+  it('a sign-in that lands after sign-out is discarded (state, storage and session)', async () => {
+    const { flow, fake, storage } = setup(RECRUITER_IN_A);
+    await flow.start();
+    await flow.submitEmail(EMAIL);
+    const release = fake.hold('verifyOtp');
+    const pending = flow.submitOtp(VALID_OTP);
+    await flow.signOut();
+    expect(flow.getSnapshot()).toEqual({ state: { kind: 'signed_out' }, busy: false });
+    release();
+    storage.setItem('sb-synthetic-auth-token', '{}');
+    await pending;
+    expect(flow.getSnapshot()).toEqual({ state: { kind: 'signed_out' }, busy: false });
+    expect(fake.signedIn).toBe(false);
+    expect(storage.map.size).toBe(0);
+  });
 
   it('works while another step is still running', async () => {
     const { flow, storage } = setup(RECRUITER_IN_A);
