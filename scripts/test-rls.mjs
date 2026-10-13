@@ -23,6 +23,9 @@
 //   5b. `node scripts/test-auth-local.mjs` (specs/m0b-tenancy.md AT-B8): local org sign-in end to end
 //      through kong, PostgREST and mailpit, which step 3 keeps on. Only its `test-auth-local: `
 //      stdout lines are printed on failure; its stderr never is.
+//   5c. `node scripts/test-concurrency-local.mjs` (M0b review M0B-DB-5): two connections demote the two
+//      owners of one org at once, under READ COMMITTED and REPEATABLE READ; the second must be refused.
+//      Only its `test-concurrency-local: ` stdout lines are printed on failure; its stderr never is.
 //   6. db-types drift: `supabase gen types typescript --local --schema public` goes to a temp
 //      file, compared byte for byte with packages/db-types/src/database.ts (never overwritten;
 //      `pnpm db:types` regenerates it on purpose).
@@ -80,6 +83,8 @@ export const EXCLUDED_SERVICES = Object.freeze(
 );
 /** AT-B8: local org sign-in end to end, run with node from the repository root after pgTAP. */
 export const AUTH_TEST_ARGS = Object.freeze(['scripts/test-auth-local.mjs']);
+/** M0B-DB-5: two connections demote an org's two owners at once, run with node after AT-B8. */
+export const CONCURRENCY_TEST_ARGS = Object.freeze(['scripts/test-concurrency-local.mjs']);
 
 export const START_ARGS = Object.freeze([
   'exec',
@@ -716,6 +721,19 @@ export async function main(options) {
         .map((l) => `  | ${redact(l)}`);
       problems.push(
         `the local org sign-in test failed (AT-B8${auth.error ? `, ${auth.error.code ?? 'error'}` : ''})`,
+        ...lines,
+      );
+    }
+    // M0B-DB-5: its stdout holds only fixed messages; stderr is never printed.
+    log('test-rls: running the two-connection owner-demotion test (M0B-DB-5)');
+    const conc = await run('node', CONCURRENCY_TEST_ARGS, { cwd: root });
+    if (conc.status !== 0) {
+      const lines = toText(conc.stdout)
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('test-concurrency-local: '))
+        .map((l) => `  | ${redact(l)}`);
+      problems.push(
+        `the two-connection owner-demotion test failed (M0B-DB-5${conc.error ? `, ${conc.error.code ?? 'error'}` : ''})`,
         ...lines,
       );
     }

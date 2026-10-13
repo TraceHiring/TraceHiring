@@ -22,6 +22,7 @@ import {
   DB_TYPES_FILE,
   DOCKER_MESSAGE,
   AUTH_TEST_ARGS,
+  CONCURRENCY_TEST_ARGS,
   EXCLUDED_SERVICES,
   FLOORS,
   GEN_TYPES_ARGS,
@@ -222,7 +223,15 @@ describe('§8.3 step 2: the shared lock', () => {
     expect(h.clock.elapsed()).toBeLessThan(LOCK_TIMEOUT_MS);
     expect(h.out.all()).toMatch(/PID 777/);
     expect(h.out.all()).toContain('/work/other worktree');
-    expect(h.stub.keys()).toEqual(['docker', 'start', 'reset', 'test', 'auth', 'gen']);
+    expect(h.stub.keys()).toEqual([
+      'docker',
+      'start',
+      'reset',
+      'test',
+      'auth',
+      'concurrency',
+      'gen',
+    ]);
     expect(existsSync(h.lockFile)).toBe(false);
   });
 
@@ -509,11 +518,49 @@ describe('m0b AT-B8: the local org sign-in test runs after pgTAP', () => {
   });
 });
 
+describe('m0b M0B-DB-5: the two-connection owner-demotion test runs after AT-B8', () => {
+  it('runs node scripts/test-concurrency-local.mjs from the root after the auth test and before gen types', async () => {
+    const h = harness();
+    expect(await h.go()).toBe(0);
+    const conc = h.stub.calls.find((c) => c.key === 'concurrency');
+    expect(conc.line).toBe(`node ${CONCURRENCY_TEST_ARGS.join(' ')}`);
+    expect(CONCURRENCY_TEST_ARGS).toEqual(['scripts/test-concurrency-local.mjs']);
+    expect(conc.opts.cwd).toBe(h.root);
+  });
+
+  it('fails the run when the concurrency test fails, printing only its own stdout lines', async () => {
+    const h = harness({
+      responses: {
+        concurrency: {
+          status: 1,
+          stdout:
+            'test-concurrency-local: repeatable read: FAILED: the second demotion was not refused\nnoise\n',
+          stderr: fakeDbUrl(),
+        },
+      },
+    });
+    expect(await h.go()).toBe(1);
+    expect(h.out.all()).toMatch(/test-concurrency-local: repeatable read: FAILED/);
+    expect(h.out.all()).toMatch(/M0B-DB-5/);
+    expect(h.out.all()).not.toContain('noise');
+    expect(h.out.all()).not.toContain('postgresql://');
+    expect(h.stub.keys()).toContain('gen');
+  });
+});
+
 describe('§8.3 steps 3–4: start and reset', () => {
   it('starts the stack without the services M0a does not need (auth stays on), then resets it', async () => {
     const h = harness();
     expect(await h.go()).toBe(0);
-    expect(h.stub.keys()).toEqual(['docker', 'start', 'reset', 'test', 'auth', 'gen']);
+    expect(h.stub.keys()).toEqual([
+      'docker',
+      'start',
+      'reset',
+      'test',
+      'auth',
+      'concurrency',
+      'gen',
+    ]);
     const [, start, reset] = h.stub.calls;
     expect(start.line).toBe(`pnpm ${START_ARGS.join(' ')}`);
     expect(START_ARGS).toEqual(['exec', 'supabase', 'start', '-x', EXCLUDED_SERVICES.join(',')]);
@@ -823,7 +870,7 @@ describe('§8.3 step 6: db-types drift', () => {
       '--schema',
       'public',
     ]);
-    expect(h.stub.calls[5].line).toBe(`pnpm ${GEN_TYPES_ARGS.join(' ')}`);
+    expect(h.stub.calls[6].line).toBe(`pnpm ${GEN_TYPES_ARGS.join(' ')}`);
     expect(DB_TYPES_FILE).toBe('packages/db-types/src/database.ts');
   });
 
@@ -890,7 +937,15 @@ describe('§8.3 step 6: db-types drift', () => {
     const root = fakeRepo({ dbTypes: 'stale\n' });
     const h = harness({ root, responses: { test: { status: 1, stdout: '' } } });
     expect(await h.go()).toBe(1);
-    expect(h.stub.keys()).toEqual(['docker', 'start', 'reset', 'test', 'auth', 'gen']);
+    expect(h.stub.keys()).toEqual([
+      'docker',
+      'start',
+      'reset',
+      'test',
+      'auth',
+      'concurrency',
+      'gen',
+    ]);
     expect(h.out.all()).toMatch(/supabase test db exited 1/);
     expect(h.out.all()).toMatch(/database\.ts: differs/);
   });
@@ -909,8 +964,17 @@ describe('--stop (CI)', () => {
       },
     });
     expect(await h.go()).toBe(0);
-    expect(h.stub.keys()).toEqual(['docker', 'start', 'reset', 'test', 'auth', 'gen', 'stop']);
-    expect(h.stub.calls[6].line).toBe(`pnpm ${STOP_ARGS.join(' ')}`);
+    expect(h.stub.keys()).toEqual([
+      'docker',
+      'start',
+      'reset',
+      'test',
+      'auth',
+      'concurrency',
+      'gen',
+      'stop',
+    ]);
+    expect(h.stub.calls[7].line).toBe(`pnpm ${STOP_ARGS.join(' ')}`);
     expect(heldDuringStop).toBe(true);
     expect(existsSync(h.lockFile)).toBe(false);
   });
