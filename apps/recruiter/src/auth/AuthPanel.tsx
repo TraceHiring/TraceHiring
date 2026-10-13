@@ -28,17 +28,48 @@ export interface AuthActions {
   signOut(): unknown;
 }
 
-/** A submit handler that passes the named fields' text to `handler`. */
-function fields(names: readonly string[], handler: (...values: string[]) => unknown) {
-  return (event: FormEvent<HTMLFormElement>) => {
+/** Reads a submitted form's fields; the browser's `FormData`, replaceable in tests (no DOM). */
+export type ReadForm = (form: HTMLFormElement) => FormData;
+const readFormData: ReadForm = (form) => new FormData(form);
+
+/** A submit handler that passes the named fields' text to `handler`, in the order of `names`. */
+export function fields(
+  names: readonly string[],
+  handler: (...values: string[]) => unknown,
+  read: ReadForm = readFormData,
+) {
+  return (event: Pick<FormEvent<HTMLFormElement>, 'preventDefault' | 'currentTarget'>) => {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
+    const data = read(event.currentTarget);
     handler(
       ...names.map((name) => {
         const value = data.get(name);
         return typeof value === 'string' ? value : '';
       }),
     );
+  };
+}
+
+/** The submit handler of each form on the sign-in screens, and the action it calls. */
+export function formHandlers(actions: AuthActions, read?: ReadForm) {
+  return {
+    email: fields(['email'], (email) => actions.submitEmail(email), read),
+    password: fields(
+      ['email', 'password'],
+      (email, password) => actions.submitPassword(email, password),
+      read,
+    ),
+    otp: fields(['code'], (code) => actions.submitOtp(code), read),
+    totp: fields(['code'], (code) => actions.submitTotp(code), read),
+  };
+}
+
+/** The click handler of each button on the sign-in screens, and the action it calls. */
+export function buttonHandlers(actions: AuthActions) {
+  return {
+    retry: () => void actions.retry(),
+    signOut: () => void actions.signOut(),
+    pickOrg: (orgId: string) => () => void actions.pickOrg(orgId),
   };
 }
 
@@ -76,16 +107,16 @@ function CodeForm({
   busy,
   label,
   submit,
-  onCode,
+  onSubmit,
 }: {
   busy: boolean;
   label: string;
   submit: string;
-  onCode: (code: string) => unknown;
+  onSubmit: ReturnType<typeof fields>;
 }) {
   const id = useId();
   return (
-    <form className={styles.form} onSubmit={fields(['code'], onCode)}>
+    <form className={styles.form} onSubmit={onSubmit}>
       <label className={styles.label} htmlFor={id}>
         {label}
       </label>
@@ -104,13 +135,24 @@ function CodeForm({
   );
 }
 
-export function AuthView({ snapshot, actions }: { snapshot: AuthSnapshot; actions: AuthActions }) {
+export function AuthView({
+  snapshot,
+  actions,
+  readForm,
+}: {
+  snapshot: AuthSnapshot;
+  actions: AuthActions;
+  /** Only tests pass this (no DOM there); the page reads the real form. */
+  readForm?: ReadForm;
+}) {
   const { state, busy } = snapshot;
+  const forms = formHandlers(actions, readForm);
+  const buttons = buttonHandlers(actions);
   const otpEmailId = useId();
   const passwordEmailId = useId();
   const passwordId = useId();
   const signOut = (label = 'Sign out') => (
-    <Button busy={busy} onClick={() => void actions.signOut()}>
+    <Button busy={busy} onClick={buttons.signOut}>
       {label}
     </Button>
   );
@@ -133,10 +175,7 @@ export function AuthView({ snapshot, actions }: { snapshot: AuthSnapshot; action
         <section className={styles.panel}>
           <h2 className={styles.heading}>Sign in</h2>
           <ErrorLine error={state.error} />
-          <form
-            className={styles.form}
-            onSubmit={fields(['email'], actions.submitEmail.bind(actions))}
-          >
+          <form className={styles.form} onSubmit={forms.email}>
             <label className={styles.label} htmlFor={otpEmailId}>
               Work email
             </label>
@@ -151,10 +190,7 @@ export function AuthView({ snapshot, actions }: { snapshot: AuthSnapshot; action
             />
             <Button busy={busy}>Email me a code</Button>
           </form>
-          <form
-            className={styles.form}
-            onSubmit={fields(['email', 'password'], actions.submitPassword.bind(actions))}
-          >
+          <form className={styles.form} onSubmit={forms.password}>
             <p className={styles.note}>
               Or sign in with a password. You will also need an authenticator app.
             </p>
@@ -192,12 +228,7 @@ export function AuthView({ snapshot, actions }: { snapshot: AuthSnapshot; action
           <h2 className={styles.heading}>Check your email</h2>
           <p>We sent a 6-digit code to {state.email}.</p>
           <ErrorLine error={state.error} />
-          <CodeForm
-            busy={busy}
-            label="Code"
-            submit="Verify code"
-            onCode={actions.submitOtp.bind(actions)}
-          />
+          <CodeForm busy={busy} label="Code" submit="Verify code" onSubmit={forms.otp} />
           {signOut('Start again')}
         </section>
       );
@@ -210,7 +241,7 @@ export function AuthView({ snapshot, actions }: { snapshot: AuthSnapshot; action
           ) : (
             <>
               <ErrorLine error={state.error} />
-              <Button busy={busy} onClick={() => void actions.retry()}>
+              <Button busy={busy} onClick={buttons.retry}>
                 Try again
               </Button>
             </>
@@ -240,7 +271,7 @@ export function AuthView({ snapshot, actions }: { snapshot: AuthSnapshot; action
             busy={busy}
             label="6-digit code from the app"
             submit="Verify and continue"
-            onCode={actions.submitTotp.bind(actions)}
+            onSubmit={forms.totp}
           />
           {signOut()}
         </section>
@@ -254,7 +285,7 @@ export function AuthView({ snapshot, actions }: { snapshot: AuthSnapshot; action
             busy={busy}
             label="6-digit code from your authenticator app"
             submit="Verify"
-            onCode={actions.submitTotp.bind(actions)}
+            onSubmit={forms.totp}
           />
           {signOut()}
         </section>
@@ -276,7 +307,7 @@ export function AuthView({ snapshot, actions }: { snapshot: AuthSnapshot; action
           <ul className={styles.orgs}>
             {state.orgs.map((org) => (
               <li key={org.id}>
-                <Button busy={busy} onClick={() => void actions.pickOrg(org.id)}>
+                <Button busy={busy} onClick={buttons.pickOrg(org.id)}>
                   {org.name}
                 </Button>
               </li>
