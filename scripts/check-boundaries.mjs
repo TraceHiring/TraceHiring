@@ -238,7 +238,7 @@ export const REQUIRED_AUTH_CONFIG = Object.freeze({
   'auth.enable_anonymous_sign_ins': 'false',
   'auth.minimum_password_length': '12',
   'auth.password_requirements': '"letters_digits"',
-  'auth.email.enable_signup': 'false',
+  'auth.email.enable_signup': 'true', // the email provider switch on the CLI; sign-ups stay off via auth.enable_signup
   'auth.email.otp_length': '6',
   'auth.email.otp_expiry': '600',
   'auth.email.template.magic_link.content_path': '"./supabase/templates/magic_link.html"',

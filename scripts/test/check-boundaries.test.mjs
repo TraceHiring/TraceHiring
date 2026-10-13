@@ -245,6 +245,14 @@ describe('rule 9: Supabase Auth settings in supabase/config.toml (M0b §4.1)', (
     expect(v.every((x) => x.rule === 9)).toBe(true);
   });
 
+  it('keeps the email provider on and turns sign-ups off globally (AT-B8 finding)', () => {
+    // On the CLI, [auth.email] enable_signup is the email provider switch: false made GoTrue
+    // answer every email sign-in with 422 email_provider_disabled. [auth] enable_signup = false
+    // is what disables sign-ups.
+    expect(REQUIRED_AUTH_CONFIG['auth.email.enable_signup']).toBe('true');
+    expect(REQUIRED_AUTH_CONFIG['auth.enable_signup']).toBe('false');
+  });
+
   it('fails when a required key is missing', () => {
     const v = checkAuthConfig({ configToml: '[auth]\n', magicLinkTemplate: realTemplate });
     expect(v.length).toBe(Object.keys(REQUIRED_AUTH_CONFIG).length);
