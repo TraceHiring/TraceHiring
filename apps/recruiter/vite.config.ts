@@ -1,4 +1,5 @@
 import { forbidServerImports } from '@trace/config/vite';
+import { headersTemplatePlugin } from '@trace/config/vite/headers';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 
@@ -31,5 +32,10 @@ export function versionFilePlugin(app: 'recruiter'): Plugin {
 
 // No `define` that reads process.env, and envPrefix stays the default `VITE_` (spec §10.1).
 export default defineConfig({
-  plugins: [forbidServerImports(), react(), versionFilePlugin('recruiter')],
+  plugins: [
+    forbidServerImports(),
+    react(),
+    versionFilePlugin('recruiter'),
+    headersTemplatePlugin(),
+  ],
 });

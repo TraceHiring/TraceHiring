@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Browser security headers in each app's build output (spec specs/m0-foundations.md §10.3, AT-22-local).
-// Reads apps/<app>/dist/_headers (Cloudflare Pages format, copied from public/_headers by Vite) for
+// Reads apps/<app>/dist/_headers (Cloudflare Pages format: copied from public/_headers by Vite, or for
+// the recruiter written from _headers.template by @trace/config/vite/headers, m0b §2.7) for
 // every app in APPS and fails (exit 1) unless:
 //   - the file exists (run the app builds first) and parses: URL lines unindented, header lines
 //     indented as `Name: value`, `! Name` detaches; no line over Cloudflare's 2,000-character limit
