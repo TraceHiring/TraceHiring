@@ -9,7 +9,7 @@ Build-notes risk 5 says the candidate token and RLS mechanism is unproven. This 
 1. A Trace key (ES256 / P-256) mints a candidate token, and an edge that holds only the **public** JWK verifies it. A tampered, an expired, an `alg=none`, a foreign-key and a wrong-type token are all rejected.
 2. The **verified** claims, handed to Postgres as `request.jwt.claims` after `SET LOCAL ROLE trace_candidate`, drive a candidate-keyed RLS policy: one row is allowed and one is denied.
 3. Which extra grants `trace_candidate` needs to evaluate `auth.jwt()` (an input for M3a).
-4. `trace_candidate` reads nothing, or is refused, on every M0b table.
+4. `trace_candidate` is refused (`42501`) on every M0b table.
 
 It does not test the real gateway connection chain, hosted Supabase, or a pooler. See "Not covered".
 
@@ -25,18 +25,18 @@ What it does to the database: one `begin; ... rollback;` through `docker exec -i
 
 Secrets: the private key is generated at run time, is non-extractable, and is never written or printed. No full token is printed or sent to psql. Only the decoded claims are shown, and they hold synthetic UUIDs.
 
-## Output of the run (2026-10-12, local stack, PostgreSQL 17.11)
+## Output of the run (2026-10-13, local stack, PostgreSQL 17.11, after the M0b migrations)
 
 Contains no secret: a throwaway public key id, a random nonce and decoded synthetic claims. `kid`, `nonce`, `iat` and `exp` change on every run.
 
 ```
 == Part 1: ES256 token (WebCrypto, no library) ==
-key: EC P-256 alg=ES256 kid=KYVZ_mOetycGcipS (private key is non-extractable and is never printed)
+key: EC P-256 alg=ES256 kid=P7rVONo-K9R1W6aV (private key is non-extractable and is never printed)
 PASS: exported JWK is public only (no "d" member)
 PASS: private key cannot be exported (extractable = false)
 minted: header.payload.signature, 540 chars (token not printed)
 PASS: valid token verifies with the public JWK
-decoded claims: {"sub":"00000000-0000-4000-8000-0000000000c1","candidate_id":"00000000-0000-4000-8000-0000000000c1","invitation_id":"00000000-0000-4000-8000-0000000000b1","org_id":"00000000-0000-4000-8000-0000000000a1","typ":"session","nonce":"Tk7ItqNMnu-qLGKfLxmgOQ","iat":1791787100,"exp":1791792500}
+decoded claims: {"sub":"00000000-0000-4000-8000-0000000000c1","candidate_id":"00000000-0000-4000-8000-0000000000c1","invitation_id":"00000000-0000-4000-8000-0000000000b1","org_id":"00000000-0000-4000-8000-0000000000a1","typ":"session","nonce":"gjW85mDXSyPCDO2ekUxzFw","iat":1791898212,"exp":1791903612}
 PASS: verified claims equal the minted claims
 PASS: tampered payload is rejected (bad_signature)
 PASS: expired token is rejected (signature itself is valid) (expired)
@@ -46,7 +46,7 @@ PASS: portal token is rejected on a session route (wrong_token_type)
 
 == Part 2: RLS under SET LOCAL ROLE trace_candidate (one rolled-back transaction) ==
 PASS: trace_candidate is NOLOGIN, NOBYPASSRLS and holds no SUPERUSER/CREATEROLE/CREATEDB/REPLICATION (login=false,bypassrls=false,super=false,createrole=false,createdb=false,replication=false)
-FINDING: trace_candidate did not exist; the spike created it inside the transaction (rolled back)
+FINDING: trace_candidate already existed on this stack (reused as is)
 PASS: postgres holds trace_candidate with inherit false, set true (grantor=postgres inherit=false set=true; grantor=supabase_admin inherit=false set=false)
 PASS: fixture holds two rows, one per candidate (owner sees 2)
 PASS: SET LOCAL ROLE trace_candidate took effect (trace_candidate)
@@ -61,20 +61,20 @@ FINDING: a direct call of auth.jwt() by trace_candidate: refused sqlstate=42501
 FINDING: GRANT USAGE ON SCHEMA auth / EXECUTE ON auth.jwt() issued by postgres: USAGE afterwards=false, explicit ACL rows for trace_candidate on auth.jwt()=0 (both grants were silent no-ops)
 FINDING: direct call of auth.jwt() after those grants: refused sqlstate=42501
 -- M0b tables as trace_candidate --
-SKIPPED: M0b table orgs not present yet
-SKIPPED: M0b table workspaces not present yet
-SKIPPED: M0b table teams not present yet
-SKIPPED: M0b table memberships not present yet
-SKIPPED: M0b table audit_log not present yet
-SKIPPED: M0b table platform_staff not present yet
-SKIPPED: M0b table staff_access_grants not present yet
-SKIPPED: M0b table idempotency_keys not present yet
+PASS: trace_candidate on public.orgs (refused (42501))
+PASS: trace_candidate on public.workspaces (refused (42501))
+PASS: trace_candidate on public.teams (refused (42501))
+PASS: trace_candidate on public.memberships (refused (42501))
+PASS: trace_candidate on public.audit_log (refused (42501))
+PASS: trace_candidate on public.platform_staff (refused (42501))
+PASS: trace_candidate on public.staff_access_grants (refused (42501))
+PASS: trace_candidate on public.idempotency_keys (refused (42501))
 PASS: rolled back: spike table, probe functions and the role created by the spike are gone
 
-RESULT: 19 passed, 0 failed, 8 skipped
+RESULT: 27 passed, 0 failed, 0 skipped
 ```
 
-The eight `SKIPPED` lines are not passes: the M0b migrations (stream B0) did not exist when this was run. Re-run the spike after they land; each table must then report `reads zero rows` or `refused (42501)`. The probe was also exercised by hand against stand-in tables (no grant: `42501`; SELECT granted, RLS on, no policy: zero rows; partitioned table: `42501`; missing: `absent`).
+The first run (2026-10-12, stream B3) reported the eight M0b tables as `SKIPPED` because their migrations did not exist yet. This re-run (M0b FIX, review finding M0B-SP-1) follows the B0 migrations, and the probe was tightened first: only a refusal (`42501`) passes, and a table that merely reads zero rows fails, since an empty table proves nothing about grants or policies. All eight are refused. `supabase/tests/rls_roles.test.sql` pins the same property in CI. The probe was also exercised by hand against stand-in tables (no grant: `42501`; SELECT granted, RLS on, no policy: zero rows, now a FAIL; partitioned table: `42501`; missing: `absent`).
 
 ## Grants `trace_candidate` needed (input for M3a)
 

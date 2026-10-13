@@ -60,7 +60,7 @@ No new vendor or library: Web Crypto (built into Workers and Node), Postgres rol
 - Key custody and rotation are a new operational duty, specified in M3a.
 
 ## Evidence
-`docs/spikes/m0b-candidate-token/README.md` records the run (2026-10-12, local stack, PostgreSQL 17.11): the ES256 token verifies with the public JWK and tampered, expired, `alg=none`, foreign-key and wrong-type tokens are rejected; under `SET LOCAL ROLE trace_candidate` with the verified claims, one row is allowed and one is denied, no claims give zero rows, and swapped claims follow the claims; the grants discovered; and the eight M0b tables reported as skipped because their migrations did not exist yet (to be re-run once they do). Command: `node docs/spikes/m0b-candidate-token/spike.mjs`.
+`docs/spikes/m0b-candidate-token/README.md` records the run (2026-10-12, local stack, PostgreSQL 17.11): the ES256 token verifies with the public JWK and tampered, expired, `alg=none`, foreign-key and wrong-type tokens are rejected; under `SET LOCAL ROLE trace_candidate` with the verified claims, one row is allowed and one is denied, no claims give zero rows, and swapped claims follow the claims; the grants discovered; and the eight M0b tables reported as skipped because their migrations did not exist yet. Re-run on 2026-10-13 after the B0 migrations (M0b FIX, review finding M0B-SP-1), with the table probe tightened first so that only a refusal passes: `trace_candidate` is refused (`42501`) on all eight M0b tables; 27 passed, 0 failed, 0 skipped. `supabase/tests/rls_roles.test.sql` pins the same property in CI. Command: `node docs/spikes/m0b-candidate-token/spike.mjs`.
 
 ## M3a requirements from the B3 review [B3-S3, B3-S4]
 - **`nonce`:** random per issuance, held by the session Durable Object, compared on every request, rotated on re-issue, invalidated on submit.
@@ -68,9 +68,8 @@ No new vendor or library: Web Crypto (built into Workers and Node), Postgres rol
 - **`kid`:** the verifier looks the key up by `kid`; an unknown `kid` is rejected. Each `typ` has a lifetime cap checked as `exp - iat`.
 - **`typ` below the edge:** write-path policies (or the `cand_*()` readers they call) assert `typ`, so a route-table bug cannot let a lobby or portal token reach session writes; every policy names its role (`to …`), because `auth.uid()` returns `sub` = `candidate_id` and a role-less policy would evaluate for candidates; allowed and denied pgTAP cases per `typ`.
 
-## Still to do in M0b (after stream B0's migrations land) [B3-P5, B3-P4]
-- Re-run `node docs/spikes/m0b-candidate-token/spike.mjs`; replace the README output block and the Evidence paragraph above; the eight M0b-table lines must then read PASS, not SKIPPED.
-- Tighten the spike's M0b-table check first: an empty table must not pass on `rows=0` alone; require `42501`, or `has_table_privilege('trace_candidate', t, 'SELECT') = false`, or a row seeded by the owner inside the transaction.
+## Done in M0b (after stream B0's migrations landed) [B3-P5, B3-P4]
+- Done 2026-10-13 (M0b FIX, M0B-SP-1): the spike's M0b-table check was tightened (an empty table no longer passes on `rows=0`; only `42501` passes), then the spike was re-run; the README output block is replaced and the Evidence paragraph above updated, and the eight M0b-table lines read PASS (refused).
 
 ## Open for the M3a SPEC (nothing here is decided)
 - **Direct RLS evaluation.** Whether Supabase's third-party or asymmetric JWT support makes it possible to evaluate Trace-issued tokens directly, without the gateway and `SET LOCAL ROLE`. To be checked against the Supabase docs current at the M3a SPEC; this ADR does not answer it.

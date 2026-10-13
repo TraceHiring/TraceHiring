@@ -543,16 +543,19 @@ function runDatabaseChecks(claims) {
     `direct call of auth.jwt() after those grants: ${get('d2_direct_auth_jwt_call_after_grants')}`,
   );
 
-  // M0b tables.
+  // M0b tables. Only a refusal (42501) passes: an empty table reads zero rows whatever the grants and
+  // policies are, so rows=0 alone proves nothing (ADR-030, B3-P4; M0b review M0B-SP-1).
   console.log('-- M0b tables as trace_candidate --');
   for (const table of M0B_TABLES) {
     const outcome = get(`m0b:${table}`);
     if (outcome === 'absent') {
       skipped(`M0b table ${table} not present yet`);
-    } else if (outcome === 'rows=0' || outcome.startsWith('refused sqlstate=42501')) {
-      pass(
+    } else if (outcome.startsWith('refused sqlstate=42501')) {
+      pass(`trace_candidate on public.${table}`, 'refused (42501)');
+    } else if (outcome === 'rows=0') {
+      fail(
         `trace_candidate on public.${table}`,
-        outcome === 'rows=0' ? 'reads zero rows' : 'refused (42501)',
+        'reads zero rows, not refused (an empty table cannot prove the denial)',
       );
     } else {
       fail(`trace_candidate on public.${table}`, outcome);
