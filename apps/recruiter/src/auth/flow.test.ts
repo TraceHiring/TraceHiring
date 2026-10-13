@@ -722,6 +722,76 @@ describe('steps only run from their own state, one at a time', () => {
   });
 });
 
+describe('a step that finishes after sign-out makes no further network call (B2-SP3)', () => {
+  const NONE = {
+    enroll: [],
+    listFactors: [],
+    'select:memberships': [],
+    'select:orgs': [],
+  } as const;
+
+  function expectNoFurtherCalls(fake: FakeSupabase, calls: readonly FakeCall[]): void {
+    for (const call of calls) expect(fake.callsOf(call)).toEqual([]);
+  }
+
+  it('a password sign-in that lands after sign-out never enrols, lists factors or reads rows', async () => {
+    const { flow, fake } = setup(RECRUITER_IN_A);
+    await flow.start();
+    const release = fake.hold('signInWithPassword');
+    const pending = flow.submitPassword(EMAIL, VALID_PASSWORD);
+    await flow.signOut();
+    release();
+    await pending;
+    expectNoFurtherCalls(fake, Object.keys(NONE) as FakeCall[]);
+    expect(fake.callsOf('getSession')).toHaveLength(1); // the one from start()
+    expect(flow.getSnapshot()).toEqual({ state: { kind: 'signed_out' }, busy: false });
+    expect(fake.signedIn).toBe(false);
+  });
+
+  /** Sign out while the `held` call of a password sign-in is pending, then let it finish. */
+  async function signOutDuring(held: FakeCall, options: FakeOptions) {
+    const { flow, fake } = setup(options);
+    await flow.start();
+    const release = fake.hold(held);
+    const pending = flow.submitPassword(EMAIL, VALID_PASSWORD);
+    await vi.waitFor(() => expect(fake.callsOf(held)).toHaveLength(1));
+    await flow.signOut();
+    release();
+    await pending;
+    expect(flow.getSnapshot()).toEqual({ state: { kind: 'signed_out' }, busy: false });
+    return fake;
+  }
+
+  it('sign-out while the assurance level is read stops before the memberships read', async () => {
+    const fake = await signOutDuring('getAuthenticatorAssuranceLevel', RECRUITER_IN_A);
+    expectNoFurtherCalls(fake, ['select:memberships', 'select:orgs', 'listFactors', 'enroll']);
+  });
+
+  it('sign-out while the memberships are read stops before factors, enrolment and orgs', async () => {
+    const fake = await signOutDuring('select:memberships', RECRUITER_IN_A);
+    expectNoFurtherCalls(fake, ['select:orgs', 'listFactors', 'enroll']);
+  });
+
+  it('sign-out while the factors are listed stops before enrolment', async () => {
+    const fake = await signOutDuring('listFactors', RECRUITER_IN_A);
+    expectNoFurtherCalls(fake, ['enroll', 'select:orgs']);
+  });
+
+  it('sign-out while TOTP is accepted stops before the org read', async () => {
+    const { flow, fake } = setup(RECRUITER_IN_A);
+    await passwordSignIn(flow);
+    expect(kind(flow)).toBe('totp_enrol');
+    const release = fake.hold('select:memberships');
+    const pending = flow.submitTotp(VALID_TOTP);
+    await vi.waitFor(() => expect(fake.callsOf('select:memberships')).toHaveLength(2));
+    await flow.signOut();
+    release();
+    await pending;
+    expectNoFurtherCalls(fake, ['select:orgs']);
+    expect(flow.getSnapshot()).toEqual({ state: { kind: 'signed_out' }, busy: false });
+  });
+});
+
 describe('the aal2 stage (§4.6: session_aal2 is shown while the org is resolved after TOTP)', () => {
   /** Every state kind the flow shows, in order, without repeats of the same kind in a row. */
   function recordKinds(flow: AuthFlow): AuthState['kind'][] {

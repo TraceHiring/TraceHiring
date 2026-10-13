@@ -60,6 +60,10 @@ export interface AuthSnapshot {
 }
 
 type Show = (state: AuthState) => void;
+/** True while the running step is still the latest one (no sign-out or newer step since). */
+type Current = () => boolean;
+/** What a stale step returns; `step` drops it, so the value never reaches the view. */
+const STALE: AuthState = { kind: 'signed_out' };
 type Stage = 'session_aal1' | 'session_aal2';
 
 /** Runs one supabase-js call; the data when it worked, else null. Error text is never read. */
@@ -137,7 +141,7 @@ export class AuthFlow {
    */
   private async step(
     from: readonly AuthState['kind'][],
-    body: (client: RecruiterSupabase, show: Show) => Promise<AuthState>,
+    body: (client: RecruiterSupabase, show: Show, current: Current) => Promise<AuthState>,
   ): Promise<void> {
     const client = this.client;
     if (client === null || this.snapshot.busy || !from.includes(this.snapshot.state.kind)) return;
@@ -147,7 +151,7 @@ export class AuthFlow {
     const show: Show = (state) => {
       if (current()) this.set(state, true);
     };
-    const next = await body(client, show);
+    const next = await body(client, show, current);
     if (current()) this.set(next, false);
     else await this.discardLateSession(client);
   }
@@ -172,12 +176,12 @@ export class AuthFlow {
 
   /** Reads a stored session once at start-up; none → signed_out. */
   start(): Promise<void> {
-    return this.step(['starting'], async (client, show) => {
+    return this.step(['starting'], async (client, show, current) => {
       const stored = await attempt(() => client.auth.getSession());
       if (stored === null) return { kind: 'signed_out', error: 'generic' };
       if (!stored.data?.session) return { kind: 'signed_out' };
       show({ kind: 'session_aal1' });
-      return this.resolve(client, show, 'session_aal1');
+      return this.resolve(client, show, current, 'session_aal1');
     });
   }
 
@@ -199,7 +203,7 @@ export class AuthFlow {
     const state = this.snapshot.state;
     if (state.kind !== 'code_sent') return Promise.resolve();
     const { email } = state;
-    return this.step(['code_sent'], async (client, show) => {
+    return this.step(['code_sent'], async (client, show, current) => {
       const code = OtpCode.safeParse(rawCode.trim());
       if (!code.success) return { kind: 'code_sent', email, error: 'invalid_code' };
       const verified = await attempt(() =>
@@ -207,13 +211,13 @@ export class AuthFlow {
       );
       if (!verified) return { kind: 'code_sent', email, error: 'code' };
       show({ kind: 'session_aal1' });
-      return this.resolve(client, show, 'session_aal1');
+      return this.resolve(client, show, current, 'session_aal1');
     });
   }
 
   /** Password sign-in (§4.2); the resolution then always asks for TOTP (§2.2). */
   submitPassword(rawEmail: string, rawPassword: string): Promise<void> {
-    return this.step(['signed_out'], async (client, show) => {
+    return this.step(['signed_out'], async (client, show, current) => {
       const input = SignInEmail.safeParse({ email: rawEmail.trim() });
       if (!input.success) return { kind: 'signed_out', error: 'invalid_email' };
       const password = Password.safeParse(rawPassword);
@@ -223,7 +227,7 @@ export class AuthFlow {
       );
       if (!signedIn) return { kind: 'signed_out', error: 'generic' };
       show({ kind: 'session_aal1' });
-      return this.resolve(client, show, 'session_aal1');
+      return this.resolve(client, show, current, 'session_aal1');
     });
   }
 
@@ -232,7 +236,7 @@ export class AuthFlow {
     const state = this.snapshot.state;
     if (state.kind !== 'totp_enrol' && state.kind !== 'totp_challenge') return Promise.resolve();
     const base = clearError(state);
-    return this.step([state.kind], async (client, show) => {
+    return this.step([state.kind], async (client, show, current) => {
       const code = TotpCode.safeParse(rawCode.trim());
       if (!code.success) return { ...base, error: 'invalid_code' } as AuthState;
       const verified = await attempt(() =>
@@ -240,7 +244,7 @@ export class AuthFlow {
       );
       if (!verified) return { ...base, error: 'code' } as AuthState;
       show({ kind: 'session_aal2' });
-      return this.resolve(client, show, 'session_aal2');
+      return this.resolve(client, show, current, 'session_aal2');
     });
   }
 
@@ -265,7 +269,9 @@ export class AuthFlow {
     const state = this.snapshot.state;
     if (state.kind !== 'session_aal1' && state.kind !== 'session_aal2') return Promise.resolve();
     const stage = state.kind;
-    return this.step([stage], (client, show) => this.resolve(client, show, stage));
+    return this.step([stage], (client, show, current) =>
+      this.resolve(client, show, current, stage),
+    );
   }
 
   /** Any state → signed_out (§4.6). sessionStorage is cleared even if the server call fails. */
@@ -280,15 +286,24 @@ export class AuthFlow {
   }
 
   /** From a session: own memberships → TOTP if §2.2 needs aal2 → the visible orgs (§4.6). */
-  private async resolve(client: RecruiterSupabase, show: Show, from: Stage): Promise<AuthState> {
+  private async resolve(
+    client: RecruiterSupabase,
+    show: Show,
+    current: Current,
+    from: Stage,
+  ): Promise<AuthState> {
     let stage: Stage = from;
     const failed = (): AuthState => ({ kind: stage, error: 'generic' });
 
+    // Every network call below is preceded by this check: after sign-out (or a newer step) the
+    // rest of the resolution must not run, or it could enrol a factor on a signed-out account.
+    if (!current()) return STALE;
     const session = await attempt(() => client.auth.getSession());
     if (session === null) return failed();
     const userId = session.data?.session?.user.id;
     if (userId === undefined) return { kind: 'signed_out' };
 
+    if (!current()) return STALE;
     const assurance = await attempt(() => client.auth.mfa.getAuthenticatorAssuranceLevel());
     if (!assurance?.data) return failed();
     const aal2 = assurance.data.currentLevel === 'aal2';
@@ -297,6 +312,7 @@ export class AuthFlow {
     show({ kind: stage });
 
     // Own rows are readable at any aal (§2.2 exception), so "needs TOTP" differs from "no org".
+    if (!current()) return STALE;
     const ownRows = await attempt(() =>
       client.from('memberships').select(MEMBERSHIP_COLUMNS).eq('user_id', userId),
     );
@@ -308,7 +324,8 @@ export class AuthFlow {
 
     const otpOnly = methods.some((m) => OTP_METHODS.has(m)) && !methods.includes('password');
     const privileged = active.some((m) => m.roles.some((role) => PRIVILEGED_ROLES.has(role)));
-    if (!aal2 && (privileged || !otpOnly)) return this.totp(client, failed);
+    if (!current()) return STALE; // covers the factor calls and the orgs read below
+    if (!aal2 && (privileged || !otpOnly)) return this.totp(client, current, failed);
 
     const orgIds = [...new Set(active.map((m) => m.org_id))];
     const orgRows = await attempt(() => client.from('orgs').select(ORG_COLUMNS).in('id', orgIds));
@@ -331,11 +348,16 @@ export class AuthFlow {
   }
 
   /** aal2 is needed: challenge an existing verified factor, or enrol a new one (§4.2). */
-  private async totp(client: RecruiterSupabase, failed: () => AuthState): Promise<AuthState> {
+  private async totp(
+    client: RecruiterSupabase,
+    current: Current,
+    failed: () => AuthState,
+  ): Promise<AuthState> {
     const factors = await attempt(() => client.auth.mfa.listFactors());
     if (!factors?.data) return failed();
     const existing = factors.data.totp[0];
     if (existing !== undefined) return { kind: 'totp_challenge', factorId: existing.id };
+    if (!current()) return STALE;
     const enrolled = await attempt(() => client.auth.mfa.enroll({ factorType: 'totp' }));
     if (!enrolled?.data) return failed();
     const { id, totp } = enrolled.data;
