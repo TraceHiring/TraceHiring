@@ -93,6 +93,17 @@ const Aal = z.enum(['aal1', 'aal2']);
 const changed = <T extends readonly [string, ...string[]]>(columns: T) =>
   z.array(z.enum(columns)).min(1);
 const empty = z.object({}).strict();
+// public.invitation_status (D1 migration 2).
+const InvitationStatus = z.enum([
+  'created',
+  'sent',
+  'otp_verified',
+  'started',
+  'submitted',
+  'expired',
+  'revoked',
+  'blocked_age',
+]);
 
 export const AUDIT_ACTIONS = [
   'org.create',
@@ -116,6 +127,12 @@ export const AUDIT_ACTIONS = [
   'test.publish',
   'assignment.create',
   'assignment.delete',
+  // D1 migration 2: invitations.
+  'invitation.create',
+  'invitation.revoke',
+  // D1 migration 4: media grants (one media.view per fetch; rule 8).
+  'media.link_issued',
+  'media.view',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -163,4 +180,15 @@ export const AuditDetails = {
   'test.publish': z.object({ version_no: z.number().int().positive() }).strict(),
   'assignment.create': z.object({ test_id: z.uuid(), membership_id: z.uuid() }).strict(),
   'assignment.delete': z.object({ test_id: z.uuid(), membership_id: z.uuid() }).strict(),
+  'invitation.create': z.object({ test_version_id: z.uuid(), status: InvitationStatus }).strict(),
+  'invitation.revoke': z.object({ old_status: InvitationStatus }).strict(),
+  'media.link_issued': z
+    .object({
+      media_id: z.uuid(),
+      session_id: z.uuid(),
+      link_id: z.uuid(),
+      ttl_seconds: z.int().min(1).max(300),
+    })
+    .strict(),
+  'media.view': z.object({ media_id: z.uuid(), session_id: z.uuid(), link_id: z.uuid() }).strict(),
 } as const satisfies Record<AuditAction, z.ZodType>;
