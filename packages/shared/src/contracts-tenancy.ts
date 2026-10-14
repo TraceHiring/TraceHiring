@@ -111,6 +111,11 @@ export const AUDIT_ACTIONS = [
   'auth.sign_in',
   'auth.step_up',
   'audit.repartition',
+  // D1 migration 1 (specs/d1-demo-slice.md §3.1): authoring and assignments.
+  'test.create',
+  'test.publish',
+  'assignment.create',
+  'assignment.delete',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -154,4 +159,8 @@ export const AuditDetails = {
   'audit.repartition': z
     .object({ month: z.string().regex(/^[0-9]{4}-(0[1-9]|1[0-2])$/), rows_moved: z.int().min(1) })
     .strict(),
+  'test.create': empty,
+  'test.publish': z.object({ version_no: z.number().int().positive() }).strict(),
+  'assignment.create': z.object({ test_id: z.uuid(), membership_id: z.uuid() }).strict(),
+  'assignment.delete': z.object({ test_id: z.uuid(), membership_id: z.uuid() }).strict(),
 } as const satisfies Record<AuditAction, z.ZodType>;

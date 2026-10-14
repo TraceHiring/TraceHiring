@@ -21968,14 +21968,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -22492,14 +22498,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -23016,14 +23028,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -23541,14 +23559,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -24066,14 +24090,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -24591,14 +24621,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -25116,14 +25152,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -25642,14 +25684,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -26169,14 +26217,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -26698,14 +26752,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -27224,14 +27284,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -27757,14 +27823,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -28286,14 +28358,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -28810,14 +28888,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -29338,14 +29422,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -29865,14 +29955,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -30393,14 +30489,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace

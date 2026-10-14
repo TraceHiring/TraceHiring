@@ -182,9 +182,13 @@ describe('AuditDetails', () => {
     'auth.sign_in': { aal: 'aal1' },
     'auth.step_up': { aal: 'aal2' },
     'audit.repartition': { month: '2099-01', rows_moved: 3 },
+    'test.create': {},
+    'test.publish': { version_no: 1 },
+    'assignment.create': { test_id: ID, membership_id: ID2 },
+    'assignment.delete': { test_id: ID, membership_id: ID2 },
   };
-  it('covers exactly the 16 events of spec §2.4', () => {
-    expect(AUDIT_ACTIONS).toHaveLength(16);
+  it('covers exactly the 16 events of spec §2.4 plus the 4 of D1 migration 1', () => {
+    expect(AUDIT_ACTIONS).toHaveLength(20);
     expect(Object.keys(AuditDetails).sort()).toEqual([...AUDIT_ACTIONS].sort());
   });
   it.each(AUDIT_ACTIONS)('accepts the %s shape', (action) => {
