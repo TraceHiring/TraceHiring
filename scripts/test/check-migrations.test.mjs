@@ -52,6 +52,9 @@ describe('names, timestamps and uniqueness (checks 1–3)', () => {
     ['20261011090000_m0b_orgs.SQL', 'file'],
     ['20261011090000_m100_x.sql', 'file'],
     ['20261011090000_m0c_x.sql', 'file'],
+    ['20261011090000_d10_x.sql', 'file'],
+    ['20261011090000_d1a_x.sql', 'file'],
+    ['20261011090000_D1_x.sql', 'file'],
     ['nested', 'dir'],
     ['.gitkeep', 'file'],
   ])('rejects the entry %s', (name, kind) => {
@@ -60,9 +63,14 @@ describe('names, timestamps and uniqueness (checks 1–3)', () => {
   });
 
   it('accepts well-formed names', () => {
-    const entries = [M1, M2, '20261011100000_m12_reports_v2.sql', '20261011110000_m3b_x.sql'].map(
-      (name) => ({ name, isDirectory: false }),
-    );
+    const entries = [
+      M1,
+      M2,
+      '20261011100000_m12_reports_v2.sql',
+      '20261011110000_m3b_x.sql',
+      // D1, the demo slice between M0b and M1 (docs/build-order.md; specs/d1-demo-slice.md §3.1).
+      '20261011120000_d1_authoring.sql',
+    ].map((name) => ({ name, isDirectory: false }));
     expect(validateEntries(entries, NOW)).toEqual([]);
   });
 

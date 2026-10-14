@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Migration rules (spec specs/m0-foundations.md §8.4, AT-17).
 //   node scripts/check-migrations.mjs [--base <ref>]     (else $MIGRATIONS_BASE, else `main`)
-// 1. every entry in supabase/migrations/ is a file named ^\d{14}_m\d{1,2}[ab]?_[a-z0-9_]+\.sql$
+// 1. every entry in supabase/migrations/ is a file named ^\d{14}_(m\d{1,2}[ab]?|d1)_[a-z0-9_]+\.sql$
+//    (d1 = the demo slice between M0b and M1, docs/build-order.md, specs/d1-demo-slice.md §3.1)
 //    (a missing directory counts as "no migrations" only while supabase/config.toml is also missing)
 // 2. the 14 digits are a real UTC timestamp, no later than now + 1 day
 // 3. versions are unique
@@ -16,7 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const MIGRATIONS_DIR = 'supabase/migrations';
-export const NAME_RE = /^(\d{14})_m\d{1,2}[ab]?_[a-z0-9_]+\.sql$/;
+export const NAME_RE = /^(\d{14})_(?:m\d{1,2}[ab]?|d1)_[a-z0-9_]+\.sql$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const violation = (p, message) => ({ path: p, message });
@@ -53,7 +54,7 @@ export function validateEntries(entries, now = new Date()) {
       out.push(
         violation(
           rel(name),
-          'name must match <14-digit UTC timestamp>_m<N>[a|b]_<snake_case>.sql (create it with `pnpm exec supabase migration new`)',
+          'name must match <14-digit UTC timestamp>_m<N>[a|b]_<snake_case>.sql or _d1_<snake_case>.sql (create it with `pnpm exec supabase migration new`)',
         ),
       );
       continue;
