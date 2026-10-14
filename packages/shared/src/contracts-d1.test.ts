@@ -32,6 +32,7 @@ import {
   allObjectsStrict,
   keysMatching,
   schemaKeys,
+  schemaNodes,
   sharedNodes,
 } from './contracts-schema-walk.js';
 
@@ -668,6 +669,12 @@ describe('QualityCard and IntegrityCard (rule 1, rule 6)', () => {
         timeline: [{ ...gap, entryKind: 'flag', ruleId: 'R', tier: 'T3', flagState: 'pending' }],
       }),
     ).toBe(false);
+    // F7: a flag entry always names a family, and it is never connectivity (stricter than the table CHECK)
+    expect(ok(IntegrityCard, { ...ready, timeline: [{ ...entry, family: null }] })).toBe(false);
+    expect(ok(IntegrityCard, { ...ready, timeline: [{ ...entry, family: 'connectivity' }] })).toBe(
+      false,
+    );
+    expect(ok(IntegrityCard, { ...ready, timeline: [{ ...context, family: null }] })).toBe(true);
     expect(ok(IntegrityCard, { ...ready, timeline: [{ ...entry, ruleId: null }] })).toBe(false); // a flag carries its rule
     expect(ok(IntegrityCard, { ...ready, timeline: [{ ...context, ruleId: 'D1-X' }] })).toBe(false); // context carries none
     expect(ok(IntegrityCard, { ...ready, timeline: [{ ...entry, signalKind: 'copy' }] })).toBe(
@@ -855,6 +862,9 @@ describe('card row schemas (migration 3)', () => {
     expect(ok(IntegrityTimelineEntryRow, { ...tRow, flag_state: 'not_used' })).toBe(false); // pending only in D1 (L-3)
     expect(ok(IntegrityTimelineEntryRow, { ...tRow, flag_state: null })).toBe(false); // a flag carries its state
     expect(ok(IntegrityTimelineEntryRow, { ...tRow, entry_kind: 'context' })).toBe(false); // context carries no rule
+    // F7: stricter than the table CHECK: the integrity job must always write a family on flag entries
+    expect(ok(IntegrityTimelineEntryRow, { ...tRow, family: null })).toBe(false);
+    expect(ok(IntegrityTimelineEntryRow, { ...tRow, family: 'connectivity' })).toBe(false);
     const context = {
       ...tRow,
       entry_kind: 'context',
@@ -943,5 +953,49 @@ describe('every D1 schema', () => {
         name,
       ).toEqual([]);
     }
+  });
+});
+
+// ---- The schema walker itself (F5): a helper that silently skips a node would make every sweep vacuous ---------------
+
+describe('contracts-schema-walk', () => {
+  it('walks through promise and success wrappers', () => {
+    expect(schemaKeys(z.promise(z.strictObject({ inPromise: z.string() })))).toEqual(['inPromise']);
+    expect(schemaKeys(z.success(z.strictObject({ inSuccess: z.string() })))).toEqual(['inSuccess']);
+  });
+  it('walks through every wrapper the contracts can use', () => {
+    const leaf = () => z.strictObject({ deep: z.string() });
+    for (const wrapped of [
+      leaf().optional(),
+      leaf().nullable(),
+      leaf().default({ deep: 'x' }),
+      leaf().readonly(),
+      leaf().catch({ deep: 'x' }),
+      z.array(leaf()),
+      z.record(z.string(), leaf()),
+      z.union([leaf(), z.string()]),
+      z.tuple([leaf()]),
+      z
+        .string()
+        .transform((s) => s)
+        .pipe(z.string())
+        .or(leaf()),
+    ]) {
+      expect(schemaKeys(wrapped)).toContain('deep');
+    }
+  });
+  it('throws on a def type it does not know instead of skipping it', () => {
+    const unknownNode = { _zod: { def: { type: 'mystery_type' } } } as unknown as z.ZodType;
+    expect(() => schemaNodes(unknownNode)).toThrow(/mystery_type/);
+    expect(() => schemaKeys(z.strictObject({ a: unknownNode }))).toThrow(/mystery_type/);
+    expect(() => allObjectsStrict(unknownNode)).toThrow(/mystery_type/);
+  });
+  it('allObjectsStrict is false when the schema has no object node at all (no vacuous pass)', () => {
+    expect(allObjectsStrict(z.string())).toBe(false);
+    expect(allObjectsStrict(z.enum(['a', 'b']))).toBe(false);
+    expect(allObjectsStrict(z.array(z.string()))).toBe(false);
+    expect(allObjectsStrict(z.strictObject({ a: z.string() }))).toBe(true);
+    expect(allObjectsStrict(z.object({ a: z.string() }))).toBe(false);
+    expect(allObjectsStrict(z.array(z.strictObject({ a: z.string() })))).toBe(true);
   });
 });

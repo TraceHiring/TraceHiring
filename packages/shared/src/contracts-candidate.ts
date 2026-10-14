@@ -179,49 +179,52 @@ export const SessionAttachRes = z.strictObject({ view: SessionView });
 // file names. `item` is the item position shown, or null. The client sends neither tier nor validated.
 const SignalItem = Position.nullable();
 const Count = z.int().min(0).max(10_000_000);
-export const ClientSignal = z.discriminatedUnion('sig', [
-  z.strictObject({
-    seq: Position,
-    t: z.int().min(0),
-    kind: z.literal('signal'),
-    sig: z.literal('paste'),
-    item: SignalItem,
-    len: Count,
-  }),
-  z.strictObject({
-    seq: Position,
-    t: z.int().min(0),
-    kind: z.literal('signal'),
-    sig: z.literal('drop'),
-    item: SignalItem,
-    len: Count,
-    dt: z.enum(['text', 'files', 'other']),
-  }),
-  z.strictObject({
-    seq: Position,
-    t: z.int().min(0),
-    kind: z.literal('signal'),
-    sig: z.literal('untrusted_input'),
-    item: SignalItem,
-    via: z.enum(['keydown', 'beforeinput', 'input']),
-    count: Position,
-  }),
-  z.strictObject({
-    seq: Position,
-    t: z.int().min(0),
-    kind: z.literal('signal'),
-    sig: z.literal('tab_hidden'),
-    item: SignalItem,
-    ms: Count,
-  }),
-  z.strictObject({
-    seq: Position,
-    t: z.int().min(0),
-    kind: z.literal('signal'),
-    sig: z.literal('fullscreen_exit'),
-    item: SignalItem,
-  }),
-]);
+
+/** The five §4.6 signal shapes around an envelope. One definition feeds both the wire event and the R2 file line. */
+const signalVariants = <Envelope extends z.ZodRawShape>(envelope: Envelope) =>
+  [
+    z.strictObject({
+      ...envelope,
+      kind: z.literal('signal'),
+      sig: z.literal('paste'),
+      item: SignalItem,
+      len: Count,
+    }),
+    z.strictObject({
+      ...envelope,
+      kind: z.literal('signal'),
+      sig: z.literal('drop'),
+      item: SignalItem,
+      len: Count,
+      dt: z.enum(['text', 'files', 'other']),
+    }),
+    z.strictObject({
+      ...envelope,
+      kind: z.literal('signal'),
+      sig: z.literal('untrusted_input'),
+      item: SignalItem,
+      via: z.enum(['keydown', 'beforeinput', 'input']),
+      count: Position,
+    }),
+    z.strictObject({
+      ...envelope,
+      kind: z.literal('signal'),
+      sig: z.literal('tab_hidden'),
+      item: SignalItem,
+      ms: Count,
+    }),
+    z.strictObject({
+      ...envelope,
+      kind: z.literal('signal'),
+      sig: z.literal('fullscreen_exit'),
+      item: SignalItem,
+    }),
+  ] as const;
+
+export const ClientSignal = z.discriminatedUnion(
+  'sig',
+  signalVariants({ seq: Position, t: z.int().min(0) }),
+);
 export type ClientSignal = z.infer<typeof ClientSignal>;
 
 /** Envelope: `seq` is the stream's own counter (from 1), `t` the client's monotonic offset in ms (T3 context). */
@@ -247,6 +250,59 @@ export const ClientEvent = z.discriminatedUnion('kind', [
   z.strictObject({ seq: Position, t: z.int().min(0), kind: z.literal('heartbeat') }),
 ]);
 export type ClientEvent = z.infer<typeof ClientEvent>;
+
+// ---- R2 evidence files (written by the SessionDO at submit; read by the jobs; §4.4, L-14, L-21) -------------------
+
+/**
+ * One line of `events.ndjson`: signal and heartbeat events only, never an `answer.*` kind and no text field (L-21).
+ * `gseq` is the session-global number (from 1; the values taken by answer events are skipped), `t` the client offset
+ * in ms and `tServer` the time the DO accepted the event. A signal carries its §4.6 payload exactly.
+ */
+export const EvidenceEventLine = z.discriminatedUnion('kind', [
+  z.discriminatedUnion(
+    'sig',
+    signalVariants({ gseq: Position, streamId: Uuid, t: z.int().min(0), tServer: Time }),
+  ),
+  z.strictObject({
+    gseq: Position,
+    streamId: Uuid,
+    t: z.int().min(0),
+    tServer: Time,
+    kind: z.literal('heartbeat'),
+  }),
+]);
+export type EvidenceEventLine = z.infer<typeof EvidenceEventLine>;
+
+/** `final.json`: the final answers rebuilt from the edit events; `sha256` is of the answer text or option id. */
+export const FinalAnswers = z
+  .strictObject({
+    v: z.literal(1),
+    sessionId: Uuid,
+    answers: z
+      .array(
+        z.discriminatedUnion('kind', [
+          z.strictObject({
+            position: Position,
+            kind: z.literal('text'),
+            text: z.string().max(10000),
+            sha256: Sha256Hex,
+            finalSeq: z.int().min(0),
+          }),
+          z.strictObject({
+            position: Position,
+            kind: z.literal('choice'),
+            choice: OptionId.nullable(),
+            sha256: Sha256Hex,
+            finalSeq: z.int().min(0),
+          }),
+        ]),
+      )
+      .max(100),
+  })
+  .refine((file) => new Set(file.answers.map((a) => a.position)).size === file.answers.length, {
+    message: 'one answer per position',
+  });
+export type FinalAnswers = z.infer<typeof FinalAnswers>;
 
 export const EventBatchReq = z.strictObject({
   streamId: Uuid,
@@ -288,7 +344,13 @@ export const CANDIDATE_ERROR_CODES = Object.keys(CANDIDATE_ERROR_STATUS) as Cand
 export const CandidateErrorCode = z.enum(
   CANDIDATE_ERROR_CODES as [CandidateErrorCode, ...CandidateErrorCode[]],
 );
+/** Every code except `out_of_order` answers exactly `{ error }`. */
 export const CandidateErrorBody = z.strictObject({ error: CandidateErrorCode });
+/** 409 `out_of_order` also carries the stream's high-water mark so the client resends from `ackSeq + 1` (§4.4). */
+export const OutOfOrderBody = z.strictObject({
+  error: z.literal('out_of_order'),
+  ackSeq: z.int().min(0),
+});
 
 // ---- Tokens (ADR-030 §7, spec §4.3) ----------------------------------------------------------------------------
 
@@ -485,20 +547,25 @@ export const SessionGrantRpcIn = z.strictObject({
   rulesAcknowledged: z.literal(true),
   photo: PhotoChoice,
 });
-export const SessionGrantRpcOut = z.strictObject({
-  resume: z.boolean(),
-  startedAt: Time.nullable(),
-  durationSeconds: z.int().min(60).max(7200),
-  sessionToken: Jws,
-  nonce: Nonce,
-  packageKey: z.string().min(1).max(256),
-  packageSha256: Sha256Hex,
-  testVersionId: Uuid,
-  rulesetVersionId: Uuid,
-  consentId: Uuid,
-  adultConfirmed: z.literal(true),
-  sessionId: Uuid,
-});
+export const SessionGrantRpcOut = z
+  .strictObject({
+    resume: z.boolean(),
+    startedAt: Time.nullable(),
+    durationSeconds: z.int().min(60).max(7200),
+    sessionToken: Jws,
+    nonce: Nonce,
+    packageKey: z.string().min(1).max(256),
+    packageSha256: Sha256Hex,
+    testVersionId: Uuid,
+    rulesetVersionId: Uuid,
+    consentId: Uuid,
+    adultConfirmed: z.literal(true),
+    sessionId: Uuid,
+  })
+  // `startedAt` is the stored, set-once start of a session that already began: only a resume has one.
+  .refine((out) => out.startedAt === null || out.resume, {
+    message: 'startedAt belongs to a resume only',
+  });
 
 export const SessionStartedRpcIn = z.strictObject({
   invitationId: Uuid,
@@ -519,3 +586,49 @@ export const CandidateRpcSchemas = {
   sessionGrant: { in: SessionGrantRpcIn, out: SessionGrantRpcOut },
   sessionStarted: { in: SessionStartedRpcIn, out: SessionStartedRpcOut },
 } as const;
+
+// ---- Inferred types for every exported wire schema (the edge, the api and the candidate app import types only) -------
+
+export type LinkToken = z.infer<typeof LinkToken>;
+export type InvitationState = z.infer<typeof InvitationState>;
+export type SessionState = z.infer<typeof SessionState>;
+export type PhotoSkippedReason = z.infer<typeof PhotoSkippedReason>;
+export type LobbyNext = z.infer<typeof LobbyNext>;
+export type OkRes = z.infer<typeof OkRes>;
+
+export type InviteResolveReq = z.infer<typeof InviteResolveReq>;
+export type OtpRequestReq = z.infer<typeof OtpRequestReq>;
+export type OtpRequestRes = z.infer<typeof OtpRequestRes>;
+export type OtpVerifyReq = z.infer<typeof OtpVerifyReq>;
+export type OtpVerifyRes = z.infer<typeof OtpVerifyRes>;
+export type AgeDeclareReq = z.infer<typeof AgeDeclareReq>;
+export type NoticeRes = z.infer<typeof NoticeRes>;
+export type ConsentReq = z.infer<typeof ConsentReq>;
+export type PhotoRes = z.infer<typeof PhotoRes>;
+export type SessionStartReq = z.infer<typeof SessionStartReq>;
+export type SessionStartRes = z.infer<typeof SessionStartRes>;
+export type SessionAttachRes = z.infer<typeof SessionAttachRes>;
+export type EventBatchReq = z.infer<typeof EventBatchReq>;
+export type EventBatchAck = z.infer<typeof EventBatchAck>;
+export type SubmitReq = z.infer<typeof SubmitReq>;
+export type CandidateErrorBody = z.infer<typeof CandidateErrorBody>;
+export type OutOfOrderBody = z.infer<typeof OutOfOrderBody>;
+
+export type InviteResolveRpcIn = z.infer<typeof InviteResolveRpcIn>;
+export type InviteResolveRpcOut = z.infer<typeof InviteResolveRpcOut>;
+export type MessagingSendRpcIn = z.infer<typeof MessagingSendRpcIn>;
+export type MessagingSendRpcOut = z.infer<typeof MessagingSendRpcOut>;
+export type LobbyMintRpcIn = z.infer<typeof LobbyMintRpcIn>;
+export type LobbyMintRpcOut = z.infer<typeof LobbyMintRpcOut>;
+export type AgeDeclareRpcIn = z.infer<typeof AgeDeclareRpcIn>;
+export type AgeDeclareRpcOut = z.infer<typeof AgeDeclareRpcOut>;
+export type NoticeGetRpcIn = z.infer<typeof NoticeGetRpcIn>;
+export type NoticeGetRpcOut = z.infer<typeof NoticeGetRpcOut>;
+export type ConsentRecordRpcIn = z.infer<typeof ConsentRecordRpcIn>;
+export type ConsentRecordRpcOut = z.infer<typeof ConsentRecordRpcOut>;
+export type PhotoPermitRpcIn = z.infer<typeof PhotoPermitRpcIn>;
+export type PhotoPermitRpcOut = z.infer<typeof PhotoPermitRpcOut>;
+export type SessionGrantRpcIn = z.infer<typeof SessionGrantRpcIn>;
+export type SessionGrantRpcOut = z.infer<typeof SessionGrantRpcOut>;
+export type SessionStartedRpcIn = z.infer<typeof SessionStartedRpcIn>;
+export type SessionStartedRpcOut = z.infer<typeof SessionStartedRpcOut>;

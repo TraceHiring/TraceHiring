@@ -1,7 +1,11 @@
 // D1 candidate wire contracts (specs/d1-demo-slice.md §4.2-§4.6). Synthetic values only; no secret-shaped literals.
-import { describe, expect, it } from 'vitest';
-import type { z } from 'zod';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import { z } from 'zod';
+import * as Candidate from './contracts-candidate.js';
 import {
+  EvidenceEventLine,
+  FinalAnswers,
+  OutOfOrderBody,
   AgeDeclareReq,
   AgeDeclareRpcIn,
   AgeDeclareRpcOut,
@@ -51,7 +55,12 @@ import {
   TestPackage,
   discardIdentityKeys,
 } from './contracts-candidate.js';
-import { allObjectsStrict, keysMatching, schemaKeys } from './contracts-schema-walk.js';
+import {
+  allObjectsStrict,
+  keysMatching,
+  schemaKeys,
+  schemaNodes,
+} from './contracts-schema-walk.js';
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const T0 = '2026-10-14T10:00:00.000Z';
@@ -437,9 +446,27 @@ describe('CandidateError codes (§4.2)', () => {
   });
   it('the body is {error: code} and never echoes input', () => {
     expect(CandidateErrorBody.parse({ error: 'out_of_order' })).toEqual({ error: 'out_of_order' });
-    expect(ok(CandidateErrorBody, { error: 'out_of_order', ackSeq: 4 })).toBe(false);
     expect(ok(CandidateErrorBody, { error: { code: 'out_of_order' } })).toBe(false);
     expect(ok(CandidateErrorBody, { error: 'something <script>' })).toBe(false);
+  });
+  it('every code other than out_of_order stays a strict {error} body (F1)', () => {
+    for (const code of CANDIDATE_ERROR_CODES) {
+      expect(ok(CandidateErrorBody, { error: code, ackSeq: 4 }), code).toBe(false);
+      expect(ok(CandidateErrorBody, { error: code }), code).toBe(true);
+    }
+  });
+  it('out_of_order carries ackSeq = hw (§4.4) and nothing else', () => {
+    expect(OutOfOrderBody.parse({ error: 'out_of_order', ackSeq: 4 })).toEqual({
+      error: 'out_of_order',
+      ackSeq: 4,
+    });
+    expect(ok(OutOfOrderBody, { error: 'out_of_order', ackSeq: 0 })).toBe(true);
+    expect(ok(OutOfOrderBody, { error: 'out_of_order' })).toBe(false);
+    expect(ok(OutOfOrderBody, { error: 'out_of_order', ackSeq: -1 })).toBe(false);
+    expect(ok(OutOfOrderBody, { error: 'out_of_order', ackSeq: 1.5 })).toBe(false);
+    expect(ok(OutOfOrderBody, { error: 'closed', ackSeq: 4 })).toBe(false);
+    expect(ok(OutOfOrderBody, { error: 'out_of_order', ackSeq: 4, hw: 4 })).toBe(false);
+    expectTypeOf<OutOfOrderBody>().toEqualTypeOf<{ error: 'out_of_order'; ackSeq: number }>();
   });
 });
 
@@ -726,6 +753,8 @@ describe('CandidateRpc method schemas (§4.2)', () => {
     };
     expect(SessionGrantRpcOut.parse(out)).toEqual(out);
     expect(ok(SessionGrantRpcOut, { ...out, resume: true, startedAt: T0 })).toBe(true);
+    expect(ok(SessionGrantRpcOut, { ...out, resume: true, startedAt: null })).toBe(true);
+    expect(ok(SessionGrantRpcOut, { ...out, resume: false, startedAt: T0 })).toBe(false); // F4
     expect(ok(SessionGrantRpcOut, { ...out, adultConfirmed: false })).toBe(false);
     expect(ok(SessionGrantRpcOut, { ...out, durationSeconds: 0 })).toBe(false);
     expect(ok(SessionGrantRpcOut, { ...out, score: 1 })).toBe(false);
@@ -792,5 +821,241 @@ describe('candidate-facing responses carry no score, band, grade, outcome, cutof
       ...Object.values(CandidateRpcSchemas).flatMap((pair) => [pair.in, pair.out]),
     ];
     for (const schema of all) expect(allObjectsStrict(schema)).toBe(true);
+  });
+});
+
+// ---- The two R2 evidence files (F2, §4.4, L-21) -------------------------------------------------------------------
+
+describe('EvidenceEventLine (events.ndjson, L-21, rule 7)', () => {
+  const base = { gseq: 7, streamId: id(31), t: 1200, tServer: T1 };
+  const lines: Record<string, Record<string, unknown>> = {
+    heartbeat: { ...base, kind: 'heartbeat' },
+    paste: { ...base, kind: 'signal', sig: 'paste', item: 2, len: 120 },
+    'paste outside an item': { ...base, kind: 'signal', sig: 'paste', item: null, len: 0 },
+    drop: { ...base, kind: 'signal', sig: 'drop', item: 2, len: 10, dt: 'files' },
+    untrusted_input: {
+      ...base,
+      kind: 'signal',
+      sig: 'untrusted_input',
+      item: 2,
+      via: 'input',
+      count: 3,
+    },
+    tab_hidden: { ...base, kind: 'signal', sig: 'tab_hidden', item: 2, ms: 4000 },
+    fullscreen_exit: { ...base, kind: 'signal', sig: 'fullscreen_exit', item: null },
+  };
+  it.each(Object.entries(lines))('accepts %s', (_name, line) => {
+    expect(EvidenceEventLine.parse(line)).toEqual(line);
+  });
+  it('holds signal and heartbeat only: no answer.* kind, whatever else it carries', () => {
+    expect(
+      ok(EvidenceEventLine, { ...base, kind: 'answer.text', item: 1, p: 0, d: 0, i: 'x' }),
+    ).toBe(false);
+    expect(ok(EvidenceEventLine, { ...base, kind: 'answer.choice', item: 1, option: 'a' })).toBe(
+      false,
+    );
+    expect(ok(EvidenceEventLine, { ...base, kind: 'answer' })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...base, kind: 'keystroke' })).toBe(false);
+  });
+  it('uses the session-global gseq (from 1) and the server time, not the per-stream seq', () => {
+    expect(ok(EvidenceEventLine, { ...lines.heartbeat, gseq: 0 })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.heartbeat, gseq: 1.5 })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.heartbeat, seq: 3 })).toBe(false);
+    const noGseq = { ...lines.heartbeat, gseq: undefined };
+    expect(ok(EvidenceEventLine, noGseq)).toBe(false);
+    const noServerTime = { ...lines.heartbeat, tServer: undefined };
+    expect(ok(EvidenceEventLine, noServerTime)).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.heartbeat, tServer: 'yesterday' })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.heartbeat, t: -1 })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.heartbeat, streamId: 'x' })).toBe(false);
+  });
+  it('a heartbeat has no payload; a signal has exactly its §4.6 payload', () => {
+    expect(ok(EvidenceEventLine, { ...lines.heartbeat, payload: {} })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.heartbeat, item: 1 })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.paste, dt: 'text' })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.paste, len: undefined })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.drop, dt: 'html' })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.untrusted_input, count: 0 })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.tab_hidden, ms: -1 })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.paste, sig: 'copy' })).toBe(false);
+    expect(ok(EvidenceEventLine, { ...lines.paste, extra: 1 })).toBe(false);
+    for (const key of ['text', 'content', 'clipboard', 'answer', 'name', 'fileName', 'file']) {
+      expect(ok(EvidenceEventLine, { ...lines.paste, [key]: 'x' }), key).toBe(false);
+      expect(ok(EvidenceEventLine, { ...lines.heartbeat, [key]: 'x' }), key).toBe(false);
+    }
+  });
+  it('carries exactly the client signal payload, minus the client seq', () => {
+    const payloadKeys = (schema: z.ZodType) =>
+      schemaKeys(schema).filter((key) => !['seq', 'gseq', 'streamId', 'tServer'].includes(key));
+    expect(payloadKeys(EvidenceEventLine)).toEqual(payloadKeys(ClientEvent).filter(isSignalKey));
+  });
+  it('no key at any depth names text, content, clipboard, answer, name or file (L-21, rule 7)', () => {
+    expect(keysMatching(EvidenceEventLine, /text|content|clipboard|answer|name|file/i)).toEqual([]);
+    expect(schemaKeys(EvidenceEventLine)).toEqual([
+      'count',
+      'dt',
+      'gseq',
+      'item',
+      'kind',
+      'len',
+      'ms',
+      'sig',
+      'streamId',
+      't',
+      'tServer',
+      'via',
+    ]);
+  });
+  it('is strict at every depth', () => {
+    expect(allObjectsStrict(EvidenceEventLine)).toBe(true);
+  });
+  it('infers the line type', () => {
+    expectTypeOf<EvidenceEventLine>().toMatchTypeOf<{
+      gseq: number;
+      kind: 'signal' | 'heartbeat';
+    }>();
+  });
+});
+
+/** Keys of the signal envelope and payload (everything in ClientEvent except answer-only keys). */
+function isSignalKey(key: string): boolean {
+  return !['p', 'd', 'i', 'option'].includes(key);
+}
+
+describe('FinalAnswers (final.json, §4.4)', () => {
+  const text = { position: 1, kind: 'text', text: 'my answer', sha256: HEX, finalSeq: 9 };
+  const choice = { position: 2, kind: 'choice', choice: 'a', sha256: HEX, finalSeq: 4 };
+  const file = { v: 1, sessionId: id(60), answers: [text, choice] };
+  it('accepts text and choice answers', () => {
+    expect(FinalAnswers.parse(file)).toEqual(file);
+    expect(ok(FinalAnswers, { ...file, answers: [] })).toBe(true);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...choice, choice: null }] })).toBe(true); // cleared
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, text: '' }] })).toBe(true);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, finalSeq: 0 }] })).toBe(true);
+  });
+  it('text iff kind text, choice iff kind choice', () => {
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, choice: 'a' }] })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...choice, text: 'x' }] })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, text: undefined }] })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...choice, choice: undefined }] })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, kind: 'choice' }] })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, kind: 'audio' }] })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, text: null }] })).toBe(false);
+  });
+  it('bounds: text <= 10000, sha256 64 hex, positions and finalSeq integers', () => {
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, text: 'x'.repeat(10000) }] })).toBe(
+      true,
+    );
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, text: 'x'.repeat(10001) }] })).toBe(
+      false,
+    );
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, sha256: 'abc' }] })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, sha256: 'A'.repeat(64) }] })).toBe(
+      false,
+    );
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, position: 0 }] })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, finalSeq: -1 }] })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, finalSeq: 1.5 }] })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...choice, choice: '' }] })).toBe(false);
+  });
+  it('one answer per position', () => {
+    expect(ok(FinalAnswers, { ...file, answers: [text, { ...choice, position: 1 }] })).toBe(false);
+  });
+  it('is versioned, bound to a session and strict', () => {
+    expect(ok(FinalAnswers, { ...file, v: 2 })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, sessionId: 'x' })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, extra: 1 })).toBe(false);
+    expect(ok(FinalAnswers, { ...file, answers: [{ ...text, extra: 1 }] })).toBe(false);
+    expect(ok(FinalAnswers, { v: 1, answers: [] })).toBe(false);
+    expect(allObjectsStrict(FinalAnswers)).toBe(true);
+  });
+  it('carries no score, band, grade, outcome, cutoff, key or rubric (rules 1, 5)', () => {
+    expect(keysMatching(FinalAnswers, /score|band|grade|outcome|cutoff|answerKey|rubric/i)).toEqual(
+      [],
+    );
+  });
+  it('infers the file type', () => {
+    expectTypeOf<FinalAnswers>().toHaveProperty('v').toEqualTypeOf<1>();
+  });
+});
+
+// ---- Exported types (F3): every exported wire schema has a same-named type ---------------------------------------------
+
+describe('exported types', () => {
+  it('infer the wire shapes (compile-time; typecheck is the assertion)', () => {
+    expectTypeOf<Candidate.OtpRequestReq>().toEqualTypeOf<{ token: string }>();
+    expectTypeOf<Candidate.OtpVerifyReq>().toEqualTypeOf<{ token: string; code: string }>();
+    expectTypeOf<Candidate.AgeDeclareReq>().toEqualTypeOf<{ adult: boolean }>();
+    expectTypeOf<Candidate.SubmitReq>().toEqualTypeOf<{ streamId: string; finalSeq: number }>();
+    expectTypeOf<Candidate.CandidateErrorBody>().toEqualTypeOf<{
+      error: Candidate.CandidateErrorCode;
+    }>();
+    expectTypeOf<Candidate.OkRes>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Candidate.EventBatchAck>().toHaveProperty('ackSeq').toEqualTypeOf<number>();
+    expectTypeOf<Candidate.EventBatchReq>().toHaveProperty('events').toEqualTypeOf<ClientEvent[]>();
+    expectTypeOf<Candidate.SessionGrantRpcOut>().toHaveProperty('resume').toEqualTypeOf<boolean>();
+    expectTypeOf<Candidate.SessionStartRes>().toMatchTypeOf<
+      { sessionToken: string } | { state: 'submitted' }
+    >();
+  });
+});
+
+// ---- Rule sweeps over every exported schema (F6) ---------------------------------------------------------------------
+
+/** Exported schemas with no object node (enums and formats). They are checked to be object-free instead. */
+const SCALAR_EXPORTS = [
+  'LinkToken',
+  'InvitationState',
+  'SessionState',
+  'PhotoSkippedReason',
+  'LobbyNext',
+  'CandidateErrorCode',
+];
+const candidateExports = (Object.entries(Candidate) as [string, unknown][]).filter(
+  (entry): entry is [string, z.ZodType] => entry[1] instanceof z.ZodType,
+);
+const candidateObjectExports = candidateExports.filter(([name]) => !SCALAR_EXPORTS.includes(name));
+
+describe('every candidate schema export (F6)', () => {
+  it('the sweep sees the contracts it must (guards against an empty or shrunk sweep)', () => {
+    const names = candidateExports.map(([name]) => name);
+    for (const name of [
+      'Receipt',
+      'SessionView',
+      'ClientEvent',
+      'EventBatchReq',
+      'EvidenceEventLine',
+      'FinalAnswers',
+      'OutOfOrderBody',
+      'SessionMirrorMessage',
+      'TestPackage',
+      'SessionGrantRpcOut',
+      'CandidateTokenClaims',
+      ...SCALAR_EXPORTS,
+    ]) {
+      expect(names, name).toContain(name);
+    }
+    expect(candidateObjectExports.length).toBeGreaterThan(40);
+  });
+  it('the scalar exports really are object-free, so they are the only exemption', () => {
+    for (const name of SCALAR_EXPORTS) {
+      const schema = Candidate[name as keyof typeof Candidate] as z.ZodType;
+      expect(allObjectsStrict(schema), name).toBe(false);
+      expect(schemaNodes(schema).size, name).toBeGreaterThan(0);
+    }
+  });
+  it.each(candidateExports)('%s: no combined-result key (rule 1)', (_name, schema) => {
+    expect(keysMatching(schema, /overall|combined|total|trust|honesty|composite/i)).toEqual([]);
+  });
+  it.each(candidateExports)('%s: nothing from the never-build list (rule 7)', (_name, schema) => {
+    expect(
+      keysMatching(
+        schema,
+        /emotion|stress|personality|gaze|ai_?likeness|voiceprint|faceMatch|face_template|asn$/i,
+      ),
+    ).toEqual([]);
+  });
+  it.each(candidateObjectExports)('%s: strict at every depth', (_name, schema) => {
+    expect(allObjectsStrict(schema)).toBe(true);
   });
 });

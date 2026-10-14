@@ -328,8 +328,10 @@ const entryShapeOk = (e: {
   hasTier: boolean;
   hasFlagState: boolean;
 }) =>
+  // Stricter than the table CHECK (F7): a flag entry also names its family, and never `connectivity`. The integrity
+  // job must therefore always write a family on flag entries.
   (e.entryKind === 'flag'
-    ? e.hasRule && e.hasTier && e.hasFlagState
+    ? e.hasRule && e.hasTier && e.hasFlagState && e.family !== null && e.family !== 'connectivity'
     : !e.hasRule && !e.hasTier && !e.hasFlagState) &&
   (e.signalKind === 'connectivity_gap') === (e.family === 'connectivity') &&
   (e.signalKind !== 'connectivity_gap' || e.entryKind === 'context');
@@ -539,3 +541,23 @@ export const IntegrityTimelineEntryRow = z
     { message: 'timeline entry breaks the table rules' },
   );
 export type IntegrityTimelineEntryRow = z.infer<typeof IntegrityTimelineEntryRow>;
+
+// ---- Inferred types for the exported schemas that had none -----------------------------------------------------------
+
+export type ApiError = z.infer<typeof ApiError>;
+export type TestListResponse = z.infer<typeof TestListResponse>;
+export type CreateTestRequest = z.infer<typeof CreateTestRequest>;
+export type TestDetailResponse = z.infer<typeof TestDetailResponse>;
+export type PublishTestRequest = z.infer<typeof PublishTestRequest>;
+export type PublishTestResponse = z.infer<typeof PublishTestResponse>;
+export type CreateAssignmentRequest = z.infer<typeof CreateAssignmentRequest>;
+export type AssignmentListResponse = z.infer<typeof AssignmentListResponse>;
+export type CreateInvitationRequest = z.infer<typeof CreateInvitationRequest>;
+export type CreateInvitationResponse = z.infer<typeof CreateInvitationResponse>;
+export type InvitationListResponse = z.infer<typeof InvitationListResponse>;
+export type ResultRow = z.infer<typeof ResultRow>;
+export type ResultsListResponse = z.infer<typeof ResultsListResponse>;
+export type ReviewQueueResponse = z.infer<typeof ReviewQueueResponse>;
+export type ReportMetaResponse = z.infer<typeof ReportMetaResponse>;
+export type MediaLinkResponse = z.infer<typeof MediaLinkResponse>;
+export type OutboxListResponse = z.infer<typeof OutboxListResponse>;

@@ -2,7 +2,19 @@
 
 Files (all in `packages/shared/src/`): `contracts-candidate.ts` (+ test), `contracts-d1.ts` (+ test), `contracts-schema-walk.ts` (a test helper, see below). The lead still owns `package.json` exports (`./contracts/candidate`, `./contracts/d1`) and `index.ts`.
 
-Test counts: `contracts-candidate.test.ts` 85, `contracts-d1.test.ts` 113 (198 total). `tsc --noEmit`, `eslint --max-warnings=0` and `prettier --check` pass in `packages/shared`.
+Test counts after the review fixes: `contracts-candidate.test.ts` 264, `contracts-d1.test.ts` 117, `canonical-json.test.ts` 18 (399 in the three files; 1142 across `packages/shared`). `tsc --noEmit`, `eslint --max-warnings=0` and `prettier --check` pass in `packages/shared`.
+
+## Review fixes (F1-F11 part)
+
+- **F1** `OutOfOrderBody` `{error:'out_of_order', ackSeq}` (§4.4: `ackSeq = hw`); `CandidateErrorBody` stays strict `{error}` for every code.
+- **F2** `EvidenceEventLine` (one line of `events.ndjson`: `gseq`, `kind` signal|heartbeat only, `streamId`, `t`, `tServer`, the §4.6 payload) and `FinalAnswers` (`final.json`). No `answer.*` kind and no text/content/clipboard/answer/name/file key at any depth (L-21, rule 7). The five signal shapes come from one factory shared with `ClientSignal`.
+- **F3** every exported schema has a same-named `z.infer` type (candidate and d1).
+- **F4** `SessionGrantRpcOut` refines `startedAt === null || resume`.
+- **F5** the schema walker handles `promise`/`success`, lists every leaf def type, throws on an unknown def type, and `allObjectsStrict` is false when a schema has no object node. The scalar candidate exports (enums, `LinkToken`) are exempted by name in the strictness sweep and proved object-free.
+- **F6** the rule-1 combined-key sweep, the rule-7 never-build sweep and the strictness sweep now run over every `ZodType` export of `contracts-candidate.ts`.
+- **F7** a timeline entry of kind `flag` needs a non-null family that is not `connectivity`. **The contract is stricter than the table CHECK: the integrity job must always write a family on flag entries.**
+- **F9** `CreateTestRequest.workspaceId` is optional (see the org-side list below).
+- **F11 (part)** `canonicalJson` is in `packages/shared/src/canonical-json.ts` (§5.1/§5.2: sorted keys by UTF-16 code unit order, no whitespace, throws on undefined/function/symbol/bigint/non-finite). A test pins SHA-256 of `canonicalJson(d1-v1.json)` = `c862bf65...96ca0e` (matches). The `index.ts` export is the lead's.
 
 ## Extra file: `contracts-schema-walk.ts`
 
@@ -46,7 +58,7 @@ A small helper (not product code) that walks a zod v4 schema: `schemaKeys`, `key
 ## Field shapes the spec left open (org side, `contracts-d1.ts`)
 
 - **`TestListResponse`** rows: `{id, name, status (draft|published|retired), versionNo, invitationCount, createdAt}`. Derived from §6.1 ("name, status, invitations").
-- **`CreateTestRequest`** `{name, durationMinutes?}` (5..120). No workspace field; the api uses the org's default workspace (`tests.workspace_id` is not null and the spec is silent). The cutoff is not in this request: the draft starts at 40 (§6.2) and `UpdateTestDraftRequest` sets it.
+- **`CreateTestRequest`** `{name, durationMinutes?, workspaceId?}` (5..120). `workspaceId` is optional: absent means the org's default workspace (`tests.workspace_id` is not null and the spec is silent); a workspace-scoped recruiter names its own and RLS decides. The cutoff is not in this request: the draft starts at 40 (§6.2) and `UpdateTestDraftRequest` sets it.
 - **`UpdateTestDraftRequest`**: `{name, durationMinutes 5..120, qualityCutoff int 0..100 (required), sections[0..2]}`. A section is `{format, name, weight int 1..100, items[0..10]}`; at most one section per format; total items <= 10; each item's format equals its section's. MCQ item `{format:'mcq', prompt, options[2..6]{id,text}, correctOptionId}` (ids unique, key must be one of them). Written item `{format:'written', prompt, rubric:{criteria[1..8]{id,label,maxPoints 1..100,anchors[1..20],minHits 1..anchors}}}` (criterion ids unique). A half-written draft (no sections, empty sections) validates, as §6.2 says "publish validates".
 - **Weights** are ints 1..100 on the wire (§5.4 says integers >= 1); the DB column is `numeric(5,2)`.
 - **`TestDetailResponse`** `{test:{id,name,createdAt}, version:{id,versionNo,status,durationMinutes,qualityCutoff,publishedAt|null,sections[{id,position,name,format,weight,items[...]}]}}`. Items repeat the draft item plus `id`/`position`. It carries the answer key, so it is org-side only; `status` draft iff `publishedAt` is null.
