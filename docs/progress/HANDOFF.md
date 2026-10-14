@@ -1,5 +1,5 @@
-# HANDOFF — 2026-10-14 09:05 IST
-Reason for stopping: **phase done — D1 SPEC is approved** (AUTOPILOT §2: one phase per session). Usage at stop: 5-hour 46% (resets about 13:20 IST), weekly **88%** (resets about 15:30 IST); chat context 65%.
+# HANDOFF — 2026-10-14 10:50 IST
+Reason for stopping: **weekly usage 91%** (CLAUDE.md: start no new task at 90%; resets about 15:30 IST); 5-hour 69%. **D1 is in BUILD, Wave 0 (lead-only)**, since H6 Sentry is not done yet.
 The next session may be a new Claude Code on another account. Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 paste prompt).
 
 ## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M8 = closed beta → M9 … M13)
@@ -7,6 +7,7 @@ The next session may be a new Claude Code on another account. Start from `docs/p
 - **M0a:** REVIEW and FIX are done; it stopped before CLOSE (founder gate: the GitHub plan). `milestone/m0a` @ `7dc8c0d` = `cp/m0a-06`.
 - **M0b:** BUILD, REVIEW and FIX are done; **no open Medium**. CLOSE waits for `m0a-reviewed` and the staging run. `milestone/m0b` @ `56c2641` = **`cp/m0b-05`**.
 - **D1 (Demo slice): SPEC DONE: `specs/d1-demo-slice.md` revision 4, "Spec approved by autopilot reviewers"** (`a44c1f6`). Reviews (`docs/reviews/D1-spec-review.md`): Opus spec review of rev 1; Opus spec and Opus database reviews of rev 2b; Sonnet confirming spec and database reviews of rev 3 (both APPROVE WITH MINOR FIXES, all applied). **Next phase: D1 BUILD**, gated on the founder's H6 Sentry.
+- **D1 BUILD Wave 0 started** (founder: continue in the same chat): draft PR **TraceHiring/TraceHiring#4** (`d1/integration` → `main`, CI only). Day-one spike merged (`b08867f`): DC-D2, D3, D4 and D7 **PASS locally**, staging halves not run. **ADR-031 accepted (autopilot): `postgres` 3.4.9** (`497c210`). Spec §8 records the results.
 
 ## Where we are
 - **`d1/integration`** (worktree `.claude/worktrees/d1-integration`; enter it with `EnterWorktree` path) is cut from `milestone/m0b` @ `cp/m0b-05`. Its tip is this handoff, on top of `acd3f47` (spec revision 2, section 3).
@@ -32,15 +33,15 @@ The next session may be a new Claude Code on another account. Start from `docs/p
 
 ## Next step (in order) — D1 BUILD (fresh session)
 1. **Founder gate first:** H6 Sentry (FOUNDER-QUEUE). No BUILD writer starts before H6 is done and AT-9-sentry (AT-D22, written by the lead) is green (spec D1-18, §11 Wave 0). Also useful before staging: enable R2, widen the `staging` env to `d1/**` and `milestone/**`, and the Cloudflare token roll (FOUNDER-QUEUE rows).
-2. **Wave 0 (lead only, spec §11):**
-   - day-one checks DC-D1…DC-D9 (Queues, DO, R2 on the plan; ES256 in workerd; service bindings; Postgres driver; Workers Free CPU; Playwright), recording each result in spec §8;
-   - ADR-031 (Postgres driver for Workers);
-   - ADR-030 acceptance text;
-   - the migrations and `rls_d1_*` pgTAP, red first;
-   - the MT-11 allow-list additions and MT-15;
-   - `@trace/shared/contracts/d1`;
-   - skeletons, boundaries, wrangler bindings, ci.yml;
-   - AT-D22.
+2. **Wave 0 (lead only, spec §11), remaining:**
+   - DC-D5, D6, D8, D9 and the staging halves of D1/D2/D3/D7 (the staging ones after the founder's R2, Cloudflare token and staging DB URL rows). Done: DC-D2, D3, D4, D7 local; ADR-031.
+   - ADR-030 acceptance text (format plus edge verification).
+   - **The migrations and `rls_d1_*` pgTAP, red first** (spec §3.1/§3.6, about 745 assertions across 19 files; lead-only; the biggest item, likely more than one session).
+   - MT-11 allow-list additions and MT-15.
+   - `@trace/shared/contracts/d1`.
+   - Add `postgres` 3.4.9 to the pnpm catalog.
+   - Skeletons, ESLint boundary elements (`@trace/band-engine`, `e2e`), wrangler bindings, ci.yml.
+   - AT-D22 (needs H6).
 3. **Then the writer streams** R1/R3/C1 → R2/R4/C2 → R5 (≤ 3 at once, own worktrees, reviews per stream), with a full `pnpm verify` and Linux CI before each merge. Open a draft PR `d1/integration` → `main` (CI only) at BUILD start.
 4. Founder queue walkthrough: the founder asked to go through FOUNDER-QUEUE one by one **later**. The ordered walkthrough (15 steps, starting with the Cloudflare token roll) was given in chat on 2026-10-14; redo it from the file when asked.
 
