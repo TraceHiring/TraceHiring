@@ -28,3 +28,10 @@ Verified clean by the reviewer:
 | S12 | Minor | §11: nobody owns `CandidateRpc`, `DemoOutboxDO`, `apps/candidate/public/_headers`; C1/C2 reviewers undefined | Assign them to R-streams; C1/C2 get spec + security reviewers (security-reviewer is mandatory for tokens, media and auth) |
 
 Next: revision 2 (lead plus writers), then the Opus database-reviewer and a confirming spec re-review, both fresh.
+
+## Revision 2b (commit `3ebafdd`) — Opus spec re-review and Opus database-reviewer, in parallel, fresh context, 2026-10-14
+**Spec re-review: CHANGES REQUIRED.** S1–S9, S11 and S12 resolved; S10 partly. New findings SR-1…SR-11 (6 Major: the event-seq collision across streams, null-cutoff semantics, an E2E assign step the roles forbid, no mechanism for L-12, an unrunnable sweep, one endpoint returning both cards; 5 Minor). Clean: rules 2, 3, 5, 6, 7, 8 and 9; exit gate and plan §5 mapped; AT numbers unique; §11 streams; no scope creep.
+
+**Database review: CHANGES REQUIRED.** Probe: a rolled-back prototype of the cards, fill triggers, guard, `reports` FKs and column grants gives **0 rows from MT-5a/5c/5d**, so the rule-1 wall holds. MT-14 `login_dml` fires for a login role with default inherit (DB-7). Findings DB-1…DB-15: 6 Major (`membership_counts` needs the JWT, which is absent on the api connection; media audit rows have no viewer; missing `test_id`/`workspace_id` scoping columns; no guard tying `review_state` to `meets_cutoff` (rule 6); idempotency grants; the sweep cannot read the cards) and 9 Minor.
+
+**Dispositions:** spec §1.7, L-14…L-36 (lead). Conflicting suggestions settled: the cutoff is mandatory (SR-2 vs DB-13), and each worker gets job-bound `idempotency_keys` grants (SR-7 vs DB-5).
