@@ -53,7 +53,7 @@ describe('@trace/db-types', () => {
     expectTypeOf<keyof Database['public']['Functions']>().toEqualTypeOf<never>();
   });
 
-  it('carries the M0b enums', () => {
+  it('carries the M0b enums and the two D1 migration-1 enums', () => {
     expect(Object.keys(Constants.public.Enums).sort()).toEqual(
       [
         'actor_kind',
@@ -62,7 +62,9 @@ describe('@trace/db-types', () => {
         'org_kind',
         'org_role',
         'org_status',
+        'section_format',
         'staff_grant_scope',
+        'test_version_status',
         'workspace_kind',
       ].sort(),
     );
