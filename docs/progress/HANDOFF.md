@@ -7,7 +7,7 @@ Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 pas
 - **Phase: D1 BUILD, Wave 0 (lead-only).** Done: AT-D22; migrations **1-4** placed, reviewed, fixed; all `rls_d1_*` files of spec §3.6 placed (incl. `media_view`, `candidate_denied`, `invariants`); **contracts** `@trace/shared/contracts/{candidate,d1}` + `canonical-json` placed and reviewed; ADR-030 accepted in part. `SIGNAL_CATALOG` and `canonicalNoticeText` placed (`b625788`). Not done: DC-D5/D6/D8/D9, skeletons, boundaries, wrangler/CSP/ci changes (Next step).
 
 ## Where we are
-- **`d1/integration`** (worktree `.claude/worktrees/d1-integration`) tip = this handoff commit; code tip **`b625788`** (`verify:fast` exit 0; not yet through a full `pnpm verify` or CI). Last full verify: Full `pnpm verify` **exit 0 at `bbae037`** (00:40 IST): `test:rls` 32 files, rls **2610** (= floor), catalog 142, db-types current; packages/shared 1142 tests.
+- **`d1/integration`** (worktree `.claude/worktrees/d1-integration`) tip = this handoff commit; code tip **`b625788`** (**full `pnpm verify` exit 0 at `3abf88f`**, 00:55 IST: rls 2610, catalog 142; Linux CI on `3abf88f`: migrations, rls, security pass, static was running at stop). Earlier full verify: Full `pnpm verify` **exit 0 at `bbae037`** (00:40 IST): `test:rls` 32 files, rls **2610** (= floor), catalog 142, db-types current; packages/shared 1142 tests.
 - Linux CI (draft PR TraceHiring/TraceHiring#4): green on `f6a0144` and on `87bbc8d`; **all green on `bbae037`** (static, rls, migrations, security).
 - Tag **`cp/d1-01`** = `bbae037` (Wave 0 migrations + tests + contracts; full verify and Linux CI green). Unchanged: `milestone/m0a` `7dc8c0d`, `m0a/integration` `c619525`, `milestone/m0b` = `m0b/integration` `56c2641`, `main` `fe77a87` (never commit on or move `main`).
 - Agent branches kept (never delete; all cherry-picked or copied): `worktree-agent-a1597e43a4cfde273` (`d06c4e5`, test drafts), `worktree-agent-a31277c7fe66088f4` (`33af756`, contracts draft), `worktree-agent-a434893532bb816a7` (`c8c0fb3`, contracts fixes).
@@ -30,7 +30,7 @@ Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 pas
 
 ## Next step (in order)
 1. Verify (below), incl. CI on the handoff commit.
-2. Full `pnpm verify` on the tip and CI on PR #4 (the tip after `bbae037` has only `verify:fast`). Export `canonicalJson` etc. from `index.ts` only if a writer needs the barrel.
+2. Confirm CI `static` on the tip is green. Export `canonicalJson` etc. from `index.ts` only if a writer needs the barrel.
 3. Wave 0 remainder (spec §11): DC-D5 (media link: R2 stream + `MediaLinkDO` burn + canvas CSP), DC-D6 (Playwright Win/Linux), DC-D8 (CPU, needs stages — may slip to Wave 1), DC-D9 (CI E2E stack); `packages/band-engine` and `e2e` skeletons; boundaries (`band-engine`, `e2e` elements); wrangler bindings per §4.2 table (`__API_ORIGIN__` CSP, staging origins on `abhayraj.workers.dev`); jobs `queue`/`scheduled` wrapped by `withErrorReporting`; `ci.yml`/`check-*` changes with tests.
 4. Open DB items carried: m1 m-2 (auto-assign re-add, decide/document), m1 m-4 + m2 n-7 (exact `trace_api` table allow-list in `rls_roles`), m1 m-5 (`test.retire` audit?), m2 m-2 (late `sessionStarted`, decide in R3), m2 n-1 (M3a), m3 n-7 (M4 index).
 5. Then Wave 1 writers R1, R3, C1 (max 3, own worktrees reset to an exact SHA). R3 must implement §6.2 R3-1..R3-9.
