@@ -9,7 +9,9 @@
     "./sentry": "./src/log/sentry.ts",
     "./health": "./src/health.ts",
     "./contracts": "./src/contracts.ts",
-    "./contracts/tenancy": "./src/contracts-tenancy.ts"
+    "./contracts/tenancy": "./src/contracts-tenancy.ts",
+    "./contracts/candidate": "./src/contracts-candidate.ts",
+    "./contracts/d1": "./src/contracts-d1.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",

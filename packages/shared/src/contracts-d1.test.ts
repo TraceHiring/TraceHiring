@@ -110,6 +110,9 @@ describe('test list, create and detail', () => {
     expect(ok(CreateTestRequest, { name: 'x', durationMinutes: 4 })).toBe(false);
     expect(ok(CreateTestRequest, { name: 'x', qualityCutoff: 40 })).toBe(false); // the draft starts at the default
     expect(ok(CreateTestRequest, { name: 'x', orgId: id(1) })).toBe(false);
+    // A workspace-scoped recruiter names its workspace; RLS decides (lead, Wave 0 contracts).
+    expect(ok(CreateTestRequest, { name: 'x', workspaceId: id(2) })).toBe(true);
+    expect(ok(CreateTestRequest, { name: 'x', workspaceId: 'ws-a' })).toBe(false);
   });
   it('TestDetailResponse', () => {
     const detail = {

@@ -49,6 +49,8 @@ export const TestListResponse = z.strictObject({
 export const CreateTestRequest = z.strictObject({
   name: z.string().min(1).max(200),
   durationMinutes: z.int().min(5).max(120).optional(),
+  // Absent: the org's default workspace. A workspace-scoped recruiter names its own; RLS decides.
+  workspaceId: z.uuid().optional(),
 });
 
 const mcqOptionsInput = () =>
