@@ -1,5 +1,5 @@
-# HANDOFF — 2026-10-14 10:50 IST
-Reason for stopping: **weekly usage 91%** (CLAUDE.md: start no new task at 90%; resets about 15:30 IST); 5-hour 69%. **D1 is in BUILD, Wave 0 (lead-only)**, since H6 Sentry is not done yet.
+# HANDOFF — 2026-10-14 11:05 IST
+Reason for stopping: usage. 5-hour 93%, weekly 94% (the founder allowed up to 100% this time). D1 BUILD Wave 0 is in progress (lead-only; H6 Sentry not done).
 The next session may be a new Claude Code on another account. Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 paste prompt).
 
 ## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M8 = closed beta → M9 … M13)
@@ -36,6 +36,7 @@ The next session may be a new Claude Code on another account. Start from `docs/p
 2. **Wave 0 (lead only, spec §11), remaining:**
    - DC-D5, D6, D8, D9 and the staging halves of D1/D2/D3/D7 (the staging ones after the founder's R2, Cloudflare token and staging DB URL rows). Done: DC-D2, D3, D4, D7 local; ADR-031.
    - ADR-030 acceptance text (format plus edge verification).
+   - **NEXT ACTION: place the parked migration-1 drafts** from `docs/progress/d1-wave0-drafts/` (`357919d`). Run `pnpm exec supabase migration new d1_authoring` and paste `d1_authoring.sql.draft`. Copy `tests/*.test.sql.draft` into `supabase/tests/` (drop the `.draft` suffix), run `test:rls` red first, then add the migration and iterate to green. Known gaps: tests that **publish** need migration 3 (the L-8 trigger and the band-rule seed), so move those cases to migration 3 or write migration 3 first; `trace_api` is created in the migration-1 draft (the test writer assumed migration 2); freeze errors accept `42501 TRACE_GUARD` / `P0001 TRACE_FROZEN`. Read both NOTES files first. Raise `rls-min-count` when green, run `pnpm db:types`, and add a `catalog_probe` negative control for a `job_org_id` policy. Done in `357919d`: the MT-11 allow-list and the AUDIT_ACTIONS (+4).
    - **The migrations and `rls_d1_*` pgTAP, red first** (spec §3.1/§3.6, about 745 assertions across 19 files; lead-only; the biggest item, likely more than one session).
    - MT-11 allow-list additions and MT-15.
    - `@trace/shared/contracts/d1`.
