@@ -269,6 +269,16 @@ begin
   if current_setting('role') is distinct from 'authenticated' and not private.is_operator() then
     raise exception 'TRACE_GUARD: invitations are created by org users only' using errcode = '42501';
   end if;
+  -- An app caller must be staff of the test's workspace before anything else is read or locked, so a caller outside it
+  -- (another org, a hiring manager, a reviewer) learns nothing about the test version's state and takes no lock
+  -- (m2 DB review m-1; the same order as consents_guard).
+  if not private.is_operator() and not exists (
+    select 1 from public.tests as t
+    where t.org_id = new.org_id and t.id = new.test_id
+      and t.workspace_id = any (private.my_workspace_ids('{org_owner,admin,recruiter}'))
+  ) then
+    raise exception 'TRACE_GUARD: not allowed to invite to this test' using errcode = '42501';
+  end if;
   -- FOR SHARE: a concurrent retire (NO KEY UPDATE) waits, so the pin is published at insert time (Q20).
   select v.status, v.test_id into v_status, v_test
   from public.test_versions as v where v.org_id = new.org_id and v.id = new.test_version_id for share;
@@ -872,11 +882,17 @@ begin
       where s.org_id = p_org_id and s.id = v_session;
   end if;
 
+  -- The invitation lock and the key check above make this call the first writer, so a unique conflict on a child row
+  -- can only mean the message repeats an item, answer or photo: a malformed message, never a retry. It is refused
+  -- (22023) rather than skipped, so a later duplicate answer can never silently lose to an earlier one (m2 DB review M-1).
   for v_el in select e from jsonb_array_elements(coalesce(p_msg -> 'served', '[]'::jsonb)) as e loop
-    insert into public.session_items (org_id, session_id, item_version_id, position, served_at)
-      values (p_org_id, v_session, (v_el ->> 'itemVersionId')::uuid, (v_el ->> 'position')::int,
-        (v_el ->> 'servedAt')::timestamptz)
-      on conflict do nothing;
+    begin
+      insert into public.session_items (org_id, session_id, item_version_id, position, served_at)
+        values (p_org_id, v_session, (v_el ->> 'itemVersionId')::uuid, (v_el ->> 'position')::int,
+          (v_el ->> 'servedAt')::timestamptz);
+    exception when unique_violation then
+      raise exception 'TRACE_BAD_MIRROR: an item or position is served twice' using errcode = '22023';
+    end;
   end loop;
 
   for v_el in select e from jsonb_array_elements(coalesce(p_msg -> 'responses', '[]'::jsonb)) as e loop
@@ -886,20 +902,26 @@ begin
     if not found then
       raise exception 'TRACE_BAD_MIRROR: a response names an item that was not served' using errcode = '22023';
     end if;
-    insert into public.responses (
-      org_id, session_id, session_item_id, answer_kind, final_text, final_choice, answer_sha256, final_seq, submitted_at
-    ) values (
-      p_org_id, v_session, v_si, v_el ->> 'kind', v_el ->> 'text', v_el ->> 'choice', v_el ->> 'sha256',
-      (v_el ->> 'finalSeq')::int, v_submitted
-    )
-    on conflict do nothing;
+    begin
+      insert into public.responses (
+        org_id, session_id, session_item_id, answer_kind, final_text, final_choice, answer_sha256, final_seq, submitted_at
+      ) values (
+        p_org_id, v_session, v_si, v_el ->> 'kind', v_el ->> 'text', v_el ->> 'choice', v_el ->> 'sha256',
+        (v_el ->> 'finalSeq')::int, v_submitted
+      );
+    exception when unique_violation then
+      raise exception 'TRACE_BAD_MIRROR: an item is answered twice' using errcode = '22023';
+    end;
   end loop;
 
   if jsonb_typeof(v_photo) = 'object' then
-    insert into public.media_objects (org_id, session_id, kind, r2_key, sha256, bytes, mime, blurred_on_device)
-      values (p_org_id, v_session, 'start_photo', v_photo ->> 'key', v_photo ->> 'sha256',
-        (v_photo ->> 'bytes')::int, v_photo ->> 'mime', (v_photo ->> 'blurredOnDevice')::boolean)
-      on conflict do nothing;
+    begin
+      insert into public.media_objects (org_id, session_id, kind, r2_key, sha256, bytes, mime, blurred_on_device)
+        values (p_org_id, v_session, 'start_photo', v_photo ->> 'key', v_photo ->> 'sha256',
+          (v_photo ->> 'bytes')::int, v_photo ->> 'mime', (v_photo ->> 'blurredOnDevice')::boolean);
+    exception when unique_violation then
+      raise exception 'TRACE_BAD_MIRROR: the start photo is already stored' using errcode = '22023';
+    end;
   end if;
 
   update public.invitations as i
@@ -910,6 +932,12 @@ begin
     values (p_org_id, 'session_mirror', v_key, v_session::text, v_submitted + interval '90 days')
     on conflict do nothing;
   return 'stored';
+-- A field of the wrong type (a uuid, int, timestamp or boolean that does not parse) is a malformed message too: the
+-- error contract says 22023, and a job that dead-letters on 22023 must not retry a poison message (m2 DB review m-3).
+exception
+  when invalid_text_representation or invalid_datetime_format or datetime_field_overflow
+    or numeric_value_out_of_range then
+    raise exception 'TRACE_BAD_MIRROR: a field has the wrong type' using errcode = '22023';
 end
 $$;
 revoke execute on function private.mirror_session(uuid, jsonb) from public, anon, authenticated, service_role;
@@ -967,10 +995,11 @@ create policy invitations_update_api on public.invitations for update to trace_a
 revoke update, delete, truncate on public.consents from postgres;
 grant update (id) on public.consents to postgres;
 grant select on public.consents to authenticated, trace_worker, trace_api;
--- id and occurred_at are the api's own (decided 2026-10-14, NOTES D-18/Q-7): a server-chosen uuid is a deterministic key
--- for at-least-once api retries, and occurred_at is the server's consent time. Only trace_api inserts.
+-- id is the api's own (decided 2026-10-14, NOTES D-18/Q-7): a server-chosen uuid is a deterministic key for at-least-once
+-- api retries. occurred_at is not granted: consents_guard always sets it, so a supplied value fails loudly (DB review m-4).
+-- Only trace_api inserts.
 grant insert (id, org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256, language,
-  event, occurred_at) on public.consents to trace_api;
+  event) on public.consents to trace_api;
 create policy consents_select_staff on public.consents for select to authenticated
   using (workspace_id = any ((select private.my_workspace_ids('{org_owner,admin,recruiter}'))::uuid[]));
 create policy consents_select_reviewer on public.consents for select to authenticated
@@ -986,10 +1015,10 @@ create policy consents_insert_api on public.consents for insert to trace_api
 grant select on public.sessions to authenticated, trace_worker, trace_integrity_worker;
 -- §3.3 note 5: the quality worker reads id, org, version ids and state.
 grant select (id, org_id, test_version_id, ruleset_version_id, state) on public.sessions to trace_quality_worker;
--- workspace_id and test_id may be supplied (tests NOTES 8), but sessions_guard always overwrites them from the test
--- version, so a supplied value never sticks.
-grant insert (id, org_id, workspace_id, test_id, test_version_id, ruleset_version_id, invitation_id, consent_id, state,
-  submit_kind, adult_confirmed_at_start, started_at, server_deadline_at, submitted_at, mirror_seq, receipt_ref)
+-- workspace_id and test_id are not granted: sessions_guard always copies them from the test version, so a supplied value
+-- fails loudly instead of being discarded (DB review m-4).
+grant insert (id, org_id, test_version_id, ruleset_version_id, invitation_id, consent_id, state, submit_kind,
+  adult_confirmed_at_start, started_at, server_deadline_at, submitted_at, mirror_seq, receipt_ref)
   on public.sessions to trace_worker;
 grant update (state, submit_kind, submitted_at, mirror_seq) on public.sessions to trace_worker;
 create policy sessions_select_staff on public.sessions for select to authenticated
