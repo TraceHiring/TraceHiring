@@ -8,7 +8,8 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-14 14:45 IST (newest; wins over the lines below):** **H6 Sentry is DONE** (EU region; founder walkthrough steps 1–4 done and verified; step 5, the H4 subdomain, is the founder's next item). D1 Wave 0: migration 1 green; next is AT-D22 (Sentry scrubber + wiring tests, now unblocked), then DB review M-1/m-1, then migration 2 (HANDOFF "Next step"). The founder now works from another Claude Code account.
+- **Update 2026-10-14 19:35 IST (newest; wins over the lines below):** AT-D22 Sentry is **green and reviewed** (D1-18 gate met); DB review m1 M-1/m-1 fixed; **migration 2 placed, reviewed and fixed** (rls 1840); migration-3 tests drafted. Next: full verify + PR #4 CI, then **migration 3** (HANDOFF "Next step" 2).
+- **Update 2026-10-14 14:45 IST:** **H6 Sentry is DONE** (EU region; founder walkthrough steps 1–4 done and verified; step 5, the H4 subdomain, is the founder's next item). D1 Wave 0: migration 1 green; next is AT-D22 (Sentry scrubber + wiring tests, now unblocked), then DB review M-1/m-1, then migration 2 (HANDOFF "Next step"). The founder now works from another Claude Code account.
 - **Update 2026-10-14 13:10 IST:** D1 Wave 0: **migration 1 is placed and green** (`45206c8`, rls 1182). Next: fix the DB review Major M-1 (workspace fence on assignments), then place migration 2 from `docs/progress/d1-wave0-drafts/m2/` (HANDOFF "Next step" 1–3). H6 Sentry still open.
 - **Update 2026-10-14 10:50 IST:** **D1 BUILD Wave 0 has started** (lead-only; H6 Sentry not done): day-one checks DC-D2/D3/D4/D7 pass locally, ADR-031 accepted, draft PR TraceHiring/TraceHiring#4. Next: the migrations and `rls_d1_*` pgTAP red first (HANDOFF "Next step" 2).
 - **Update 2026-10-14 09:05 IST :** **D1 SPEC is approved** (`specs/d1-demo-slice.md` revision 4, `a44c1f6`). The next phase is **D1 BUILD** in a fresh session. It is gated on the founder's H6 Sentry; spec §11 Wave 0 is lead-only. Branch `d1/integration` (worktree `.claude/worktrees/d1-integration`).
@@ -142,10 +143,10 @@ Before changing anything, run HANDOFF "Verify first" and report in 5 lines wheth
 (tip commit, clean tree, verify:fast, pnpm test, PR TraceHiring/TraceHiring#4 CI). If it does not match, stop and
 tell me what differs.
 
-Then do HANDOFF "Next step" in order. Phase: D1 BUILD, Wave 0 (lead-only). H6 Sentry is done, so AT-D22 (the
-Sentry scrubber and its wiring tests) is next, then the DB review fixes M-1/m-1 (docs/reviews/D1-db-review-m1.md,
-tests red first), then migration 2 from docs/progress/d1-wave0-drafts/m2/. No writer stream starts before the
-migrations and contracts are merged and AT-D22 is green.
+Then do HANDOFF "Next step" in order. Phase: D1 BUILD, Wave 0 (lead-only). AT-D22 is green and reviewed and
+migration 2 is placed and reviewed; next is a full pnpm verify and PR TraceHiring/TraceHiring#4 CI, then migration 3
+(place the drafts in docs/progress/d1-wave0-drafts/m3-tests/, tests red first, then delete every D1-M1-SHIM).
+No writer stream starts before the migrations and contracts are merged.
 
 Safety rules (never break these): never commit on or move main; never force-push; never delete or move branches,
 tags (cp/*) or worktrees (.claude/worktrees/agent-* hold earlier work); never rewrite pushed history; never deploy
