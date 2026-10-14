@@ -164,6 +164,26 @@ create policy mt_11_note_org_in on public.mt_11_note
 for select
 to authenticated
 using (org_id in (select unnest((select private.my_org_ids('{admin}'::public.org_role[])))));
+-- FR-1 re-review: IS NOT DISTINCT FROM, a row compare and an EXISTS over the caller's org list are bound too.
+create policy mt_11_note_not_distinct on public.mt_11_note
+for update
+to authenticated
+using (owner_id is not distinct from (select auth.uid()))
+with check (owner_id is not distinct from (select auth.uid()));
+create policy mt_11_note_row_compare on public.mt_11_note
+for delete
+to authenticated
+using ((org_id, owner_id) = ((select (auth.jwt() ->> 'org_id')::uuid), (select auth.uid())));
+create policy mt_11_note_exists_unnest on public.mt_11_note
+for insert
+to authenticated
+with check (
+  exists (
+    select 1
+    from unnest((select private.my_org_ids('{admin}'::public.org_role[]))) as o (id)
+    where o.id = mt_11_note.org_id
+  )
+);
 create policy mt_11_note_scoped_live on public.mt_11_note
 for delete
 to authenticated
@@ -387,9 +407,12 @@ tree_node (oid, clause, ord, piece, end_ord, depth) as (
 -- that is in private or auth, with its schema, its node, whether it depends on the caller and whether it sits
 -- inside an IS [NOT] NULL test (a NULLTEST node), which only asks whether there is a caller. bound (FIX re-review
 -- FR-1): the helper returns boolean itself (a predicate on the caller, such as private.is_operator), or the call
--- sits inside an operator (OPEXPR, SCALARARRAYOPEXPR) or an ANY/IN sub-select that also reads a column (any VAR),
--- such as org_id = any((select private.my_org_ids(...))). A call compared only to a constant, such as
--- (select auth.jwt() ->> 'role') = 'authenticated', or to itself, is not bound: it does not pick rows.
+-- sits inside an operator (OPEXPR, SCALARARRAYOPEXPR, DISTINCTEXPR, NULLIFEXPR, ROWCOMPAREEXPR) or an ANY/IN or
+-- row-compare sub-select that also reads a column (any VAR), such as org_id = any((select private.my_org_ids(...))),
+-- or inside an EXISTS sub-select correlated to the policy's table (a VAR with varlevelsup > 0). A call compared only
+-- to a constant, such as (select auth.jwt() ->> 'role') = 'authenticated', or to itself, is not bound: it does not
+-- pick rows. Still missed (owner M1): an IN sub-select that reads a column of another table but compares the caller
+-- only to a constant.
 tree_call (oid, clause, nspname, ord, caller, null_tested, bound) as (
   select
     fn.oid,
@@ -420,7 +443,16 @@ tree_call (oid, clause, nspname, ord, caller, null_tested, bound) as (
         and (
           op.piece like '{OPEXPR %'
           or op.piece like '{SCALARARRAYOPEXPR %'
+          or op.piece like '{DISTINCTEXPR %'
+          or op.piece like '{NULLIFEXPR %'
+          or op.piece like '{ROWCOMPAREEXPR %'
           or op.piece like '{SUBLINK :subLinkType 2 %'
+          or op.piece like '{SUBLINK :subLinkType 3 %'
+          or op.piece like '{SUBLINK :subLinkType 5 %'
+          or (
+            op.piece like '{SUBLINK :subLinkType 0 %'
+            and substring(v.piece from ':varlevelsup ([0-9]+)')::int > 0
+          )
         )
         and op.ord < fn.ord
         and fn.ord < op.end_ord
@@ -733,9 +765,15 @@ select is_empty(
   $q$
   select v.branch, v.object, v.detail
   from mt_11_run as v
-  where v.object in ('mt_11_note_member_exists on public.mt_11_note', 'mt_11_note_org_in on public.mt_11_note')
+  where v.object in (
+      'mt_11_note_member_exists on public.mt_11_note',
+      'mt_11_note_org_in on public.mt_11_note',
+      'mt_11_note_not_distinct on public.mt_11_note',
+      'mt_11_note_row_compare on public.mt_11_note',
+      'mt_11_note_exists_unnest on public.mt_11_note'
+    )
   $q$,
-  'MT-11: no row for a caller call bound through a correlated EXISTS or an IN sub-select (FR-1 negative control)'
+  'MT-11: no row for a caller call bound through EXISTS, IN, IS NOT DISTINCT FROM or a row compare (FR-1 controls)'
 );
 rollback to savepoint mt_11_negative;
 

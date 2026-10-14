@@ -215,9 +215,12 @@ tree_node (oid, clause, ord, piece, end_ord, depth) as (
 -- that is in private or auth, with its schema, its node, whether it depends on the caller and whether it sits
 -- inside an IS [NOT] NULL test (a NULLTEST node), which only asks whether there is a caller. bound (FIX re-review
 -- FR-1): the helper returns boolean itself (a predicate on the caller, such as private.is_operator), or the call
--- sits inside an operator (OPEXPR, SCALARARRAYOPEXPR) or an ANY/IN sub-select that also reads a column (any VAR),
--- such as org_id = any((select private.my_org_ids(...))). A call compared only to a constant, such as
--- (select auth.jwt() ->> 'role') = 'authenticated', or to itself, is not bound: it does not pick rows.
+-- sits inside an operator (OPEXPR, SCALARARRAYOPEXPR, DISTINCTEXPR, NULLIFEXPR, ROWCOMPAREEXPR) or an ANY/IN or
+-- row-compare sub-select that also reads a column (any VAR), such as org_id = any((select private.my_org_ids(...))),
+-- or inside an EXISTS sub-select correlated to the policy's table (a VAR with varlevelsup > 0). A call compared only
+-- to a constant, such as (select auth.jwt() ->> 'role') = 'authenticated', or to itself, is not bound: it does not
+-- pick rows. Still missed (owner M1): an IN sub-select that reads a column of another table but compares the caller
+-- only to a constant.
 tree_call (oid, clause, nspname, ord, caller, null_tested, bound) as (
   select
     fn.oid,
@@ -248,7 +251,16 @@ tree_call (oid, clause, nspname, ord, caller, null_tested, bound) as (
         and (
           op.piece like '{OPEXPR %'
           or op.piece like '{SCALARARRAYOPEXPR %'
+          or op.piece like '{DISTINCTEXPR %'
+          or op.piece like '{NULLIFEXPR %'
+          or op.piece like '{ROWCOMPAREEXPR %'
           or op.piece like '{SUBLINK :subLinkType 2 %'
+          or op.piece like '{SUBLINK :subLinkType 3 %'
+          or op.piece like '{SUBLINK :subLinkType 5 %'
+          or (
+            op.piece like '{SUBLINK :subLinkType 0 %'
+            and substring(v.piece from ':varlevelsup ([0-9]+)')::int > 0
+          )
         )
         and op.ord < fn.ord
         and fn.ord < op.end_ord
