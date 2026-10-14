@@ -8,8 +8,8 @@ Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 pas
 
 ## Where we are
 - **`d1/integration`** (worktree `.claude/worktrees/d1-integration`) tip = this handoff commit; code tip **`bbae037`**. Full `pnpm verify` **exit 0 at `bbae037`** (00:40 IST): `test:rls` 32 files, rls **2610** (= floor), catalog 142, db-types current; packages/shared 1142 tests.
-- Linux CI (draft PR TraceHiring/TraceHiring#4): green on `f6a0144` and on `87bbc8d`; on `bbae037` migrations, rls and security passed, **static was still running** at handoff (check it first).
-- No `cp/d1-*` tag yet (see Next step 1). Unchanged: `milestone/m0a` `7dc8c0d`, `m0a/integration` `c619525`, `milestone/m0b` = `m0b/integration` `56c2641`, `main` `fe77a87` (never commit on or move `main`).
+- Linux CI (draft PR TraceHiring/TraceHiring#4): green on `f6a0144` and on `87bbc8d`; **all green on `bbae037`** (static, rls, migrations, security).
+- Tag **`cp/d1-01`** = `bbae037` (Wave 0 migrations + tests + contracts; full verify and Linux CI green). Unchanged: `milestone/m0a` `7dc8c0d`, `m0a/integration` `c619525`, `milestone/m0b` = `m0b/integration` `56c2641`, `main` `fe77a87` (never commit on or move `main`).
 - Agent branches kept (never delete; all cherry-picked or copied): `worktree-agent-a1597e43a4cfde273` (`d06c4e5`, test drafts), `worktree-agent-a31277c7fe66088f4` (`33af756`, contracts draft), `worktree-agent-a434893532bb816a7` (`c8c0fb3`, contracts fixes).
 
 ## Done this session (verified)
@@ -28,7 +28,7 @@ Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 pas
 - Migration 4 fixed in place (never applied to a shared DB), as migration 3 was.
 
 ## Next step (in order)
-1. Verify (below); confirm CI `static` on `bbae037` (and the handoff commit) is green; then tag **`cp/d1-01`** on `bbae037` (Wave 0 migrations + tests + contracts; spec §11 item 7) and `git push trace --tags`.
+1. Verify (below), incl. CI on the handoff commit.
 2. Rest of Wave 0 shared pieces (lead, tests first): `SIGNAL_CATALOG` in `@trace/shared` (§4.6, §5.2: versioned, tier T3, `validated` per sig; `tab_hidden`/`fullscreen_exit` context only) and `canonicalNoticeText` (AT-D8). Also export `canonicalJson` from `index.ts` if the writers need the barrel.
 3. Wave 0 remainder (spec §11): DC-D5 (media link: R2 stream + `MediaLinkDO` burn + canvas CSP), DC-D6 (Playwright Win/Linux), DC-D8 (CPU, needs stages — may slip to Wave 1), DC-D9 (CI E2E stack); `packages/band-engine` and `e2e` skeletons; boundaries (`band-engine`, `e2e` elements); wrangler bindings per §4.2 table (`__API_ORIGIN__` CSP, staging origins on `abhayraj.workers.dev`); jobs `queue`/`scheduled` wrapped by `withErrorReporting`; `ci.yml`/`check-*` changes with tests.
 4. Open DB items carried: m1 m-2 (auto-assign re-add, decide/document), m1 m-4 + m2 n-7 (exact `trace_api` table allow-list in `rls_roles`), m1 m-5 (`test.retire` audit?), m2 m-2 (late `sessionStarted`, decide in R3), m2 n-1 (M3a), m3 n-7 (M4 index).
