@@ -1,4 +1,4 @@
--- rls_d1_invitations (spec specs/d1-demo-slice.md ง3.6 row "rls_d1_invitations"; ง3.2 invitations; ง3.3 invitations row + note 2; L-1, L-17, L-31, L-32, L-35). RED first: written from the spec, targets migration <ts2>_d1_invites_sessions.sql (migration 2) on top of
+-- rls_d1_invitations (spec specs/d1-demo-slice.md ยง3.6 row "rls_d1_invitations"; ยง3.2 invitations; ยง3.3 invitations row + note 2; L-1, L-17, L-31, L-32, L-35). RED first: written from the spec, targets migration <ts2>_d1_invites_sessions.sql (migration 2) on top of
 -- migration 1 (authoring) and, where NOTES.md says so, migration 3 (L-8 trigger and org seed). Personas are synthetic (p-<persona>@example.test); no PII.
 -- try() returns 'OK <rows>' or '<sqlstate> <message>'.
 begin;
@@ -44,6 +44,42 @@ create function pg_temp.nt(p_v uuid) returns uuid language sql security definer 
   select notice_version_id from public.test_versions where id = p_v
 $f$;
 grant execute on function pg_temp.nt(uuid) to public;
+
+-- D1-M1-SHIM (remove when migration 3 lands): stands in for migration 3's L-8 trigger, which pins a new
+-- ruleset row and the org notice on every draft insert (spec ยง3.1 row 3, L-8, L-34). It is created only
+-- while integrity.band_rule_versions does not exist, inside this rolled-back transaction, so publish paths
+-- can be exercised against migration 1 alone. Same trigger name as planned for L-8 (sorts after the guard).
+do $shim$
+begin
+  if to_regclass('integrity.band_rule_versions') is null then
+    create function private.d1_m1_shim_pin() returns trigger
+    language plpgsql security definer set search_path = '' as $f$
+    declare
+      v_notice uuid;
+      v_rs uuid;
+    begin
+      select n.id into v_notice from public.notice_versions as n
+      where n.org_id = new.org_id and n.notice_key = 'd1-m1-shim' and n.version = 1;
+      if v_notice is null then
+        insert into public.notice_versions (org_id, notice_key, version, language, body_template, template_sha256)
+        values (new.org_id, 'd1-m1-shim', 1, 'en', 'Synthetic notice body.', repeat('0', 64))
+        returning id into v_notice;
+      end if;
+      insert into public.ruleset_versions (org_id, workspace_id, test_id, version_no, band_rule_version_id, signal_settings)
+      values (new.org_id, new.workspace_id, new.test_id, new.version_no, gen_random_uuid(),
+        '{"paste":{"enabled":true},"drop":{"enabled":true},"untrusted_input":{"enabled":true},'
+        '"tab_hidden":{"enabled":true},"fullscreen_exit":{"enabled":true}}'::jsonb)
+      returning id into v_rs;
+      new.ruleset_version_id := v_rs;
+      new.notice_version_id := v_notice;
+      return new;
+    end
+    $f$;
+    create trigger test_versions_ruleset_seed before insert on public.test_versions
+      for each row execute function private.d1_m1_shim_pin();
+  end if;
+end
+$shim$;
 
 -- Personas: synthetic users, fixed ids, created on the operator path (postgres, no claims).
 insert into auth.users (id, aud, role, email) values
@@ -548,7 +584,7 @@ select matches(pg_temp.try($$insert into public.invitations (org_id, test_id, te
 select matches(pg_temp.try($$insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, adult_confirmed_by_inviter, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000002', 'f1000000-0000-4000-8000-000000000001', 'pin04@example.test', '2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b', true, '2026-12-31 00:00:00+00')$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN|23503)', 'pin: T1 version on a T2 invitation refused');
 select matches(pg_temp.try($$insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, adult_confirmed_by_inviter, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-00000000000b', 'pin05@example.test', '2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c', true, '2026-12-31 00:00:00+00')$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN|23503)', 'pin: another org version refused (composite FK)');
 -- ===== CHECKs (D1-1): synthetic-only contacts, SHA-256 hash =====
-select matches(pg_temp.try($$insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, adult_confirmed_by_inviter, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 'real.person@gmail.com', '2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d', true, '2026-12-31 00:00:00+00')$$), '^23514', 'CHECK: a real-looking mail domain is refused');
+select matches(pg_temp.try($$insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, adult_confirmed_by_inviter, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 'real.person@acme-corp.com', '2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d', true, '2026-12-31 00:00:00+00')$$), '^23514', 'CHECK: a real-looking mail domain is refused');
 select matches(pg_temp.try($$insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, adult_confirmed_by_inviter, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 'a@example.com', '2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e', true, '2026-12-31 00:00:00+00')$$), '^23514', 'CHECK: example.com is not the reserved example.test');
 select matches(pg_temp.try($$insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, adult_confirmed_by_inviter, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 'UPPER@example.test', '2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f', true, '2026-12-31 00:00:00+00')$$), '^23514', 'CHECK: upper-case local part refused');
 select matches(pg_temp.try($$insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, adult_confirmed_by_inviter, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 'a@sub.example.test', '3030303030303030303030303030303030303030303030303030303030303030', true, '2026-12-31 00:00:00+00')$$), '^23514', 'CHECK: a subdomain of example.test refused');
