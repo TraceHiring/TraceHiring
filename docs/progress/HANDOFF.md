@@ -1,12 +1,12 @@
-# HANDOFF — 2026-10-14 07:20 IST
-Reason for stopping: usage guard, at 88% of the 5-hour window (resets about 08:20 IST); weekly is at 82% (resets about 15:30 IST).
+# HANDOFF — 2026-10-14 09:05 IST
+Reason for stopping: **phase done — D1 SPEC is approved** (AUTOPILOT §2: one phase per session). Usage at stop: 5-hour 46% (resets about 13:20 IST), weekly **88%** (resets about 15:30 IST); chat context 65%.
 The next session may be a new Claude Code on another account. Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 paste prompt).
 
 ## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M8 = closed beta → M9 … M13)
 - Milestones closed: **0 of 17** (no `m*-reviewed` tag).
 - **M0a:** REVIEW and FIX are done; it stopped before CLOSE (founder gate: the GitHub plan). `milestone/m0a` @ `7dc8c0d` = `cp/m0a-06`.
 - **M0b:** BUILD, REVIEW and FIX are done; **no open Medium**. CLOSE waits for `m0a-reviewed` and the staging run. `milestone/m0b` @ `56c2641` = **`cp/m0b-05`**.
-- **D1 (Demo slice): SPEC in progress** (founder, 2026-10-14: start D1 SPEC before `m0b-reviewed`, multi-agent). `specs/d1-demo-slice.md` is at **revision 2**. The Opus spec review of revision 1 was CHANGES REQUIRED (`docs/reviews/D1-spec-review.md`). Every finding S1–S12 is applied. The database review is still pending.
+- **D1 (Demo slice): SPEC DONE: `specs/d1-demo-slice.md` revision 4, "Spec approved by autopilot reviewers"** (`a44c1f6`). Reviews (`docs/reviews/D1-spec-review.md`): Opus spec review of rev 1; Opus spec and Opus database reviews of rev 2b; Sonnet confirming spec and database reviews of rev 3 (both APPROVE WITH MINOR FIXES, all applied). **Next phase: D1 BUILD**, gated on the founder's H6 Sentry.
 
 ## Where we are
 - **`d1/integration`** (worktree `.claude/worktrees/d1-integration`; enter it with `EnterWorktree` path) is cut from `milestone/m0b` @ `cp/m0b-05`. Its tip is this handoff, on top of `acd3f47` (spec revision 2, section 3).
@@ -30,10 +30,19 @@ The next session may be a new Claude Code on another account. Start from `docs/p
   - Three Sonnet writers drafted §3–§11 in parallel: data model and RLS (22 tables); candidate runtime (edge `SessionDO`, `InviteOtpDO`, tokens, photo, signals); results, UI, CI/E2E, AT-D1…AT-D22, streams.
   - The lead merged them and resolved every OPEN item in **§1.5 R-1…R-19** (`f660af1`).
 
-## Next step (in order) — D1 SPEC continues (fresh window)
-1. **Align the leftovers in revision 2** (lead, small edits). §5.1/§6.2 still say `quality_state`/`integrity_state`, `session_events`, `MEDIA_LINK_SECRET`, `shortlisted` and the old `rls_d1_reports` text. §7 must have one queue (`max_retries 5` + DLQ), buckets `trace-packages-<env>` and `trace-evidence-<env>`, and secrets `API_DB_URL`, `MEDIA_LINK_HMAC_KEY`, `CANDIDATE_TOKEN_PRIVATE_JWK`. Grep for each old name and make it agree with §3–§5 (revision 2 text wins).
-2. **Opus `database-reviewer`** (fresh) on revision 2, plus an **Opus or Sonnet confirming `spec-reviewer`** that checks S1–S12 are resolved (`docs/reviews/D1-spec-review.md`). Run them in parallel. Apply the findings as revision 3, then record "Spec approved by autopilot reviewers".
-3. Then D1 BUILD (fresh session). Wave 0 (lead): H6 Sentry must be done by the founder and AT-9-sentry written and green before any writer starts; DC-D checks; ADR-031; migrations and `rls_d1_*` red first. Founder rows for D1 are in FOUNDER-QUEUE (`8660d29`).
+## Next step (in order) — D1 BUILD (fresh session)
+1. **Founder gate first:** H6 Sentry (FOUNDER-QUEUE). No BUILD writer starts before H6 is done and AT-9-sentry (AT-D22, written by the lead) is green (spec D1-18, §11 Wave 0). Also useful before staging: enable R2, widen the `staging` env to `d1/**` and `milestone/**`, and the Cloudflare token roll (FOUNDER-QUEUE rows).
+2. **Wave 0 (lead only, spec §11):**
+   - day-one checks DC-D1…DC-D9 (Queues, DO, R2 on the plan; ES256 in workerd; service bindings; Postgres driver; Workers Free CPU; Playwright), recording each result in spec §8;
+   - ADR-031 (Postgres driver for Workers);
+   - ADR-030 acceptance text;
+   - the migrations and `rls_d1_*` pgTAP, red first;
+   - the MT-11 allow-list additions and MT-15;
+   - `@trace/shared/contracts/d1`;
+   - skeletons, boundaries, wrangler bindings, ci.yml;
+   - AT-D22.
+3. **Then the writer streams** R1/R3/C1 → R2/R4/C2 → R5 (≤ 3 at once, own worktrees, reviews per stream), with a full `pnpm verify` and Linux CI before each merge. Open a draft PR `d1/integration` → `main` (CI only) at BUILD start.
+4. Founder queue walkthrough: the founder asked to go through FOUNDER-QUEUE one by one **later**. The ordered walkthrough (15 steps, starting with the Cloudflare token roll) was given in chat on 2026-10-14; redo it from the file when asked.
 
 ## Decisions made this session (HOW-level, AUTOPILOT §4)
 - D1 decisions D1-1…D1-18 and resolutions R-1…R-19 in the spec, notably:
