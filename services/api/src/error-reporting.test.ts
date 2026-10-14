@@ -8,7 +8,8 @@
 // so nothing here changes when it is swapped in.
 import { HealthResponse, LogLine } from '@trace/shared/contracts';
 import { type ErrorReporter, type SerializedError } from '@trace/shared/log';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { SENTRY_DATA_COLLECTION } from '@trace/shared/sentry';
 import { createApp } from './app.js';
 import { sentryReporter, withErrorReporting, workerSentryOptions } from './error-reporting.js';
 
@@ -157,6 +158,13 @@ describe('api Sentry wiring (AT-D22)', () => {
     return { transport, envelopes, events };
   };
 
+  // @sentry/cloudflare caches one client per isolate (its options and transport are read once), so every
+  // test shares this transport, emptied before each test.
+  const sentry = capturing();
+  beforeEach(() => {
+    sentry.envelopes.length = 0;
+  });
+
   const failingHandler = (lines: string[]) => {
     const app = createApp({
       reporter: sentryReporter,
@@ -170,9 +178,11 @@ describe('api Sentry wiring (AT-D22)', () => {
     expect(workerSentryOptions({ SENTRY_DSN_WORKERS: dsn(), VERSION: SHA } as Env)).toMatchObject({
       dsn: dsn(),
       release: SHA,
-      sendDefaultPii: false,
-      tracesSampleRate: 0,
+      dataCollection: SENTRY_DATA_COLLECTION,
     });
+    expect(
+      workerSentryOptions({ SENTRY_DSN_WORKERS: dsn(), VERSION: SHA } as Env),
+    ).not.toHaveProperty('tracesSampleRate');
     expect(workerSentryOptions({ SENTRY_DSN_WORKERS: '', VERSION: SHA } as Env)).toBeUndefined();
   });
 
@@ -206,7 +216,6 @@ describe('api Sentry wiring (AT-D22)', () => {
 
   it('sends one scrubbed event for a failing request, and the DSN reaches no log line', async () => {
     const lines: string[] = [];
-    const sentry = capturing();
     const handler = withErrorReporting(failingHandler(lines), { transport: sentry.transport });
     const { ctx, settle } = execution();
 
@@ -239,5 +248,40 @@ describe('api Sentry wiring (AT-D22)', () => {
       expect(everything).not.toContain(sensitive);
     }
     expect(lines.join('\n')).not.toContain(dsn());
+  });
+
+  it('sends no transaction or span when a request asks for a sampled trace (tracing stays off)', async () => {
+    // Any tracesSampleRate (0 included) would let this header force a sampled transaction, which never
+    // passes beforeSend and carries headers, the query and the body (AT-D22 security review, blocker 2).
+    const healthy = createApp({ reporter: sentryReporter, sink: () => {} });
+    // A different error type from the test above: the SDK caches its client, and Dedupe would drop a repeat.
+    const failingApp = createApp({
+      reporter: sentryReporter,
+      now: () => throwValue(new RangeError(piiMessage())),
+      sink: () => {},
+    });
+    const failing = { fetch: failingApp.fetch };
+    const trace = {
+      'sentry-trace': `${'ab'.repeat(16)}-${'cd'.repeat(8)}-1`,
+      baggage: 'sentry-sampled=true',
+    };
+
+    for (const handler of [{ fetch: healthy.fetch }, failing]) {
+      const { ctx, settle } = execution();
+      await withErrorReporting(handler, { transport: sentry.transport }).fetch(
+        new Request(`https://api.test/health?m=${mobile()}`, { headers: trace }),
+        { SENTRY_DSN_WORKERS: dsn(), VERSION: SHA } as Env,
+        ctx,
+      );
+      await settle();
+    }
+
+    const types = sentry.envelopes.flatMap((envelope) =>
+      ((envelope as [unknown, [{ type?: string }, unknown][]])[1] ?? []).map(
+        ([header]) => header.type,
+      ),
+    );
+    expect(types).toEqual(['event']);
+    expect(JSON.stringify(sentry.envelopes)).not.toContain(mobile());
   });
 });

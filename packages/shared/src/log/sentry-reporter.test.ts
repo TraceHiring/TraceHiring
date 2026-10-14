@@ -7,6 +7,7 @@ import { reportError } from './error-reporter.js';
 import { REDACTED } from './redact.js';
 import {
   createSentryReporter,
+  SENTRY_DATA_COLLECTION,
   sentryDsn,
   sentryOptions,
   toSentryEvent,
@@ -129,18 +130,68 @@ describe('sentryDsn', () => {
 });
 
 describe('sentryOptions', () => {
-  it('turns off default PII and tracing and installs the scrubber', () => {
+  it('turns off all data collection, sets no trace rate and installs the scrubber', () => {
     const options = sentryOptions({ dsn: dsn(), release: 'abcdef1' });
     expect(options).toEqual({
       dsn: dsn(),
       release: 'abcdef1',
-      sendDefaultPii: false,
-      tracesSampleRate: 0,
+      dataCollection: SENTRY_DATA_COLLECTION,
       attachStacktrace: false,
+      sendClientReports: false,
       maxBreadcrumbs: 50,
+      integrations: expect.any(Function),
       beforeSend: scrubSentryEvent,
       beforeBreadcrumb: scrubSentryBreadcrumb,
     });
+    // Any number (0 included) turns tracing on in SDK 11; a forced trace would skip beforeSend.
+    expect(options).not.toHaveProperty('tracesSampleRate');
+    expect(options).not.toHaveProperty('tracesSampler');
+  });
+
+  it('collects nothing: every data-collection switch is off', () => {
+    expect(SENTRY_DATA_COLLECTION).toEqual({
+      userInfo: false,
+      cookies: false,
+      httpHeaders: false,
+      httpBodies: [],
+      urlQueryParams: false,
+      graphQL: { document: false, variables: false },
+      genAI: { inputs: false, outputs: false },
+      databaseQueryData: false,
+      queues: false,
+      stackFrameVariables: false,
+      frameContextLines: 0,
+    });
+  });
+
+  it('keeps only the allow-listed integrations', () => {
+    const integrations = sentryOptions({ dsn: dsn(), release: 'dev' })?.integrations;
+    const names = [
+      'Dedupe',
+      'EventFilters',
+      'FunctionToString',
+      'LinkedErrors',
+      'Breadcrumbs',
+      'RequestData',
+      'HttpServer',
+      'Fetch',
+      'Console',
+      'HttpContext',
+      'CultureContext',
+      'BrowserApiErrors',
+      'GlobalHandlers',
+      'BrowserSession',
+      'ConversationId',
+      'Replay',
+      'Feedback',
+    ];
+    expect(integrations?.(names.map((name) => ({ name }))).map((i) => i.name)).toEqual([
+      'Dedupe',
+      'EventFilters',
+      'FunctionToString',
+      'LinkedErrors',
+      'Breadcrumbs',
+    ]);
   });
 
   it('passes an environment that is a plain name', () => {

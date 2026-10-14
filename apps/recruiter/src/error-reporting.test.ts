@@ -5,7 +5,11 @@
 import { randomBytes } from 'node:crypto';
 import * as Sentry from '@sentry/react';
 import { noopErrorReporter, type ErrorReporter, type SerializedError } from '@trace/shared/log';
-import { scrubSentryBreadcrumb, scrubSentryEvent } from '@trace/shared/sentry';
+import {
+  SENTRY_DATA_COLLECTION,
+  scrubSentryBreadcrumb,
+  scrubSentryEvent,
+} from '@trace/shared/sentry';
 import { describe, expect, it } from 'vitest';
 import pkg from '../package.json';
 import {
@@ -191,8 +195,7 @@ describe('recruiter Sentry wiring (AT-D22)', () => {
     const options = inits[0] ?? {};
     expect(options).toMatchObject({
       dsn: dsn(),
-      sendDefaultPii: false,
-      tracesSampleRate: 0,
+      dataCollection: SENTRY_DATA_COLLECTION,
       sendClientReports: false,
       beforeSend: scrubSentryEvent,
       beforeBreadcrumb: scrubSentryBreadcrumb,
@@ -200,7 +203,7 @@ describe('recruiter Sentry wiring (AT-D22)', () => {
     if (APP_VERSION === 'dev' || /[a-f]/.test(APP_VERSION)) {
       expect(options['release']).toBe(APP_VERSION);
     }
-    for (const key of Object.keys(options)) expect(key).not.toMatch(/replay/i);
+    for (const key of Object.keys(options)) expect(key).not.toMatch(/replay|traces/i);
     const integrations = options['integrations'] as (d: { name: string }[]) => { name: string }[];
     const defaults = [
       'GlobalHandlers',
@@ -245,6 +248,10 @@ describe('recruiter Sentry wiring (AT-D22)', () => {
     expect(
       (events[0] as { exception?: { values?: unknown[] } }).exception?.values?.[0],
     ).toMatchObject({ type: 'TypeError', value: '[REDACTED]' });
+    // No user info is collected, so the SDK tells Relay never to infer the client IP (AT-D22 review, blocker 1).
+    // The SDK adds sdk.settings to the event after beforeSend, so the scrubber cannot remove it.
+    const sdkInfo = (events[0] as { sdk?: { settings?: { infer_ip?: string } } }).sdk;
+    expect(sdkInfo?.settings?.infer_ip).toBe('never');
     const text = JSON.stringify(envelopes);
     for (const value of s.all) expect(text).not.toContain(value);
   });

@@ -8,9 +8,11 @@
 //   query_string, data and env go; the user goes;
 // - every URL loses its query string, including breadcrumb and frame URLs;
 // - each exception value becomes serializeError's code, or "[REDACTED]";
-// - the redactor runs over everything that remains (spec §9.1).
+// - tags, extra and every context but the trace ids go: the browser SDK puts raw callback
+//   arguments in extra, which no redactor can be trusted with (AT-D22 security review, major 3);
+// - the redactor runs over every string that remains (spec §9.1).
 // No Sentry package is imported: the event is typed structurally, so @trace/shared stays SDK-free.
-import { REDACTED, redact, redactSerializedError, redactString } from './redact.js';
+import { REDACTED, redactSerializedError, redactString } from './redact.js';
 import { isErrorName, serializeError, type SerializedError } from './serialize-error.js';
 import { isVersion } from './version.js';
 
@@ -49,8 +51,6 @@ export interface SentryEventLike {
   environment?: string;
   sdk?: { name?: string; version?: string };
   request?: { url?: string; method?: string };
-  tags?: Record<string, unknown>;
-  extra?: Record<string, unknown>;
   contexts?: Record<string, unknown>;
   exception?: { values?: SentryExceptionLike[] };
   breadcrumbs?: SentryBreadcrumbLike[];
@@ -190,12 +190,14 @@ export const scrubSentryBreadcrumb = <B extends object>(breadcrumb: B): B | null
   }
 };
 
-/** Only the trace and span ids of the trace context; every other context passes the redactor. */
+/**
+ * Only the trace and span ids of the trace context. Every other context goes: SDK contexts carry the
+ * user agent, locale and timezone, and a redactor cannot be trusted with free text (AT-D22 review).
+ */
 const scrubContexts = (contexts: unknown): Record<string, unknown> | undefined => {
   if (!isRecord(contexts)) return undefined;
-  const { trace, ...rest } = contexts;
-  const redacted = redact(rest);
-  const out = isRecord(redacted) ? redacted : {};
+  const trace = contexts['trace'];
+  const out: Record<string, unknown> = {};
   if (isRecord(trace)) {
     const ids = compact({
       trace_id: isHexId(trace['trace_id'], TRACE_ID) ? trace['trace_id'] : undefined,
@@ -234,8 +236,6 @@ const scrubEventInner = (event: object, hint: SentryHintLike | undefined): Sentr
     request:
       request &&
       compact({ url: safeUrl(request['url']), method: label(request['method'], METHOD) }),
-    tags: isRecord(e['tags']) ? (redact(e['tags']) as Record<string, unknown>) : undefined,
-    extra: isRecord(e['extra']) ? (redact(e['extra']) as Record<string, unknown>) : undefined,
     contexts: scrubContexts(e['contexts']),
     exception: exceptionValues && {
       values: exceptionValues.map((x) => scrubException(x, value)),

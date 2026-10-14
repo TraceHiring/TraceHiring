@@ -9,7 +9,7 @@
 //   5. a text file in the index with CRLF line endings
 //   6. an eslint-disable comment that switches off a boundaries/ or trace/ rule, or names no rule
 //      (S1.4 security review), in apps/, packages/, workers/ or services/ source
-//   7. an error reporter or Sentry name in non-test source of apps/candidate/ or workers/edge/
+//   7. an error reporter or Sentry name (incl. @trace/shared/sentry) in non-test source of apps/candidate/ or workers/edge/
 //      (spec §9.2: only the recruiter app, workers/jobs and services/api report errors; S3a review
 //      S3A-3, plan risk 9)
 //   8. a Worker's wrangler.jsonc (workers/*/, services/*/) whose top-level `observability` is not exactly
@@ -67,7 +67,9 @@ const SOURCE_EXT = /\.(?:[cm]?[jt]sx?)$/;
 
 /** Workspaces that must never report errors (rule 7): the candidate app and the edge Worker. */
 export const NO_REPORTER_SCOPES = ['apps/candidate/', 'workers/edge/'];
-const REPORTER_NAMES = /\b(?:reportError|noopErrorReporter|ErrorReporter)\b|@sentry\//;
+// @trace/shared/sentry (the SDK-free adapter, d1 AT-D22) counts too: it has no SDK, but it is a reporter.
+const REPORTER_NAMES =
+  /\b(?:reportError|noopErrorReporter|ErrorReporter|createSentryReporter)\b|@sentry\/|@trace\/shared\/sentry/;
 const isTestFile = (p) => /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(p);
 
 /** Generated files, the same ones ESLint ignores (packages/config/eslint/index.js). */

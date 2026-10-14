@@ -80,23 +80,75 @@ const DSN = /^https:\/\/[0-9a-f]{32}@[a-z0-9.-]+\/\d+$/;
 export const sentryDsn = (value: unknown): string | undefined =>
   typeof value === 'string' && DSN.test(value) ? value : undefined;
 
+/**
+ * Every data-collection switch of the Sentry SDKs, off. SDK 11 replaced `sendDefaultPii` with
+ * `dataCollection`, whose defaults collect user info (the browser then asks Relay to infer the
+ * client IP), cookies, headers, bodies, query strings, frame variables and source lines; the name
+ * `sendDefaultPii` is ignored (security review of AT-D22, blocker 1).
+ */
+export const SENTRY_DATA_COLLECTION: {
+  userInfo: false;
+  cookies: false;
+  httpHeaders: false;
+  httpBodies: never[];
+  urlQueryParams: false;
+  graphQL: { document: false; variables: false };
+  genAI: { inputs: false; outputs: false };
+  databaseQueryData: false;
+  queues: false;
+  stackFrameVariables: false;
+  frameContextLines: 0;
+} = {
+  userInfo: false,
+  cookies: false,
+  httpHeaders: false,
+  httpBodies: [],
+  urlQueryParams: false,
+  graphQL: { document: false, variables: false },
+  genAI: { inputs: false, outputs: false },
+  databaseQueryData: false,
+  queues: false,
+  stackFrameVariables: false,
+  frameContextLines: 0,
+};
+
+/**
+ * The only SDK integrations that run, by name; every other default is dropped. They dedupe, filter
+ * and link errors, and (browser only) keep breadcrumbs, which beforeBreadcrumb scrubs. Dropped
+ * among others: request data and HTTP context (headers, IP, user agent), console capture, culture
+ * context, the browser's wrapped-callback errors (they put raw callback arguments in `extra`), its
+ * window handlers (installGlobalErrorReporting reports those), sessions (they skip beforeSend),
+ * Replay and Feedback.
+ */
+export const SENTRY_INTEGRATIONS: ReadonlySet<string> = new Set([
+  'Dedupe',
+  'EventFilters',
+  'FunctionToString',
+  'LinkedErrors',
+  'Breadcrumbs',
+]);
+
 export interface SentryOptions {
   dsn: string;
   release?: string;
   environment?: string;
-  sendDefaultPii: false;
-  tracesSampleRate: 0;
+  dataCollection: typeof SENTRY_DATA_COLLECTION;
   attachStacktrace: false;
+  sendClientReports: false;
   maxBreadcrumbs: number;
+  integrations: <I extends { name: string }>(defaults: I[]) => I[];
   beforeSend: typeof scrubSentryEvent;
   beforeBreadcrumb: typeof scrubSentryBreadcrumb;
 }
 
 /**
- * The options every consumer initialises its SDK with (spec §9.2): no default PII, no tracing (and
- * so no Session Replay data), `release` = the commit SHA, the scrubber as beforeSend and
- * beforeBreadcrumb. Undefined when there is no valid DSN: then the consumer does not initialise the
- * SDK. The release must be a version (a SHA holding a hex letter, or 'dev'), as in error-reporter.ts.
+ * The options every consumer initialises its SDK with (spec §9.2): no data collection, the
+ * integration allow-list, `release` = the commit SHA, the scrubber as beforeSend and
+ * beforeBreadcrumb. There is deliberately **no `tracesSampleRate`**: any number, 0 included, turns
+ * tracing on, and an incoming `sentry-trace` header could then force a sampled transaction that
+ * never passes beforeSend (security review of AT-D22, blocker 2). Undefined when there is no valid
+ * DSN: then the consumer does not initialise the SDK. The release must be a version (a SHA holding a
+ * hex letter, or 'dev'), as in error-reporter.ts.
  */
 export const sentryOptions = (input: {
   dsn: unknown;
@@ -112,10 +164,11 @@ export const sentryOptions = (input: {
     ...(typeof environment === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(environment)
       ? { environment }
       : {}),
-    sendDefaultPii: false,
-    tracesSampleRate: 0,
+    dataCollection: SENTRY_DATA_COLLECTION,
     attachStacktrace: false,
+    sendClientReports: false,
     maxBreadcrumbs: 50,
+    integrations: (defaults) => defaults.filter((i) => SENTRY_INTEGRATIONS.has(i.name)),
     beforeSend: scrubSentryEvent,
     beforeBreadcrumb: scrubSentryBreadcrumb,
   };

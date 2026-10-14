@@ -409,6 +409,7 @@ describe('rule 7: no error reporter or Sentry in the candidate app or the edge W
     ['the noop reporter', 'import { noopErrorReporter } from "@trace/shared";'],
     ['the ErrorReporter type', 'type R = import("@trace/shared/log").ErrorReporter;'],
     ['a Sentry package', 'import * as S from "@sentry/browser";'],
+    ['the shared Sentry entry', 'import { createSentryReporter } from "@trace/shared/sentry";'],
     ['a call to the runtime global', 'reportError(new Error("x"));'],
   ])('flags %s in edge or candidate source', (_label, code) => {
     for (const p of ['workers/edge/src/app.ts', 'apps/candidate/src/main.tsx']) {

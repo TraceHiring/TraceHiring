@@ -13,19 +13,6 @@ export const errorReporter: ErrorReporter = createSentryReporter((event, hint) =
   Sentry.captureEvent(event as Sentry.Event, hint as Sentry.EventHint);
 });
 
-/**
- * Default integrations the app never runs. GlobalHandlers: installGlobalErrorReporting reports
- * window errors through the adapter instead. BrowserSession: a session carries the user agent and
- * skips beforeSend. Replay and Feedback: no Session Replay and no feedback widget (spec §9.2).
- */
-const DROPPED_INTEGRATIONS: ReadonlySet<string> = new Set([
-  'GlobalHandlers',
-  'BrowserSession',
-  'Replay',
-  'ReplayCanvas',
-  'Feedback',
-]);
-
 /** The part of @sentry/react used here; tests pass their own. */
 interface Sdk {
   init(options: Sentry.BrowserOptions): unknown;
@@ -42,12 +29,9 @@ export function initErrorReporting(
 ): boolean {
   const options = sentryOptions({ dsn: env.VITE_SENTRY_DSN, release: APP_VERSION });
   if (options === undefined) return false;
-  sdk.init({
-    ...options,
-    ...overrides,
-    sendClientReports: false,
-    integrations: (defaults) => defaults.filter((i) => !DROPPED_INTEGRATIONS.has(i.name)),
-  });
+  // The shared options keep only the allow-listed integrations: no window handlers (installGlobalErrorReporting
+  // reports those), sessions, HTTP or culture context, wrapped-callback errors, Replay or Feedback.
+  sdk.init({ ...options, ...overrides });
   return true;
 }
 

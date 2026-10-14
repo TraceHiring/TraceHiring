@@ -177,11 +177,24 @@ describe('scrubSentryEvent (AT-9-sentry)', () => {
     expect(mechanism).toEqual({ type: 'auto.http.hono', handled: false });
   });
 
-  it('runs the redactor over tags, extra and contexts', () => {
+  it('drops tags and extra, and every context but the trace ids', () => {
+    // A redactor misses free text such as a person's name, and SDK integrations put raw data here:
+    // the browser's wrapped callbacks set extra.arguments, a thrown object lands in extra.__serialized__
+    // (security review of AT-D22, major 3).
     const p = pii();
-    const out = scrubSentryEvent(fullEvent(p)) as Record<string, unknown>;
-    expectNone([out['tags'], out['extra'], out['contexts']], p);
-    expect((out['tags'] as Record<string, unknown>)['route']).toBe('/v1/candidates');
+    const event = {
+      ...fullEvent(p),
+      extra: {
+        arguments: [{ target: `button[aria-label="Shortlist ${p.word}"]` }],
+        __serialized__: { who: p.word },
+      },
+      contexts: { ...fullEvent(p).contexts, culture: { timezone: 'Asia/Kolkata', locale: p.word } },
+    };
+    const out = scrubSentryEvent(event) as Record<string, unknown>;
+    expect(out).not.toHaveProperty('tags');
+    expect(out).not.toHaveProperty('extra');
+    expect(Object.keys(out['contexts'] as object)).toEqual(['trace']);
+    expectNone(out, p);
   });
 
   it('keeps the trace context ids only', () => {
