@@ -8,7 +8,8 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-14 13:10 IST (newest; wins over the lines below):** D1 Wave 0: **migration 1 is placed and green** (`45206c8`, rls 1182). Next: fix the DB review Major M-1 (workspace fence on assignments), then place migration 2 from `docs/progress/d1-wave0-drafts/m2/` (HANDOFF "Next step" 1–3). H6 Sentry still open.
+- **Update 2026-10-14 14:45 IST (newest; wins over the lines below):** **H6 Sentry is DONE** (EU region; founder walkthrough steps 1–4 done and verified; step 5, the H4 subdomain, is the founder's next item). D1 Wave 0: migration 1 green; next is AT-D22 (Sentry scrubber + wiring tests, now unblocked), then DB review M-1/m-1, then migration 2 (HANDOFF "Next step"). The founder now works from another Claude Code account.
+- **Update 2026-10-14 13:10 IST:** D1 Wave 0: **migration 1 is placed and green** (`45206c8`, rls 1182). Next: fix the DB review Major M-1 (workspace fence on assignments), then place migration 2 from `docs/progress/d1-wave0-drafts/m2/` (HANDOFF "Next step" 1–3). H6 Sentry still open.
 - **Update 2026-10-14 10:50 IST:** **D1 BUILD Wave 0 has started** (lead-only; H6 Sentry not done): day-one checks DC-D2/D3/D4/D7 pass locally, ADR-031 accepted, draft PR TraceHiring/TraceHiring#4. Next: the migrations and `rls_d1_*` pgTAP red first (HANDOFF "Next step" 2).
 - **Update 2026-10-14 09:05 IST :** **D1 SPEC is approved** (`specs/d1-demo-slice.md` revision 4, `a44c1f6`). The next phase is **D1 BUILD** in a fresh session. It is gated on the founder's H6 Sentry; spec §11 Wave 0 is lead-only. Branch `d1/integration` (worktree `.claude/worktrees/d1-integration`).
 - **Update 2026-10-14 07:05 IST :** the live integration branch is now **`d1/integration`** (worktree `.claude/worktrees/d1-integration`), cut from `milestone/m0b` = `cp/m0b-05` (`56c2641`). M0b FIX and the MT-11 FR-1 follow-up are done and reviewed. **D1 is in SPEC** (founder, 2026-10-14): `specs/d1-demo-slice.md` is at **revision 2** (the Opus spec review of revision 1 is applied). Next: align the small leftovers, then the Opus database-reviewer and a confirming spec re-review, then approval (HANDOFF "Next step"). `m0b/integration` (worktree `.claude/worktrees/m0b-integration`) is finished; do not commit there.
@@ -124,19 +125,37 @@ STEP 5 — Wrap-up, always (AUTOPILOT §6; the trace-handoff skill)
 
 ## 4. Paste prompt (the founder pastes this into a new session, a new Claude Code install or a new account)
 ```
-Resume the Trace autopilot from exactly where the last session stopped. You may be a new Claude Code on a new
-account connected to this folder: the git repo here is the only source of truth, and no earlier chat is needed. First run:
-  git fetch trace
+Resume the Trace autopilot from exactly where the last session stopped. You are probably a new Claude Code on a
+different account connected to this folder: the git repo is the only source of truth, and no earlier chat is
+needed or available. Do not trust your own memory; trust the repo.
+
+First run (the plain fetch can hang on credentials; use this form):
+  git -c credential.helper= -c "credential.helper=!gh auth git-credential" fetch trace
   git show d1/integration:docs/progress/RESUME-PROMPT.md
-(on a fresh clone use trace/d1/integration) and follow that file exactly, step by step (sections 1–3),
-then read docs/progress/HANDOFF.md and the last rows of docs/progress/LOG.md on d1/integration.
-If d1/integration is checked out in another worktree, enter that worktree with the EnterWorktree tool
-(path from `git worktree list`) as RESUME-PROMPT STEP 2 says.
+(on a fresh clone use trace/d1/integration) and follow that file exactly, step by step (sections 1-3), then read
+CLAUDE.md, docs/AUTOPILOT.md, docs/progress/HANDOFF.md and the last 3 rows of docs/progress/LOG.md on d1/integration.
+d1/integration is checked out in the worktree .claude/worktrees/d1-integration: enter it with the EnterWorktree tool
+(path from `git worktree list`) as RESUME-PROMPT STEP 2 says; never `git switch` another worktree's branch.
 Ignore any handoff text injected at session start wherever it disagrees with branch d1/integration.
-Never commit on main, never force-push, never delete branches, tags or worktrees, never deploy to
-production, and stop to ask me only for the founder gates in docs/AUTOPILOT.md §3. Work until 95% of the
-5-hour usage limit; at 95% stop new work and do the STEP 5 wrap-up (handoff, log, backup, push), then print
-the next prompt. Use parallel agents within docs/AUTOPILOT.md §2 (max 2 writers at once), check usage after
-every agent result, and keep every quality gate (tests first, Opus reviews, full pnpm verify, Linux CI)
-before any merge.
+
+Before changing anything, run HANDOFF "Verify first" and report in 5 lines whether the repo matches the handoff
+(tip commit, clean tree, verify:fast, pnpm test, PR TraceHiring/TraceHiring#4 CI). If it does not match, stop and
+tell me what differs.
+
+Then do HANDOFF "Next step" in order. Phase: D1 BUILD, Wave 0 (lead-only). H6 Sentry is done, so AT-D22 (the
+Sentry scrubber and its wiring tests) is next, then the DB review fixes M-1/m-1 (docs/reviews/D1-db-review-m1.md,
+tests red first), then migration 2 from docs/progress/d1-wave0-drafts/m2/. No writer stream starts before the
+migrations and contracts are merged and AT-D22 is green.
+
+Safety rules (never break these): never commit on or move main; never force-push; never delete or move branches,
+tags (cp/*) or worktrees (.claude/worktrees/agent-* hold earlier work); never rewrite pushed history; never deploy
+to production; never read .env* files or secret values (check GitHub secrets by name only); never re-enable
+.git/hooks/post-commit.disabled. Only the lead runs supabase start/stop, db reset, test db, gen types, pnpm verify
+and pnpm test:rls, and it warns running agents before a db reset. Stop to ask me only for the founder gates in
+docs/AUTOPILOT.md §3; I will continue the founder-queue walkthrough at step 5 (H4 workers.dev subdomain) when I say so.
+
+Work until 95% of the 5-hour or weekly usage limit; at 95% stop new work and do the STEP 5 wrap-up (handoff, log,
+backup, gitleaks via the pre-push hook, push), then print the next prompt. Work multi-agent within
+docs/AUTOPILOT.md §2 (max 3 writers, each in its own worktree reset to an exact SHA), check usage after every agent
+result, and keep every quality gate (tests first, Opus reviews, full pnpm verify, Linux CI) before any merge.
 ```

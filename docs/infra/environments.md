@@ -41,12 +41,12 @@ Planned: deployment branches limited to `main` (H3). **Checked 2026-10-11: the e
 | Name | Kind | Holds | Used by | Status | Set by |
 | --- | --- | --- | --- | --- | --- |
 | `CLOUDFLARE_ACCOUNT_ID` | variable | Cloudflare account ID (above) | `wrangler` steps 5–7 | **live** (checked with `gh variable list`) | Founder |
-| `SUPABASE_STAGING_PROJECT_REF` | variable | `trace-staging` project ref | M0b on | pending (needs the project) | Autopilot, after the project exists |
-| `SUPABASE_STAGING_URL` | variable | `https://<ref>.supabase.co` | M0b on (recruiter app, CSP) | pending | Autopilot |
-| `SUPABASE_STAGING_PUBLISHABLE_KEY` | variable | `trace-staging` publishable key (`sb_publishable_…`), a public client key | M0b on | pending | Autopilot |
-| `CLOUDFLARE_API_TOKEN` | **secret** | API token limited to this account: Workers Scripts: Edit, Cloudflare Pages: Edit, Account Settings: Read (H4) | steps 5–7 only | **missing**: no secret with this name. A secret with a wrong name exists (see "Verified 2026-10-11") | **Founder only** |
-| `SUPABASE_STAGING_DB_URL` | **secret** | `trace-staging` session-pooler connection string, with password (H5) | steps 3–4 only | **name mismatch**: the founder set `SUPABASE_DB_URL`; the spec (§7.3) and the CI jobs to be written in S1.5 read `SUPABASE_STAGING_DB_URL` | **Founder only** |
-| `SENTRY_DSN_RECRUITER`, `SENTRY_DSN_WORKERS` | variable | Sentry DSNs | Sentry adapter | **deferred until before D1** (H6, spec revision 10) | Founder |
+| `SUPABASE_STAGING_PROJECT_REF` | variable | `vsugnnxeahjtgzmgmyfu` | M0b on | **live** (checked 2026-10-14 with `gh variable list`) | Autopilot (2026-10-14) |
+| `SUPABASE_STAGING_URL` | variable | `https://vsugnnxeahjtgzmgmyfu.supabase.co` | M0b on (recruiter app, CSP) | **live**; Auth health 200 with the key | Autopilot (2026-10-14) |
+| `SUPABASE_STAGING_PUBLISHABLE_KEY` | variable | `trace-staging` publishable key (`sb_publishable_…`), a public client key | M0b on | **live** (checked 2026-10-14 with `gh variable list`) | Autopilot (2026-10-14) |
+| `CLOUDFLARE_API_TOKEN` | **secret** | API token limited to this account: Workers Scripts: Edit, Cloudflare Pages: Edit, Account Settings: Read; no IP filter, no TTL | steps 5–7 only | **live** (set 2026-10-14; old token rolled; misnamed secret deleted; checked by name) | **Founder only** |
+| `SUPABASE_STAGING_DB_URL` | **secret** | `trace-staging` Session-pooler string (port 5432, `?sslmode=require`), with password | steps 3–4 only | **live** (set 2026-10-14; `SUPABASE_DB_URL` deleted; checked by name) | **Founder only** |
+| `VITE_SENTRY_DSN` (recruiter build; the D1 spec name, L-24), `SENTRY_DSN_WORKERS` | variable | Sentry DSNs of `trace-recruiter` and `trace-workers` (EU region, `*.ingest.de.sentry.io`) | Sentry adapter (D1, AT-D22) | **live** (set 2026-10-14, H6) | Founder |
 
 The autopilot never sets or reads a secret value. `trace-dev` gets no GitHub variables: dev runs locally.
 
@@ -75,6 +75,13 @@ GitHub `staging` secrets (names only, per the founder): `AWS_ACCESS_KEY_ID`, `AW
 - No repo-level secrets.
 - `.github/workflows/` does not exist yet; CI is written in S1.5. The names checked are those in spec §7.3, which S1.5 implements.
 - The Supabase connector was **not attached** to this session (only Claude Docs, visualize and scheduled-tasks were), so the project refs, URLs and publishable keys could not be read and the three `SUPABASE_STAGING_*` variables are still unset.
+
+## Verified 2026-10-14 (founder walkthrough steps 1–4; names only, never values)
+
+- Supabase: `trace-staging` ref `vsugnnxeahjtgzmgmyfu` (Postgres **17.11**, H5), `trace-dev` ref `fjvaogxoxapenoqqykem`.
+- Sentry (H6): org `tracehiring`, data region **EU (Germany)**; projects `trace-recruiter` (React) and `trace-workers` (Cloudflare (Node)); error monitoring only; org-level data scrubber, default scrubbers and "prevent storing IP addresses" on (founder-confirmed).
+- `staging` secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `CLOUDFLARE_API_TOKEN`, `SUPABASE_STAGING_DB_URL`. Variables: `CLOUDFLARE_ACCOUNT_ID`, `SENTRY_DSN_WORKERS`, `SUPABASE_STAGING_PROJECT_REF`, `SUPABASE_STAGING_PUBLISHABLE_KEY`, `SUPABASE_STAGING_URL`, `VITE_SENTRY_DSN`.
+- Items 1, 2 and 4 of "Open steps" below are done; item 5 (H4 subdomain) is the next founder step.
 
 ## Open steps (founder)
 
