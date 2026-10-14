@@ -22,7 +22,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(153);
+select plan(158);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -557,6 +557,22 @@ select is((select coalesce(string_agg(r, ',' order by r), '') from unnest(array[
 set local role trace_integrity_worker;
 set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
 select matches(pg_temp.try($$insert into integrity.flags (id, org_id, session_id, rule_id, family, tier, severity, untrusted, raw_media, count, first_offset_ms, state, signal_seqs) values ('a7000000-0000-4000-8000-000000000020', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000001', 'D1-UNTRUSTED-INPUT', 'input_origin', 'T3', 'hard', true, false, 1, 1000, 'pending', '{1}')$$), '^42501 TRACE_GUARD', 'flags I: no flag is added once the session''s integrity card is final (its band could no longer match, I-3)');
+reset role;
+reset trace.job_org_id;
+-- ===== DB review m3 m-7b: the single flip re-checks the cutoff and the band against the flags =====
+-- C12 is parked awaiting_quality with a Clear band; its quality card (70 of 40, meets the cutoff) lands now, then a
+-- pending T3 medium flag is added while the card still waits. Neither final state may be reached.
+set local role trace_quality_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select is(pg_temp.try($$insert into public.quality_cards (org_id, session_id, quality_score_id) values ('a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000012', 'a5000000-0000-4000-8000-000000000012')$$), 'OK 1', 'm-7b fixture: the late quality card of C12 lands (meets_cutoff = true)');
+reset role;
+reset trace.job_org_id;
+set local role trace_integrity_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select is(pg_temp.try($$insert into integrity.flags (id, org_id, session_id, rule_id, family, tier, severity, untrusted, raw_media, count, first_offset_ms, state, signal_seqs) values ('a7000000-0000-4000-8000-000000000021', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000012', 'D1-PASTE', 'paste', 'T3', 'medium', false, false, 1, 1000, 'pending', '{1}')$$), 'OK 1', 'm-7b fixture: a pending T3 medium flag is added while the card waits');
+select matches(pg_temp.try($$update public.integrity_cards set review_state = 'not_reviewed_below_cutoff' where session_id = 'a4000000-0000-4000-8000-000000000012'$$), '^42501 TRACE_GUARD: not_reviewed_below_cutoff needs', 'integrity_cards U: the flip to not_reviewed_below_cutoff is refused while meets_cutoff = true (DB review m3 m-7b)');
+select matches(pg_temp.try($$update public.integrity_cards set review_state = 'reviewed' where session_id = 'a4000000-0000-4000-8000-000000000012'$$), '^42501 TRACE_GUARD: the band is lower than its flags', 'integrity_cards U: the flip to reviewed is refused when the Clear band no longer matches a T3 medium flag (rule 3, DB review m3 m-7b)');
+select is((select review_state::text from public.integrity_cards where session_id = 'a4000000-0000-4000-8000-000000000012'), 'awaiting_quality', 'integrity_cards: after the refused flips C12 still waits (no partial state)');
 reset role;
 reset trace.job_org_id;
 -- ===== DB review m3 m-4: the immutable result tables refuse TRUNCATE (cascade reaches the timeline, whose TRUNCATE is revoked) =====

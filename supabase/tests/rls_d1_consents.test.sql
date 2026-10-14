@@ -543,6 +543,21 @@ reset trace.api_org_id;
 grant update, delete, truncate on public.consents to postgres;
 -- TRUNCATE CASCADE also reaches the migration-3 append-only tables (their TRUNCATE is revoked from the owner too).
 grant truncate on integrity.signals, quality.grader_runs, public.integrity_timeline_entries to postgres;
+-- DB review m3 n-1: every other TRUNCATE trigger is switched off (rolled back with the test), so a TRACE_APPEND_ONLY
+-- from the cascade below can only come from consents' own trigger.
+do $do$
+declare
+  r record;
+begin
+  for r in
+    select t.tgrelid::regclass as rel, t.tgname
+    from pg_trigger as t
+    where not t.tgisinternal and (t.tgtype & 32) <> 0 and t.tgrelid <> 'public.consents'::regclass
+  loop
+    execute format('alter table %s disable trigger %I', r.rel, r.tgname);
+  end loop;
+end
+$do$;
 select matches(pg_temp.try($$update public.consents set language = 'en'$$), '^P0001 TRACE_APPEND_ONLY', 'trigger: UPDATE raises TRACE_APPEND_ONLY (privilege re-granted)');
 select matches(pg_temp.try($$delete from public.consents$$), '^P0001 TRACE_APPEND_ONLY', 'trigger: DELETE raises TRACE_APPEND_ONLY');
 select matches(pg_temp.try($$truncate public.consents cascade$$), '^P0001 TRACE_APPEND_ONLY', 'trigger: TRUNCATE (cascade, so the FK does not refuse first) raises TRACE_APPEND_ONLY');

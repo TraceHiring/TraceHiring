@@ -25,17 +25,18 @@
 | m-3 | minor | The card's `photo_missing` was job-supplied and could disagree with the result | **Fixed:** the fill copies `integrity.results.photo_missing`; the `rls_d1_cards` fixture and assertion are adjusted |
 | m-4 | minor | No TRUNCATE guard on `quality.scores`, `integrity.flags`, `integrity.results`, `quality_cards`, `integrity_cards`, `reports` | **Fixed:** ENABLE ALWAYS statement triggers (`42501 TRACE_GUARD`); 12 tests (normal and replica mode) |
 | m-5 | minor | The sweep's stage-alphabetical order let poison rows of one stage starve the others | **Fixed:** round-robin across stages, oldest first within a stage; test with `p_limit 3` |
-| m-6 | minor (uncertain) | A stage counts as done when its card exists, even if the `reports` pointer was never set | **Open → jobs spec:** a stage writes its card, flags, flip and pointer in **one transaction**, or the sweep gains "card exists and pointer null" conditions. Decide when `workers/jobs` is specced (Wave 1) |
-| m-7 | minor | Test gaps: (a) the age guard on the quality/integrity stages (a fresh session is not listed); (b) band/flag consistency on the UPDATE flip; (c) same-value re-attach | (c) **fixed**; (a) and (b) **open**: add in the next DB test pass (needs a new fixture session) |
+| m-6 | minor (uncertain) | A stage counts as done when its card exists, even if the `reports` pointer was never set | **Decided (spec §5.1 "Transactions and retries"):** each stage outcome is one transaction (card or flip, flags, timeline, pointer, idempotency key); the sweep keeps reading cards only |
+| m-7 | minor | Test gaps: (a) the age guard on the quality/integrity stages (a fresh session is not listed); (b) band/flag consistency on the UPDATE flip; (c) same-value re-attach | (c) **fixed**; (a) and (b) **fixed** (tests only): `rls_d1_sweep` mirrors a fresh session and asserts it is on neither result stage; `rls_d1_cards` adds a T3 medium flag to a parked Clear card and asserts both flips are refused. A mutation run (aged session; soft flag) fails exactly those assertions |
 | m-8 | minor | The L-8 notice lookup did not filter on `notice_key` | **Fixed:** `notice_key = 'candidate-notice' and language = 'en'` |
-| n-1 | note | The consents TRUNCATE CASCADE assertion would also pass on a cascaded table's trigger | Open (cheap): put the table name in the append-only message and assert on it |
+| n-1 | note | The consents TRUNCATE CASCADE assertion would also pass on a cascaded table's trigger | **Fixed** (test only, no message change): the consents test switches off every other TRUNCATE trigger inside its transaction, so the cascade assertion can only be met by `consents_no_truncate` |
 | n-2 | note | The `reports` insert in `mirror_session` uses `on conflict do nothing` | Keep (exactly-once is tested) |
 | n-3 | note | Only a manual recomputation ties the rule-table hash to its JSON | **Fixed:** `rls_d1_rulesets_m3` pins the exact hash; `band-rules-sync.test.mjs` still lands with `packages/band-engine` |
-| n-4 | note (uncertain) | The seeded rubric's `content_sha256` hashes `jsonb::text`, not canonical JSON | Open: use one canonicalisation when the quality job hashes rubrics (`rubric_set_sha256`) |
+| n-4 | note (uncertain) | The seeded rubric's `content_sha256` hashes `jsonb::text`, not canonical JSON | **Decided (spec §5.1):** the job copies `rubric_versions.content_sha256` and never recomputes it; `rubric_set_sha256` = SHA-256 of `canonicalJson` of the sorted hashes, one `canonicalJson` in `@trace/shared` |
 | n-5 | note | The global `unique (session_id)` duplicates m2's `(org_id, session_id)` index; `expires_at > created_at` compares two clocks | Keep for D1; revisit the duplicate index in M3a |
-| n-6 | note | The card guard runs before `on conflict`, so a retried awaiting insert after the quality card has landed raises | **Jobs spec:** on retry, read the existing card and do the single flip; never re-insert |
+| n-6 | note | The card guard runs before `on conflict`, so a retried awaiting insert after the quality card has landed raises | **Decided (spec §5.1):** every run reads the existing card first; awaiting plus a quality card → flags then the single flip; never re-insert |
 | n-7 | note | `sweep_pending` has no supporting index | M4: a partial index on `sessions (submitted_at) where state <> 'in_progress'` |
 
 ## After the fixes
 - `pnpm test:rls` exit 0: 29 files, rls **2428** (floor raised from 2405), catalog 142, db-types current.
 - `pnpm -s verify:fast` exit 0.
+- Follow-up 2026-10-14 (late): m-6, n-4, n-6 written into spec §5.1; m-7a, m-7b, n-1 fixed test-only. Full `pnpm verify` exit 0 (rls **2435**, catalog 142).

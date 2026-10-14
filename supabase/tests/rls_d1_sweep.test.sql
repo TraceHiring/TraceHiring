@@ -16,7 +16,7 @@ end
 $f$;
 grant execute on function pg_temp.try(text) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(35);
+select plan(37);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -337,6 +337,23 @@ set local role trace_worker;
 select is((select count(*)::int from private.sweep_pending(1000) where session_id = 'a4000000-0000-4000-8000-000000000002'), 0, 'sweep_pending: once Sb has its integrity card the session is complete and drops out');
 select is((select count(*)::int from private.sweep_pending(1000) where stage = 'session_mirror' and session_id = 'a4000000-0000-4000-8000-000000000011'), 0, 'sweep_pending: once X1 has a sessions row it is no longer a session_mirror row');
 select is((select count(*)::int from private.sweep_pending(1000) where stage = 'quality_score' and session_id = 'a4000000-0000-4000-8000-000000000011'), 1, 'sweep_pending: X1 moves on to quality_score (no quality card yet)');
+reset role;
+reset request.jwt.claims;
+reset trace.job_org_id;
+reset trace.api_org_id;
+-- DB review m3 m-7a: X2 is mirrored just now (DO times = now()) with no card at all, so only the age guard keeps it off
+-- the quality_score and integrity_band stages.
+set local role trace_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+insert into public.sessions (id, org_id, test_version_id, ruleset_version_id, invitation_id, consent_id, state, submit_kind, submitted_at, adult_confirmed_at_start, started_at, server_deadline_at, mirror_seq, receipt_ref) values
+  ('a4000000-0000-4000-8000-000000000012', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', pg_temp.rs('f1000000-0000-4000-8000-000000000001'), 'a2000000-0000-4000-8000-000000000012', 'a3000000-0000-4000-8000-000000000012', 'submitted', 'candidate', now(), true, (select started_at from public.invitations where id = 'a2000000-0000-4000-8000-000000000012'), now() + interval '30 minutes', 1, 'RCPT0012');
+reset role;
+reset request.jwt.claims;
+reset trace.job_org_id;
+reset trace.api_org_id;
+set local role trace_worker;
+select is((select count(*)::int from private.sweep_pending(1000) where session_id = 'a4000000-0000-4000-8000-000000000012' and stage = 'quality_score'), 0, 'sweep_pending: a freshly submitted session with no quality card is not a quality_score row yet (age guard, DB review m3 m-7a)');
+select is((select count(*)::int from private.sweep_pending(1000) where session_id = 'a4000000-0000-4000-8000-000000000012' and stage = 'integrity_band'), 0, 'sweep_pending: a freshly submitted session with no integrity card is not an integrity_band row yet (age guard, DB review m3 m-7a)');
 reset role;
 reset request.jwt.claims;
 reset trace.job_org_id;
