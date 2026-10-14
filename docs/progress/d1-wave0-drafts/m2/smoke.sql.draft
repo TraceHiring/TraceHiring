@@ -1,0 +1,483 @@
+-- Smoke for the D1 migration 2 draft (not a pgTAP file; rolled back). Run AFTER the migration-1 draft (only if
+-- public.tests does not exist yet) and the migration-2 draft, inside the same transaction, as postgres:
+--   begin; [m1 draft] ; m2 draft ; this file ; rollback;
+-- Every case records (name, got, want) in a temp table; a case passes when got LIKE want. The last two queries print
+-- the pass/fail counts and every failing case. Synthetic personas only (fixed uuids, @example.test addresses).
+
+set local statement_timeout = '120s';
+set local lock_timeout = '60s';
+create temp table smoke (ts timestamptz not null default clock_timestamp(), name text, got text, want text);
+grant select, insert on smoke to public;
+create function pg_temp.try(p_sql text) returns text language plpgsql as $f$
+declare n bigint;
+begin
+  execute p_sql;
+  get diagnostics n = row_count;
+  return 'OK ' || n;
+exception when others then
+  return sqlstate || ' ' || sqlerrm;
+end
+$f$;
+grant execute on function pg_temp.try(text) to public;
+create function pg_temp.val(p_sql text) returns text language plpgsql as $f$
+declare r text;
+begin
+  execute p_sql into r;
+  return coalesce(r, '<null>');
+exception when others then
+  return sqlstate || ' ' || sqlerrm;
+end
+$f$;
+grant execute on function pg_temp.val(text) to public;
+create function pg_temp.chk(p_name text, p_got text, p_want text) returns void language sql as $f$
+  insert into pg_temp.smoke (name, got, want) values (p_name, p_got, p_want)
+$f$;
+grant execute on function pg_temp.chk(text, text, text) to public;
+grant trace_api to postgres with inherit false, set true;
+grant trace_worker to postgres with inherit false, set true;
+grant trace_quality_worker to postgres with inherit false, set true;
+grant trace_integrity_worker to postgres with inherit false, set true;
+
+-- ---------------------------------------------------------------------------------------------
+-- Fixtures (operator path)
+-- ---------------------------------------------------------------------------------------------
+insert into auth.users (id, aud, role, email) values
+  ('00000000-0000-4000-8000-000000000001', 'authenticated', 'authenticated', 's-owner@example.test'),
+  ('00000000-0000-4000-8000-000000000005', 'authenticated', 'authenticated', 's-recruiter@example.test'),
+  ('00000000-0000-4000-8000-000000000007', 'authenticated', 'authenticated', 's-reviewer@example.test'),
+  ('00000000-0000-4000-8000-000000000008', 'authenticated', 'authenticated', 's-hm@example.test'),
+  ('00000000-0000-4000-8000-000000000014', 'authenticated', 'authenticated', 's-reviewer-other@example.test'),
+  ('00000000-0000-4000-8000-00000000000e', 'authenticated', 'authenticated', 's-b-admin@example.test');
+insert into public.orgs (id, kind, name, slug) values
+  ('a1000000-0000-4000-8000-000000000001', 'customer', 'Org A', 'm2-smoke-org-a'),
+  ('a1000000-0000-4000-8000-000000000003', 'customer', 'Org B', 'm2-smoke-org-b');
+insert into public.workspaces (id, org_id, name, kind, is_default) values
+  ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'Default', 'default', true),
+  ('b1000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000003', 'Default', 'default', true);
+insert into public.memberships (org_id, user_id, roles, workspace_id, display_name, status) values
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', '{org_owner,admin}', null, 'Owner', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000005', '{recruiter}', null, 'Recruiter', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000007', '{reviewer}', null, 'Reviewer', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000008', '{hiring_manager}', null, 'Hm', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000014', '{reviewer}', null, 'Reviewer Other', 'active'),
+  ('a1000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-00000000000e', '{org_owner,admin}', null, 'B Admin', 'active');
+insert into public.notice_versions (id, org_id, notice_key, version, language, body_template, template_sha256) values
+  ('c1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'candidate_notice', 1, 'en', 'Synthetic notice body', repeat('c', 64)),
+  ('c1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'candidate_notice', 2, 'en', 'Synthetic notice body two', repeat('d', 64));
+insert into public.tests (id, org_id, workspace_id, name) values
+  ('e1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Smoke Test One'),
+  ('e1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Smoke Test Two');
+-- Migration 3 creates the ruleset row and its band rule FK; here a placeholder band rule id stands in for it.
+insert into public.ruleset_versions (id, org_id, test_id, version_no, band_rule_version_id, signal_settings) values
+  ('d1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 1,
+   'dd000000-0000-4000-8000-000000000001',
+   '{"paste":{"enabled":true},"drop":{"enabled":true},"untrusted_input":{"enabled":true},"tab_hidden":{"enabled":true},"fullscreen_exit":{"enabled":true}}');
+insert into public.test_versions (id, org_id, test_id, version_no, total_time_seconds, quality_cutoff, ruleset_version_id, notice_version_id, content_sha256) values
+  ('f1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 1, 600, 40,
+   'd1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000001', repeat('e', 64)),
+  ('f1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000002', 1, 600, 40,
+   null, null, null);
+insert into public.rubric_versions (id, org_id, rubric_key, version_no, criteria, content_sha256) values
+  ('71000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'default', 1,
+   '[{"id":"c1","label":"Clarity","max_points":5,"anchors":{}}]', repeat('7', 64));
+insert into public.sections (id, org_id, test_version_id, position, name, format, weight) values
+  ('51000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 1, 'MCQ', 'mcq', 1),
+  ('51000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 2, 'Written', 'written', 1);
+insert into public.item_versions (id, org_id, section_id, format, position, stem, options, rubric_version_id, content_sha256) values
+  ('91000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', '51000000-0000-4000-8000-000000000001', 'mcq', 1,
+   'Pick one', '[{"id":"a","text":"A"},{"id":"b","text":"B"}]', null, repeat('9', 64)),
+  ('91000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', '51000000-0000-4000-8000-000000000002', 'written', 1,
+   'Explain', null, '71000000-0000-4000-8000-000000000001', repeat('8', 64));
+insert into public.item_answer_keys (org_id, item_version_id, key) values
+  ('a1000000-0000-4000-8000-000000000001', '91000000-0000-4000-8000-000000000001', '{"option_id":"a"}');
+update public.test_versions set status = 'published' where id = 'f1000000-0000-4000-8000-000000000001';
+insert into public.assignments (org_id, membership_id, test_id, as_role)
+  select m.org_id, m.id, 'e1000000-0000-4000-8000-000000000001', 'reviewer'
+  from public.memberships as m where m.user_id = '00000000-0000-4000-8000-000000000007';
+
+select pg_temp.chk('fixture: V1 published', (select status::text from public.test_versions where id = 'f1000000-0000-4000-8000-000000000001'), 'published');
+
+-- ---------------------------------------------------------------------------------------------
+-- A. Invitation insert (authenticated), label, age at insert, pins
+-- ---------------------------------------------------------------------------------------------
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000005","aal":"aal1","amr":[{"method":"otp","timestamp":1}],"role":"authenticated"}';
+select pg_temp.chk('A1 recruiter creates invitation 1', pg_temp.try($q$
+  insert into public.invitations (id, org_id, test_id, test_version_id, contact_email, link_token_hash, adult_confirmed_by_inviter, expires_at)
+  values ('11000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001',
+          'f1000000-0000-4000-8000-000000000001', 'cand.one@example.test', repeat('1', 64), true, '2030-01-01')$q$), 'OK 1');
+select pg_temp.chk('A2 recruiter creates invitation 2 (inviter unknown)', pg_temp.try($q$
+  insert into public.invitations (id, org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at)
+  values ('11000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001',
+          'f1000000-0000-4000-8000-000000000001', 'cand.two@example.test', repeat('2', 64), '2030-01-01')$q$), 'OK 1');
+select pg_temp.chk('A3 inviter says under 18 -> created blocked', pg_temp.try($q$
+  insert into public.invitations (id, org_id, test_id, test_version_id, contact_email, link_token_hash, adult_confirmed_by_inviter, expires_at)
+  values ('11000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001',
+          'f1000000-0000-4000-8000-000000000001', 'cand.three@example.test', repeat('3', 64), false, '2030-01-01')$q$), 'OK 1');
+select pg_temp.chk('A4 invitation 4', pg_temp.try($q$
+  insert into public.invitations (id, org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at)
+  values ('11000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001',
+          'f1000000-0000-4000-8000-000000000001', 'cand.four@example.test', repeat('4', 64), '2030-01-01')$q$), 'OK 1');
+select pg_temp.chk('A5 invitation 5', pg_temp.try($q$
+  insert into public.invitations (id, org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at)
+  values ('11000000-0000-4000-8000-000000000005', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001',
+          'f1000000-0000-4000-8000-000000000001', 'cand.five@example.test', repeat('5', 64), '2030-01-01')$q$), 'OK 1');
+select pg_temp.chk('A6 real-looking domain refused', pg_temp.try($q$
+  insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'someone@gmail.com', repeat('6', 64), '2030-01-01')$q$), '23514%');
+select pg_temp.chk('A7 unpublished version refused', pg_temp.try($q$
+  insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000002', 'f1000000-0000-4000-8000-000000000002',
+          'cand.six@example.test', repeat('6', 64), '2030-01-01')$q$), '42501%published%');
+select pg_temp.chk('A8 version of another test refused', pg_temp.try($q$
+  insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000002', 'f1000000-0000-4000-8000-000000000001',
+          'cand.six@example.test', repeat('6', 64), '2030-01-01')$q$), '42501%another test%');
+select pg_temp.chk('A9 client cannot set status', pg_temp.try($q$
+  insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at, status)
+  values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'cand.six@example.test', repeat('6', 64), '2030-01-01', 'started')$q$), '42501%');
+select pg_temp.chk('A10 duplicate live contact refused', pg_temp.try($q$
+  insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'cand.one@example.test', repeat('6', 64), '2030-01-01')$q$), '23505%');
+select pg_temp.chk('A11 link_token_hash not selectable', pg_temp.try($q$ select link_token_hash from public.invitations $q$), '42501%');
+select pg_temp.chk('A12 recruiter sees 5 invitations', pg_temp.val($q$ select count(*) from public.invitations $q$), '5');
+reset role;
+select pg_temp.chk('A13 labels 1..5 in order', (select string_agg(candidate_label, ',' order by id) from public.invitations), 'Candidate 1,Candidate 2,Candidate 3,Candidate 4,Candidate 5');
+select pg_temp.chk('A14 inviter minor is blocked_age/inviter', (select status || '/' || age_block_source from public.invitations where id = '11000000-0000-4000-8000-000000000003'), 'blocked_age/inviter');
+select pg_temp.chk('A15 invitation_seq bumped (gap-tolerant)', (select invitation_seq::text from public.tests where id = 'e1000000-0000-4000-8000-000000000001'), '_');
+select pg_temp.chk('A16 audit invitation.create x5', (select count(*)::text from public.audit_log where action = 'invitation.create'), '5');
+select pg_temp.chk('A17 operator insert refused', pg_temp.try($q$
+  insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'cand.seven@example.test', repeat('7', 64), '2030-01-01')$q$), '42501%org users only%');
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000008","aal":"aal2","amr":[{"method":"password","timestamp":1},{"method":"totp","timestamp":2}],"role":"authenticated"}';
+select pg_temp.chk('A18 hm sees nothing', pg_temp.val($q$ select count(*) from public.invitations $q$), '0');
+select pg_temp.chk('A19 hm insert refused (RLS)', pg_temp.try($q$
+  insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'cand.eight@example.test', repeat('8', 64), '2030-01-01')$q$), '42501%row-level security%');
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000007","aal":"aal2","amr":[{"method":"password","timestamp":1},{"method":"totp","timestamp":2}],"role":"authenticated"}';
+select pg_temp.chk('A20 assigned reviewer sees invitations of T1', pg_temp.val($q$ select count(*) from public.invitations $q$), '5');
+select pg_temp.chk('A21 reviewer cannot revoke', pg_temp.try($q$ update public.invitations set status = 'revoked' where id = '11000000-0000-4000-8000-000000000005' $q$), 'OK 0');
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000014","aal":"aal2","amr":[{"method":"password","timestamp":1},{"method":"totp","timestamp":2}],"role":"authenticated"}';
+select pg_temp.chk('A22 unassigned reviewer sees nothing', pg_temp.val($q$ select count(*) from public.invitations $q$), '0');
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-00000000000e","aal":"aal2","amr":[{"method":"password","timestamp":1},{"method":"totp","timestamp":2}],"role":"authenticated"}';
+select pg_temp.chk('A23 other-org admin sees nothing', pg_temp.val($q$ select count(*) from public.invitations $q$), '0');
+select pg_temp.chk('A24 other-org admin cannot create in org A', pg_temp.try($q$
+  insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'cand.nine@example.test', repeat('9', 64), '2030-01-01')$q$), '42501%');
+reset role;
+
+-- ---------------------------------------------------------------------------------------------
+-- B. Revoke (authenticated) and wrong-role transitions
+-- ---------------------------------------------------------------------------------------------
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000005","aal":"aal1","amr":[{"method":"otp","timestamp":1}],"role":"authenticated"}';
+select pg_temp.chk('B1 recruiter revokes invitation 2 (created)', pg_temp.try($q$ update public.invitations set status = 'revoked' where id = '11000000-0000-4000-8000-000000000002' $q$), 'OK 1');
+select pg_temp.chk('B2 recruiter cannot set sent', pg_temp.try($q$ update public.invitations set status = 'sent' where id = '11000000-0000-4000-8000-000000000005' $q$), '42501%revoke%');
+select pg_temp.chk('B3 recruiter cannot set adult_self_declared', pg_temp.try($q$ update public.invitations set adult_self_declared = true where id = '11000000-0000-4000-8000-000000000005' $q$), '42501%');
+select pg_temp.chk('B4 revoked is terminal (hidden by USING)', pg_temp.try($q$ update public.invitations set status = 'revoked' where id = '11000000-0000-4000-8000-000000000002' $q$), 'OK 0');
+reset role;
+select pg_temp.chk('B5 audit invitation.revoke {old_status}', (select string_agg(details::text, ';') from public.audit_log where action = 'invitation.revoke'), '{"old_status": "created"}');
+
+-- ---------------------------------------------------------------------------------------------
+-- C. trace_api: sent, otp, age, consent, session id, started, expiry, resolve
+-- ---------------------------------------------------------------------------------------------
+set local role trace_api;
+select pg_temp.chk('C1 api without api_org_id sees nothing', pg_temp.val($q$ select count(*) from public.invitations $q$), '0');
+select pg_temp.chk('C2 api without api_org_id writes nothing', pg_temp.try($q$ update public.invitations set status = 'sent' where id = '11000000-0000-4000-8000-000000000001' $q$), 'OK 0');
+select pg_temp.chk('C3 resolve by hash works without org', pg_temp.val($q$ select id::text || '/' || org_id::text || '/' || status from private.resolve_invitation_by_hash(repeat('1', 64)) $q$), '11000000-0000-4000-8000-000000000001/a1000000-0000-4000-8000-000000000001/created');
+select pg_temp.chk('C4 resolve with a malformed hash returns nothing', pg_temp.val($q$ select count(*) from private.resolve_invitation_by_hash('ZZ') $q$), '0');
+select set_config('trace.api_org_id', 'a1000000-0000-4000-8000-000000000003', true);
+select pg_temp.chk('C6 api with org B cannot touch org A', pg_temp.try($q$ update public.invitations set status = 'sent' where id = '11000000-0000-4000-8000-000000000001' $q$), 'OK 0');
+select set_config('trace.api_org_id', 'a1000000-0000-4000-8000-000000000001', true);
+select pg_temp.chk('C7 api sees org A invitations', pg_temp.val($q$ select count(*) from public.invitations $q$), '5');
+select pg_temp.chk('C8 api cannot read link_token_hash', pg_temp.try($q$ select link_token_hash from public.invitations $q$), '42501%');
+select pg_temp.chk('C9 api sets sent (L-1)', pg_temp.try($q$ update public.invitations set status = 'sent' where id = '11000000-0000-4000-8000-000000000001' $q$), 'OK 1');
+select pg_temp.chk('C10 api sets otp_verified', pg_temp.try($q$ update public.invitations set status = 'otp_verified' where id = '11000000-0000-4000-8000-000000000001' $q$), 'OK 1');
+select pg_temp.chk('C11 api cannot move backward', pg_temp.try($q$ update public.invitations set status = 'sent' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%forward%');
+select pg_temp.chk('C12 api cannot set submitted', pg_temp.try($q$ update public.invitations set status = 'submitted' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%cannot set%');
+select pg_temp.chk('C13 api cannot set revoked', pg_temp.try($q$ update public.invitations set status = 'revoked' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%cannot set%');
+select pg_temp.chk('C14 api cannot change the contact', pg_temp.try($q$ update public.invitations set contact_email = 'x@example.test' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%');
+select pg_temp.chk('C15 consent before the age answer refused', pg_temp.try($q$
+  insert into public.consents (org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256)
+  values ('a1000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'd1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000001', repeat('a', 64))$q$), '42501%adult%');
+select pg_temp.chk('C16 session id before consent refused', pg_temp.try($q$ update public.invitations set session_id = 'aa000000-0000-4000-8000-000000000001' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%after consent%');
+select pg_temp.chk('C17 api records adult self-declaration', pg_temp.try($q$ update public.invitations set adult_self_declared = true where id = '11000000-0000-4000-8000-000000000001' $q$), 'OK 1');
+select pg_temp.chk('C18 adult answer is set once', pg_temp.try($q$ update public.invitations set adult_self_declared = false where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%set once%');
+select pg_temp.chk('C19 consent with a non-pinned notice refused', pg_temp.try($q$
+  insert into public.consents (org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256)
+  values ('a1000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'd1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000002', repeat('a', 64))$q$), '42501%pinned notice%');
+select pg_temp.chk('C20 consent with a bad hash refused', pg_temp.try($q$
+  insert into public.consents (org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256)
+  values ('a1000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'd1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000001', 'nothex')$q$), '23514%');
+select pg_temp.chk('C21 consent recorded', pg_temp.try($q$
+  insert into public.consents (id, org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256)
+  values ('cc000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'd1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000001', repeat('a', 64))$q$), 'OK 1');
+select pg_temp.chk('C22 replayed consent is a no-op', pg_temp.try($q$
+  insert into public.consents (org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256)
+  values ('a1000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'd1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000001', repeat('a', 64))
+  on conflict (org_id, invitation_id, event) do nothing$q$), 'OK 0');
+select pg_temp.chk('C23 consent for another org refused (RLS)', pg_temp.try($q$
+  insert into public.consents (org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256)
+  values ('a1000000-0000-4000-8000-000000000003', '11000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'd1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000001', repeat('a', 64))$q$), '%');
+select pg_temp.chk('C24 api cannot update a consent', pg_temp.try($q$ update public.consents set language = 'en' $q$), '42501%');
+select pg_temp.chk('C25 started before session id refused', pg_temp.try($q$ update public.invitations set status = 'started', started_at = '2026-10-14 10:00+00' where id = '11000000-0000-4000-8000-000000000001' $q$), '23514%|42501%');
+select pg_temp.chk('C26 api sets session id after consent', pg_temp.try($q$ update public.invitations set session_id = 'aa000000-0000-4000-8000-000000000001' where id = '11000000-0000-4000-8000-000000000001' $q$), 'OK 1');
+select pg_temp.chk('C27 session id is set once', pg_temp.try($q$ update public.invitations set session_id = 'aa000000-0000-4000-8000-000000000009' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%set once%');
+select pg_temp.chk('C28 expiry refused once session id is set (L-32)', pg_temp.try($q$ update public.invitations set status = 'expired' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%cannot expire%');
+select pg_temp.chk('C29 started_at without started refused', pg_temp.try($q$ update public.invitations set started_at = '2026-10-14 10:00+00' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%started transition%');
+select pg_temp.chk('C30 started without started_at refused', pg_temp.try($q$ update public.invitations set status = 'started' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%DO start time%');
+select pg_temp.chk('C31 started with the DO time (L-17)', pg_temp.try($q$ update public.invitations set status = 'started', started_at = '2026-10-14 10:00+00' where id = '11000000-0000-4000-8000-000000000001' $q$), 'OK 1');
+select pg_temp.chk('C32 retried sessionStarted with the stored time is a no-op', pg_temp.try($q$ update public.invitations set status = 'started', started_at = '2026-10-14 10:00+00' where id = '11000000-0000-4000-8000-000000000001' $q$), 'OK 1');
+select pg_temp.chk('C33 started_at is set once', pg_temp.try($q$ update public.invitations set started_at = '2026-10-14 10:05+00' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%set once%');
+select pg_temp.chk('C34 api cannot expire a started invitation', pg_temp.try($q$ update public.invitations set status = 'expired' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%');
+-- Invitation 4: self-declared minor (rule 9). The api sends only the answer; the guard forces the block.
+select pg_temp.chk('C35 api: otp on invitation 4', pg_temp.try($q$ update public.invitations set status = 'otp_verified' where id = '11000000-0000-4000-8000-000000000004' $q$), 'OK 1');
+select pg_temp.chk('C36 api: self-declared minor', pg_temp.try($q$ update public.invitations set adult_self_declared = false where id = '11000000-0000-4000-8000-000000000004' $q$), 'OK 1');
+select pg_temp.chk('C37 minor is blocked_age/self_declared', pg_temp.val($q$ select status || '/' || age_block_source from public.invitations where id = '11000000-0000-4000-8000-000000000004' $q$), 'blocked_age/self_declared');
+select pg_temp.chk('C38 blocked_age is terminal', pg_temp.try($q$ update public.invitations set status = 'otp_verified' where id = '11000000-0000-4000-8000-000000000004' $q$), '42501%terminal%');
+select pg_temp.chk('C39 consent on a blocked invitation refused', pg_temp.try($q$
+  insert into public.consents (org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256)
+  values ('a1000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000004', 'f1000000-0000-4000-8000-000000000001',
+          'd1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000001', repeat('a', 64))$q$), '42501%');
+select pg_temp.chk('C40 blocked_age without a minor answer refused', pg_temp.try($q$ update public.invitations set status = 'blocked_age' where id = '11000000-0000-4000-8000-000000000005' $q$), '42501%minor%');
+select pg_temp.chk('C41 api cannot fake the inviter source', pg_temp.try($q$ update public.invitations set age_block_source = 'inviter' where id = '11000000-0000-4000-8000-000000000005' $q$), '42501%');
+select pg_temp.chk('C42 lazy expiry of a fresh invitation', pg_temp.try($q$ update public.invitations set status = 'expired' where id = '11000000-0000-4000-8000-000000000005' $q$), 'OK 1');
+select pg_temp.chk('C43 expired is terminal', pg_temp.try($q$ update public.invitations set status = 'sent' where id = '11000000-0000-4000-8000-000000000005' $q$), '42501%terminal%');
+select pg_temp.chk('C44 api cannot read sessions', pg_temp.try($q$ select 1 from public.sessions $q$), '42501%');
+select pg_temp.chk('C45 api cannot insert a session', pg_temp.try($q$ insert into public.sessions (id) values (gen_random_uuid()) $q$), '42501%');
+reset role;
+select pg_temp.chk('C46 resolve denied to authenticated', (select has_function_privilege('authenticated', 'private.resolve_invitation_by_hash(text)', 'execute')::text), 'false');
+select pg_temp.chk('C47 resolve denied to trace_worker', (select has_function_privilege('trace_worker', 'private.resolve_invitation_by_hash(text)', 'execute')::text), 'false');
+select pg_temp.chk('C48 resolve denied to anon', (select has_function_privilege('anon', 'private.resolve_invitation_by_hash(text)', 'execute')::text), 'false');
+select pg_temp.chk('C49 resolve result columns', (select pg_get_function_result('private.resolve_invitation_by_hash(text)'::regprocedure)),
+  'TABLE(org_id uuid, id uuid, status invitation_status, candidate_id uuid, session_id uuid, started_at timestamp with time zone, test_id uuid, test_version_id uuid, expires_at timestamp with time zone)');
+select pg_temp.chk('C50 consent workspace/test copied', (select (workspace_id = 'b1000000-0000-4000-8000-000000000001' and test_id = 'e1000000-0000-4000-8000-000000000001')::text from public.consents where id = 'cc000000-0000-4000-8000-000000000001'), 'true');
+select pg_temp.chk('C51 operator cannot insert a consent', pg_temp.try($q$
+  insert into public.consents (org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256)
+  values ('a1000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000003', 'f1000000-0000-4000-8000-000000000001',
+          'd1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000001', repeat('a', 64))$q$), '42501%api only%');
+select pg_temp.chk('C52 operator cannot change an invitation', pg_temp.try($q$ update public.invitations set status = 'sent' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%');
+
+-- L-31 CHECK, tested with the insert trigger switched off (owner DDL inside this rolled-back transaction).
+alter table public.invitations disable trigger invitations_label;
+select pg_temp.chk('C53 L-31: blocked_age with both answers adult refused', pg_temp.try($q$
+  insert into public.invitations (org_id, workspace_id, test_id, test_version_id, candidate_label, contact_email, link_token_hash, adult_confirmed_by_inviter, adult_self_declared, age_block_source, status, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'Candidate 90', 'c90@example.test', repeat('a', 64), true, true, 'inviter', 'blocked_age', '2030-01-01')$q$), '23514%invitations_age_block%');
+select pg_temp.chk('C54 L-31: a minor answer without blocked_age refused', pg_temp.try($q$
+  insert into public.invitations (org_id, workspace_id, test_id, test_version_id, candidate_label, contact_email, link_token_hash, adult_confirmed_by_inviter, adult_self_declared, status, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'Candidate 91', 'c91@example.test', repeat('b', 64), null, false, 'otp_verified', '2030-01-01')$q$), '23514%invitations_age_block%');
+select pg_temp.chk('C55 L-31: inviter minor without blocked_age refused', pg_temp.try($q$
+  insert into public.invitations (org_id, workspace_id, test_id, test_version_id, candidate_label, contact_email, link_token_hash, adult_confirmed_by_inviter, status, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'Candidate 92', 'c92@example.test', repeat('c', 64), false, 'created', '2030-01-01')$q$), '23514%invitations_age_block%');
+select pg_temp.chk('C56 L-31: blocked_age without a source refused', pg_temp.try($q$
+  insert into public.invitations (org_id, workspace_id, test_id, test_version_id, candidate_label, contact_email, link_token_hash, adult_confirmed_by_inviter, status, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'Candidate 93', 'c93@example.test', repeat('d', 64), false, 'blocked_age', '2030-01-01')$q$), '23514%age_block_source%');
+select pg_temp.chk('C57 L-31: nulls (not yet stated) with created pass', pg_temp.try($q$
+  insert into public.invitations (org_id, workspace_id, test_id, test_version_id, candidate_label, contact_email, link_token_hash, status, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'Candidate 94', 'c94@example.test', repeat('e', 64), 'created', '2030-01-01')$q$), 'OK 1');
+delete from public.invitations where candidate_label = 'Candidate 94';
+alter table public.invitations enable always trigger invitations_label;
+
+-- ---------------------------------------------------------------------------------------------
+-- D. Mirror (trace_worker): invitation submitted guard, mirror_session idempotency, sessions guard, children
+-- ---------------------------------------------------------------------------------------------
+create temp table msg as select jsonb_build_object(
+  'v', 1, 'jobKind', 'session_mirror', 'mirrorSeq', 1,
+  'jobKey', 'aa000000-0000-4000-8000-000000000001:session_mirror:d1000000-0000-4000-8000-000000000001',
+  'sessionId', 'aa000000-0000-4000-8000-000000000001', 'orgId', 'a1000000-0000-4000-8000-000000000001',
+  'invitationId', '11000000-0000-4000-8000-000000000001', 'testVersionId', 'f1000000-0000-4000-8000-000000000001',
+  'rulesetVersionId', 'd1000000-0000-4000-8000-000000000001', 'consentId', 'cc000000-0000-4000-8000-000000000001',
+  'state', 'submitted', 'receiptRef', 'ABCDEFGH',
+  'startedAt', '2026-10-14T10:00:00Z', 'deadlineAt', '2026-10-14T10:10:00Z', 'submittedAt', '2026-10-14T10:08:00Z',
+  'lastEventSeq', 12, 'streamCount', 1, 'resumeCount', 0,
+  'served', jsonb_build_array(
+    jsonb_build_object('position', 1, 'itemVersionId', '91000000-0000-4000-8000-000000000001', 'servedAt', '2026-10-14T10:00:05Z'),
+    jsonb_build_object('position', 1, 'itemVersionId', '91000000-0000-4000-8000-000000000002', 'servedAt', '2026-10-14T10:01:00Z')),
+  'evidence', jsonb_build_object('finalKey', 'k', 'finalSha256', repeat('f', 64), 'eventsKey', 'k2', 'eventsSha256', repeat('f', 64)),
+  'replay', 'ok', 'signalCatalogVersion', 'd1-v1',
+  'coverage', jsonb_build_object('activeMs', 480000, 'coveredMs', 470000), 'gaps', '[]'::jsonb,
+  'photo', jsonb_build_object('key', 'media/a1000000-0000-4000-8000-000000000001/aa000000-0000-4000-8000-000000000001/start_photo.jpg',
+    'sha256', repeat('b', 64), 'bytes', 40000, 'mime', 'image/jpeg', 'blurredOnDevice', true),
+  'photoSkippedReason', null,
+  'responses', jsonb_build_array(
+    jsonb_build_object('itemVersionId', '91000000-0000-4000-8000-000000000001', 'kind', 'choice', 'choice', 'a', 'sha256', repeat('1', 64), 'finalSeq', 3),
+    jsonb_build_object('itemVersionId', '91000000-0000-4000-8000-000000000002', 'kind', 'text', 'text', 'Synthetic answer', 'sha256', repeat('2', 64), 'finalSeq', 11))
+) as m;
+grant select on msg to public;
+
+set local role trace_worker;
+select pg_temp.chk('D1 mirror without job_org_id refused', pg_temp.try($q$ select private.mirror_session('a1000000-0000-4000-8000-000000000001', (select m from pg_temp.msg)) $q$), '42501%job org%');
+select set_config('trace.job_org_id', 'a1000000-0000-4000-8000-000000000001', true);
+select pg_temp.chk('D2 submitted without a sessions row refused (L-35)', pg_temp.try($q$ update public.invitations set status = 'submitted' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%sessions row%');
+select pg_temp.chk('D3 worker cannot set started', pg_temp.try($q$ update public.invitations set status = 'started' where id = '11000000-0000-4000-8000-000000000005' $q$), '42501%');
+select pg_temp.chk('D4 worker cannot read the contact', pg_temp.try($q$ select contact_email from public.invitations $q$), '42501%');
+select pg_temp.chk('D5 bad jobKey refused', pg_temp.try($q$ select private.mirror_session('a1000000-0000-4000-8000-000000000001', (select m || '{"jobKey":"x"}' from pg_temp.msg)) $q$), '22023%jobKey%');
+select pg_temp.chk('D6 org mismatch refused', pg_temp.try($q$ select private.mirror_session('a1000000-0000-4000-8000-000000000003', (select m from pg_temp.msg)) $q$), '42501%job org%');
+select pg_temp.chk('D7 photo and skip reason both set refused', pg_temp.try($q$ select private.mirror_session('a1000000-0000-4000-8000-000000000001', (select m || '{"photoSkippedReason":"declined"}' from pg_temp.msg)) $q$), '22023%photo%');
+select pg_temp.chk('D8 mirror stores', pg_temp.val($q$ select private.mirror_session('a1000000-0000-4000-8000-000000000001', (select m from pg_temp.msg)) $q$), 'stored');
+select pg_temp.chk('D9 mirror replay is duplicate', pg_temp.val($q$ select private.mirror_session('a1000000-0000-4000-8000-000000000001', (select m from pg_temp.msg)) $q$), 'duplicate');
+select pg_temp.chk('D10 duplicate by key with a higher mirrorSeq', pg_temp.val($q$ select private.mirror_session('a1000000-0000-4000-8000-000000000001', (select m || '{"mirrorSeq":2}' from pg_temp.msg)) $q$), 'duplicate');
+select pg_temp.chk('D11 session row', pg_temp.val($q$ select state || '/' || submit_kind || '/' || mirror_seq || '/' || receipt_ref || '/' || adult_confirmed_at_start from public.sessions $q$), 'submitted/candidate/1/ABCDEFGH/true');
+select pg_temp.chk('D12 two session items', pg_temp.val($q$ select count(*) from public.session_items $q$), '2');
+select pg_temp.chk('D13 two responses', pg_temp.val($q$ select count(*) from public.responses $q$), '2');
+select pg_temp.chk('D14 one start photo', pg_temp.val($q$ select count(*) from public.media_objects $q$), '1');
+select pg_temp.chk('D15 invitation submitted', pg_temp.val($q$ select status from public.invitations where id = '11000000-0000-4000-8000-000000000001' $q$), 'submitted');
+select pg_temp.chk('D16 idempotency key stored', pg_temp.val($q$ select key from public.idempotency_keys where scope = 'session_mirror' $q$), 'aa000000-0000-4000-8000-000000000001:session_mirror:d1000000-0000-4000-8000-000000000001');
+select pg_temp.chk('D17 mirror_seq equal refused at the trigger', pg_temp.try($q$ update public.sessions set mirror_seq = 1 where id = 'aa000000-0000-4000-8000-000000000001' $q$), '42501%forward%');
+select pg_temp.chk('D18 submitted session is terminal', pg_temp.try($q$ update public.sessions set state = 'in_progress', submitted_at = null, submit_kind = null, mirror_seq = 2 where id = 'aa000000-0000-4000-8000-000000000001' $q$), '42501%set once%|42501%terminal%');
+select pg_temp.chk('D19 submitted_at set once', pg_temp.try($q$ update public.sessions set submitted_at = '2026-10-14 10:09+00', mirror_seq = 2 where id = 'aa000000-0000-4000-8000-000000000001' $q$), '42501%set once%');
+select pg_temp.chk('D20 worker cannot change started_at (no grant)', pg_temp.try($q$ update public.sessions set started_at = '2026-10-14 09:00+00' where id = 'aa000000-0000-4000-8000-000000000001' $q$), '42501%');
+select pg_temp.chk('D21 session items are insert-only', pg_temp.try($q$ update public.session_items set position = position $q$), '42501%');
+select pg_temp.chk('D22 responses are insert-only', pg_temp.try($q$ update public.responses set final_seq = final_seq $q$), '42501%');
+select pg_temp.chk('D23 media key must match its ids', pg_temp.try($q$
+  insert into public.media_objects (org_id, session_id, kind, r2_key, sha256, bytes, mime, blurred_on_device)
+  values ('a1000000-0000-4000-8000-000000000001', 'aa000000-0000-4000-8000-000000000001', 'start_photo', 'media/x/y/start_photo.jpg', repeat('b', 64), 10, 'image/jpeg', true)$q$), '42501%media key%');
+select pg_temp.chk('D24 media kind allow-list (rule 8)', pg_temp.try($q$
+  insert into public.media_objects (org_id, session_id, kind, r2_key, sha256, bytes, mime, blurred_on_device)
+  values ('a1000000-0000-4000-8000-000000000001', 'aa000000-0000-4000-8000-000000000001', 'camera_frame', 'media/a1000000-0000-4000-8000-000000000001/aa000000-0000-4000-8000-000000000001/start_photo.jpg', repeat('b', 64), 10, 'image/jpeg', true)$q$), '23514%');
+select pg_temp.chk('D25 unblurred photo refused', pg_temp.try($q$
+  insert into public.media_objects (org_id, session_id, kind, r2_key, sha256, bytes, mime, blurred_on_device)
+  values ('a1000000-0000-4000-8000-000000000001', 'aa000000-0000-4000-8000-000000000001', 'start_photo', 'media/a1000000-0000-4000-8000-000000000001/aa000000-0000-4000-8000-000000000001/start_photo.jpg', repeat('b', 64), 10, 'image/jpeg', false)$q$), '23514%');
+select pg_temp.chk('D26 session for a blocked invitation refused (rule 9)', pg_temp.try($q$
+  insert into public.sessions (id, org_id, test_version_id, ruleset_version_id, invitation_id, consent_id, state, submit_kind, adult_confirmed_at_start, started_at, server_deadline_at, submitted_at, mirror_seq, receipt_ref)
+  values ('aa000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001',
+          '11000000-0000-4000-8000-000000000003', 'cc000000-0000-4000-8000-000000000001', 'submitted', 'candidate', true, '2026-10-14 10:00+00', '2026-10-14 10:10+00', '2026-10-14 10:05+00', 1, 'ZZZZZZZZ')$q$), '42501%blocked%');
+select pg_temp.chk('D27 session with a non-adult flag refused (CHECK)', pg_temp.try($q$
+  insert into public.sessions (id, org_id, test_version_id, ruleset_version_id, invitation_id, consent_id, state, submit_kind, adult_confirmed_at_start, started_at, server_deadline_at, submitted_at, mirror_seq, receipt_ref)
+  values ('aa000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001',
+          '11000000-0000-4000-8000-000000000001', 'cc000000-0000-4000-8000-000000000001', 'submitted', 'candidate', false, '2026-10-14 10:00+00', '2026-10-14 10:10+00', '2026-10-14 10:05+00', 1, 'YYYYYYYY')$q$), '23514%|23505%');
+select pg_temp.chk('D28 mirror for a revoked invitation is dead', pg_temp.val($q$ select private.mirror_session('a1000000-0000-4000-8000-000000000001', (select m || jsonb_build_object(
+  'invitationId', '11000000-0000-4000-8000-000000000002', 'sessionId', 'aa000000-0000-4000-8000-000000000002',
+  'jobKey', 'aa000000-0000-4000-8000-000000000002:session_mirror:d1000000-0000-4000-8000-000000000001') from pg_temp.msg)) $q$), 'dead_invitation');
+select pg_temp.chk('D29 dead mirror wrote nothing', pg_temp.val($q$ select count(*) from public.sessions $q$), '1');
+select pg_temp.chk('D30 worker org B cannot see org A sessions', pg_temp.val($q$ select set_config('trace.job_org_id', 'a1000000-0000-4000-8000-000000000003', true) || (select count(*) from public.sessions) $q$), '%0');
+select set_config('trace.job_org_id', 'a1000000-0000-4000-8000-000000000001', true);
+select pg_temp.chk('D31 worker cannot insert a consent', pg_temp.try($q$ insert into public.consents (org_id) values ('a1000000-0000-4000-8000-000000000001') $q$), '42501%');
+reset role;
+select pg_temp.chk('D32 media workspace/test copied', (select (workspace_id = 'b1000000-0000-4000-8000-000000000001' and test_id = 'e1000000-0000-4000-8000-000000000001')::text from public.media_objects), 'true');
+select pg_temp.chk('D33 session items section copied', (select string_agg(section_id::text, ',' order by section_id) from public.session_items), '51000000-0000-4000-8000-000000000001,51000000-0000-4000-8000-000000000002');
+select pg_temp.chk('D34 terminal submitted invitation', pg_temp.try($q$ update public.invitations set status = 'expired' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%terminal%');
+select pg_temp.chk('D35 operator cannot write a session', pg_temp.try($q$ update public.sessions set mirror_seq = 5 $q$), '42501%mirror only%');
+
+-- ---------------------------------------------------------------------------------------------
+-- E. Consents append-only (revoke first, then the trigger in normal and replica mode)
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.chk('E1 owner UPDATE revoked', pg_temp.try($q$ update public.consents set language = 'en' $q$), '42501%permission denied%');
+select pg_temp.chk('E2 owner DELETE revoked', pg_temp.try($q$ delete from public.consents $q$), '42501%permission denied%');
+select pg_temp.chk('E3 owner TRUNCATE revoked', pg_temp.try($q$ truncate public.consents cascade $q$), '42501%permission denied%');
+grant update, delete, truncate on public.consents to postgres;
+select pg_temp.chk('E4 trigger blocks UPDATE', pg_temp.try($q$ update public.consents set language = 'en' $q$), 'P0001 TRACE_APPEND_ONLY');
+select pg_temp.chk('E5 trigger blocks DELETE', pg_temp.try($q$ delete from public.consents $q$), 'P0001 TRACE_APPEND_ONLY');
+select pg_temp.chk('E6 trigger blocks TRUNCATE', pg_temp.try($q$ truncate public.consents cascade $q$), 'P0001 TRACE_APPEND_ONLY');
+select pg_temp.chk('E7 replica mode can be set', pg_temp.try($q$ set local session_replication_role = replica $q$), 'OK%');
+select pg_temp.chk('E8 replica: trigger blocks UPDATE', pg_temp.try($q$ update public.consents set language = 'en' $q$), 'P0001 TRACE_APPEND_ONLY');
+select pg_temp.chk('E9 replica: trigger blocks DELETE', pg_temp.try($q$ delete from public.consents $q$), 'P0001 TRACE_APPEND_ONLY');
+select pg_temp.chk('E10 replica: trigger blocks TRUNCATE', pg_temp.try($q$ truncate public.consents cascade $q$), 'P0001 TRACE_APPEND_ONLY');
+select pg_temp.chk('E11 replica: invitation guard still fires', pg_temp.try($q$ update public.invitations set status = 'sent' where id = '11000000-0000-4000-8000-000000000001' $q$), '42501%');
+select pg_temp.chk('E12 replica: session guard still fires', pg_temp.try($q$ update public.sessions set mirror_seq = 9 $q$), '42501%');
+select pg_temp.chk('E13 replica: invitation label trigger still fires', pg_temp.try($q$
+  insert into public.invitations (org_id, test_id, test_version_id, contact_email, link_token_hash, expires_at)
+  values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+          'cand.r@example.test', repeat('f', 64), '2030-01-01')$q$), '42501%org users only%');
+set local session_replication_role = origin;
+revoke update, delete, truncate on public.consents from postgres;
+select pg_temp.chk('E14 consents count unchanged', (select count(*)::text from public.consents), '1');
+
+-- ---------------------------------------------------------------------------------------------
+-- F. idempotency_keys (L-20)
+-- ---------------------------------------------------------------------------------------------
+set local role trace_worker;
+select set_config('trace.job_org_id', '', true);
+select pg_temp.chk('F1 mirror worker, org unset: insert refused', pg_temp.try($q$ insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'session_mirror', 's:session_mirror:r', '2030-01-01') $q$), '42501%row-level%');
+select set_config('trace.job_org_id', 'a1000000-0000-4000-8000-000000000001', true);
+select pg_temp.chk('F2 mirror worker inserts its own scope', pg_temp.try($q$ insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'session_mirror', 's:session_mirror:r', '2030-01-01') $q$), 'OK 1');
+select pg_temp.chk('F3 duplicate is on conflict do nothing', pg_temp.try($q$ insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'session_mirror', 's:session_mirror:r', '2030-01-01') on conflict do nothing $q$), 'OK 0');
+select pg_temp.chk('F4 mirror worker cannot write quality_score', pg_temp.try($q$ insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'quality_score', 's:quality_score:r', '2030-01-01') $q$), '42501%row-level%');
+select pg_temp.chk('F5 mirror worker cannot write org B', pg_temp.try($q$ insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000003', 'session_mirror', 's2:session_mirror:r', '2030-01-01') $q$), '42501%row-level%');
+select pg_temp.chk('F6 mirror worker UPDATE revoked', pg_temp.try($q$ update public.idempotency_keys set result_ref = 'x' $q$), '42501%permission denied%');
+select pg_temp.chk('F7 mirror worker DELETE revoked', pg_temp.try($q$ delete from public.idempotency_keys $q$), '42501%permission denied%');
+reset role;
+set local role trace_quality_worker;
+select pg_temp.chk('F8 quality worker inserts quality_score', pg_temp.try($q$ insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'quality_score', 's:quality_score:r', '2030-01-01') $q$), 'OK 1');
+select pg_temp.chk('F9 quality worker cannot write session_mirror', pg_temp.try($q$ insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'session_mirror', 'q:session_mirror:r', '2030-01-01') $q$), '42501%row-level%');
+select pg_temp.chk('F10 quality worker sees only its scope', pg_temp.val($q$ select string_agg(distinct scope, ',') from public.idempotency_keys $q$), 'quality_score');
+select pg_temp.chk('F11 quality worker UPDATE denied', pg_temp.try($q$ update public.idempotency_keys set result_ref = 'x' $q$), '42501%permission denied%');
+select pg_temp.chk('F12 quality worker reads session ids, not times', pg_temp.try($q$ select started_at from public.sessions $q$), '42501%');
+select pg_temp.chk('F13 quality worker reads session state', pg_temp.val($q$ select state from public.sessions $q$), 'submitted');
+select pg_temp.chk('F14 quality worker reads responses', pg_temp.val($q$ select count(*) from public.responses $q$), '2');
+reset role;
+set local role trace_integrity_worker;
+select pg_temp.chk('F15 integrity worker inserts integrity_band', pg_temp.try($q$ insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'integrity_band', 's:integrity_band:r', '2030-01-01') $q$), 'OK 1');
+select pg_temp.chk('F16 integrity worker cannot write quality_score', pg_temp.try($q$ insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'quality_score', 'i:quality_score:r', '2030-01-01') $q$), '42501%row-level%');
+select pg_temp.chk('F17 integrity worker cannot read responses', pg_temp.try($q$ select 1 from public.responses $q$), '42501%');
+select pg_temp.chk('F18 integrity worker reads sessions', pg_temp.val($q$ select count(*) from public.sessions $q$), '1');
+reset role;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000001","aal":"aal2","amr":[{"method":"password","timestamp":1},{"method":"totp","timestamp":2}],"role":"authenticated"}';
+select pg_temp.chk('F19 org user cannot touch idempotency_keys', pg_temp.try($q$ select 1 from public.idempotency_keys $q$), '42501%');
+reset role;
+select pg_temp.chk('F20 old literal-true policies gone', (select count(*)::text from pg_policies where tablename = 'idempotency_keys' and (qual = 'true' or with_check = 'true')), '0');
+select pg_temp.chk('F21 six scoped policies', (select count(*)::text from pg_policies where tablename = 'idempotency_keys'), '6');
+
+-- ---------------------------------------------------------------------------------------------
+-- G. App-role reads of the session tables
+-- ---------------------------------------------------------------------------------------------
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000005","aal":"aal1","amr":[{"method":"otp","timestamp":1}],"role":"authenticated"}';
+select pg_temp.chk('G1 recruiter sees the session', pg_temp.val($q$ select count(*) from public.sessions $q$), '1');
+select pg_temp.chk('G2 recruiter sees consent', pg_temp.val($q$ select count(*) from public.consents $q$), '1');
+select pg_temp.chk('G3 recruiter sees session items', pg_temp.val($q$ select count(*) from public.session_items $q$), '2');
+select pg_temp.chk('G4 recruiter sees media metadata', pg_temp.val($q$ select bytes from public.media_objects $q$), '40000');
+select pg_temp.chk('G5 recruiter cannot read r2_key', pg_temp.try($q$ select r2_key from public.media_objects $q$), '42501%');
+select pg_temp.chk('G6 recruiter cannot read sha256', pg_temp.try($q$ select sha256 from public.media_objects $q$), '42501%');
+select pg_temp.chk('G7 recruiter cannot read responses (R-8)', pg_temp.try($q$ select 1 from public.responses $q$), '42501%');
+select pg_temp.chk('G8 recruiter cannot write sessions', pg_temp.try($q$ update public.sessions set mirror_seq = 9 $q$), '42501%');
+select pg_temp.chk('G9 recruiter cannot insert consents', pg_temp.try($q$ insert into public.consents (org_id) values ('a1000000-0000-4000-8000-000000000001') $q$), '42501%');
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000006","aal":"aal1","amr":[{"method":"password","timestamp":1}],"role":"authenticated"}';
+select pg_temp.chk('G10 unknown user sees no session', pg_temp.val($q$ select count(*) from public.sessions $q$), '0');
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000007","aal":"aal2","amr":[{"method":"password","timestamp":1},{"method":"totp","timestamp":2}],"role":"authenticated"}';
+select pg_temp.chk('G11 assigned reviewer sees the session', pg_temp.val($q$ select count(*) from public.sessions $q$), '1');
+select pg_temp.chk('G12 assigned reviewer sees media metadata', pg_temp.val($q$ select count(*) from public.media_objects $q$), '1');
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000007","aal":"aal1","amr":[{"method":"password","timestamp":1}],"role":"authenticated"}';
+select pg_temp.chk('G13 reviewer at aal1 sees nothing', pg_temp.val($q$ select count(*) from public.sessions $q$), '0');
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000014","aal":"aal2","amr":[{"method":"password","timestamp":1},{"method":"totp","timestamp":2}],"role":"authenticated"}';
+select pg_temp.chk('G14 unassigned reviewer sees no session', pg_temp.val($q$ select count(*) from public.sessions $q$), '0');
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000008","aal":"aal2","amr":[{"method":"password","timestamp":1},{"method":"totp","timestamp":2}],"role":"authenticated"}';
+select pg_temp.chk('G15 hm sees no session', pg_temp.val($q$ select count(*) from public.sessions $q$), '0');
+select pg_temp.chk('G16 hm sees no consent', pg_temp.val($q$ select count(*) from public.consents $q$), '0');
+reset role;
+set local role anon;
+select pg_temp.chk('G17 anon denied on invitations', pg_temp.try($q$ select 1 from public.invitations $q$), '42501%');
+select pg_temp.chk('G18 anon denied on sessions', pg_temp.try($q$ select 1 from public.sessions $q$), '42501%');
+reset role;
+select pg_temp.chk('G19 trace_candidate holds nothing on the new tables', (select count(*)::text from information_schema.role_table_grants where grantee in ('trace_candidate', 'trace_candidate_gateway', 'anon') and table_name in ('invitations','consents','sessions','session_items','responses','media_objects')), '0');
+select pg_temp.chk('G20 no score/band/grade/outcome/reject column in the new tables', (select count(*)::text from information_schema.columns where table_schema = 'public' and table_name in ('invitations','consents','sessions','session_items','responses','media_objects') and column_name ~ '(score|band|grade|outcome|reject)'), '0');
+select pg_temp.chk('G21 invitation_status has no reject label', (select count(*)::text from pg_enum where enumtypid = 'public.invitation_status'::regtype and enumlabel like '%reject%'), '0');
+select pg_temp.chk('G22 all new guards ENABLE ALWAYS', (select string_agg(tgname || '=' || tgenabled, ',' order by tgname) from pg_trigger where tgrelid in ('public.invitations'::regclass, 'public.consents'::regclass, 'public.sessions'::regclass, 'public.session_items'::regclass, 'public.responses'::regclass, 'public.media_objects'::regclass) and not tgisinternal and tgenabled <> 'A' and tgname <> 'invitations_audit'), '<null>');
+select pg_temp.chk('G23 mirror_session EXECUTE only trace_worker', (select string_agg(r, ',' order by r) from unnest(array['anon','authenticated','service_role','trace_api','trace_worker','trace_quality_worker','trace_integrity_worker']) as r where has_function_privilege(r, 'private.mirror_session(uuid,jsonb)', 'execute')), 'trace_worker');
+select pg_temp.chk('G24 no private function executable by trace_api/trace_worker beyond the list', (select coalesce(string_agg(distinct p.proname || ':' || r, ',' order by p.proname || ':' || r), '<none>') from pg_proc as p join pg_namespace as n on n.oid = p.pronamespace cross join unnest(array['trace_api','trace_worker']) as r where n.nspname = 'private' and has_function_privilege(r, p.oid, 'execute')), 'api_org_id:trace_api,job_org_id:trace_worker,mirror_session:trace_worker,resolve_invitation_by_hash:trace_api');
+
+-- ---------------------------------------------------------------------------------------------
+-- Result
+-- ---------------------------------------------------------------------------------------------
+select 'PASS ' || count(*) filter (where got like want) || ' / FAIL ' || count(*) filter (where got not like want) || ' / TOTAL ' || count(*) from smoke;
+select 'FAIL ' || name || ' | got: ' || got || ' | want: ' || want from smoke where got not like want order by ts;
