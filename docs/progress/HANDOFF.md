@@ -1,13 +1,13 @@
-# HANDOFF — 2026-10-15 ~00:45 IST
+# HANDOFF — 2026-10-15 ~00:50 IST
 Reason for stopping: usage guard (5-hour window at ~80%+ on the Pro plan; the founder's line is 98%, the wrap-up costs 3–5% and one more Opus review would not fit). Next session may be on another account.
 Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 paste prompt).
 
 ## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M13)
 - Milestones closed: **0 of 17**. M0a, M0b: built, reviewed, fixed; CLOSE waits for founder gates.
-- **Phase: D1 BUILD, Wave 0 (lead-only).** Done: AT-D22; migrations **1-4** placed, reviewed, fixed; all `rls_d1_*` files of spec §3.6 placed (incl. `media_view`, `candidate_denied`, `invariants`); **contracts** `@trace/shared/contracts/{candidate,d1}` + `canonical-json` placed and reviewed; ADR-030 accepted in part. Not done: `SIGNAL_CATALOG`, `canonicalNoticeText`, DC-D5/D6/D8/D9, skeletons, boundaries, wrangler/CSP/ci changes (Next step).
+- **Phase: D1 BUILD, Wave 0 (lead-only).** Done: AT-D22; migrations **1-4** placed, reviewed, fixed; all `rls_d1_*` files of spec §3.6 placed (incl. `media_view`, `candidate_denied`, `invariants`); **contracts** `@trace/shared/contracts/{candidate,d1}` + `canonical-json` placed and reviewed; ADR-030 accepted in part. `SIGNAL_CATALOG` and `canonicalNoticeText` placed (`b625788`). Not done: DC-D5/D6/D8/D9, skeletons, boundaries, wrangler/CSP/ci changes (Next step).
 
 ## Where we are
-- **`d1/integration`** (worktree `.claude/worktrees/d1-integration`) tip = this handoff commit; code tip **`bbae037`**. Full `pnpm verify` **exit 0 at `bbae037`** (00:40 IST): `test:rls` 32 files, rls **2610** (= floor), catalog 142, db-types current; packages/shared 1142 tests.
+- **`d1/integration`** (worktree `.claude/worktrees/d1-integration`) tip = this handoff commit; code tip **`b625788`** (`verify:fast` exit 0; not yet through a full `pnpm verify` or CI). Last full verify: Full `pnpm verify` **exit 0 at `bbae037`** (00:40 IST): `test:rls` 32 files, rls **2610** (= floor), catalog 142, db-types current; packages/shared 1142 tests.
 - Linux CI (draft PR TraceHiring/TraceHiring#4): green on `f6a0144` and on `87bbc8d`; **all green on `bbae037`** (static, rls, migrations, security).
 - Tag **`cp/d1-01`** = `bbae037` (Wave 0 migrations + tests + contracts; full verify and Linux CI green). Unchanged: `milestone/m0a` `7dc8c0d`, `m0a/integration` `c619525`, `milestone/m0b` = `m0b/integration` `56c2641`, `main` `fe77a87` (never commit on or move `main`).
 - Agent branches kept (never delete; all cherry-picked or copied): `worktree-agent-a1597e43a4cfde273` (`d06c4e5`, test drafts), `worktree-agent-a31277c7fe66088f4` (`33af756`, contracts draft), `worktree-agent-a434893532bb816a7` (`c8c0fb3`, contracts fixes).
@@ -19,6 +19,7 @@ Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 pas
 - Opus **DB review** (APPROVE WITH MINOR FIXES) + Opus **security review** (PASS WITH NOTES) → `0b9a949`: view grant only for a link issued to the same viewer/media within 330 s and never viewed (per-link advisory lock), reused link ids refused, `mo.org_id = private.api_org_id()`; tests for demoted, removed, re-added, suspended member/org, audit failure, positive controls (73 assertions, new cases red first). Spec §6.2 **"Media link requirements" R3-1..R3-9** for stream R3; `docs/reviews/D1-db-review-m4.md`, `D1-security-review-m4.md`.
 - `6b2c657` `rls_d1_candidate_denied` (36) and `rls_d1_invariants` (66), Sonnet-drafted, lead-placed; no rule-5 finding. Notes: `docs/progress/d1-wave0-drafts/m4-tests/NOTES.md`.
 - `1a1ce39` ADR-030 **Accepted (autopilot) in part** (token format, ES256 signing, edge verification); gateway/RLS part stays Proposed (M3a).
+- `b625788` `@trace/shared/signal-catalog` (`SIGNAL_CATALOG` `d1-signals-v1`, cross-checked with d1-v1.json and `ClientSignal`) and `@trace/shared/canonical-notice` (`canonicalNoticeText`, `noticeSha256`), tests first; spec §4.2 names them.
 - `104a98b` + `87bbc8d` **contracts** (Sonnet-drafted, lead decisions in spec §4.2 "Contracts"), Opus spec review PASS WITH FIXES → `131318f` (spec F8, F10), `9890b9e` (code F1–F7, F9, `canonicalJson`), `bbae037` (review record `docs/reviews/D1-contracts-review.md`, `./canonical-json` export).
 
 ## Decisions made this session (lead; recorded where named)
@@ -29,7 +30,7 @@ Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 pas
 
 ## Next step (in order)
 1. Verify (below), incl. CI on the handoff commit.
-2. Rest of Wave 0 shared pieces (lead, tests first): `SIGNAL_CATALOG` in `@trace/shared` (§4.6, §5.2: versioned, tier T3, `validated` per sig; `tab_hidden`/`fullscreen_exit` context only) and `canonicalNoticeText` (AT-D8). Also export `canonicalJson` from `index.ts` if the writers need the barrel.
+2. Full `pnpm verify` on the tip and CI on PR #4 (the tip after `bbae037` has only `verify:fast`). Export `canonicalJson` etc. from `index.ts` only if a writer needs the barrel.
 3. Wave 0 remainder (spec §11): DC-D5 (media link: R2 stream + `MediaLinkDO` burn + canvas CSP), DC-D6 (Playwright Win/Linux), DC-D8 (CPU, needs stages — may slip to Wave 1), DC-D9 (CI E2E stack); `packages/band-engine` and `e2e` skeletons; boundaries (`band-engine`, `e2e` elements); wrangler bindings per §4.2 table (`__API_ORIGIN__` CSP, staging origins on `abhayraj.workers.dev`); jobs `queue`/`scheduled` wrapped by `withErrorReporting`; `ci.yml`/`check-*` changes with tests.
 4. Open DB items carried: m1 m-2 (auto-assign re-add, decide/document), m1 m-4 + m2 n-7 (exact `trace_api` table allow-list in `rls_roles`), m1 m-5 (`test.retire` audit?), m2 m-2 (late `sessionStarted`, decide in R3), m2 n-1 (M3a), m3 n-7 (M4 index).
 5. Then Wave 1 writers R1, R3, C1 (max 3, own worktrees reset to an exact SHA). R3 must implement §6.2 R3-1..R3-9.
@@ -42,6 +43,7 @@ Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 pas
 - Ad-hoc pgTAP runs outside `supabase test db` need `create extension if not exists pgtap with schema extensions;` inside the file's transaction (scratch runner pattern: pipe the file to `docker exec -i supabase_db_trace psql -U postgres -X -q -At` from a node `spawnSync`).
 - A pgTAP dry run of a changed migration against a DB that already has it: copy it with `create or replace function` and run it plus the test in one rolled-back transaction.
 - Warn running agents before `test:rls` (it resets the DB).
+- `scripts/test/gitleaks-config.test.mjs` › "finds an api_key value starting with true" flaked once under `verify:fast` load (real gitleaks process); it passed alone and on re-run. If it recurs, raise its timeout.
 - JS `String.replace` turns `$$` into `$` in a replacement string: always use a replacer function.
 - Worktree guard: no `$(…)`, loops, `cd` + git chains, pipes into docker/psql; commit via `git commit -F <file>`.
 - Agents are costly on Pro: an Opus review ≈ 115–220k tokens; a Sonnet writer ≈ 175–230k. This session went from 1% to ~80% of the 5-hour window with 7 agents.

@@ -8,7 +8,7 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-15 00:45 IST (newest; wins over the lines below):** Wave 0: **migrations 1-4 and every §3.6 pgTAP file are placed, reviewed and fixed; contracts `@trace/shared/contracts/{candidate,d1}` and `canonical-json` placed and reviewed**; full verify green at `bbae037` (rls 2610). Next: confirm CI, tag `cp/d1-01`, then `SIGNAL_CATALOG`, `canonicalNoticeText`, DC-D5/D6/D8/D9, skeletons, wrangler/CSP/ci (HANDOFF "Next step").
+- **Update 2026-10-15 00:45 IST (newest; wins over the lines below):** Wave 0: **migrations 1-4 and every §3.6 pgTAP file are placed, reviewed and fixed; contracts `@trace/shared/contracts/{candidate,d1}` and `canonical-json` placed and reviewed**; full verify green at `bbae037` (rls 2610). `cp/d1-01` = `bbae037`; `SIGNAL_CATALOG` and `canonicalNoticeText` added (`b625788`). Next: full verify + CI on the tip, then DC-D5/D6/D8/D9, skeletons, wrangler/CSP/ci (HANDOFF "Next step").
 - **Update 2026-10-14 23:00 IST:** **migration 3 is placed, reviewed (Opus, APPROVE WITH MINOR FIXES) and fixed** (`e253624`, rls 2428; `docs/reviews/D1-db-review-m3.md`). H4 done (`abhayraj.workers.dev`). Next: full verify + PR #4 CI, the small open review items, then **migration 4** (HANDOFF "Next step"); founder walkthrough continues at step 6 (R2).
 - **Update 2026-10-14 21:45 IST:** migration 3 placed and green (`7e9e3fc`), not yet reviewed (superseded by the line above).
 - **Update 2026-10-14 19:35 IST:** AT-D22 Sentry is **green and reviewed** (D1-18 gate met); DB review m1 M-1/m-1 fixed; **migration 2 placed, reviewed and fixed** (rls 1840); migration-3 tests drafted. Next: full verify + PR #4 CI, then **migration 3** (HANDOFF "Next step" 2).
@@ -147,9 +147,9 @@ Before changing anything, run HANDOFF "Verify first" and report in 5 lines wheth
 tell me what differs.
 
 Then do HANDOFF "Next step" in order. Phase: D1 BUILD, Wave 0 (lead-only). Migrations 1-4, all rls_d1_* tests and
-the contracts are placed, reviewed and fixed (code tip bbae037, rls 2610; reviews in docs/reviews/D1-*). Next: confirm
-PR TraceHiring/TraceHiring#4 CI and tag cp/d1-01, then SIGNAL_CATALOG and canonicalNoticeText, then the rest of Wave 0
-(DC-D5/D6/D8/D9, skeletons, boundaries, wrangler/CSP/ci). Writers R1/R3/C1 start only after Wave 0 is merged.
+the contracts are placed, reviewed and fixed (code tip bbae037, rls 2610; reviews in docs/reviews/D1-*). cp/d1-01 is tagged;
+SIGNAL_CATALOG and canonicalNoticeText are in (b625788). Next: full pnpm verify and PR TraceHiring/TraceHiring#4 CI on
+the tip, then the rest of Wave 0 (DC-D5/D6/D8/D9, skeletons, boundaries, wrangler/CSP/ci). Writers R1/R3/C1 start only after Wave 0 is merged.
 
 Safety rules (never break these): never commit on or move main; never force-push; never delete or move branches,
 tags (cp/*) or worktrees (.claude/worktrees/agent-* hold earlier work); never rewrite pushed history; never deploy
