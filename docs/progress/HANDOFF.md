@@ -1,44 +1,50 @@
-# HANDOFF — 2026-10-14 ~23:00 IST
-Reason for stopping: founder asked to wrap up (weekly usage ~92% of the founder's 98% line; the next session may be on another account).
+# HANDOFF — 2026-10-15 ~00:45 IST
+Reason for stopping: usage guard (5-hour window at ~80%+ on the Pro plan; the founder's line is 98%, the wrap-up costs 3–5% and one more Opus review would not fit). Next session may be on another account.
 Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 paste prompt).
 
 ## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M13)
 - Milestones closed: **0 of 17**. M0a, M0b: built, reviewed, fixed; CLOSE waits for founder gates.
-- **Phase: D1 BUILD, Wave 0 (lead-only).** Done: AT-D22 (Sentry); migrations 1, 2, **3** placed, reviewed and fixed; every `D1-M1-SHIM` deleted. Not done: migration 4, invariants/candidate-denied tests, contracts, skeletons, wrangler/CSP (see Next step).
+- **Phase: D1 BUILD, Wave 0 (lead-only).** Done: AT-D22; migrations **1-4** placed, reviewed, fixed; all `rls_d1_*` files of spec §3.6 placed (incl. `media_view`, `candidate_denied`, `invariants`); **contracts** `@trace/shared/contracts/{candidate,d1}` + `canonical-json` placed and reviewed; ADR-030 accepted in part. Not done: `SIGNAL_CATALOG`, `canonicalNoticeText`, DC-D5/D6/D8/D9, skeletons, boundaries, wrangler/CSP/ci changes (Next step).
 
 ## Where we are
-- **`d1/integration`** (worktree `.claude/worktrees/d1-integration`) tip = this handoff commit; code tip **`e253624`** (migration 3 review fixes). Draft PR TraceHiring/TraceHiring#4 (CI only): green on `f4d100f`; `eb5e3e7` was pushed (CI result not checked); **check CI on the pushed tip first**.
-- Unchanged: `milestone/m0a` `7dc8c0d`, `m0a/integration` `c619525`, `milestone/m0b` = `m0b/integration` `56c2641`, `main` `fe77a87` (never commit on or move `main`).
-- Agent branches kept (never delete): `worktree-agent-a922084a4ffff55fa` (m3 test drafts, already cherry-picked). This session's reviewer agent was read-only (no branch).
+- **`d1/integration`** (worktree `.claude/worktrees/d1-integration`) tip = this handoff commit; code tip **`bbae037`**. Full `pnpm verify` **exit 0 at `bbae037`** (00:40 IST): `test:rls` 32 files, rls **2610** (= floor), catalog 142, db-types current; packages/shared 1142 tests.
+- Linux CI (draft PR TraceHiring/TraceHiring#4): green on `f6a0144` and on `87bbc8d`; on `bbae037` migrations, rls and security passed, **static was still running** at handoff (check it first).
+- No `cp/d1-*` tag yet (see Next step 1). Unchanged: `milestone/m0a` `7dc8c0d`, `m0a/integration` `c619525`, `milestone/m0b` = `m0b/integration` `56c2641`, `main` `fe77a87` (never commit on or move `main`).
+- Agent branches kept (never delete; all cherry-picked or copied): `worktree-agent-a1597e43a4cfde273` (`d06c4e5`, test drafts), `worktree-agent-a31277c7fe66088f4` (`33af756`, contracts draft), `worktree-agent-a434893532bb816a7` (`c8c0fb3`, contracts fixes).
 
-## Done 2026-10-14 evening (this session, verified)
-- Verify-first matched the 19:35 handoff; full `pnpm verify` exit 0 at `f4d100f`.
-- `7e9e3fc` **migration 3** `supabase/migrations/20261014151833_d1_results.sql` (spec §3.1 row 3): `quality.scores`/`grader_runs`; `integrity.band_rule_versions` (Rule-shape CHECK `integrity.rule_table_valid`) + L-33 FK; `integrity.signals`/`flags`/`results`; `public.quality_cards`/`integrity_cards` (definer fill + L-4/L-28 guard), `integrity_timeline_entries`, `reports` (`reports_set_once`); org seed `private.seed_org` + `seed_org_defaults` trigger + backfill; L-8 trigger `test_versions_ruleset_seed`; `private.sweep_pending(int)`; `mirror_session` writes the reports row; invitations `unique (session_id)` + `expires_at > created_at`. Tests red first, then green; 5 new pgTAP files; 13 shim blocks deleted; `rls_roles`, `rls_d1_consents`, db-types list updated. Full `pnpm verify` exit 0 at `7e9e3fc`.
-- Opus **database review of migration 3**: APPROVE WITH MINOR FIXES, rule 1 and rule 6 clean (`docs/reviews/D1-db-review-m3.md`). `e253624` fixed M-1, m-1, m-2, m-3, m-4, m-5, m-7c, m-8, n-3 test-first. **Checks at `e253624`:** `pnpm test:rls` exit 0 (29 files, rls **2428** = floor, catalog 142, db-types current); `pnpm -s verify:fast` exit 0. Full `pnpm verify` not re-run after `e253624` (run it first).
-- Founder walkthrough **step 5 (H4) done**: `workers.dev` subdomain **`abhayraj`** (kept as is); recorded in `docs/infra/environments.md` and FOUNDER-QUEUE "Resolved".
-- `docs/progress/d1-wave0-drafts/m3/d1-v1.json`: rule table v1 (seed hash `c862bf65…ca0e`, pinned in `rls_d1_rulesets_m3`); stream band-engine copies it unchanged.
+## Done this session (verified)
+- Verify-first matched the 23:00 handoff; full `pnpm verify` exit 0 at `8b1efd6`.
+- `26cd6eb` m3 review items: m-7a (sweep age guard), m-7b (flip consistency), n-1 (consents TRUNCATE trigger isolation) as tests (no red phase possible: mutation runs fail exactly the new assertions); m-6, n-4, n-6 written into spec §5.1 "Transactions and retries".
+- `f6a0144` **migration 4** `20261014175327_d1_media_audit.sql` (`private.media_viewer_check`, `media_link_grant`, `media_view_grant`), `rls_d1_media_view` red first; `AUDIT_ACTIONS` 20 → 24 (incl. the missing `invitation.create/revoke`).
+- Opus **DB review** (APPROVE WITH MINOR FIXES) + Opus **security review** (PASS WITH NOTES) → `0b9a949`: view grant only for a link issued to the same viewer/media within 330 s and never viewed (per-link advisory lock), reused link ids refused, `mo.org_id = private.api_org_id()`; tests for demoted, removed, re-added, suspended member/org, audit failure, positive controls (73 assertions, new cases red first). Spec §6.2 **"Media link requirements" R3-1..R3-9** for stream R3; `docs/reviews/D1-db-review-m4.md`, `D1-security-review-m4.md`.
+- `6b2c657` `rls_d1_candidate_denied` (36) and `rls_d1_invariants` (66), Sonnet-drafted, lead-placed; no rule-5 finding. Notes: `docs/progress/d1-wave0-drafts/m4-tests/NOTES.md`.
+- `1a1ce39` ADR-030 **Accepted (autopilot) in part** (token format, ES256 signing, edge verification); gateway/RLS part stays Proposed (M3a).
+- `104a98b` + `87bbc8d` **contracts** (Sonnet-drafted, lead decisions in spec §4.2 "Contracts"), Opus spec review PASS WITH FIXES → `131318f` (spec F8, F10), `9890b9e` (code F1–F7, F9, `canonicalJson`), `bbae037` (review record `docs/reviews/D1-contracts-review.md`, `./canonical-json` export).
 
-## Decisions made this session (lead; details in `docs/reviews/D1-db-review-m3.md`)
-- **Rule 6 (FOUNDER-QUEUE, non-blocking confirm):** only a `reviewed` integrity card attaches to `reports`.
-- Sweep: cross-org (EXECUTE `trace_worker` only), age guard on DO times, round-robin across stages. No flag after a final card. The coverage floor is pinned to the rule table. The card's `photo_missing` comes from the result. TRUNCATE is refused on all immutable result tables. Same-value re-attach is a no-op.
+## Decisions made this session (lead; recorded where named)
+- Media: bind the grants to `private.api_org_id()` (security F3 overrules DB n-1); keep the deterministic R2 key of D1-5 and move "no audit row, no bytes" into R3-3 (security F1) — `D1-security-review-m4.md`.
+- `jti = crypto.randomUUID()`, `exp` = issue + 300 s exactly — spec §4.5, §6.2 R3-4.
+- Contracts: `sessionGrant` returns `sessionId`; `sessionStarted` takes `orgId`; no client answer hash in D1 (§4.4, AT-D25); optional `workspaceId` on test creation; `IntegrityCard.ready.photoMissing`; flag timeline entries must carry a non-connectivity family (stricter than the table) — spec §4.2, contracts NOTES.
+- Migration 4 fixed in place (never applied to a shared DB), as migration 3 was.
 
 ## Next step (in order)
-1. Verify (below), incl. PR #4 CI on the pushed tip and a **full `pnpm verify`** on `e253624`; fix any Linux failure.
-2. Open review items (cheap, test-first): m-7a (fresh session not swept for quality/integrity), m-7b (band/flag consistency on the UPDATE flip, and awaiting → below-cutoff while `meets_cutoff = true`), n-1 (table name in TRACE_APPEND_ONLY). Write m-6, n-4 and n-6 into the `workers/jobs` part of the spec (one transaction per stage: card + flags + flip + pointer; on retry flip, never re-insert; one canonical JSON hash for rubrics).
-3. Migration 4 `<ts4>_d1_media_audit.sql` (spec §3.1 row 4, §3.4 media rows, L-2, L-25, L-26, R-7): `private.media_viewer_check()`, `media_link_grant()`, `media_view_grant()`; pgTAP `rls_d1_media_view` red first; then `rls_d1_candidate_denied`, `rls_d1_invariants` (§3.6 rows). Also DB review m1 open m-2, m-4, m-5 and m2 m-2 (late `sessionStarted`), n-1, n-7. Then an Opus DB review of migration 4.
-4. Rest of Wave 0 (spec §11): DC-D5/D6/D8/D9, ADR-030 text, `@trace/shared` `contracts/d1` (incl. zod for `quality.*`/`integrity.*` rows), `postgres` catalog entry, skeletons, boundaries, wrangler bindings (`__API_ORIGIN__` CSP, staging origins on `abhayraj.workers.dev`), jobs `queue`/`scheduled` wrapped by `withErrorReporting`. **Writers R1/R3/C1 start only after migrations + contracts are merged.**
+1. Verify (below); confirm CI `static` on `bbae037` (and the handoff commit) is green; then tag **`cp/d1-01`** on `bbae037` (Wave 0 migrations + tests + contracts; spec §11 item 7) and `git push trace --tags`.
+2. Rest of Wave 0 shared pieces (lead, tests first): `SIGNAL_CATALOG` in `@trace/shared` (§4.6, §5.2: versioned, tier T3, `validated` per sig; `tab_hidden`/`fullscreen_exit` context only) and `canonicalNoticeText` (AT-D8). Also export `canonicalJson` from `index.ts` if the writers need the barrel.
+3. Wave 0 remainder (spec §11): DC-D5 (media link: R2 stream + `MediaLinkDO` burn + canvas CSP), DC-D6 (Playwright Win/Linux), DC-D8 (CPU, needs stages — may slip to Wave 1), DC-D9 (CI E2E stack); `packages/band-engine` and `e2e` skeletons; boundaries (`band-engine`, `e2e` elements); wrangler bindings per §4.2 table (`__API_ORIGIN__` CSP, staging origins on `abhayraj.workers.dev`); jobs `queue`/`scheduled` wrapped by `withErrorReporting`; `ci.yml`/`check-*` changes with tests.
+4. Open DB items carried: m1 m-2 (auto-assign re-add, decide/document), m1 m-4 + m2 n-7 (exact `trace_api` table allow-list in `rls_roles`), m1 m-5 (`test.retire` audit?), m2 m-2 (late `sessionStarted`, decide in R3), m2 n-1 (M3a), m3 n-7 (M4 index).
+5. Then Wave 1 writers R1, R3, C1 (max 3, own worktrees reset to an exact SHA). R3 must implement §6.2 R3-1..R3-9.
 
 ## Founder items still open (`docs/progress/FOUNDER-QUEUE.md`)
 - Confirm the rule-6 decision (non-blocking). Walkthrough continues at **step 6: R2** (enable R2 on the Cloudflare account), then `staging` branch rules for `d1/**`, GitHub plan / branch protection, staging-evidence choice, H8, H11, SES, DNS, AWS OIDC, H9, the reviewer smoke user.
 
 ## Gotchas
-- Docker Desktop can stop mid-session: relaunch `C:\Program Files\Docker\Docker\Docker Desktop.exe` (via a node `spawn` script; the worktree guard blocks direct launches); the engine took ~10 min to answer; the Supabase containers restart by themselves.
-- Ad-hoc pgTAP runs outside `supabase test db` need `create extension if not exists pgtap with schema extensions;` inside the file's transaction.
-- TRUNCATE ... CASCADE from `consents`/`sessions` reaches tables whose TRUNCATE is revoked or guarded; the consents test re-grants three of them.
-- JS `String.replace` turns `$$` in a replacement string into `$` (broke pgTAP `$$` once again): always use a replacer function.
-- Only the lead runs `supabase start/stop`, `db reset`, `test db`, `gen types`, `pnpm verify`, `pnpm test:rls`; reviewers read files only while the lead verifies.
-- Worktree guard: no `$(…)`, loops, `cd` + git, pipes into docker/psql/powershell/wsl; write scripts to the scratchpad and run them with node; commit via `git commit -F <file>`.
-- Agents are costly: the Opus migration-3 review took ~180k tokens (~1% weekly on Pro).
+- Docker Desktop can stop mid-session: relaunch via a node `spawn` script (the worktree guard blocks direct launches); the Supabase containers restart by themselves.
+- Ad-hoc pgTAP runs outside `supabase test db` need `create extension if not exists pgtap with schema extensions;` inside the file's transaction (scratch runner pattern: pipe the file to `docker exec -i supabase_db_trace psql -U postgres -X -q -At` from a node `spawnSync`).
+- A pgTAP dry run of a changed migration against a DB that already has it: copy it with `create or replace function` and run it plus the test in one rolled-back transaction.
+- Warn running agents before `test:rls` (it resets the DB).
+- JS `String.replace` turns `$$` into `$` in a replacement string: always use a replacer function.
+- Worktree guard: no `$(…)`, loops, `cd` + git chains, pipes into docker/psql; commit via `git commit -F <file>`.
+- Agents are costly on Pro: an Opus review ≈ 115–220k tokens; a Sonnet writer ≈ 175–230k. This session went from 1% to ~80% of the 5-hour window with 7 agents.
 
 ## Verify first
-- `git -c credential.helper= -c "credential.helper=!gh auth git-credential" fetch trace` · `git log --oneline -3 d1/integration` · `git status` · `docker ps` · `pnpm -s verify:fast` · `pnpm -s test` · `gh pr checks 4 --repo TraceHiring/TraceHiring` · then `pnpm verify`
+- `git -c credential.helper= -c "credential.helper=!gh auth git-credential" fetch trace` · `git log --oneline -3 d1/integration` · `git status` · `docker ps` · `pnpm -s verify:fast` · `gh pr checks 4 --repo TraceHiring/TraceHiring`
