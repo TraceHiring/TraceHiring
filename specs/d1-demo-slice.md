@@ -738,7 +738,14 @@ The cutoff is **mandatory and pinned in the published test version** (`test_vers
 
 ---
 
-## 8. Day-one checks (run first in BUILD, results recorded here; none has been run)
+## 8. Day-one checks (run first in BUILD; results recorded here)
+**Results, 2026-10-14 (local, spike `docs/spikes/d1-day-one/`, `147fd44`):**
+- **DC-D2 PASS (local):** SQLite DO plus alarm; Queue consumer in another Worker; a failing message is delivered **6 times (1 + `max_retries` 5)**, then reaches the DLQ; cron `scheduled` fires.
+- **DC-D3 PASS (local):** `WorkerEntrypoint` RPC binding works; the RPC methods are unreachable over HTTP (404), `/health` 200.
+- **DC-D4 PASS:** ES256 sign/verify and HMAC in Node 22 and workerd; Node-signed, workerd-verified. Use `subtle.verify('HMAC')` or the hand-written constant-time compare (`crypto.subtle.timingSafeEqual` exists in workerd only).
+- **DC-D7 PASS (local):** `postgres` 3.4.9 (about 22 KiB gzip) and `pg` 8.23.0 (about 40 KiB) in workerd; `SET LOCAL ROLE` inside a transaction works. **ADR-031 accepted (autopilot): `postgres`.** The staging parts are not run: TLS pooler, real login roles, and the `nodejs_compat_do_not_populate_process_env` combination.
+- **Not run:** DC-D1 and the staging halves of D2, D3 and D7 (founder gates: R2, Cloudflare token, staging DB URL); DC-D5, D6, D8 and D9 (later in Wave 0). Tooling note: `@cloudflare/vitest-pool-workers` 0.23.0 announces a rename to `@cloudflare/vitest-plugin`.
+
 | DC | What | If it fails |
 | --- | --- | --- |
 | DC-D1 | **R2:** both buckets (`trace-packages-<env>`, `trace-evidence-<env>`) create, put/get from a Worker binding in `wrangler dev` and on staging (R2 is not enabled on the account; founder gate); a read-only use of `PACKAGES` from edge | stop; founder enables R2 |
