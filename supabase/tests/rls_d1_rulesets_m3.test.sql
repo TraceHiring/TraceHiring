@@ -24,7 +24,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(102);
+select plan(103);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -257,6 +257,8 @@ select is((select count(*)::int from public.test_versions where test_id = 'e1000
 select is((select r.band_rule_version_id from public.ruleset_versions r where r.test_id = 'e1000000-0000-4000-8000-000000000001' and r.version_no = 1), (select id from integrity.band_rule_versions where org_id = 'a1000000-0000-4000-8000-000000000001' and version_no = 1), 'pin: the published ruleset of V1 still names the seeded v1 although v2..v6 now exist');
 select is((select count(*)::int from public.test_versions where ruleset_version_id is null or notice_version_id is null), 0, 'L-8: no version row lacks a ruleset or notice id');
 select is((select count(*)::int from pg_attribute a where a.attrelid = 'public.test_versions'::regclass and a.attname in ('ruleset_version_id', 'notice_version_id') and (has_column_privilege('authenticated', a.attrelid, a.attname, 'INSERT') or has_column_privilege('authenticated', a.attrelid, a.attname, 'UPDATE'))), 0, 'L-8: ruleset_version_id and notice_version_id are outside the authenticated INSERT and UPDATE grants (trigger-only columns)');
+
+select is((select content_sha256 from integrity.band_rule_versions where org_id = 'a1000000-0000-4000-8000-000000000001' and version_no = 1), 'c862bf653c6284fbb4d2319c923cd1c8aa28bcc40a2a61ccbc10d6e6af96ca0e', 'seed: content_sha256 is the SHA-256 of the canonical JSON of rule table d1-v1 (pinned until band-rules-sync.test.mjs lands; DB review m3 n-3)');
 
 select * from finish();
 rollback;

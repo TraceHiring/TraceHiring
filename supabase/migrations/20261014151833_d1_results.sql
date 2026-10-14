@@ -283,9 +283,18 @@ set search_path = ''
 as $$
 declare
   v_meets boolean;
+  v_card_state text;
 begin
   if tg_op <> 'INSERT' then
     raise exception 'TRACE_GUARD: flags are immutable in D1' using errcode = '42501';
+  end if;
+  -- Once the session's integrity card is final its band can no longer be re-checked, so no flag is added (I-3). The
+  -- share lock serialises this insert with the card's single flip (DB review m3 m-1).
+  select c.review_state into v_card_state
+  from public.integrity_cards as c where c.org_id = new.org_id and c.session_id = new.session_id
+  for share;
+  if found and v_card_state <> 'awaiting_quality' then
+    raise exception 'TRACE_GUARD: no flag is added once the integrity card is final' using errcode = '42501';
   end if;
   select c.meets_cutoff into v_meets
   from public.quality_cards as c where c.org_id = new.org_id and c.session_id = new.session_id;
@@ -341,13 +350,15 @@ as $$
 declare
   v_rs uuid;
   v_band uuid;
+  v_floor smallint;
 begin
   if tg_op <> 'INSERT' then
     raise exception 'TRACE_GUARD: an integrity result is immutable' using errcode = '42501';
   end if;
-  select s.ruleset_version_id, r.band_rule_version_id into v_rs, v_band
+  select s.ruleset_version_id, r.band_rule_version_id, b.coverage_floor_permille into v_rs, v_band, v_floor
   from public.sessions as s
   join public.ruleset_versions as r on r.org_id = s.org_id and r.id = s.ruleset_version_id
+  left join integrity.band_rule_versions as b on b.org_id = r.org_id and b.id = r.band_rule_version_id
   where s.org_id = new.org_id and s.id = new.session_id;
   if not found then
     raise exception 'TRACE_GUARD: session not found' using errcode = '23503';
@@ -357,6 +368,11 @@ begin
     or (new.band_rule_version_id is not null and new.band_rule_version_id is distinct from v_band) then
     raise exception 'TRACE_GUARD: the result names another ruleset or rule table than the session'
       using errcode = '42501';
+  end if;
+  -- The coverage floor is the rule table's, so "never Clear on thin coverage" cannot be bypassed with a supplied floor
+  -- (rule 3; DB review m3 m-2). An out-of-range value is left to the CHECK (23514).
+  if new.coverage_floor_permille between 0 and 1000 and new.coverage_floor_permille is distinct from v_floor then
+    raise exception 'TRACE_GUARD: the coverage floor is not the rule table''s' using errcode = '42501';
   end if;
   return new;
 end
@@ -477,8 +493,8 @@ create index integrity_cards_workspace_idx on public.integrity_cards (org_id, wo
 create index integrity_cards_test_idx on public.integrity_cards (org_id, test_id);
 alter table public.integrity_cards enable row level security;
 
--- Fill (L-7): every value column comes from the result and its rule table; the job supplies only the ids,
--- review_state and photo_missing (R-11: from the mirror message).
+-- Fill (L-7): every value column comes from the result and its rule table, photo_missing included (R-11: the job
+-- records it on the result from the mirror message; DB review m3 m-3); the job supplies only the ids and review_state.
 create function private.integrity_cards_fill()
 returns trigger
 language plpgsql
@@ -500,9 +516,9 @@ begin
     raise exception 'TRACE_GUARD: session not found' using errcode = '23503';
   end if;
   select r.ruleset_version_id, r.band_rule_version_id, r.engine_version, r.band, r.evidence_strength,
-      r.coverage_permille, r.coverage_floor_permille, r.computed_at, b.version_no
+      r.coverage_permille, r.coverage_floor_permille, r.photo_missing, r.computed_at, b.version_no
     into new.ruleset_version_id, new.band_rule_version_id, new.engine_version, v_band, new.evidence_strength,
-      new.coverage_permille, new.coverage_floor_permille, new.computed_at, v_version_no
+      new.coverage_permille, new.coverage_floor_permille, new.photo_missing, new.computed_at, v_version_no
   from integrity.results as r
   join integrity.band_rule_versions as b on b.org_id = r.org_id and b.id = r.band_rule_version_id
   where r.org_id = new.org_id and r.id = new.integrity_result_id and r.session_id = new.session_id;
@@ -765,6 +781,40 @@ create trigger reports_set_once before insert or update or delete on public.repo
 alter table public.reports enable always trigger reports_set_once;
 
 -- ---------------------------------------------------------------------------------------------
+-- The immutable result tables refuse TRUNCATE too (row triggers do not fire on it), for the operator and in replica
+-- mode (DB review m3 m-4). The append-only ledgers above raise TRACE_APPEND_ONLY instead.
+-- ---------------------------------------------------------------------------------------------
+create function private.results_no_truncate()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  raise exception 'TRACE_GUARD: % is immutable and cannot be truncated', tg_table_name using errcode = '42501';
+end
+$$;
+revoke execute on function private.results_no_truncate() from public, anon, authenticated, service_role;
+create trigger scores_no_truncate before truncate on quality.scores
+  for each statement execute function private.results_no_truncate();
+create trigger flags_no_truncate before truncate on integrity.flags
+  for each statement execute function private.results_no_truncate();
+create trigger results_no_truncate before truncate on integrity.results
+  for each statement execute function private.results_no_truncate();
+create trigger quality_cards_no_truncate before truncate on public.quality_cards
+  for each statement execute function private.results_no_truncate();
+create trigger integrity_cards_no_truncate before truncate on public.integrity_cards
+  for each statement execute function private.results_no_truncate();
+create trigger reports_no_truncate before truncate on public.reports
+  for each statement execute function private.results_no_truncate();
+alter table quality.scores enable always trigger scores_no_truncate;
+alter table integrity.flags enable always trigger flags_no_truncate;
+alter table integrity.results enable always trigger results_no_truncate;
+alter table public.quality_cards enable always trigger quality_cards_no_truncate;
+alter table public.integrity_cards enable always trigger integrity_cards_no_truncate;
+alter table public.reports enable always trigger reports_no_truncate;
+
+-- ---------------------------------------------------------------------------------------------
 -- Org seed (R-5): notice v1, band rules v1 (= packages/band-engine/src/rules/d1-v1.json), default rubric.
 -- Idempotent (on conflict do nothing), so the trigger and the backfill share it.
 -- ---------------------------------------------------------------------------------------------
@@ -841,7 +891,8 @@ begin
   select b.id into v_band from integrity.band_rule_versions as b
   where b.org_id = new.org_id order by b.version_no desc limit 1;
   select n.id into v_notice from public.notice_versions as n
-  where n.org_id = new.org_id order by n.version desc, n.published_at desc limit 1;
+  where n.org_id = new.org_id and n.notice_key = 'candidate-notice' and n.language = 'en'
+  order by n.version desc limit 1;
   if v_band is null or v_notice is null then
     raise exception 'TRACE_GUARD: the org has no seeded band rule version or notice' using errcode = '42501';
   end if;
@@ -1035,7 +1086,8 @@ grant execute on function private.mirror_session(uuid, jsonb) to trace_worker;
 -- private.sweep_pending (L-18): stalled stages for the jobs cron. Reads public tables only; returns rows for every org
 -- (each row carries its org_id; the cron runs one job per row with that org as the job org). Only DO-supplied times
 -- are compared (§10-DB clock skew). The age threshold is a constant: 30 minutes past the deadline for a missing
--- mirror, 15 minutes past submit for a missing card.
+-- mirror, 15 minutes past submit for a missing card. Rows are returned round-robin across the stages, oldest first
+-- within a stage, so stalled rows of one stage (e.g. a dead-lettered job) cannot starve the others (DB review m3 m-5).
 -- ---------------------------------------------------------------------------------------------
 create function private.sweep_pending(p_limit int)
 returns table (org_id uuid, session_id uuid, ruleset_version_id uuid, stage text)
@@ -1044,9 +1096,11 @@ stable
 security definer
 set search_path = ''
 as $$
-  select p.org_id, p.session_id, p.ruleset_version_id, p.stage
+  select q.org_id, q.session_id, q.ruleset_version_id, q.stage
   from (
-    select i.org_id, i.session_id, v.ruleset_version_id, 'session_mirror'::text as stage
+    select p.*, row_number() over (partition by p.stage order by p.age_at, p.org_id, p.session_id) as rn
+    from (
+    select i.org_id, i.session_id, v.ruleset_version_id, 'session_mirror'::text as stage, i.started_at as age_at
     from public.invitations as i
     join public.test_versions as v on v.org_id = i.org_id and v.id = i.test_version_id
     where i.status = 'started'
@@ -1055,13 +1109,13 @@ as $$
       and i.started_at + make_interval(secs => v.total_time_seconds) + interval '30 minutes' < now()
       and not exists (select 1 from public.sessions as s where s.org_id = i.org_id and s.id = i.session_id)
     union all
-    select s.org_id, s.id, s.ruleset_version_id, 'quality_score'::text
+    select s.org_id, s.id, s.ruleset_version_id, 'quality_score'::text, coalesce(s.submitted_at, s.server_deadline_at)
     from public.sessions as s
     where s.state <> 'in_progress'
       and coalesce(s.submitted_at, s.server_deadline_at) + interval '15 minutes' < now()
       and not exists (select 1 from public.quality_cards as q where q.org_id = s.org_id and q.session_id = s.id)
     union all
-    select s.org_id, s.id, s.ruleset_version_id, 'integrity_band'::text
+    select s.org_id, s.id, s.ruleset_version_id, 'integrity_band'::text, coalesce(s.submitted_at, s.server_deadline_at)
     from public.sessions as s
     where s.state <> 'in_progress'
       and coalesce(s.submitted_at, s.server_deadline_at) + interval '15 minutes' < now()
@@ -1078,8 +1132,9 @@ as $$
           and exists (select 1 from public.quality_cards as q where q.org_id = s.org_id and q.session_id = s.id)
         )
       )
-  ) as p
-  order by p.stage, p.org_id, p.session_id
+    ) as p
+  ) as q
+  order by q.rn, q.stage, q.age_at, q.org_id, q.session_id
   limit greatest(coalesce(p_limit, 0), 0)
 $$;
 revoke execute on function private.sweep_pending(int) from public, anon, authenticated, service_role;

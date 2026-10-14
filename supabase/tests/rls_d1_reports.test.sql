@@ -18,7 +18,7 @@ end
 $f$;
 grant execute on function pg_temp.try(text) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(122);
+select plan(129);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -645,6 +645,51 @@ reset trace.job_org_id;
 reset trace.api_org_id;
 select is((select count(*)::int from public.reports where session_id = 'a4000000-0000-4000-8000-000000000021'), 0, 'mirror_session: a dead invitation stores no reports row');
 select is((select count(*)::int from public.reports where org_id = 'a1000000-0000-4000-8000-000000000001'), 9, 'mirror_session: the dead invitation changed no report count');
+
+-- ===== rule 6 (lead decision; DB review m3 M-1): only a reviewed integrity card is attached to its report =====
+reset role;
+reset request.jwt.claims;
+reset trace.job_org_id;
+reset trace.api_org_id;
+set local role trace_integrity_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+insert into integrity.results (id, org_id, session_id, ruleset_version_id, band_rule_version_id, engine_version, band, evidence_strength, coverage_permille, coverage_floor_permille, photo_missing, input_hash, computed_at)
+  select v.rid, 'a1000000-0000-4000-8000-000000000001', v.sid, s.ruleset_version_id, r.band_rule_version_id, 'band-engine-1', 'clear', 1.00, 900, 700, false, repeat('e', 64), '2026-10-14 10:22:00+00'
+  from (values ('a6000000-0000-4000-8000-000000000008'::uuid, 'a4000000-0000-4000-8000-000000000008'::uuid), ('a6000000-0000-4000-8000-000000000009'::uuid, 'a4000000-0000-4000-8000-000000000009'::uuid)) as v (rid, sid)
+  join public.sessions as s on s.id = v.sid
+  join public.ruleset_versions as r on r.id = s.ruleset_version_id;
+insert into public.integrity_cards (org_id, session_id, integrity_result_id, review_state, photo_missing) values ('a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000008', 'a6000000-0000-4000-8000-000000000008', 'awaiting_quality', false);
+select matches(pg_temp.try($$update public.reports set integrity_card_id = pg_temp.ic('a4000000-0000-4000-8000-000000000008') where session_id = 'a4000000-0000-4000-8000-000000000008'$$), '^42501 TRACE_GUARD', 'rule 6: an awaiting_quality integrity card cannot be attached to its report');
+reset role;
+reset trace.job_org_id;
+select matches(pg_temp.try($$update public.reports set integrity_card_id = pg_temp.ic('a4000000-0000-4000-8000-000000000008') where session_id = 'a4000000-0000-4000-8000-000000000008'$$), '^42501 TRACE_GUARD', 'rule 6: the operator cannot attach an awaiting_quality card either (ENABLE ALWAYS)');
+set local role trace_quality_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+insert into quality.scores (id, org_id, session_id, test_version_id, score, section_scores, quality_cutoff, meets_cutoff, scoring_version, rubric_set_sha256, rubric_version_ids, grader_model_id, grader_adapter_version, computed_at) values
+  ('a5000000-0000-4000-8000-000000000008', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000008', 'f1000000-0000-4000-8000-000000000001', 80, '[{"position": 1, "weight": 1, "score": 80}]', 40, true, 'd1-scoring-v1', repeat('d', 64), '{}', 'mock-grader-v1', 'mock-1', '2026-10-14 10:21:00+00'),
+  ('a5000000-0000-4000-8000-000000000009', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000009', 'f1000000-0000-4000-8000-000000000001', 10, '[{"position": 1, "weight": 1, "score": 10}]', 40, false, 'd1-scoring-v1', repeat('d', 64), '{}', 'mock-grader-v1', 'mock-1', '2026-10-14 10:21:00+00');
+insert into public.quality_cards (org_id, session_id, quality_score_id) values ('a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000008', 'a5000000-0000-4000-8000-000000000008'), ('a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000009', 'a5000000-0000-4000-8000-000000000009');
+reset role;
+reset trace.job_org_id;
+set local role trace_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+insert into public.reports (org_id, session_id) values ('a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000009');
+reset role;
+reset trace.job_org_id;
+set local role trace_integrity_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select is(pg_temp.try($$update public.integrity_cards set review_state = 'reviewed' where session_id = 'a4000000-0000-4000-8000-000000000008'$$), 'OK 1', 'rule 6 fixture: the awaiting card flips to reviewed once the quality card meets the cutoff');
+select is(pg_temp.try($$update public.reports set integrity_card_id = pg_temp.ic('a4000000-0000-4000-8000-000000000008') where session_id = 'a4000000-0000-4000-8000-000000000008'$$), 'OK 1', 'rule 6: the reviewed card then attaches to its report');
+insert into public.integrity_cards (org_id, session_id, integrity_result_id, review_state, photo_missing) values ('a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000009', 'a6000000-0000-4000-8000-000000000009', 'not_reviewed_below_cutoff', false);
+select matches(pg_temp.try($$update public.reports set integrity_card_id = pg_temp.ic('a4000000-0000-4000-8000-000000000009') where session_id = 'a4000000-0000-4000-8000-000000000009'$$), '^42501 TRACE_GUARD', 'rule 6: a not_reviewed_below_cutoff card cannot be attached (an org role never learns it exists)');
+reset role;
+reset trace.job_org_id;
+select matches(pg_temp.try($$update public.reports set integrity_card_id = pg_temp.ic('a4000000-0000-4000-8000-000000000009') where session_id = 'a4000000-0000-4000-8000-000000000009'$$), '^42501 TRACE_GUARD', 'rule 6: the operator cannot attach a below-cutoff card either');
+set local role trace_quality_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select is(pg_temp.try($$update public.reports set quality_card_id = pg_temp.qc('a4000000-0000-4000-8000-000000000001') where session_id = 'a4000000-0000-4000-8000-000000000001'$$), 'OK 1', 'reports U: re-attaching the same quality card is an accepted no-op (idempotent retry, NOTES Q3)');
+reset role;
+reset trace.job_org_id;
 
 select * from finish();
 rollback;

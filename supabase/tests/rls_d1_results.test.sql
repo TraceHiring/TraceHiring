@@ -22,7 +22,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(167);
+select plan(168);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -507,6 +507,13 @@ select is((select count(*)::int from pg_constraint c join pg_class a on a.oid = 
 select is(has_schema_privilege('trace_quality_worker', 'integrity', 'USAGE') or has_schema_privilege('trace_integrity_worker', 'quality', 'USAGE'), false, 'rule 1: neither result worker holds USAGE on the other internal schema (MT-5c, MT-14 both_schemas)');
 select is((select count(*)::int from pg_roles r where r.rolname in ('trace_quality_worker', 'trace_integrity_worker') and pg_has_role(r.oid, 'trace_worker', 'member')), 0, 'rule 1: the two result workers are not members of trace_worker');
 select is(has_schema_privilege('trace_api', 'quality', 'USAGE') or has_schema_privilege('trace_api', 'integrity', 'USAGE'), false, 'rule 1: trace_api holds nothing in quality or integrity (3.3 note 6)');
+
+-- ===== DB review m3 m-2: the coverage floor is the rule table's, never a supplied value =====
+set local role trace_integrity_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select matches(pg_temp.try($$insert into integrity.results (id, org_id, session_id, ruleset_version_id, band_rule_version_id, engine_version, band, evidence_strength, coverage_permille, coverage_floor_permille, photo_missing, input_hash, computed_at) values ('a6000000-0000-4000-8000-000000000006', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000006', (select ruleset_version_id from public.sessions where id = 'a4000000-0000-4000-8000-000000000006'), (select r.band_rule_version_id from public.ruleset_versions r where r.id = (select ruleset_version_id from public.sessions where id = 'a4000000-0000-4000-8000-000000000006')), 'band-engine-1', 'clear', 1.00, 100, 0, false, repeat('e', 64), '2026-10-14 10:22:00+00')$$), '^42501 TRACE_GUARD', 'integrity.results I: a supplied coverage floor of 0 is refused, so Clear at 10% coverage cannot pass (rule 3)');
+reset role;
+reset trace.job_org_id;
 
 select * from finish();
 rollback;

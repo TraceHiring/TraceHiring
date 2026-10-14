@@ -16,7 +16,7 @@ end
 $f$;
 grant execute on function pg_temp.try(text) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(34);
+select plan(35);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -341,6 +341,8 @@ reset role;
 reset request.jwt.claims;
 reset trace.job_org_id;
 reset trace.api_org_id;
+
+select is((select count(distinct stage)::int from private.sweep_pending(3)), 3, 'sweep_pending: a small p_limit still returns every stalled stage (round-robin by age, so one stage''s poison rows cannot starve the others; DB review m3 m-5)');
 
 select * from finish();
 rollback;
