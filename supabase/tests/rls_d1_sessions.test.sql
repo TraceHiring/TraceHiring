@@ -46,42 +46,6 @@ create function pg_temp.nt(p_v uuid) returns uuid language sql security definer 
 $f$;
 grant execute on function pg_temp.nt(uuid) to public;
 
--- D1-M1-SHIM (remove when migration 3 lands): stands in for migration 3's L-8 trigger, which pins a new
--- ruleset row and the org notice on every draft insert (spec §3.1 row 3, L-8, L-34). It is created only
--- while integrity.band_rule_versions does not exist, inside this rolled-back transaction, so publish paths
--- can be exercised against migration 1 alone. Same trigger name as planned for L-8 (sorts after the guard).
-do $shim$
-begin
-  if to_regclass('integrity.band_rule_versions') is null then
-    create function private.d1_m1_shim_pin() returns trigger
-    language plpgsql security definer set search_path = '' as $f$
-    declare
-      v_notice uuid;
-      v_rs uuid;
-    begin
-      select n.id into v_notice from public.notice_versions as n
-      where n.org_id = new.org_id and n.notice_key = 'd1-m1-shim' and n.version = 1;
-      if v_notice is null then
-        insert into public.notice_versions (org_id, notice_key, version, language, body_template, template_sha256)
-        values (new.org_id, 'd1-m1-shim', 1, 'en', 'Synthetic notice body.', repeat('0', 64))
-        returning id into v_notice;
-      end if;
-      insert into public.ruleset_versions (org_id, workspace_id, test_id, version_no, band_rule_version_id, signal_settings)
-      values (new.org_id, new.workspace_id, new.test_id, new.version_no, gen_random_uuid(),
-        '{"paste":{"enabled":true},"drop":{"enabled":true},"untrusted_input":{"enabled":true},'
-        '"tab_hidden":{"enabled":true},"fullscreen_exit":{"enabled":true}}'::jsonb)
-      returning id into v_rs;
-      new.ruleset_version_id := v_rs;
-      new.notice_version_id := v_notice;
-      return new;
-    end
-    $f$;
-    create trigger test_versions_ruleset_seed before insert on public.test_versions
-      for each row execute function private.d1_m1_shim_pin();
-  end if;
-end
-$shim$;
-
 -- Personas: synthetic users, fixed ids, created on the operator path (postgres, no claims).
 insert into auth.users (id, aud, role, email) values
   ('00000000-0000-4000-8000-000000000001', 'authenticated', 'authenticated', 'p-owner-admin@example.test'),

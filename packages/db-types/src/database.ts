@@ -357,6 +357,88 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"integrity_cards": {
+                  Row: {
+                    "band": string,"band_rule_version_id": string,"computed_at": string,"coverage_floor_permille": number,"coverage_permille": number,"engine_version": string,"evidence_strength": number,"id": string,"integrity_result_id": string,"org_id": string,"photo_missing": boolean,"review_state": string,"rule_table_version": string,"ruleset_version_id": string,"session_id": string,"test_id": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "band": string,"band_rule_version_id": string,"computed_at": string,"coverage_floor_permille": number,"coverage_permille": number,"engine_version": string,"evidence_strength": number,"id"?: string,"integrity_result_id": string,"org_id": string,"photo_missing": boolean,"review_state": string,"rule_table_version": string,"ruleset_version_id": string,"session_id": string,"test_id": string,"workspace_id": string
+                  }
+                  Update: {
+                    "band"?: string,"band_rule_version_id"?: string,"computed_at"?: string,"coverage_floor_permille"?: number,"coverage_permille"?: number,"engine_version"?: string,"evidence_strength"?: number,"id"?: string,"integrity_result_id"?: string,"org_id"?: string,"photo_missing"?: boolean,"review_state"?: string,"rule_table_version"?: string,"ruleset_version_id"?: string,"session_id"?: string,"test_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "integrity_cards_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "integrity_cards_org_id_ruleset_version_id_fkey"
+      columns: ["org_id","ruleset_version_id"]
+isOneToOne: false
+      referencedRelation: "ruleset_versions"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "integrity_cards_org_id_session_id_fkey"
+      columns: ["org_id","session_id"]
+isOneToOne: false
+      referencedRelation: "sessions"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "integrity_cards_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "integrity_cards_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"integrity_timeline_entries": {
+                  Row: {
+                    "count": number,"entry_kind": string,"family": string | null,"flag_state": string | null,"id": string,"integrity_card_id": string,"observed": NonNullable<Json>,"offset_ms": number,"org_id": string,"position": number,"rule_id": string | null,"session_id": string,"signal_kind": string,"signal_seqs": (number)[],"test_id": string,"tier": string | null,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "count"?: number,"entry_kind": string,"family"?: string | null,"flag_state"?: string | null,"id"?: string,"integrity_card_id": string,"observed"?: NonNullable<Json>,"offset_ms": number,"org_id": string,"position": number,"rule_id"?: string | null,"session_id": string,"signal_kind": string,"signal_seqs"?: (number)[],"test_id": string,"tier"?: string | null,"workspace_id": string
+                  }
+                  Update: {
+                    "count"?: number,"entry_kind"?: string,"family"?: string | null,"flag_state"?: string | null,"id"?: string,"integrity_card_id"?: string,"observed"?: NonNullable<Json>,"offset_ms"?: number,"org_id"?: string,"position"?: number,"rule_id"?: string | null,"session_id"?: string,"signal_kind"?: string,"signal_seqs"?: (number)[],"test_id"?: string,"tier"?: string | null,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "integrity_timeline_entries_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "integrity_timeline_entries_org_id_integrity_card_id_sessio_fkey"
+      columns: ["org_id","integrity_card_id","session_id"]
+isOneToOne: false
+      referencedRelation: "integrity_cards"
+      referencedColumns: ["org_id","id","session_id"]
+    },{
+      foreignKeyName: "integrity_timeline_entries_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "integrity_timeline_entries_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
                 },"invitations": {
                   Row: {
                     "adult_confirmed_by_inviter": boolean | null,"adult_self_declared": boolean | null,"age_block_source": string | null,"candidate_id": string,"candidate_label": string,"contact_email": string,"created_at": string,"created_by": string | null,"expires_at": string,"id": string,"link_token_hash": string,"org_id": string,"session_id": string | null,"started_at": string | null,"status": Database["public"]['Enums']["invitation_status"],"test_id": string,"test_version_id": string,"workspace_id": string
@@ -605,6 +687,94 @@ isOneToOne: false
 isOneToOne: false
       referencedRelation: "orgs"
       referencedColumns: ["id"]
+    }
+                  ]
+                },"quality_cards": {
+                  Row: {
+                    "computed_at": string,"grader_adapter_version": string,"grader_model_id": string,"id": string,"meets_cutoff": boolean,"org_id": string,"quality_cutoff": number,"quality_score_id": string,"rubric_set_sha256": string,"rubric_version_ids": (string)[],"score": number,"scoring_version": string,"section_scores": NonNullable<Json>,"session_id": string,"test_id": string,"test_version_id": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "computed_at": string,"grader_adapter_version": string,"grader_model_id": string,"id"?: string,"meets_cutoff": boolean,"org_id": string,"quality_cutoff": number,"quality_score_id": string,"rubric_set_sha256": string,"rubric_version_ids": (string)[],"score": number,"scoring_version": string,"section_scores": NonNullable<Json>,"session_id": string,"test_id": string,"test_version_id": string,"workspace_id": string
+                  }
+                  Update: {
+                    "computed_at"?: string,"grader_adapter_version"?: string,"grader_model_id"?: string,"id"?: string,"meets_cutoff"?: boolean,"org_id"?: string,"quality_cutoff"?: number,"quality_score_id"?: string,"rubric_set_sha256"?: string,"rubric_version_ids"?: (string)[],"score"?: number,"scoring_version"?: string,"section_scores"?: NonNullable<Json>,"session_id"?: string,"test_id"?: string,"test_version_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "quality_cards_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "quality_cards_org_id_session_id_fkey"
+      columns: ["org_id","session_id"]
+isOneToOne: true
+      referencedRelation: "sessions"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "quality_cards_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "quality_cards_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"reports": {
+                  Row: {
+                    "created_at": string,"id": string,"integrity_card_id": string | null,"org_id": string,"quality_card_id": string | null,"session_id": string,"test_id": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"id"?: string,"integrity_card_id"?: string | null,"org_id": string,"quality_card_id"?: string | null,"session_id": string,"test_id": string,"workspace_id": string
+                  }
+                  Update: {
+                    "created_at"?: string,"id"?: string,"integrity_card_id"?: string | null,"org_id"?: string,"quality_card_id"?: string | null,"session_id"?: string,"test_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "reports_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "reports_org_id_integrity_card_id_session_id_fkey"
+      columns: ["org_id","integrity_card_id","session_id"]
+isOneToOne: false
+      referencedRelation: "integrity_cards"
+      referencedColumns: ["org_id","id","session_id"]
+    },{
+      foreignKeyName: "reports_org_id_quality_card_id_session_id_fkey"
+      columns: ["org_id","quality_card_id","session_id"]
+isOneToOne: false
+      referencedRelation: "quality_cards"
+      referencedColumns: ["org_id","id","session_id"]
+    },{
+      foreignKeyName: "reports_org_id_session_id_fkey"
+      columns: ["org_id","session_id"]
+isOneToOne: true
+      referencedRelation: "sessions"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "reports_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "reports_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
     }
                   ]
                 },"responses": {
