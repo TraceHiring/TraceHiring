@@ -5,7 +5,45 @@ export type Database = {
   
   "public": {
           Tables: {
-            "audit_log": {
+            "assignments": {
+                  Row: {
+                    "as_role": Database["public"]['Enums']["org_role"],"created_at": string,"created_by": string | null,"id": string,"membership_id": string,"org_id": string,"scope": string,"test_id": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "as_role": Database["public"]['Enums']["org_role"],"created_at"?: string,"created_by"?: string | null,"id"?: string,"membership_id": string,"org_id": string,"scope"?: string,"test_id": string,"workspace_id": string
+                  }
+                  Update: {
+                    "as_role"?: Database["public"]['Enums']["org_role"],"created_at"?: string,"created_by"?: string | null,"id"?: string,"membership_id"?: string,"org_id"?: string,"scope"?: string,"test_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "assignments_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "assignments_org_id_membership_id_fkey"
+      columns: ["org_id","membership_id"]
+isOneToOne: false
+      referencedRelation: "memberships"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "assignments_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "assignments_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"audit_log": {
                   Row: {
                     "action": string,"actor_kind": Database["public"]['Enums']["actor_kind"],"actor_roles": (Database["public"]['Enums']["org_role"])[],"actor_user_id": string | null,"candidate_id": string | null,"details": NonNullable<Json>,"id": string,"object_id": string | null,"object_table": string | null,"occurred_at": string,"org_id": string,"request_id": string | null,"staff_grant_id": string | null,"workspace_id": string | null
                   }
@@ -269,6 +307,94 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"item_answer_keys": {
+                  Row: {
+                    "created_at": string,"created_by": string | null,"format": Database["public"]['Enums']["section_format"],"item_version_id": string,"key": NonNullable<Json>,"org_id": string,"test_id": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"created_by"?: string | null,"format"?: Database["public"]['Enums']["section_format"],"item_version_id": string,"key": NonNullable<Json>,"org_id": string,"test_id": string,"workspace_id": string
+                  }
+                  Update: {
+                    "created_at"?: string,"created_by"?: string | null,"format"?: Database["public"]['Enums']["section_format"],"item_version_id"?: string,"key"?: NonNullable<Json>,"org_id"?: string,"test_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "item_answer_keys_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "item_answer_keys_org_id_item_version_id_format_fkey"
+      columns: ["org_id","item_version_id","format"]
+isOneToOne: false
+      referencedRelation: "item_versions"
+      referencedColumns: ["org_id","id","format"]
+    },{
+      foreignKeyName: "item_answer_keys_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "item_answer_keys_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"item_versions": {
+                  Row: {
+                    "content_sha256": string,"created_at": string,"created_by": string | null,"format": Database["public"]['Enums']["section_format"],"id": string,"item_id": string,"options": Json | null,"org_id": string,"origin": string,"position": number,"rubric_version_id": string | null,"section_id": string,"stem": string,"test_id": string,"test_version_id": string,"version_no": number,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "content_sha256": string,"created_at"?: string,"created_by"?: string | null,"format": Database["public"]['Enums']["section_format"],"id"?: string,"item_id"?: string,"options"?: Json | null,"org_id": string,"origin"?: string,"position": number,"rubric_version_id"?: string | null,"section_id": string,"stem": string,"test_id": string,"test_version_id": string,"version_no"?: number,"workspace_id": string
+                  }
+                  Update: {
+                    "content_sha256"?: string,"created_at"?: string,"created_by"?: string | null,"format"?: Database["public"]['Enums']["section_format"],"id"?: string,"item_id"?: string,"options"?: Json | null,"org_id"?: string,"origin"?: string,"position"?: number,"rubric_version_id"?: string | null,"section_id"?: string,"stem"?: string,"test_id"?: string,"test_version_id"?: string,"version_no"?: number,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "item_versions_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "item_versions_org_id_rubric_version_id_fkey"
+      columns: ["org_id","rubric_version_id"]
+isOneToOne: false
+      referencedRelation: "rubric_versions"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "item_versions_org_id_section_id_format_fkey"
+      columns: ["org_id","section_id","format"]
+isOneToOne: false
+      referencedRelation: "sections"
+      referencedColumns: ["org_id","id","format"]
+    },{
+      foreignKeyName: "item_versions_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "item_versions_org_id_test_version_id_fkey"
+      columns: ["org_id","test_version_id"]
+isOneToOne: false
+      referencedRelation: "test_versions"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "item_versions_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
                 },"memberships": {
                   Row: {
                     "created_at": string,"created_by": string | null,"display_name": string,"id": string,"org_id": string,"removed_at": string | null,"roles": (Database["public"]['Enums']["org_role"])[],"status": Database["public"]['Enums']["membership_status"],"team_id": string | null,"user_id": string,"workspace_id": string | null
@@ -299,6 +425,26 @@ isOneToOne: false
 isOneToOne: false
       referencedRelation: "workspaces"
       referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"notice_versions": {
+                  Row: {
+                    "body_template": string,"id": string,"language": string,"notice_key": string,"org_id": string,"published_at": string,"template_sha256": string,"version": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "body_template": string,"id"?: string,"language": string,"notice_key": string,"org_id": string,"published_at"?: string,"template_sha256": string,"version": number
+                  }
+                  Update: {
+                    "body_template"?: string,"id"?: string,"language"?: string,"notice_key"?: string,"org_id"?: string,"published_at"?: string,"template_sha256"?: string,"version"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "notice_versions_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
     }
                   ]
                 },"orgs": {
@@ -333,6 +479,96 @@ isOneToOne: false
 isOneToOne: false
       referencedRelation: "orgs"
       referencedColumns: ["id"]
+    }
+                  ]
+                },"rubric_versions": {
+                  Row: {
+                    "content_sha256": string,"created_at": string,"created_by": string | null,"criteria": NonNullable<Json>,"id": string,"org_id": string,"rubric_key": string,"version_no": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "content_sha256": string,"created_at"?: string,"created_by"?: string | null,"criteria": NonNullable<Json>,"id"?: string,"org_id": string,"rubric_key": string,"version_no": number
+                  }
+                  Update: {
+                    "content_sha256"?: string,"created_at"?: string,"created_by"?: string | null,"criteria"?: NonNullable<Json>,"id"?: string,"org_id"?: string,"rubric_key"?: string,"version_no"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "rubric_versions_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"ruleset_versions": {
+                  Row: {
+                    "band_rule_version_id": string | null,"content_sha256": string | null,"id": string,"org_id": string,"published_at": string | null,"signal_settings": NonNullable<Json>,"test_id": string,"version_no": number,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "band_rule_version_id"?: string | null,"content_sha256"?: string | null,"id"?: string,"org_id": string,"published_at"?: string | null,"signal_settings": NonNullable<Json>,"test_id": string,"version_no": number,"workspace_id": string
+                  }
+                  Update: {
+                    "band_rule_version_id"?: string | null,"content_sha256"?: string | null,"id"?: string,"org_id"?: string,"published_at"?: string | null,"signal_settings"?: NonNullable<Json>,"test_id"?: string,"version_no"?: number,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "ruleset_versions_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "ruleset_versions_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "ruleset_versions_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"sections": {
+                  Row: {
+                    "created_at": string,"format": Database["public"]['Enums']["section_format"],"id": string,"name": string,"org_id": string,"position": number,"test_id": string,"test_version_id": string,"time_limit_seconds": number | null,"weight": number,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"format": Database["public"]['Enums']["section_format"],"id"?: string,"name": string,"org_id": string,"position": number,"test_id": string,"test_version_id": string,"time_limit_seconds"?: number | null,"weight": number,"workspace_id": string
+                  }
+                  Update: {
+                    "created_at"?: string,"format"?: Database["public"]['Enums']["section_format"],"id"?: string,"name"?: string,"org_id"?: string,"position"?: number,"test_id"?: string,"test_version_id"?: string,"time_limit_seconds"?: number | null,"weight"?: number,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "sections_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "sections_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "sections_org_id_test_version_id_fkey"
+      columns: ["org_id","test_version_id"]
+isOneToOne: false
+      referencedRelation: "test_versions"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "sections_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
     }
                   ]
                 },"staff_access_grants": {
@@ -387,6 +623,76 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"test_versions": {
+                  Row: {
+                    "content_sha256": string | null,"created_at": string,"created_by": string | null,"id": string,"notice_version_id": string | null,"org_id": string,"published_at": string | null,"published_by": string | null,"quality_cutoff": number,"ruleset_version_id": string | null,"status": Database["public"]['Enums']["test_version_status"],"test_id": string,"total_time_seconds": number,"version_no": number,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "content_sha256"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"notice_version_id"?: string | null,"org_id": string,"published_at"?: string | null,"published_by"?: string | null,"quality_cutoff": number,"ruleset_version_id"?: string | null,"status"?: Database["public"]['Enums']["test_version_status"],"test_id": string,"total_time_seconds": number,"version_no": number,"workspace_id": string
+                  }
+                  Update: {
+                    "content_sha256"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"notice_version_id"?: string | null,"org_id"?: string,"published_at"?: string | null,"published_by"?: string | null,"quality_cutoff"?: number,"ruleset_version_id"?: string | null,"status"?: Database["public"]['Enums']["test_version_status"],"test_id"?: string,"total_time_seconds"?: number,"version_no"?: number,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "test_versions_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "test_versions_org_id_notice_version_id_fkey"
+      columns: ["org_id","notice_version_id"]
+isOneToOne: false
+      referencedRelation: "notice_versions"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "test_versions_org_id_ruleset_version_id_fkey"
+      columns: ["org_id","ruleset_version_id"]
+isOneToOne: false
+      referencedRelation: "ruleset_versions"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "test_versions_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "test_versions_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"tests": {
+                  Row: {
+                    "archived_at": string | null,"created_at": string,"created_by": string | null,"id": string,"invitation_seq": number,"name": string,"org_id": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "archived_at"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"invitation_seq"?: number,"name": string,"org_id": string,"workspace_id": string
+                  }
+                  Update: {
+                    "archived_at"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"invitation_seq"?: number,"name"?: string,"org_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "tests_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "tests_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
                 },"workspaces": {
                   Row: {
                     "archived_at": string | null,"created_at": string,"id": string,"is_default": boolean,"kind": Database["public"]['Enums']["workspace_kind"],"name": string,"org_id": string
@@ -416,7 +722,7 @@ isOneToOne: false
             [_ in never]: never
           }
           Enums: {
-            "actor_kind": "org_user"|"candidate"|"staff"|"system","data_residency": "r2_apac"|"s3_mumbai","membership_status": "invited"|"active"|"suspended"|"removed","org_kind": "customer"|"trace_library"|"trace_internal","org_role": "org_owner"|"admin"|"recruiter"|"reviewer"|"hiring_manager","org_status": "active"|"suspended","staff_grant_scope": "support_read","workspace_kind": "default"|"client"
+            "actor_kind": "org_user"|"candidate"|"staff"|"system","data_residency": "r2_apac"|"s3_mumbai","membership_status": "invited"|"active"|"suspended"|"removed","org_kind": "customer"|"trace_library"|"trace_internal","org_role": "org_owner"|"admin"|"recruiter"|"reviewer"|"hiring_manager","org_status": "active"|"suspended","section_format": "written"|"mcq","staff_grant_scope": "support_read","test_version_status": "draft"|"published"|"retired","workspace_kind": "default"|"client"
           }
           CompositeTypes: {
             [_ in never]: never
@@ -532,7 +838,7 @@ export type CompositeTypes<
 export const Constants = {
   "public": {
           Enums: {
-            "actor_kind": ["org_user", "candidate", "staff", "system"],"data_residency": ["r2_apac", "s3_mumbai"],"membership_status": ["invited", "active", "suspended", "removed"],"org_kind": ["customer", "trace_library", "trace_internal"],"org_role": ["org_owner", "admin", "recruiter", "reviewer", "hiring_manager"],"org_status": ["active", "suspended"],"staff_grant_scope": ["support_read"],"workspace_kind": ["default", "client"]
+            "actor_kind": ["org_user", "candidate", "staff", "system"],"data_residency": ["r2_apac", "s3_mumbai"],"membership_status": ["invited", "active", "suspended", "removed"],"org_kind": ["customer", "trace_library", "trace_internal"],"org_role": ["org_owner", "admin", "recruiter", "reviewer", "hiring_manager"],"org_status": ["active", "suspended"],"section_format": ["written", "mcq"],"staff_grant_scope": ["support_read"],"test_version_status": ["draft", "published", "retired"],"workspace_kind": ["default", "client"]
           }
         }
 } as const

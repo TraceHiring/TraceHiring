@@ -461,7 +461,9 @@ set search_path = ''
 as $$
 begin
   if tg_op = 'INSERT' then
-    new.created_by := (select auth.uid());
+    -- created_by is outside every authenticated grant, so an app caller always gets auth.uid(); only the
+    -- operator path (no JWT) may name the creator, which the publish auto-assignment then uses (R-15).
+    new.created_by := coalesce((select auth.uid()), new.created_by);
     new.invitation_seq := 0;
     return new;
   end if;
@@ -617,7 +619,7 @@ begin
       raise exception 'TRACE_GUARD: a test version starts as a draft' using errcode = '42501';
     end if;
     new.workspace_id := v_ws;
-    new.created_by := v_uid;
+    new.created_by := coalesce(v_uid, new.created_by);  -- same rule as tests_guard
     new.published_at := null;
     new.published_by := null;
     if new.version_no is null then
@@ -647,10 +649,8 @@ begin
 
   if old.status = 'published' then
     if new.status = 'published' then
-      if new is distinct from old then
-        raise exception 'TRACE_GUARD: a published test version is frozen' using errcode = '42501';
-      end if;
-      return new;
+      -- Even an identical update is refused, so a second (racing) publisher gets an error, not a silent no-op.
+      raise exception 'TRACE_GUARD: a published test version is frozen' using errcode = '42501';
     elsif new.status = 'retired' then
       if new.total_time_seconds is distinct from old.total_time_seconds
         or new.quality_cutoff is distinct from old.quality_cutoff
@@ -1163,8 +1163,10 @@ create policy sections_select_quality_worker on public.sections for select to tr
 
 -- item_versions
 grant select, delete on public.item_versions to authenticated;
-grant insert (org_id, section_id, format, position, stem, options, rubric_version_id, content_sha256)
-  on public.item_versions to authenticated;
+-- test_version_id is overwritten from the section by item_versions_guard; origin is pinned to 'human' by a CHECK,
+-- so granting both adds no capability and lets the CHECK report 23514 (an AI-drafted item cannot exist).
+grant insert (org_id, test_version_id, section_id, format, position, stem, options, rubric_version_id, origin,
+  content_sha256) on public.item_versions to authenticated;
 grant update (position, stem, options, rubric_version_id, content_sha256) on public.item_versions to authenticated;
 grant select on public.item_versions to trace_quality_worker;
 create policy item_versions_select_staff on public.item_versions for select to authenticated
@@ -1183,7 +1185,8 @@ create policy item_versions_select_quality_worker on public.item_versions for se
 
 -- item_answer_keys
 grant select, delete on public.item_answer_keys to authenticated;
-grant insert (org_id, item_version_id, key) on public.item_answer_keys to authenticated;
+-- format is pinned to 'mcq' by a CHECK and the composite FK; granting it lets those report 23514 / 23503.
+grant insert (org_id, item_version_id, format, key) on public.item_answer_keys to authenticated;
 grant update (key) on public.item_answer_keys to authenticated;
 grant select on public.item_answer_keys to trace_quality_worker;
 create policy item_answer_keys_select_staff on public.item_answer_keys for select to authenticated
@@ -1203,7 +1206,8 @@ create policy item_answer_keys_select_quality_worker on public.item_answer_keys 
 -- assignments (L-16: owner/admin any test; a recruiter only reviewer rows on tests they are assigned to, inside
 -- their workspaces). No UPDATE grant.
 grant select, delete on public.assignments to authenticated;
-grant insert (org_id, membership_id, test_id, as_role) on public.assignments to authenticated;
+-- scope is pinned to 'test' by a CHECK; granting it lets the CHECK report 23514.
+grant insert (org_id, membership_id, scope, test_id, as_role) on public.assignments to authenticated;
 create policy assignments_select_staff on public.assignments for select to authenticated
   using (workspace_id = any ((select private.my_workspace_ids('{org_owner,admin,recruiter}'))::uuid[]));
 -- Reviewer: own rows only (a reviewer at aal1 holds no counting membership, so org_id never matches).
