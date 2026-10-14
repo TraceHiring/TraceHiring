@@ -21,7 +21,9 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(87);
+-- The trace_api SELECT denials on quality_cards, integrity_cards, integrity_timeline_entries and reports move to the
+-- migration-3 files: those tables do not exist yet.
+select plan(83);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -363,7 +365,7 @@ set local role trace_api;
 set local trace.api_org_id = 'a1000000-0000-4000-8000-000000000001';
 select is(pg_temp.try($$insert into public.consents (id, org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256, language, event, occurred_at) values ('42000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000001', '41000000-0000-4000-8000-000000000004', 'f1000000-0000-4000-8000-000000000001', pg_temp.rs('f1000000-0000-4000-8000-000000000001'), pg_temp.nt('f1000000-0000-4000-8000-000000000001'), repeat('a', 64), 'en', 'granted', '2026-10-14 09:55:00+00')$$), 'OK 1', 'consents I: trace_api inserts a consent for an adult-declared otp_verified invitation');
 select matches(pg_temp.try($$insert into public.consents (id, org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256, language, event, occurred_at) values ('42000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000001', '41000000-0000-4000-8000-000000000004', 'f1000000-0000-4000-8000-000000000001', pg_temp.rs('f1000000-0000-4000-8000-000000000001'), pg_temp.nt('f1000000-0000-4000-8000-000000000001'), repeat('a', 64), 'en', 'granted', '2026-10-14 09:55:00+00')$$), '^(23505|OK 0)', 'consents I: a second consent for the same invitation is a unique violation (the api uses on conflict do nothing)');
-select matches(pg_temp.try($$insert into public.consents (id, org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256, language, event, occurred_at) values ('42000000-0000-4000-8000-000000000005', 'a1000000-0000-4000-8000-000000000003', '41000000-0000-4000-8000-00000000000c', 'f1000000-0000-4000-8000-00000000000b', pg_temp.rs('f1000000-0000-4000-8000-00000000000b'), pg_temp.nt('f1000000-0000-4000-8000-00000000000b'), repeat('a', 64), 'en', 'granted', '2026-10-14 09:55:00+00')$$), '^42501 new row violates row-level security', 'consents I: api org A cannot insert for an org B invitation (cross-org)');
+select matches(pg_temp.try($$insert into public.consents (id, org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256, language, event, occurred_at) values ('42000000-0000-4000-8000-000000000005', 'a1000000-0000-4000-8000-000000000003', '41000000-0000-4000-8000-00000000000c', 'f1000000-0000-4000-8000-00000000000b', pg_temp.rs('f1000000-0000-4000-8000-00000000000b'), pg_temp.nt('f1000000-0000-4000-8000-00000000000b'), repeat('a', 64), 'en', 'granted', '2026-10-14 09:55:00+00')$$), '^42501 TRACE_GUARD: the consent is outside the api org', 'consents I: api org A cannot insert for an org B invitation (cross-org)');
 reset role;
 reset request.jwt.claims;
 reset trace.job_org_id;
@@ -376,7 +378,7 @@ reset request.jwt.claims;
 reset trace.job_org_id;
 reset trace.api_org_id;
 set local role trace_api;
-select matches(pg_temp.try($$insert into public.consents (id, org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256, language, event, occurred_at) values ('42000000-0000-4000-8000-000000000006', 'a1000000-0000-4000-8000-000000000001', '41000000-0000-4000-8000-000000000004', 'f1000000-0000-4000-8000-000000000001', pg_temp.rs('f1000000-0000-4000-8000-000000000001'), pg_temp.nt('f1000000-0000-4000-8000-000000000001'), repeat('a', 64), 'en', 'granted', '2026-10-14 09:55:00+00')$$), '^42501 new row violates row-level security', 'consents I: api without an api org cannot insert');
+select matches(pg_temp.try($$insert into public.consents (id, org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256, language, event, occurred_at) values ('42000000-0000-4000-8000-000000000006', 'a1000000-0000-4000-8000-000000000001', '41000000-0000-4000-8000-000000000004', 'f1000000-0000-4000-8000-000000000001', pg_temp.rs('f1000000-0000-4000-8000-000000000001'), pg_temp.nt('f1000000-0000-4000-8000-000000000001'), repeat('a', 64), 'en', 'granted', '2026-10-14 09:55:00+00')$$), '^42501 TRACE_GUARD: the consent is outside the api org', 'consents I: api without an api org cannot insert');
 reset role;
 reset request.jwt.claims;
 reset trace.job_org_id;
@@ -400,10 +402,6 @@ select matches(pg_temp.try($$select 1 from public.media_objects limit 1$$), '^42
 select matches(pg_temp.try($$select 1 from public.idempotency_keys limit 1$$), '^42501 permission denied', 'idempotency_keys: trace_api has no SELECT privilege');
 select matches(pg_temp.try($$select 1 from public.memberships limit 1$$), '^42501 permission denied', 'memberships: trace_api has no SELECT privilege');
 select matches(pg_temp.try($$select 1 from public.audit_log limit 1$$), '^42501 permission denied', 'audit_log: trace_api has no SELECT privilege');
-select matches(pg_temp.try($$select 1 from public.quality_cards limit 1$$), '^42501 permission denied', 'quality_cards: trace_api has no SELECT privilege (needs migration 3)');
-select matches(pg_temp.try($$select 1 from public.integrity_cards limit 1$$), '^42501 permission denied', 'integrity_cards: trace_api has no SELECT privilege (needs migration 3)');
-select matches(pg_temp.try($$select 1 from public.integrity_timeline_entries limit 1$$), '^42501 permission denied', 'integrity_timeline_entries: trace_api has no SELECT privilege (needs migration 3)');
-select matches(pg_temp.try($$select 1 from public.reports limit 1$$), '^42501 permission denied', 'reports: trace_api has no SELECT privilege (needs migration 3)');
 select matches(pg_temp.try($$select 1 from quality.scores limit 1$$), '^42501 permission denied', 'quality.scores: trace_api has no privilege (needs migration 3)');
 select matches(pg_temp.try($$select 1 from integrity.results limit 1$$), '^42501 permission denied', 'integrity.results: trace_api has no privilege (needs migration 3)');
 reset role;
@@ -413,8 +411,10 @@ reset trace.api_org_id;
 select is((has_schema_privilege('trace_api', 'quality', 'USAGE')), false, 'quality: trace_api has no USAGE on the schema (MT-5c: at most one internal schema, here none)');
 select is((has_schema_privilege('trace_api', 'integrity', 'USAGE')), false, 'integrity: trace_api has no USAGE on the schema');
 select is(((select count(*)::int from information_schema.role_table_grants where grantee = 'trace_api' and table_schema in ('quality', 'integrity'))), 0, 'trace_api holds no table privilege in quality or integrity');
+set local role trace_api;
 select matches(pg_temp.try($$insert into public.sessions (id) values (gen_random_uuid())$$), '^42501 permission denied', 'sessions: trace_api cannot insert (trace_worker only)');
 select matches(pg_temp.try($$insert into public.media_objects (id) values (gen_random_uuid())$$), '^42501 permission denied', 'media_objects: trace_api cannot insert');
+reset role;
 -- ===== private.resolve_invitation_by_hash(p_hash): the only token-hash lookup =====
 select is((has_schema_privilege('trace_api', 'private', 'USAGE')), true, 'resolve: trace_api can reach the private schema (helpers are called over SQL after SET LOCAL ROLE)');
 reset role;

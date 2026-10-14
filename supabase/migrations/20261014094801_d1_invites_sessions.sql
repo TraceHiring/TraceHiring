@@ -483,6 +483,11 @@ begin
   if current_setting('role') is distinct from 'trace_api' then
     raise exception 'TRACE_GUARD: consents are recorded by the api only' using errcode = '42501';
   end if;
+  -- The org comes first: without it, the replay no-op below would tell an api call scoped to no org (or another org)
+  -- whether a consent exists (lead fix 2026-10-14, rls_d1_api "api without an api org cannot insert").
+  if new.org_id is distinct from (select private.api_org_id()) then
+    raise exception 'TRACE_GUARD: the consent is outside the api org' using errcode = '42501';
+  end if;
   -- A replayed consent (double click, retry) is a no-op at any later step: the api re-reads the stored row.
   if exists (
     select 1 from public.consents as c

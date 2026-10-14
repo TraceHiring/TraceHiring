@@ -177,3 +177,14 @@ It raises 42501 when `p_org_id` is not `job_org_id()`, and 22023 `TRACE_BAD_MIRR
 9. Inviting on an archived test (`tests.archived_at` not null) is not refused; the spec says nothing. Add a guard?
 10. Not re-tested: applying the migration-1 *draft* plus this draft on a DB without migration 1. The shared DB already
     has the placed migration 1. The runner handles both cases.
+
+## Lead decisions at placement (2026-10-14, `20261014094801_d1_invites_sessions.sql`)
+
+- **(a) USAGE on schema `private` for `trace_api` and `trace_worker`: accepted (D-4).** MT-8 forbids it only for anon and authenticated; EXECUTE stays per function (`rls_roles` pins the exact lists: `trace_api` api_org_id + resolve_invitation_by_hash, `trace_worker` job_org_id + mirror_session).
+- **(b) Owner `UPDATE (id)` on `consents`: accepted (D-3, Q-8).** Needed by the `sessions → consents` FK; every UPDATE still hits `consents_append_only`. The catalog checks pass with it.
+- **(c) Operator path (Q-1): allowed on invitation INSERT only**, as on the migration-1 authoring tables; the creator is named only on the operator path (m-1 rule); the rule-9 inviter block holds for every caller. Consents stay api-only, sessions and children worker-only.
+- **(d) `rls_idempotency` (M0b) rewritten for L-20** in the same change (worker: own scope in its job org, S and I only).
+- **Grants (D-18, Q-7, tests NOTES 8):** `trace_api` supplies consent `id` and `occurred_at`; `trace_worker` supplies `id` on session children, `workspace_id`/`test_id` on sessions (always overwritten by `sessions_guard`) and `upload_state` (pinned by its CHECK). Authenticated invitation inserts still cannot choose `id`.
+- **Guard fix:** `consents_guard` refuses a consent outside `api_org_id()` **before** the replay no-op, so an api call scoped to no org or another org learns nothing about existing consents.
+- **Tests pinned** to the codes the migration gives (tests NOTES ambiguities 2, 3, 9), each still a refusal; two fixture bugs fixed (two trace_api denials ran as the operator; a session finish without a newer `mirror_seq`); a non-canonical `jobKey` is a `22023` malformed message. The migration-3 assertions (trace_api denials on cards/timeline/reports, mirror_session writing `reports`) were moved out; add them to the m3 files.
+- Result: `pnpm test:rls` 24 files, rls 1835, catalog 142, db-types current.
