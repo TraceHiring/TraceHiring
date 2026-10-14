@@ -952,8 +952,12 @@ create policy invitations_update_api on public.invitations for update to trace_a
   using (org_id = (select private.api_org_id()))
   with check (org_id = (select private.api_org_id()));
 
--- consents (append-only: no UPDATE/DELETE/TRUNCATE for anyone, the owner included)
+-- consents (append-only: no UPDATE/DELETE/TRUNCATE for anyone, the owner included). Unlike audit_log, consents is
+-- referenced by an FK (sessions -> consents), and the FK check runs `SELECT ... FOR KEY SHARE` on consents as its owner,
+-- which needs UPDATE on at least one column. So the owner keeps a column-level UPDATE on `id` only; any UPDATE still
+-- hits consents_append_only (ENABLE ALWAYS) and raises TRACE_APPEND_ONLY (NOTES D-3).
 revoke update, delete, truncate on public.consents from postgres;
+grant update (id) on public.consents to postgres;
 grant select on public.consents to authenticated, trace_worker, trace_api;
 grant insert (org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id, rendered_sha256, language,
   event) on public.consents to trace_api;
