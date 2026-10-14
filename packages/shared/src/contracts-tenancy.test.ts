@@ -212,6 +212,19 @@ describe('AuditDetails', () => {
         .success,
     ).toBe(false);
   });
+  it('takes the link id from crypto.randomUUID: a v4 id passes, a non-RFC 128-bit id does not', () => {
+    const view = AuditDetails['media.view'];
+    expect(
+      view.safeParse({ media_id: ID, session_id: ID2, link_id: crypto.randomUUID() }).success,
+    ).toBe(true);
+    expect(
+      view.safeParse({
+        media_id: ID,
+        session_id: ID2,
+        link_id: '0123abcd-0123-0123-0123-0123456789ab',
+      }).success,
+    ).toBe(false);
+  });
   it.each(AUDIT_ACTIONS)('accepts the %s shape', (action) => {
     expect(AuditDetails[action].safeParse(examples[action]).success).toBe(true);
   });
