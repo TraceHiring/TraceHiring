@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  SENTRY_ORIGIN_TOKEN,
   SUPABASE_ORIGIN_TOKEN,
   headersTemplatePlugin,
   renderHeaders,
@@ -64,6 +65,62 @@ describe('renderHeaders', () => {
       /exactly once/,
     );
     expect(() => renderHeaders(`${TEMPLATE}# ${SUPABASE_ORIGIN_TOKEN}\n`, URL_OK)).toThrow(
+      /exactly once/,
+    );
+  });
+});
+
+// d1 AT-D22 / L-24: the recruiter's connect-src also gets the Sentry ingest origin of VITE_SENTRY_DSN. The DSN
+// is built at run time, so no DSN-shaped literal sits in the repo.
+describe('renderHeaders: the Sentry ingest origin', () => {
+  const INGEST = 'https://o1.ingest.de.sentry.io';
+  const dsn = (host = 'o1.ingest.de.sentry.io'): string => `https://${'ab12'.repeat(8)}@${host}/42`;
+  const WITH_SENTRY = TEMPLATE.replace(
+    `${SUPABASE_ORIGIN_TOKEN};`,
+    `${SUPABASE_ORIGIN_TOKEN} ${SENTRY_ORIGIN_TOKEN};`,
+  );
+
+  it('replaces the Sentry token with the ingest origin of the DSN, never the key or project', () => {
+    const out = renderHeaders(WITH_SENTRY, URL_OK, dsn());
+    expect(out).toContain(`connect-src 'self' ${URL_OK} ${INGEST};`);
+    expect(out).not.toContain('ab12');
+    expect(out).not.toContain('/42');
+  });
+
+  it('accepts the US ingest host too', () => {
+    expect(renderHeaders(WITH_SENTRY, URL_OK, dsn('o7.ingest.sentry.io'))).toContain(
+      'https://o7.ingest.sentry.io;',
+    );
+  });
+
+  it('drops the Sentry token when the DSN is unset or empty', () => {
+    for (const value of [undefined, '']) {
+      const out = renderHeaders(WITH_SENTRY, URL_OK, value);
+      expect(out).toContain(`connect-src 'self' ${URL_OK}; object-src`);
+      expect(out).not.toContain(SENTRY_ORIGIN_TOKEN);
+    }
+    expect(renderHeaders(WITH_SENTRY, undefined, undefined)).toContain(
+      "connect-src 'self'; object-src",
+    );
+  });
+
+  it.each([
+    ['http', dsn().replace('https', 'http')],
+    ['another host', dsn('o1.ingest.de.sentry.io.example.test')],
+    ['a non-ingest Sentry host', dsn('sentry.io')],
+    ['a query', `${dsn()}?x=1`],
+    ['no public key', 'https://o1.ingest.de.sentry.io/42'],
+    ['not a DSN', 'not a dsn'],
+  ])('fails the build for %s, without echoing the value', (_label, value) => {
+    expect(() => renderHeaders(WITH_SENTRY, URL_OK, value)).toThrow(/VITE_SENTRY_DSN/);
+    expect(() => renderHeaders(WITH_SENTRY, URL_OK, value)).toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining('ab12') }),
+    );
+  });
+
+  it('fails when a DSN is set but the template has no Sentry token, or has it twice', () => {
+    expect(() => renderHeaders(TEMPLATE, URL_OK, dsn())).toThrow(/exactly once/);
+    expect(() => renderHeaders(`${WITH_SENTRY}# ${SENTRY_ORIGIN_TOKEN}\n`, URL_OK, dsn())).toThrow(
       /exactly once/,
     );
   });

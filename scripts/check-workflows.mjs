@@ -561,6 +561,8 @@ export const STAGING_SECRET_USERS = {
 export const BUILD_ONLY_ENV = Object.freeze({
   VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
   VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+  // d1 AT-D22 (m0-foundations §7.3): the recruiter's Sentry DSN, a public value (H6).
+  VITE_SENTRY_DSN: '${{ vars.VITE_SENTRY_DSN }}',
 });
 
 const INSTALL_RE = /\b(?:pnpm|npm|yarn)\s+(?:install|i|ci|add)\b/;
@@ -714,6 +716,10 @@ export const ENV_ALLOW_LIST = Object.freeze([
   // specs/m0b-tenancy.md §2.7: the deploy-staging build step only (BUILD_ONLY_ENV).
   'VITE_SUPABASE_URL',
   'VITE_SUPABASE_PUBLISHABLE_KEY',
+  'VITE_SENTRY_DSN',
+  // d1 AT-D22 (specs/d1-demo-slice.md §7.1, L-24): the Workers deploy step passes it to jobs and api
+  // only, as a var (a DSN is public, not a secret).
+  'SENTRY_DSN_WORKERS',
   // specs/m0b-tenancy.md AT-B9 [R5]: the org sign-in smoke step (public variables, then the three
   // smoke secrets bound by STAGING_SECRET_USERS).
   'SUPABASE_STAGING_URL',

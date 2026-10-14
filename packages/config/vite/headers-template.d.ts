@@ -4,8 +4,15 @@
 /** The connect-src placeholder in an app's _headers.template. */
 export declare const SUPABASE_ORIGIN_TOKEN: '__SUPABASE_ORIGIN__';
 
-/** The `_headers` text: the token replaced by the Supabase origin, or dropped when the URL is unset. */
-export declare function renderHeaders(template: string, supabaseUrl: unknown): string;
+/** The connect-src placeholder for the Sentry ingest origin (recruiter, d1 AT-D22). */
+export declare const SENTRY_ORIGIN_TOKEN: '__SENTRY_ORIGIN__';
+
+/** The `_headers` text: each token replaced by its origin (Supabase URL, Sentry DSN), or dropped when unset. */
+export declare function renderHeaders(
+  template: string,
+  supabaseUrl: unknown,
+  sentryDsn?: unknown,
+): string;
 
 export interface EmittedAsset {
   type: 'asset';

@@ -173,11 +173,24 @@ describe('checkCsp', () => {
     ['recruiter', 'https://*.supabase.co', false],
     ['recruiter', 'wss://abcdefghijklmnopqrst.supabase.co', false],
     ['recruiter', 'https://trace-edge-staging.sub.workers.dev', false],
+    // d1 AT-D22 / L-24: the Sentry ingest origin (EU and US hosts), recruiter only.
+    ['recruiter', 'https://o1.ingest.de.sentry.io', true],
+    ['recruiter', 'https://o42.ingest.sentry.io', true],
+    ['recruiter', 'https://*.ingest.sentry.io', false],
+    ['recruiter', 'https://sentry.io', false],
+    ['recruiter', 'https://o1.ingest.de.sentry.io.example.test', false],
+    ['candidate', 'https://o1.ingest.de.sentry.io', false],
   ])('connect-src for %s with %s: allowed=%s', (app, origin, allowed) => {
     const csp = base.replace("connect-src 'self'", `connect-src 'self' ${origin}`);
     expect(checkCsp(app, csp)).toEqual(
       allowed ? [] : [expect.stringMatching(/not on the .* allow-list/)],
     );
+  });
+
+  it('allows the Supabase and the Sentry origin together (one per entry)', () => {
+    const both = 'https://abcdefghijklmnopqrst.supabase.co https://o1.ingest.de.sentry.io';
+    const csp = base.replace("connect-src 'self'", "connect-src 'self' " + both);
+    expect(checkCsp('recruiter', csp)).toEqual([]);
   });
 
   it('fails when connect-src names two origins for one allow-list entry (m0b AT-B12)', () => {

@@ -140,11 +140,13 @@ jobs:
       # dist/version.json from VITE_APP_VERSION (§9.3). The loop then rebuilds each Worker under
       # --env staging into the same dist/, so the next step scans, and the Workers step deploys,
       # the staging bytes (an env.staging define or alias cannot ship unscanned). No secret here:
-      # the recruiter's Supabase URL and publishable key are public staging variables (m0b §2.7, H10).
+      # the recruiter's Supabase URL and publishable key are public staging variables (m0b §2.7, H10),
+      # and so is its Sentry DSN (d1 AT-D22, H6).
       - name: Build
         env:
           VITE_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
         run: |
           set -euo pipefail
           VITE_APP_VERSION="$GITHUB_SHA" pnpm build
@@ -168,16 +170,19 @@ jobs:
           set -euo pipefail
           psql --version
           node scripts/staging-catalog-checks.mjs
-      # §7.2 step 5 (AT-11).
+      # §7.2 step 5 (AT-11). jobs and api also get the Sentry DSN as a var (d1 AT-D22, L-24); edge never
+      # (no reporter on the edge Worker, m0-foundations §9.2).
       - name: Deploy the Workers (edge, jobs, api)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SENTRY_DSN_WORKERS: ${{ vars.SENTRY_DSN_WORKERS }}
         run: |
           set -euo pipefail
           export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
-          for dir in workers/edge workers/jobs services/api; do
-            (cd "$dir" && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA")
+          (cd workers/edge && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA")
+          for dir in workers/jobs services/api; do
+            (cd "$dir" && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA" --var "SENTRY_DSN_WORKERS:$SENTRY_DSN_WORKERS")
           done
       # §7.2 step 6: the staging Workers' secrets must be a subset of the allow-list (AT-15).
       - name: Check Worker secrets

@@ -69,9 +69,14 @@ describe(`${APP} _headers.template`, () => {
       }
   });
 
-  it("limits connect-src to 'self' plus the one Supabase origin token (M0b)", () => {
-    expect(directives.get('connect-src')).toEqual(["'self'", '__SUPABASE_ORIGIN__']);
+  it("limits connect-src to 'self' plus the Supabase (M0b) and Sentry (d1 AT-D22) origin tokens", () => {
+    expect(directives.get('connect-src')).toEqual([
+      "'self'",
+      '__SUPABASE_ORIGIN__',
+      '__SENTRY_ORIGIN__',
+    ]);
     expect(text.split('__SUPABASE_ORIGIN__')).toHaveLength(2);
+    expect(text.split('__SENTRY_ORIGIN__')).toHaveLength(2);
   });
 
   it('is the only headers source: public/_headers would be copied over the generated file', () => {

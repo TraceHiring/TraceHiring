@@ -16,3 +16,18 @@ Scope: `git diff 5b0d457..d8b1b3a` (`9581677` shared scrubber and adapter, `d8b1
 Checked and clean (reviewer): BrowserSession dropped, client reports off, no Replay/Feedback/logs/metrics/check-ins, the allow-list scrubber's event and breadcrumb fields, the DSN is never logged, the no-DSN path skips init, candidate and edge cannot hold `@sentry/*`, all versions are at least 2 weeks old.
 
 Note for the founder (H6): in the Sentry projects, keep "Prevent storing of IP addresses" and server-side data scrubbing on (already part of H6).
+
+## Confirming re-review (Opus security-reviewer, 2026-10-14): PASS WITH NOTES
+
+All five findings verified closed against the SDK 11.1.0 sources (B-1, B-2, M-3, m-4, n-5). Per-request isolation still holds without the HttpServer/RequestData/Fetch integrations (`withInvocationIsolationScope`), and no envelope type other than `event` can be sent. Its notes, all fixed by the lead the same day:
+
+| ID | Severity | Finding | Disposition |
+| --- | --- | --- | --- |
+| Mi-1 | Minor | With no `tracesSampleRate`, @sentry/cloudflare falls back to `env.SENTRY_TRACES_SAMPLE_RATE` (and reads `SENTRY_TUNNEL`, `SENTRY_DSN`, `SENTRY_DEBUG`, …): an operator-set var would reopen B-2 or redirect envelopes. | **FIXED:** `workerSentryOptions` returns undefined (no SDK) when the env holds any `SENTRY_*` name but `SENTRY_DSN_WORKERS`; tests for five names, seen red first (api and jobs). |
+| N-1 | Nit | The Cloudflare client sets no `sdk.settings`, so `infer_ip` is not `never` on Worker events. | **FIXED:** Worker options carry `_metadata.sdk.settings` `infer_ip`/`infer_user_agent` = `never`; the real-SDK wiring test asserts it on the sent event. |
+| N-2 | Nit | The server client appends SpanStreaming after the integration filter, so "the only integrations that run" was not strictly true. | **FIXED:** comment corrected in `sentry-reporter.ts` (inert while tracing is off). |
+| NC | Not checked | `withErrorReporting` wraps only `fetch`; the jobs queue consumer and cron (Wave 2) would report to no client. | **OPEN (reliability, not a leak):** when the lead wires `queue`/`scheduled` in `workers/jobs/src/index.ts` (spec §11 Wave 2), wrap them too, with a wiring test. |
+
+Also in the same change (AT-D20 part of L-24): the recruiter CSP gets the Sentry ingest origin (`__SENTRY_ORIGIN__` filled from `VITE_SENTRY_DSN`, `check-headers` allow-list), and the staging deploy passes `VITE_SENTRY_DSN` to the recruiter build and `SENTRY_DSN_WORKERS` to jobs and api only (`check-workflows`).
+
+**AT-D22 is green; with this re-review the D1-18 gate for writer streams is met** (H6 done, AT-D22 passing).

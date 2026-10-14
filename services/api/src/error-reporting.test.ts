@@ -186,6 +186,26 @@ describe('api Sentry wiring (AT-D22)', () => {
     expect(workerSentryOptions({ SENTRY_DSN_WORKERS: '', VERSION: SHA } as Env)).toBeUndefined();
   });
 
+  it.each([
+    'SENTRY_TRACES_SAMPLE_RATE',
+    'SENTRY_TUNNEL',
+    'SENTRY_DSN',
+    'SENTRY_DEBUG',
+    'SENTRY_RELEASE',
+  ])(
+    'fails closed (no SDK) when the env also holds %s, which the SDK would read (AT-D22 re-review Mi-1)',
+    (name) => {
+      const env = { SENTRY_DSN_WORKERS: dsn(), VERSION: SHA, [name]: '1' } as unknown as Env;
+      expect(workerSentryOptions(env)).toBeUndefined();
+    },
+  );
+
+  it('tells Sentry never to infer an IP from the Worker (AT-D22 re-review N-1)', () => {
+    expect(workerSentryOptions({ SENTRY_DSN_WORKERS: dsn(), VERSION: SHA } as Env)).toMatchObject({
+      _metadata: { sdk: { settings: { infer_ip: 'never' } } },
+    });
+  });
+
   it('serves requests without initialising the SDK when there is no DSN', async () => {
     const lines: string[] = [];
     let wrapped = 0;
@@ -239,6 +259,9 @@ describe('api Sentry wiring (AT-D22)', () => {
       exception?: { values?: { type?: string; value?: string }[] };
     };
     expect(event.release).toBe(SHA);
+    expect((event as { sdk?: { settings?: { infer_ip?: string } } }).sdk?.settings?.infer_ip).toBe(
+      'never',
+    );
     expect(event.user).toBeUndefined();
     expect(event.request?.headers).toBeUndefined();
     if (event.request?.url !== undefined) expect(event.request.url).not.toContain('?');

@@ -8,6 +8,39 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 export const SUPABASE_ORIGIN_TOKEN = '__SUPABASE_ORIGIN__';
+/** d1 AT-D22 / L-24: the Sentry ingest origin of VITE_SENTRY_DSN, in the recruiter's connect-src. */
+export const SENTRY_ORIGIN_TOKEN = '__SENTRY_ORIGIN__';
+
+/** A Sentry DSN on an ingest host: https, a 32-hex public key, o<n>.ingest[.<region>].sentry.io, a project id. */
+const SENTRY_DSN = /^https:\/\/[0-9a-f]{32}@(o[0-9]+\.ingest(?:\.[a-z]{2})?\.sentry\.io)\/[0-9]+$/;
+
+/**
+ * The ingest origin of the DSN (never its key or project), or null when the variable is unset or empty.
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function sentryOrigin(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const m = typeof value === 'string' ? SENTRY_DSN.exec(value) : null;
+  if (m === null) {
+    throw new Error(
+      'VITE_SENTRY_DSN must be a Sentry DSN on an o<n>.ingest[.<region>].sentry.io host (value not shown)',
+    );
+  }
+  return `https://${m[1]}`;
+}
+
+/**
+ * Replaces `token` with `origin`, or drops it (and its leading space) when origin is null.
+ * @param {string} text
+ * @param {string} token
+ * @param {string | null} origin
+ */
+function fill(text, token, origin) {
+  return origin === null
+    ? text.replace(` ${token}`, '').replace(token, '')
+    : text.replace(token, () => origin);
+}
 
 const SUPABASE_URL = /^https:\/\/[a-z0-9]{20}\.supabase\.co\/?$/;
 
@@ -46,16 +79,20 @@ function checkPublishableKey(value) {
  * The `_headers` text for one build.
  * @param {string} template
  * @param {unknown} supabaseUrl
+ * @param {unknown} [sentryDsn] VITE_SENTRY_DSN; when set, the template must hold the Sentry token exactly once
  * @returns {string}
  */
-export function renderHeaders(template, supabaseUrl) {
+export function renderHeaders(template, supabaseUrl, sentryDsn) {
   const origin = supabaseOrigin(supabaseUrl);
+  const ingest = sentryOrigin(sentryDsn);
   if (template.split(SUPABASE_ORIGIN_TOKEN).length !== 2) {
     throw new Error(`_headers.template must contain ${SUPABASE_ORIGIN_TOKEN} exactly once`);
   }
-  return origin === null
-    ? template.replace(` ${SUPABASE_ORIGIN_TOKEN}`, '').replace(SUPABASE_ORIGIN_TOKEN, '')
-    : template.replace(SUPABASE_ORIGIN_TOKEN, origin);
+  const sentryTokens = template.split(SENTRY_ORIGIN_TOKEN).length - 1;
+  if (sentryTokens > 1 || (ingest !== null && sentryTokens !== 1)) {
+    throw new Error(`_headers.template must contain ${SENTRY_ORIGIN_TOKEN} exactly once`);
+  }
+  return fill(fill(template, SUPABASE_ORIGIN_TOKEN, origin), SENTRY_ORIGIN_TOKEN, ingest);
 }
 
 /**
@@ -66,6 +103,8 @@ export function headersTemplatePlugin(options = {}) {
   let root = '';
   /** @type {unknown} */
   let supabaseUrl;
+  /** @type {unknown} */
+  let sentryDsn;
   return {
     name: /** @type {const} */ ('trace:headers-template'),
     /** @param {{ root: string, env: Record<string, unknown> }} config */
@@ -73,6 +112,8 @@ export function headersTemplatePlugin(options = {}) {
       root = config.root;
       supabaseUrl = config.env['VITE_SUPABASE_URL'];
       supabaseOrigin(supabaseUrl);
+      sentryDsn = config.env['VITE_SENTRY_DSN'];
+      sentryOrigin(sentryDsn);
       checkPublishableKey(config.env['VITE_SUPABASE_PUBLISHABLE_KEY']);
     },
     /** @this {{ emitFile(file: { type: 'asset', fileName: string, source: string }): unknown }} */
@@ -81,7 +122,7 @@ export function headersTemplatePlugin(options = {}) {
       this.emitFile({
         type: 'asset',
         fileName: '_headers',
-        source: renderHeaders(template, supabaseUrl),
+        source: renderHeaders(template, supabaseUrl, sentryDsn),
       });
     },
   };

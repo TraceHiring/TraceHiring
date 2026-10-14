@@ -646,6 +646,9 @@ describe('checkWorkflow', () => {
           'STAGING_SMOKE_EMAIL',
           'STAGING_SMOKE_PASSWORD',
           'STAGING_SMOKE_TOTP_SECRET',
+          // d1 AT-D22: the Sentry DSNs (public vars): the recruiter build and the jobs/api deploy
+          'VITE_SENTRY_DSN',
+          'SENTRY_DSN_WORKERS',
         ].sort(),
       );
     });
@@ -1148,11 +1151,16 @@ describe('checkWorkflow', () => {
   });
 
   describe('VITE_SUPABASE_* only on the deploy build step (m0b §2.7)', () => {
-    it('lists exactly the two build variables and their public vars sources', () => {
+    it('lists exactly the three build variables and their public vars sources (m0b §2.7, d1 AT-D22)', () => {
       expect(BUILD_ONLY_ENV).toEqual({
         VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
         VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+        VITE_SENTRY_DSN: '${{ vars.VITE_SENTRY_DSN }}',
       });
+    });
+
+    it('allows the Workers Sentry DSN variable (d1 AT-D22: a public var, passed to jobs and api only)', () => {
+      expect(ENV_ALLOW_LIST).toContain('SENTRY_DSN_WORKERS');
     });
 
     it.each([

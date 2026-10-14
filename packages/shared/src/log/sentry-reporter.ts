@@ -113,7 +113,9 @@ export const SENTRY_DATA_COLLECTION: {
 };
 
 /**
- * The only SDK integrations that run, by name; every other default is dropped. They dedupe, filter
+ * The default SDK integrations kept, by name; every other default is dropped. (The server client
+ * still appends SpanStreaming after this filter; it does nothing while tracing is off, which is why
+ * sentryOptions sets no tracesSampleRate. AT-D22 re-review N-2.) They dedupe, filter
  * and link errors, and (browser only) keep breadcrumbs, which beforeBreadcrumb scrubs. Dropped
  * among others: request data and HTTP context (headers, IP, user agent), console capture, culture
  * context, the browser's wrapped-callback errors (they put raw callback arguments in `extra`), its

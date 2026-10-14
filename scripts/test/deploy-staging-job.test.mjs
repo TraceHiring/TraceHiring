@@ -143,10 +143,14 @@ describe('deploy-staging: step-scoped secrets (§7.2, §7.3)', () => {
       const cf = ['workers_deployed', 'secrets_checked', 'pages_deployed'].includes(state);
       const env = s.env ?? {};
       if (cf) {
-        expect(Object.keys(env).sort(), state).toEqual([
-          'CLOUDFLARE_ACCOUNT_ID',
-          'CLOUDFLARE_API_TOKEN',
-        ]);
+        // The Workers deploy alone also gets the public Sentry DSN var (d1 AT-D22).
+        expect(Object.keys(env).sort(), state).toEqual(
+          [
+            'CLOUDFLARE_ACCOUNT_ID',
+            'CLOUDFLARE_API_TOKEN',
+            ...(state === 'workers_deployed' ? ['SENTRY_DSN_WORKERS'] : []),
+          ].sort(),
+        );
         expect(env.CLOUDFLARE_ACCOUNT_ID).toBe('${{ vars.CLOUDFLARE_ACCOUNT_ID }}');
       } else {
         expect(env.CLOUDFLARE_ACCOUNT_ID, state).toBeUndefined();
@@ -172,10 +176,12 @@ describe('deploy-staging: commands', () => {
   it('builds the staging Worker bundles with no secret, before the scan (S3B-1)', () => {
     const built = stepIn('built');
     expect(secretRefs(built)).toEqual([]);
-    // m0b §2.7: only the two public build variables, from vars (check-workflows BUILD_ONLY_ENV).
+    // m0b §2.7 and d1 AT-D22: only the three public build variables, from vars (check-workflows
+    // BUILD_ONLY_ENV).
     expect(built.env).toEqual({
       VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
       VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+      VITE_SENTRY_DSN: '${{ vars.VITE_SENTRY_DSN }}',
     });
     const r = run(built);
     expect(r.split('\n')[0]).toBe('set -euo pipefail');
@@ -201,13 +207,18 @@ describe('deploy-staging: commands', () => {
   });
 
   it('deploys exactly the scanned staging bundle: dist/index.js, --no-bundle, VERSION from $GITHUB_SHA (S3B-1)', () => {
-    const r = run(stepIn('workers_deployed'));
+    const step = stepIn('workers_deployed');
+    const r = run(step);
     expect(r).toContain(`export WRANGLER_OUTPUT_FILE_PATH=${OUTPUT_FILE}`);
-    expect(r).toContain(`for dir in ${WORKER_DIRS}; do`);
+    // d1 AT-D22 (L-24): jobs and api get the Sentry DSN as a var; the edge Worker never does (no
+    // reporter on edge, m0-foundations §9.2). The DSN comes from a public var, never a secret.
+    expect(r).toContain('for dir in workers/jobs services/api; do');
     const lines = r.split('\n').filter((l) => /wrangler deploy/.test(l));
     expect(lines.map(norm)).toEqual([
-      '(cd "$dir" && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA")',
+      '(cd workers/edge && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA")',
+      '(cd "$dir" && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA" --var "SENTRY_DSN_WORKERS:$SENTRY_DSN_WORKERS")',
     ]);
+    expect(step.env.SENTRY_DSN_WORKERS).toBe('${{ vars.SENTRY_DSN_WORKERS }}');
   });
 
   it('checks the Worker secrets with check-staging-secrets', () => {

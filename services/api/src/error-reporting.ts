@@ -16,15 +16,35 @@ export const sentryReporter = createSentryReporter((event, hint) => {
   Sentry.captureEvent(event as Sentry.Event, hint as Sentry.EventHint);
 });
 
+/** Worker options: the shared ones, plus SDK metadata telling Sentry never to infer an IP or user agent. */
+type WorkerSentryOptions = SentryOptions & {
+  _metadata: { sdk: { settings: { infer_ip: 'never'; infer_user_agent: 'never' } } };
+};
+
 /**
  * The SDK options for this env, or undefined when SENTRY_DSN_WORKERS holds no DSN. The DSN is read
  * first, so without one nothing else of env is read here; an env that throws when read gives
  * undefined, and the app's own error path then answers the request. Never throws.
+ *
+ * Fails closed when the env holds any other SENTRY_* name: @sentry/cloudflare reads
+ * SENTRY_TRACES_SAMPLE_RATE, SENTRY_TUNNEL, SENTRY_DSN, SENTRY_DEBUG and others from env, which could
+ * turn tracing back on or send envelopes elsewhere (AT-D22 re-review Mi-1).
  */
-export const workerSentryOptions = (env: Env): SentryOptions | undefined => {
+export const workerSentryOptions = (env: Env): WorkerSentryOptions | undefined => {
   try {
     const dsn = sentryDsn(env.SENTRY_DSN_WORKERS);
-    return dsn === undefined ? undefined : sentryOptions({ dsn, release: env.VERSION });
+    if (dsn === undefined) return undefined;
+    if (Object.keys(env).some((k) => k.startsWith('SENTRY_') && k !== 'SENTRY_DSN_WORKERS')) {
+      return undefined;
+    }
+    const options = sentryOptions({ dsn, release: env.VERSION });
+    return (
+      options && {
+        ...options,
+        // The Cloudflare client sets no sdk.settings itself (AT-D22 re-review N-1).
+        _metadata: { sdk: { settings: { infer_ip: 'never', infer_user_agent: 'never' } } },
+      }
+    );
   } catch {
     return undefined;
   }
