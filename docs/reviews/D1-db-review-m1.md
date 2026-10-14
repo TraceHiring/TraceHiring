@@ -2,16 +2,19 @@
 
 Scope: `supabase/migrations/20261014065417_d1_authoring.sql` (commit `45206c8`), its tests `supabase/tests/rls_d1_{tests,assignments,scoping,rulesets,helpers}.test.sql` (`512021f`), the amended `rls_roles` and `catalog_probe`. Probes ran rolled back on the local Postgres 17.11.
 
-**Verdict: CHANGES REQUIRED** — 0 Blocking, 1 Major, 5 Minor, 4 Notes. No rule 1/2/3/5/6 break, no cross-org leak, no hole in the freeze/publish state machine.
+**Verdict: CHANGES REQUIRED** (2026-10-14 update: M-1, m-1 fixed and m-3 covered in `4a2211c`; m-2, m-4, m-5 open) — 0 Blocking, 1 Major, 5 Minor, 4 Notes. No rule 1/2/3/5/6 break, no cross-org leak, no hole in the freeze/publish state machine.
 
 ## Findings and lead dispositions
 
 | ID | Severity | Finding | Disposition |
 | --- | --- | --- | --- |
-| M-1 | **Major** | Assignments ignore the workspace fence (M0b D16b): `assignments_guard` (≈ lines 998–1004), `my_assigned_test_ids` (≈ 429–446) and the publish auto-assignment (≈ 730–739) never compare `memberships.workspace_id` with the test's workspace. A workspace-A2 reviewer can be assigned to an A1 test and then reads its items and **answer keys**; a workspace-scoped recruiter would later reach A1 evidence via migration 4. Spec-level hole (§3.3/§3.4 as written). | **OPEN — fix first next session (tests red first):** guard `and (m.workspace_id is null or m.workspace_id = v_ws)`; helper `and (m.workspace_id is null or a.workspace_id = m.workspace_id)`; same filter in the auto-assignment select; workspace-scoped reviewer persona with allowed and denied cases; note it in spec §3.4. |
-| m-1 | Minor | `created_by := coalesce(auth.uid(), new.created_by)` trusts "no JWT" rather than "operator"; no exploitable path today, but a future definer/`trace_api`/`service_role` insert could name any creator and get auto-assigned (R-15). | OPEN: use `case when private.is_operator() then new.created_by else auth.uid() end`; test that `authenticated` supplying `created_by` gets `42501`. |
+| M-1 | **Major** | Assignments ignore the workspace fence (M0b D16b): `assignments_guard` (≈ lines 998–1004), `my_assigned_test_ids` (≈ 429–446) and the publish auto-assignment (≈ 730–739) never compare `memberships.workspace_id` with the test's workspace. A workspace-A2 reviewer can be assigned to an A1 test and then reads its items and **answer keys**; a workspace-scoped recruiter would later reach A1 evidence via migration 4. Spec-level hole (§3.3/§3.4 as written). | **FIXED 2026-10-14** in `4a2211c` (`20261014093232_d1_authoring_fixes.sql`): guard (every caller, operator too), helper and auto-assignment filters as proposed; tests `rls_d1_workspace_fence` seen red first (10 failing), then 23/23; spec revision 4a §3.4. |
+
+| m-1 | Minor | `created_by := coalesce(auth.uid(), new.created_by)` trusts "no JWT" rather than "operator"; no exploitable path today, but a future definer/`trace_api`/`service_role` insert could name any creator and get auto-assigned (R-15). | **FIXED** in `4a2211c` (tests_guard and test_versions_guard): the guard functions run on temp tables as `trace_worker` with no JWT get a null creator; `authenticated` naming one gets `42501`. |
+
 | m-2 | Minor | Auto-assignment re-adds a creator an owner deliberately unassigned, on every later publish. | OPEN: auto-assign only on a test's first publish, or document as intended (HOW-level). |
-| m-3 | Minor | The "publish needs a band rule" branch is never exercised (the shim always sets one). | OPEN: operator nulls `band_rule_version_id` on a draft's ruleset, expect `42501 TRACE_GUARD`. |
+| m-3 | Minor | The "publish needs a band rule" branch is never exercised (the shim always sets one). | **COVERED** in `4a2211c` (`rls_d1_workspace_fence` m-3 case; passes, so no defect). |
+
 | m-4 | Minor | The two `trace_api` policies and its column-limited `test_versions` SELECT have no RLS tests. | OPEN: add set/unset/cross-org cases, or an exact `trace_api` table allow-list in `rls_roles`. |
 | m-5 | Minor | Retire is not audited. | OPEN: decide on a `test.retire` audit action (needs AUDIT_ACTIONS + contract test). |
 | n-1 | Note | Policy predicates filter `workspace_id`/`test_id` without `org_id`; every index leads with `org_id` (no skip scan in PG17). Fine at D1 volume. | Before M3: add `(workspace_id)` / `(test_id)` indexes or always filter by `org_id`. |
