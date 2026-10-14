@@ -35,3 +35,20 @@ Next: revision 2 (lead plus writers), then the Opus database-reviewer and a conf
 **Database review: CHANGES REQUIRED.** Probe: a rolled-back prototype of the cards, fill triggers, guard, `reports` FKs and column grants gives **0 rows from MT-5a/5c/5d**, so the rule-1 wall holds. MT-14 `login_dml` fires for a login role with default inherit (DB-7). Findings DB-1…DB-15: 6 Major (`membership_counts` needs the JWT, which is absent on the api connection; media audit rows have no viewer; missing `test_id`/`workspace_id` scoping columns; no guard tying `review_state` to `meets_cutoff` (rule 6); idempotency grants; the sweep cannot read the cards) and 9 Minor.
 
 **Dispositions:** spec §1.7, L-14…L-36 (lead). Conflicting suggestions settled: the cutoff is mandatory (SR-2 vs DB-13), and each worker gets job-bound `idempotency_keys` grants (SR-7 vs DB-5).
+
+## Revision 3 (commit `66c5fe8`): final confirming reviews, Sonnet spec-reviewer and database-reviewer, in parallel, 2026-10-14
+**Spec re-review: APPROVE WITH MINOR FIXES.**
+- SR-1…SR-11 and L-14…L-36 are resolved in §4–§11, except four leftovers from the fold-in: the AT-D27 path; whether the sweep re-enqueues or runs in-process; a stale `membership_counts_for` signature; missing bindings and data items.
+- One real bug: the `integrity_band` key must be written only with the card's final state, or an `awaiting_quality` card is stuck forever.
+- No rule regression.
+
+**Database re-review: APPROVE WITH MINOR FIXES.**
+- DB-1…DB-15 are all resolved. A probe on PG 17.11 confirmed `nulls not distinct`, `inherit false, set true`, the L-31 truth table and the CHECK-function grant behaviour.
+- New defects found and fixed:
+  - (C1) The M0b literal-true `idempotency_keys` worker policies would OR away the L-20 scope; they are dropped.
+  - (C2) `authenticated` cannot execute the `signal_settings` CHECK validator; that column is moved out of its grant.
+  - (C3) A deleted draft left its ruleset row behind; the delete trigger now removes it.
+  - (C4) The card guard's Clear/Insufficient wording is fixed.
+- Nits fixed as well.
+
+All fixes are applied in revision 4 (editor agent, lead-chosen options: the sweep re-enqueues; `signal_settings` is excluded from the `authenticated` grant). **Outcome: spec approved by autopilot reviewers.**
