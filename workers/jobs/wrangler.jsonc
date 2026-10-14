@@ -31,17 +31,18 @@
   },
   // The deployed commit, reported by GET /health (spec §9.3). 'dev' locally; CI overrides it with
   // `--var VERSION:<40-hex sha>` (spec §7.2). vars are not inherited by env blocks, so each env
-  // repeats it. This is a public build identifier, not a secret.
-  "vars": { "VERSION": "dev" },
+  // repeats it. This is a public build identifier, not a secret. SENTRY_DSN_WORKERS (d1 AT-D22) is
+  // empty here, so the Sentry SDK stays off; the staging deploy sets it (a DSN is public, a var).
+  "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "" },
   "env": {
     "dev": {
       "name": "trace-jobs-dev",
-      "vars": { "VERSION": "dev" },
+      "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "" },
     },
     "staging": {
       "name": "trace-jobs-staging",
       "workers_dev": true,
-      "vars": { "VERSION": "dev" },
+      "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "" },
     },
   },
 }

@@ -35,6 +35,9 @@ catalog:
   '@types/node': 22.20.5
   globals: 17.13.0
   fast-check: 4.10.2
+  # Sentry adapter (m0-foundations §9.2, d1 AT-D22): recruiter app, workers/jobs, services/api only.
+  '@sentry/cloudflare': 11.1.0
+  '@sentry/react': 11.1.0
 
 # Build-script allow-list (pnpm 12 key, checked in S1.0).
 allowBuilds:
@@ -57,6 +60,10 @@ overrides:
   handlebars: 4.7.10
   sharp: 0.35.5
   undici: 7.29.1
+  # Release-age pin (d1 AT-D22, 2026-10-14): @sentry/browser-utils 11.1.0 asks for web-vitals ^6.1.1,
+  # whose newest, 6.2.3, was 9 days old; 6.2.2 (2026-09-14) is past the two-week rule. Remove once
+  # a newer release is two weeks old.
+  web-vitals: 6.2.2
 
 # braces <= 3.0.3 (GHSA-vfj7-8cjw-p6xm, high: stack exhaustion on deeply nested brace patterns) has no
 # fixed release. It is reached only through eslint-plugin-boundaries > micromatch at lint time, with

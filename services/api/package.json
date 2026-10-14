@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@sentry/cloudflare": "catalog:",
     "@trace/shared": "workspace:*",
     "@trace/vendors": "workspace:*",
     "@trace/workers-http": "workspace:*",
