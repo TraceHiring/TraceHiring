@@ -26,7 +26,7 @@ Status key: **live**: exists and verified · **pending**: approved, not created 
 | "rajabhay.work@gmail.com's Project" (ref `giuisatnjoagzlbcbktu`) | Supabase project | none | `ap-south-1` | Free | **paused** (founder, 2026-10-11; paused projects don't use a free slot) | Supabase default project; empty `public` schema; uses one of the 2 free slots |
 | `trace-candidate-staging` | Cloudflare Pages | staging | global | Free, $0 | CI | `wrangler pages deploy` in `deploy-staging` (spec §7.2 step 7). URL `https://trace-candidate-staging.pages.dev` |
 | `trace-recruiter-staging` | Cloudflare Pages | staging | global | Free, $0 | CI | Same. URL `https://trace-recruiter-staging.pages.dev` |
-| `trace-edge-staging` | Cloudflare Worker | staging | global | Workers Free, $0 | CI | `wrangler deploy --env staging` (spec §7.2 step 5). URL `https://trace-edge-staging.<workers.dev subdomain>.workers.dev` |
+| `trace-edge-staging` | Cloudflare Worker | staging | global | Workers Free, $0 | CI | `wrangler deploy --env staging` (spec §7.2 step 5). URL `https://trace-edge-staging.abhayraj.workers.dev` |
 | `trace-jobs-staging` | Cloudflare Worker | staging | global | Workers Free, $0 | CI | Same |
 | `trace-api-staging` | Cloudflare Worker | staging | global | Workers Free, $0 | CI | Same |
 | Workers `dev` env, local Supabase | local machine | dev | — | — | local only | `wrangler dev` and `supabase start`; no Cloudflare dev resources exist |
@@ -81,7 +81,7 @@ GitHub `staging` secrets (names only, per the founder): `AWS_ACCESS_KEY_ID`, `AW
 - Supabase: `trace-staging` ref `vsugnnxeahjtgzmgmyfu` (Postgres **17.11**, H5), `trace-dev` ref `fjvaogxoxapenoqqykem`.
 - Sentry (H6): org `tracehiring`, data region **EU (Germany)**; projects `trace-recruiter` (React) and `trace-workers` (Cloudflare (Node)); error monitoring only; org-level data scrubber, default scrubbers and "prevent storing IP addresses" on (founder-confirmed).
 - `staging` secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `CLOUDFLARE_API_TOKEN`, `SUPABASE_STAGING_DB_URL`. Variables: `CLOUDFLARE_ACCOUNT_ID`, `SENTRY_DSN_WORKERS`, `SUPABASE_STAGING_PROJECT_REF`, `SUPABASE_STAGING_PUBLISHABLE_KEY`, `SUPABASE_STAGING_URL`, `VITE_SENTRY_DSN`.
-- Items 1, 2 and 4 of "Open steps" below are done; item 5 (H4 subdomain) is the next founder step.
+- Items 1, 2 and 4 of "Open steps" below are done. **H4 done 2026-10-14:** the account's `workers.dev` subdomain is `abhayraj` (already set; founder confirmed in chat, kept as is). Staging Worker URLs are `https://trace-<worker>-staging.abhayraj.workers.dev`. Production will use tracehiring.tech custom domains, never `workers.dev`.
 
 ## Open steps (founder)
 
@@ -91,4 +91,4 @@ Done by the founder on 2026-10-11: old project paused, `trace-staging` and `trac
 2. **Supabase DB URL:** set `SUPABASE_STAGING_DB_URL` (the name CI reads) and delete `SUPABASE_DB_URL`.
 3. **Deployment branches:** limit the `staging` environment to `main` (H3).
 4. **Supabase connector:** attach it to the next autopilot session (or reply with the two project refs) so the autopilot can record refs, URLs and publishable keys and set the `SUPABASE_STAGING_*` variables. In `trace-staging`'s API settings, keep exposed schemas = `public` only (H5).
-5. **`*.workers.dev` subdomain:** reply with the real subdomain name (H4).
+5. ~~**`*.workers.dev` subdomain (H4)**~~ done 2026-10-14: `abhayraj.workers.dev`.
