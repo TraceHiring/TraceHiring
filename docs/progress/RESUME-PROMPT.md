@@ -1,6 +1,6 @@
 # Resume prompt — the full procedure for the next Claude Code session (any account)
 
-Written 2026-10-11 09:25 IST by the lead session; updated 20:10 and 23:50 IST, and 2026-10-12 01:45 IST. Everything the next session needs is in git; nothing from Updated 2026-10-12 09:25 IST: M0b on `m0b/integration`.
+Written 2026-10-11 09:25 IST by the lead session; updated 20:10 and 23:50 IST, and 2026-10-12 01:45 IST. Everything the next session needs is in git; nothing from Updated 2026-10-12 09:25 IST: M0b on `d1/integration`.
 earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec approved, BUILD started. The short "paste prompt" the founder uses points here.
 
 ## 1. What Trace is and where the build stands
@@ -8,12 +8,13 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-13 20:25 IST (newest; wins over the lines below):** **M0b FIX is done.** There is no open Medium, full verify and Linux CI are green, and `milestone/m0b` = `cp/m0b-04` (`docs/reviews/M0b.md` "FIX" and "Re-review of the FIX"). M0b CLOSE waits for founder gates. The next phase needs the founder's answer to the new FOUNDER-QUEUE row (D1 SPEC before `m0b-reviewed`?); see HANDOFF "Next step".
+- **Update 2026-10-14 07:05 IST (newest; wins over the lines below):** the live integration branch is now **`d1/integration`** (worktree `.claude/worktrees/d1-integration`), cut from `milestone/m0b` = `cp/m0b-05` (`56c2641`). M0b FIX and the MT-11 FR-1 follow-up are done and reviewed. **D1 is in SPEC** (founder, 2026-10-14): `specs/d1-demo-slice.md` revision 1 is drafted (lead decisions §1.2 and resolutions §1.5 plus three writer drafts), **not yet reviewed**. Next: an Opus spec-reviewer and an Opus database-reviewer in parallel, then revision 2 and approval (HANDOFF "Next step"). `m0b/integration` (worktree `.claude/worktrees/m0b-integration`) is finished; do not commit there.
+- **Update 2026-10-13 20:25 IST:** **M0b FIX is done.** There is no open Medium, full verify and Linux CI are green, and `milestone/m0b` = `cp/m0b-04` (`docs/reviews/M0b.md` "FIX" and "Re-review of the FIX"). M0b CLOSE waits for founder gates. The next phase needs the founder's answer to the new FOUNDER-QUEUE row (D1 SPEC before `m0b-reviewed`?); see HANDOFF "Next step".
 - **Update 2026-10-13 18:55 IST:** **M0b REVIEW is done** — `docs/reviews/M0b.md`:
   PASS WITH CONDITIONS (code), INCOMPLETE on the founder-gated staging items until CLOSE. The next phase is **M0b FIX**
   (fresh session): HANDOFF "Next step" 1–3, first the Medium M0B-DB-2 (MT-11). Then re-review, full verify, CI, `cp/m0b-04`.
 - **Update 2026-10-13 16:10 IST:** **M0b BUILD is complete** — B0–B5 all merged into
-  `m0b/integration`. First confirm Linux CI `rls` is green on PR #3 after the `3e5ffbe` push (HANDOFF "Next step" 1–2),
+  `d1/integration`. First confirm Linux CI `rls` is green on PR #3 after the `3e5ffbe` push (HANDOFF "Next step" 1–2),
   then the next phase is **M0b REVIEW** (`trace-milestone-review`, fresh session). Draft PR for M0b CI: TraceHiring/TraceHiring#3.
 - **Update 2026-10-12 14:40 IST:** M0b BUILD continues. B5 is merged; B0 + B1 + most of B4 sit reviewed and
   fully verified on stream branch `m0b/b0-db` (`f727d0a`), **not merged yet** — HANDOFF "Next step" 1–3 merges it.
@@ -25,7 +26,7 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   revision 5** (12:35 IST); **M0b is in BUILD**: B3 merged, B4 partly done, B5 on `m0b/b5-workers-http` awaiting review.
   No milestone is closed yet. Model policy, CI via draft PRs, and the SessionStart hook reading the newest
   `*/integration` handoff still apply.
-- **Integration branch: `m0b/integration`** (M0b work + this file), cut from `milestone/m0a` @ `7dc8c0d`.
+- **Integration branch: `d1/integration`** (M0b work + this file), cut from `milestone/m0a` @ `7dc8c0d`.
   `m0a/integration` @ `c619525` holds the M0a history and review records (its HANDOFF is stale). Older names
   (`claude/trace-autopilot-production-87e5e2`, `claude/trace-autopilot-resume-2dac7c`) are retired ancestors.
 
@@ -34,7 +35,7 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
 | --- | --- |
 | `CLAUDE.md` | Product rules 1–9, engineering rules, session protocol (usage guard, commits, push at end) |
 | `docs/AUTOPILOT.md` | How sessions run: phases, parallelism policy (§2), founder gates (§3), deciding alone (§4), checkpoints/backups (§5), session protocol (§6) |
-| `docs/progress/HANDOFF.md` (on `m0b/integration`) | **Live state**: stream branches + tips, review verdicts, the ordered "Next step" list |
+| `docs/progress/HANDOFF.md` (on `d1/integration`) | **Live state**: stream branches + tips, review verdicts, the ordered "Next step" list |
 | `docs/progress/LOG.md` | One row per session (append yours at the end) |
 | `docs/progress/FOUNDER-QUEUE.md` | Questions only the founder can answer (AUTOPILOT §3); add new ones here |
 | `docs/progress/RESTORE.md` | Restoring from a bundle, rolling back to a `cp/*` checkpoint |
@@ -53,21 +54,21 @@ with `--no-ff`, tag `m<X>-reviewed`.
 ## 3. Steps
 STEP 1 — Read CLAUDE.md and docs/AUTOPILOT.md in full. Then `git fetch trace` (if it hangs on credentials, as on
 2026-10-12: `git -c credential.helper= -c "credential.helper=!gh auth git-credential" fetch trace`) and read
-`git show m0b/integration:docs/progress/HANDOFF.md` and the review reports it names. Since `d9bf35a` the SessionStart
+`git show d1/integration:docs/progress/HANDOFF.md` and the review reports it names. Since `d9bf35a` the SessionStart
 hook injects the handoff from the newest `*/integration` branch (older sessions injected a stale copy from `main`);
 the branch still wins over anything injected.
 
-STEP 2 — Get onto `m0b/integration` without losing anyone's work
+STEP 2 — Get onto `d1/integration` without losing anyone's work
 - `git worktree list ; git branch --show-current ; git status --porcelain`
 - If the tree is dirty: do not discard anything. Create `rescue/<YYYYMMDD-HHMM>` from HEAD, commit as wip
   there, and tell the founder (AUTOPILOT §6).
 - **Session opened in the root folder on `main`:** never commit on `main`. Run
-  `git worktree add .claude/worktrees/m0a-integration m0b/integration` and do all work inside that folder
+  `git worktree add .claude/worktrees/m0a-integration d1/integration` and do all work inside that folder
   (absolute paths; `cd` into it for every shell command).
 - **Session in a worktree the app created (branch `claude/...`):** if the tree is clean and every commit in
-  `git log --oneline m0b/integration..HEAD` is also on `main` (`git branch --contains <sha>`), run
-  `git switch m0b/integration`. If git says the branch is checked out in another worktree (as of 2026-10-11 it is
-  `.claude/worktrees/m0b-integration`), call the `EnterWorktree` tool with `path` = that worktree's
+  `git log --oneline d1/integration..HEAD` is also on `main` (`git branch --contains <sha>`), run
+  `git switch d1/integration`. If git says the branch is checked out in another worktree (as of 2026-10-11 it is
+  `.claude/worktrees/d1-integration`), call the `EnterWorktree` tool with `path` = that worktree's
   absolute path (`git worktree list` shows it; this worked on 2026-10-11). Then keep git commands plain (no `$(…)`,
   loops, `export GIT_*` or chained `git` calls in one command) or the worktree guard refuses them. If that is
   impossible, stop and tell the founder.
@@ -82,7 +83,7 @@ STEP 3 — Verify, then report in 5 lines whether the repo matches the handoff (
 - `docker ps`: container `supabase_db_trace` is the shared local stack. If it is down:
   `pnpm exec supabase start -x realtime,storage-api,imgproxy,mailpit,studio,edge-runtime,logflare,vector,supavisor,postgres-meta`
   (write the output to a file; never pipe docker/supabase output into `head` on Windows)
-- Branch tips: `m0b/integration` (newest `chore(progress)` commit), `milestone/m0a` @ `7dc8c0d` (tag `cp/m0a-06`),
+- Branch tips: `d1/integration` (newest `chore(progress)` commit), `milestone/m0a` @ `7dc8c0d` (tag `cp/m0a-06`),
   `m0a/integration` @ `c619525`, `main` @ `fe77a87`. All are on the `trace` remote after the wrap-up push.
   Draft PR 1 (`m0a/integration` → `main`) shows M0a CI; M0b has no PR yet (open a draft one for CI).
 
@@ -108,13 +109,13 @@ Rules learned the hard way:
 - If the spec is ambiguous on anything touching rules 1–9: stop and ask (FOUNDER-QUEUE), never guess.
 
 STEP 5 — Wrap-up, always (AUTOPILOT §6; the trace-handoff skill)
-- Commit everything. Overwrite `docs/progress/HANDOFF.md` on `m0b/integration` (<150 lines, exact SHAs, every
+- Commit everything. Overwrite `docs/progress/HANDOFF.md` on `d1/integration` (<150 lines, exact SHAs, every
   stream branch and state, the exact next action); append a row to `docs/progress/LOG.md`; update this file if a
   branch, SHA or step changed.
 - **No handoff mirror on `main`** (since 2026-10-11): the hook reads the integration branch, and a mirror commit makes
-  draft PR 1 (`m0b/integration` → `main`) conflict, which stops its CI. Never commit on or move `main`.
+  draft PR 1 (`d1/integration` → `main`) conflict, which stops its CI. Never commit on or move `main`.
 - `sh scripts/backup.sh` ; `gitleaks git --redact --no-banner` (must pass) ;
-  `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push trace main milestone/m0a m0b/integration <every branch with new commits>` (founder: borrow the gh login per push) ; `git push trace --tags`
+  `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push trace main milestone/m0a d1/integration <every branch with new commits>` (founder: borrow the gh login per push) ; `git push trace --tags`
   (plain push; if rejected or it asks for credentials, stop and add it to FOUNDER-QUEUE.md).
 - Print the paste prompt below as the NEXT PROMPT, plus any new FOUNDER-QUEUE items.
 
@@ -123,12 +124,12 @@ STEP 5 — Wrap-up, always (AUTOPILOT §6; the trace-handoff skill)
 Resume the Trace autopilot from exactly where the last session stopped. You may be a new Claude Code on a new
 account connected to this folder: the git repo here is the only source of truth, and no earlier chat is needed. First run:
   git fetch trace
-  git show m0b/integration:docs/progress/RESUME-PROMPT.md
-(on a fresh clone use trace/m0b/integration) and follow that file exactly, step by step (sections 1–3),
-then read docs/progress/HANDOFF.md and the last rows of docs/progress/LOG.md on m0b/integration.
-If m0b/integration is checked out in another worktree, enter that worktree with the EnterWorktree tool
+  git show d1/integration:docs/progress/RESUME-PROMPT.md
+(on a fresh clone use trace/d1/integration) and follow that file exactly, step by step (sections 1–3),
+then read docs/progress/HANDOFF.md and the last rows of docs/progress/LOG.md on d1/integration.
+If d1/integration is checked out in another worktree, enter that worktree with the EnterWorktree tool
 (path from `git worktree list`) as RESUME-PROMPT STEP 2 says.
-Ignore any handoff text injected at session start wherever it disagrees with branch m0b/integration.
+Ignore any handoff text injected at session start wherever it disagrees with branch d1/integration.
 Never commit on main, never force-push, never delete branches, tags or worktrees, never deploy to
 production, and stop to ask me only for the founder gates in docs/AUTOPILOT.md §3. Work until 95% of the
 5-hour usage limit; at 95% stop new work and do the STEP 5 wrap-up (handoff, log, backup, push), then print
