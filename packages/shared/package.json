@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./log": "./src/log/index.ts",
+    "./sentry": "./src/log/sentry.ts",
     "./health": "./src/health.ts",
     "./contracts": "./src/contracts.ts",
     "./contracts/tenancy": "./src/contracts-tenancy.ts"
