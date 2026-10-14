@@ -20,6 +20,42 @@ $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
 select plan(65);
+
+-- D1-M1-SHIM (remove when migration 3 lands): stands in for migration 3's L-8 trigger, which pins a new
+-- ruleset row and the org notice on every draft insert (spec §3.1 row 3, L-8, L-34). It is created only
+-- while integrity.band_rule_versions does not exist, inside this rolled-back transaction, so publish paths
+-- can be exercised against migration 1 alone. Same trigger name as planned for L-8 (sorts after the guard).
+do $shim$
+begin
+  if to_regclass('integrity.band_rule_versions') is null then
+    create function private.d1_m1_shim_pin() returns trigger
+    language plpgsql security definer set search_path = '' as $f$
+    declare
+      v_notice uuid;
+      v_rs uuid;
+    begin
+      select n.id into v_notice from public.notice_versions as n
+      where n.org_id = new.org_id and n.notice_key = 'd1-m1-shim' and n.version = 1;
+      if v_notice is null then
+        insert into public.notice_versions (org_id, notice_key, version, language, body_template, template_sha256)
+        values (new.org_id, 'd1-m1-shim', 1, 'en', 'Synthetic notice body.', repeat('0', 64))
+        returning id into v_notice;
+      end if;
+      insert into public.ruleset_versions (org_id, workspace_id, test_id, version_no, band_rule_version_id, signal_settings)
+      values (new.org_id, new.workspace_id, new.test_id, new.version_no, gen_random_uuid(),
+        '{"paste":{"enabled":true},"drop":{"enabled":true},"untrusted_input":{"enabled":true},'
+        '"tab_hidden":{"enabled":true},"fullscreen_exit":{"enabled":true}}'::jsonb)
+      returning id into v_rs;
+      new.ruleset_version_id := v_rs;
+      new.notice_version_id := v_notice;
+      return new;
+    end
+    $f$;
+    create trigger test_versions_ruleset_seed before insert on public.test_versions
+      for each row execute function private.d1_m1_shim_pin();
+  end if;
+end
+$shim$;
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -200,10 +236,10 @@ set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", 
 select matches(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64)$$), '^42501 permission denied', 'ruleset_versions U: hiring_manager has no UPDATE privilege');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000009", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
-select is(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64) where test_id = 'e1000000-0000-4000-8000-000000000003'$$), 'OK 0', 'ruleset_versions U: workspace recruiter cannot touch a workspace A1 ruleset (fence)');
+select matches(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64) where test_id = 'e1000000-0000-4000-8000-000000000003'$$), '^42501 permission denied', 'ruleset_versions U: workspace recruiter cannot touch a workspace A1 ruleset (fence) (no UPDATE grant, O-1)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
-select is(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64) where org_id = 'a1000000-0000-4000-8000-000000000001'$$), 'OK 0', 'ruleset_versions U: org B admin cannot touch an org A ruleset (cross-org)');
+select matches(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64) where org_id = 'a1000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'ruleset_versions U: org B admin cannot touch an org A ruleset (cross-org) (no UPDATE grant, O-1)');
 reset role;
 reset request.jwt.claims;
 

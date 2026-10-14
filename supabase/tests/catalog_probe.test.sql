@@ -2,11 +2,11 @@
 -- table appears. Inside this rolled-back transaction a throwaway table, sequence and function is created as
 -- postgres in each of the four in-scope schemas. Each assertion also reports any probe object that is missing,
 -- so it can never pass vacuously. Hand-written; not generated.
--- Assertions 5 to 12 are MT-11 controls (W3b database review finding 7, catalog pass C review E2, M0b review
--- M0B-DB-2 and its re-review), 13 to 15 prove, one dynamic-SQL shape at a time, what MT-5b counts as naming a
--- schema, and 16 proves what MT-7 counts as changing the search path (catalog pass C review E1). See below.
+-- Assertions 5 to 14 are MT-11 controls (W3b database review finding 7, catalog pass C review E2, M0b review
+-- M0B-DB-2 and its re-review, D1 helpers), 15 to 17 prove, one dynamic-SQL shape at a time, what MT-5b counts as
+-- naming a schema, and 18 proves what MT-7 counts as changing the search path (catalog pass C review E1). See below.
 begin;
-select plan(16);
+select plan(18);
 
 create table public.mt_4b_t (id int);
 create table private.mt_4b_t (id int);
@@ -188,6 +188,25 @@ create policy mt_11_note_scoped_live on public.mt_11_note
 for delete
 to authenticated
 using (deleted_at is null and org_id = any((select private.my_org_ids('{admin}'::public.org_role[]))::uuid[]));
+-- D1 (spec specs/d1-demo-slice.md §3.5): job_org_id, api_org_id and my_assigned_test_ids are caller helpers, so a
+-- policy that binds one of them to a column is compliant; one that only tests a helper for null is not.
+create policy mt_11_note_job_org on public.mt_11_note
+for select
+to trace_worker
+using (org_id = (select private.job_org_id()));
+create policy mt_11_note_api_org on public.mt_11_note
+for select
+to trace_api
+using (org_id = (select private.api_org_id()));
+create policy mt_11_note_assigned on public.mt_11_note
+for select
+to authenticated
+using (owner_id = any((select private.my_assigned_test_ids('{reviewer}'::public.org_role[]))::uuid[]));
+create policy mt_11_note_job_org_open on public.mt_11_note
+for update
+to trace_worker
+using ((select private.job_org_id()) is not null)
+with check ((select private.job_org_id()) is not null);
 create temp view mt_11_run as
 -- MT-11 copy begin
 -- MT-11 (spec specs/m0-foundations.md §8.5, separate per-operation policies, CLAUDE.md): a policy on an in-scope
@@ -780,6 +799,26 @@ select is_empty(
     )
   $q$,
   'MT-11: no row for a caller call bound through EXISTS, IN, IS NOT DISTINCT FROM or a row compare (FR-1 controls)'
+);
+select is_empty(
+  $q$
+  select v.branch, v.object, v.detail
+  from mt_11_run as v
+  where v.object in (
+      'mt_11_note_job_org on public.mt_11_note',
+      'mt_11_note_api_org on public.mt_11_note',
+      'mt_11_note_assigned on public.mt_11_note'
+    )
+  $q$,
+  'MT-11: no row for a policy binding job_org_id, api_org_id or my_assigned_test_ids to a column (D1 controls)'
+);
+select isnt_empty(
+  $q$
+  select 1
+  from mt_11_run as v
+  where v.object = 'mt_11_note_job_org_open on public.mt_11_note'
+  $q$,
+  'MT-11: a worker policy that only checks job_org_id() for null still hits (D1 positive control)'
 );
 rollback to savepoint mt_11_negative;
 

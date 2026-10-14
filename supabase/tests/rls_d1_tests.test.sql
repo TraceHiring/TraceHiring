@@ -20,6 +20,42 @@ $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
 select plan(236);
+
+-- D1-M1-SHIM (remove when migration 3 lands): stands in for migration 3's L-8 trigger, which pins a new
+-- ruleset row and the org notice on every draft insert (spec §3.1 row 3, L-8, L-34). It is created only
+-- while integrity.band_rule_versions does not exist, inside this rolled-back transaction, so publish paths
+-- can be exercised against migration 1 alone. Same trigger name as planned for L-8 (sorts after the guard).
+do $shim$
+begin
+  if to_regclass('integrity.band_rule_versions') is null then
+    create function private.d1_m1_shim_pin() returns trigger
+    language plpgsql security definer set search_path = '' as $f$
+    declare
+      v_notice uuid;
+      v_rs uuid;
+    begin
+      select n.id into v_notice from public.notice_versions as n
+      where n.org_id = new.org_id and n.notice_key = 'd1-m1-shim' and n.version = 1;
+      if v_notice is null then
+        insert into public.notice_versions (org_id, notice_key, version, language, body_template, template_sha256)
+        values (new.org_id, 'd1-m1-shim', 1, 'en', 'Synthetic notice body.', repeat('0', 64))
+        returning id into v_notice;
+      end if;
+      insert into public.ruleset_versions (org_id, workspace_id, test_id, version_no, band_rule_version_id, signal_settings)
+      values (new.org_id, new.workspace_id, new.test_id, new.version_no, gen_random_uuid(),
+        '{"paste":{"enabled":true},"drop":{"enabled":true},"untrusted_input":{"enabled":true},'
+        '"tab_hidden":{"enabled":true},"fullscreen_exit":{"enabled":true}}'::jsonb)
+      returning id into v_rs;
+      new.ruleset_version_id := v_rs;
+      new.notice_version_id := v_notice;
+      return new;
+    end
+    $f$;
+    create trigger test_versions_ruleset_seed before insert on public.test_versions
+      for each row execute function private.d1_m1_shim_pin();
+  end if;
+end
+$shim$;
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -230,10 +266,10 @@ select is(pg_temp.try($$update public.tests set name = 'Test Two Renamed' where 
 select is(pg_temp.try($$update public.tests set name = 'Fence Rename' where name = 'Test Three Renamed'$$), 'OK 0', 'tests U: workspace recruiter cannot rename a workspace A1 test');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
-select matches(pg_temp.try($$update public.tests set name = 'Reviewer Rename' where name = 'Test One Renamed'$$), '^42501 permission denied', 'tests U: assigned reviewer has no UPDATE privilege');
+select matches(pg_temp.try($$update public.tests set name = 'Reviewer Rename' where name = 'Test One Renamed'$$), '^OK 0$', 'tests U: assigned reviewer UPDATE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
-select matches(pg_temp.try($$update public.tests set name = 'Hm Rename' where org_id = 'a1000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'tests U: hiring_manager has no UPDATE privilege');
+select matches(pg_temp.try($$update public.tests set name = 'Hm Rename' where org_id = 'a1000000-0000-4000-8000-000000000001'$$), '^OK 0$', 'tests U: hiring_manager UPDATE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000004", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
 select is(pg_temp.try($$update public.tests set name = 'Aal1 Rename' where org_id = 'a1000000-0000-4000-8000-000000000001'$$), 'OK 0', 'tests U: admin at aal1 update affects no row [AT-B6]');
@@ -410,16 +446,16 @@ set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000009", 
 select is(pg_temp.try($$update public.sections set name = 'Fence Rename' where name = 'Writing'$$), 'OK 0', 'sections U: workspace recruiter cannot rename a workspace A1 section');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
-select matches(pg_temp.try($$update public.sections set name = 'Reviewer Rename' where name = 'Writing'$$), '^42501 permission denied', 'sections U: reviewer has no UPDATE privilege');
+select matches(pg_temp.try($$update public.sections set name = 'Reviewer Rename' where name = 'Writing'$$), '^OK 0$', 'sections U: reviewer UPDATE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
-select matches(pg_temp.try($$update public.sections set name = 'Hm Rename'$$), '^42501 permission denied', 'sections U: hiring_manager has no UPDATE privilege');
+select matches(pg_temp.try($$update public.sections set name = 'Hm Rename'$$), '^OK 0$', 'sections U: hiring_manager UPDATE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000005", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
 select is(pg_temp.try($$delete from public.sections where name = 'Extra Recruiter'$$), 'OK 1', 'sections D: recruiter deletes a draft section');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
-select matches(pg_temp.try($$delete from public.sections where name = 'Extra Admin'$$), '^42501 permission denied', 'sections D: reviewer has no DELETE privilege');
+select matches(pg_temp.try($$delete from public.sections where name = 'Extra Admin'$$), '^OK 0$', 'sections D: reviewer DELETE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select is(pg_temp.try($$delete from public.sections where name = 'Extra Admin'$$), 'OK 0', 'sections D: org B admin cannot delete an org A section (cross-org)');
@@ -495,10 +531,10 @@ set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000009", 
 select is(pg_temp.try($$update public.item_versions set stem = 'Fence edit.' where id = '61000000-0000-4000-8000-000000000001'$$), 'OK 0', 'item_versions U: workspace recruiter cannot edit a workspace A1 item');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
-select matches(pg_temp.try($$update public.item_versions set stem = 'Reviewer edit.' where id = '61000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'item_versions U: reviewer has no UPDATE privilege');
+select matches(pg_temp.try($$update public.item_versions set stem = 'Reviewer edit.' where id = '61000000-0000-4000-8000-000000000001'$$), '^OK 0$', 'item_versions U: reviewer UPDATE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
-select matches(pg_temp.try($$delete from public.item_versions where id = '61000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'item_versions D: hiring_manager has no DELETE privilege');
+select matches(pg_temp.try($$delete from public.item_versions where id = '61000000-0000-4000-8000-000000000001'$$), '^OK 0$', 'item_versions D: hiring_manager DELETE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select is(pg_temp.try($$delete from public.item_versions where stem = 'A second written prompt.'$$), 'OK 1', 'item_versions D: owner deletes a draft item');
@@ -539,7 +575,7 @@ reset trace.job_org_id;
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select is(pg_temp.try($$insert into public.item_answer_keys (org_id, item_version_id, format, key) select 'a1000000-0000-4000-8000-000000000001', id, 'mcq', '{"option_id": "o2"}' from public.item_versions where stem = 'A second choice item.'$$), 'OK 1', 'item_answer_keys I: admin keys an mcq item');
-select matches(pg_temp.try($$insert into public.item_answer_keys (org_id, item_version_id, format, key) values ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000001', 'mcq', '{"option_id": "o1"}')$$), '^23503', 'item_answer_keys I: a key on a written item is impossible (composite FK on format)');
+select matches(pg_temp.try($$insert into public.item_answer_keys (org_id, item_version_id, format, key) values ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000001', 'mcq', '{"option_id": "o1"}')$$), '^(23503|23514 TRACE_BAD_ANSWER_KEY)', 'item_answer_keys I: a key on a written item is impossible (key guard, else composite FK on format)');
 select matches(pg_temp.try($$insert into public.item_answer_keys (org_id, item_version_id, format, key) values ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000001', 'written', '{"option_id": "o1"}')$$), '^23514', 'item_answer_keys I: format other than mcq violates the CHECK');
 select matches(pg_temp.try($$insert into public.item_answer_keys (org_id, item_version_id, format, key) values ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000002', 'mcq', '{"option_id": "o2"}')$$), '^23505', 'item_answer_keys I: a second key on the same item is refused (primary key)');
 set local role authenticated;
@@ -559,13 +595,13 @@ set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", 
 select is(pg_temp.try($$update public.item_answer_keys set key = '{"option_id": "o2"}' where item_version_id = '61000000-0000-4000-8000-000000000002'$$), 'OK 1', 'item_answer_keys U: owner changes a draft key');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
-select matches(pg_temp.try($$update public.item_answer_keys set key = '{"option_id": "o2"}'$$), '^42501 permission denied', 'item_answer_keys U: reviewer has no UPDATE privilege');
+select matches(pg_temp.try($$update public.item_answer_keys set key = '{"option_id": "o2"}'$$), '^OK 0$', 'item_answer_keys U: reviewer UPDATE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select is(pg_temp.try($$delete from public.item_answer_keys where item_version_id in (select id from public.item_versions where stem = 'A second choice item.')$$), 'OK 1', 'item_answer_keys D: admin deletes a draft key');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
-select matches(pg_temp.try($$delete from public.item_answer_keys$$), '^42501 permission denied', 'item_answer_keys D: hiring_manager has no DELETE privilege');
+select matches(pg_temp.try($$delete from public.item_answer_keys$$), '^OK 0$', 'item_answer_keys D: hiring_manager DELETE hits no row (RLS)');
 reset role;
 reset request.jwt.claims;
 
@@ -621,7 +657,7 @@ select matches(pg_temp.try($$update public.rubric_versions set criteria = '[{"id
 select matches(pg_temp.try($$delete from public.rubric_versions where rubric_key = 'writing-spare'$$), '^42501 permission denied', 'rubric_versions D: no DELETE privilege (matrix SIU, no D)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
-select matches(pg_temp.try($$update public.rubric_versions set criteria = '[{"id": "c1", "label": "Reviewer", "max_points": 4, "anchors": []}]' where rubric_key = 'writing-spare'$$), '^42501 permission denied', 'rubric_versions U: reviewer has no UPDATE privilege');
+select matches(pg_temp.try($$update public.rubric_versions set criteria = '[{"id": "c1", "label": "Reviewer", "max_points": 4, "anchors": []}]' where rubric_key = 'writing-spare'$$), '^OK 0$', 'rubric_versions U: reviewer UPDATE hits no row (RLS)');
 reset role;
 reset request.jwt.claims;
 select matches(pg_temp.try($$delete from public.rubric_versions where rubric_key = 'writing-basic'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'rubric_versions D: even the operator cannot delete a referenced rubric (no bypass)');
@@ -641,10 +677,10 @@ select is(pg_temp.try($$insert into public.item_answer_keys (org_id, item_versio
 select matches(pg_temp.try($$update public.test_versions set status = 'published' where test_id = 'e1000000-0000-4000-8000-000000000003' and version_no = 2$$), '^(42501 TRACE_GUARD|23514)', 'publish: a version without content_sha256 is refused');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
-select matches(pg_temp.try($$update public.test_versions set status = 'published' where id = 'f1000000-0000-4000-8000-000000000002'$$), '^42501 permission denied', 'publish: reviewer cannot publish');
+select matches(pg_temp.try($$update public.test_versions set status = 'published' where id = 'f1000000-0000-4000-8000-000000000002'$$), '^OK 0$', 'publish: reviewer cannot publish (RLS hides the row)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
-select matches(pg_temp.try($$update public.test_versions set status = 'published' where id = 'f1000000-0000-4000-8000-000000000002'$$), '^42501 permission denied', 'publish: hiring_manager cannot publish');
+select matches(pg_temp.try($$update public.test_versions set status = 'published' where id = 'f1000000-0000-4000-8000-000000000002'$$), '^OK 0$', 'publish: hiring_manager cannot publish (RLS hides the row)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000004", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
 select is(pg_temp.try($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = 'f1000000-0000-4000-8000-000000000002'$$), 'OK 0', 'publish: admin at aal1 publishes nothing [AT-B6]');
@@ -676,10 +712,10 @@ select matches(pg_temp.try($$update public.test_versions set total_time_seconds 
 select matches(pg_temp.try($$update public.test_versions set content_sha256 = repeat('e', 64) where id = 'f1000000-0000-4000-8000-000000000001'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'freeze: content_sha256 cannot change after publish');
 select matches(pg_temp.try($$update public.test_versions set status = 'draft' where id = 'f1000000-0000-4000-8000-000000000001'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'freeze: published cannot go back to draft');
 select matches(pg_temp.try($$insert into public.sections (org_id, test_version_id, position, name, format, weight) values ('a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000003', 2, 'Late', 'mcq', 1)$$), '^(42501|P0001)', 'freeze: a section cannot be added to a published version');
-select is(pg_temp.try($$update public.sections set name = 'Late Edit' where id = '51000000-0000-4000-8000-000000000004'$$), 'OK 0', 'freeze: the policy hides published sections from UPDATE');
-select is(pg_temp.try($$delete from public.sections where id = '51000000-0000-4000-8000-000000000004'$$), 'OK 0', 'freeze: the policy hides published sections from DELETE');
-select is(pg_temp.try($$update public.item_versions set stem = 'Late Edit' where id = '61000000-0000-4000-8000-000000000004'$$), 'OK 0', 'freeze: the policy hides published items from UPDATE');
-select is(pg_temp.try($$delete from public.item_answer_keys where item_version_id = '61000000-0000-4000-8000-000000000004'$$), 'OK 0', 'freeze: the policy hides published keys from DELETE');
+select is(pg_temp.try($$update public.sections set name = 'Late Edit' where id = '51000000-0000-4000-8000-000000000004'$$), '42501 TRACE_GUARD: the test version is frozen', 'freeze: the guard refuses UPDATE of published sections');
+select is(pg_temp.try($$delete from public.sections where id = '51000000-0000-4000-8000-000000000004'$$), '42501 TRACE_GUARD: the test version is frozen', 'freeze: the guard refuses DELETE of published sections');
+select is(pg_temp.try($$update public.item_versions set stem = 'Late Edit' where id = '61000000-0000-4000-8000-000000000004'$$), '42501 TRACE_GUARD: the test version is frozen', 'freeze: the guard refuses UPDATE of published items');
+select is(pg_temp.try($$delete from public.item_answer_keys where item_version_id = '61000000-0000-4000-8000-000000000004'$$), '42501 TRACE_GUARD: the test version is frozen', 'freeze: the guard refuses DELETE of published keys');
 reset role;
 reset request.jwt.claims;
 select matches(pg_temp.try($$update public.sections set name = 'Late Edit' where id = '51000000-0000-4000-8000-000000000004'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'freeze: postgres (operator) cannot update a published section (no bypass)');
@@ -713,7 +749,7 @@ select is(pg_temp.try($$update public.test_versions set status = 'published' whe
 select matches(pg_temp.try($$update public.test_versions set status = 'retired' where test_id = (select id from public.tests where name = 'Test Four')$$), '^42501 TRACE_GUARD', 'retire: a draft cannot be retired directly (draft -> published -> retired)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
-select matches(pg_temp.try($$update public.test_versions set status = 'retired' where id = 'f1000000-0000-4000-8000-000000000002'$$), '^42501 permission denied', 'retire: reviewer cannot retire');
+select matches(pg_temp.try($$update public.test_versions set status = 'retired' where id = 'f1000000-0000-4000-8000-000000000002'$$), '^OK 0$', 'retire: reviewer cannot retire (RLS hides the row)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000005", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
 select is(pg_temp.try($$update public.test_versions set status = 'retired' where id = 'f1000000-0000-4000-8000-000000000002'$$), 'OK 1', 'retire: recruiter retires a published version');
@@ -722,10 +758,10 @@ set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", 
 select is(pg_temp.try($$update public.test_versions set status = 'retired' where id = 'f1000000-0000-4000-8000-000000000003'$$), 'OK 0', 'retire: org B admin retires nothing in org A (cross-org)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
-select matches(pg_temp.try($$delete from public.test_versions where id = 'f1000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'test_versions D: reviewer has no DELETE privilege');
+select matches(pg_temp.try($$delete from public.test_versions where id = 'f1000000-0000-4000-8000-000000000001'$$), '^OK 0$', 'test_versions D: reviewer DELETE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
-select matches(pg_temp.try($$delete from public.test_versions$$), '^42501 permission denied', 'test_versions D: hiring_manager has no DELETE privilege');
+select matches(pg_temp.try($$delete from public.test_versions$$), '^OK 0$', 'test_versions D: hiring_manager DELETE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select is(pg_temp.try($$delete from public.test_versions where id = 'f1000000-0000-4000-8000-000000000003'$$), 'OK 0', 'test_versions D: admin cannot delete a published version (the policy admits drafts only)');

@@ -20,6 +20,42 @@ $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
 select plan(87);
+
+-- D1-M1-SHIM (remove when migration 3 lands): stands in for migration 3's L-8 trigger, which pins a new
+-- ruleset row and the org notice on every draft insert (spec §3.1 row 3, L-8, L-34). It is created only
+-- while integrity.band_rule_versions does not exist, inside this rolled-back transaction, so publish paths
+-- can be exercised against migration 1 alone. Same trigger name as planned for L-8 (sorts after the guard).
+do $shim$
+begin
+  if to_regclass('integrity.band_rule_versions') is null then
+    create function private.d1_m1_shim_pin() returns trigger
+    language plpgsql security definer set search_path = '' as $f$
+    declare
+      v_notice uuid;
+      v_rs uuid;
+    begin
+      select n.id into v_notice from public.notice_versions as n
+      where n.org_id = new.org_id and n.notice_key = 'd1-m1-shim' and n.version = 1;
+      if v_notice is null then
+        insert into public.notice_versions (org_id, notice_key, version, language, body_template, template_sha256)
+        values (new.org_id, 'd1-m1-shim', 1, 'en', 'Synthetic notice body.', repeat('0', 64))
+        returning id into v_notice;
+      end if;
+      insert into public.ruleset_versions (org_id, workspace_id, test_id, version_no, band_rule_version_id, signal_settings)
+      values (new.org_id, new.workspace_id, new.test_id, new.version_no, gen_random_uuid(),
+        '{"paste":{"enabled":true},"drop":{"enabled":true},"untrusted_input":{"enabled":true},'
+        '"tab_hidden":{"enabled":true},"fullscreen_exit":{"enabled":true}}'::jsonb)
+      returning id into v_rs;
+      new.ruleset_version_id := v_rs;
+      new.notice_version_id := v_notice;
+      return new;
+    end
+    $f$;
+    create trigger test_versions_ruleset_seed before insert on public.test_versions
+      for each row execute function private.d1_m1_shim_pin();
+  end if;
+end
+$shim$;
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -200,27 +236,21 @@ reset role;
 reset trace.job_org_id;
 
 -- ===== private.my_assigned_test_ids(org_role[]) =====
-set local role authenticated;
+-- Called as postgres: no app or worker role holds USAGE on schema private (M0b); the helper reads only GUCs.
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select is((select private.my_assigned_test_ids('{reviewer}'::public.org_role[])::uuid[]), array['e1000000-0000-4000-8000-000000000001'::uuid], 'my_assigned_test_ids: the assigned reviewer gets exactly the assigned test');
 select is(cardinality(coalesce((select private.my_assigned_test_ids('{recruiter}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: a role the caller does not hold as the assignment''s as_role returns nothing');
-set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000014", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select is(cardinality(coalesce((select private.my_assigned_test_ids('{reviewer}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: an unassigned reviewer gets nothing');
-set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
 select is(cardinality(coalesce((select private.my_assigned_test_ids('{reviewer}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: a reviewer at aal1 gets nothing (membership_counts rejects)');
-set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000005", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
 select is((select private.my_assigned_test_ids('{recruiter}'::public.org_role[])::uuid[]), array['e1000000-0000-4000-8000-000000000003'::uuid], 'my_assigned_test_ids: the creator recruiter (OTP at aal1) gets the auto-assigned test');
 select is(cardinality(coalesce((select private.my_assigned_test_ids('{reviewer}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: a recruiter-role assignment does not count as reviewer');
-set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000006", "aal": "aal1", "amr": [{"method": "password", "timestamp": 1760000000}], "role": "authenticated"}';
 select is(cardinality(coalesce((select private.my_assigned_test_ids('{recruiter}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: a password recruiter at aal1 gets nothing');
-set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
 select is(cardinality(coalesce((select private.my_assigned_test_ids('{reviewer,recruiter}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: hiring_manager gets nothing');
-set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select is(cardinality(coalesce((select private.my_assigned_test_ids('{reviewer,recruiter,admin,org_owner}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: an org B admin gets no org A test (cross-org)');
 reset role;
@@ -340,10 +370,10 @@ set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", 
 select is(pg_temp.try($$delete from public.assignments where as_role = 'recruiter' and test_id = 'e1000000-0000-4000-8000-000000000001'$$), 'OK 1', 'D: org_owner deletes an assignment');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
-select matches(pg_temp.try($$delete from public.assignments$$), '^42501 permission denied', 'D: reviewer has no DELETE privilege');
+select matches(pg_temp.try($$delete from public.assignments$$), '^OK 0$', 'D: reviewer DELETE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
-select matches(pg_temp.try($$delete from public.assignments$$), '^42501 permission denied', 'D: hiring_manager has no DELETE privilege');
+select matches(pg_temp.try($$delete from public.assignments$$), '^OK 0$', 'D: hiring_manager DELETE hits no row (RLS)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select is(pg_temp.try($$delete from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000001'$$), 'OK 0', 'D: org B admin cannot delete org A assignments (cross-org)');
