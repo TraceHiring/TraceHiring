@@ -7,7 +7,7 @@ Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 pas
 - **Phase: D1 BUILD, Wave 0 (lead-only).** Done: AT-D22; migrations **1-4** placed, reviewed, fixed; all `rls_d1_*` files of spec §3.6 placed (incl. `media_view`, `candidate_denied`, `invariants`); **contracts** `@trace/shared/contracts/{candidate,d1}` + `canonical-json` placed and reviewed; ADR-030 accepted in part. `SIGNAL_CATALOG` and `canonicalNoticeText` placed (`b625788`); **band-engine and e2e skeletons, boundaries, wrangler bindings and the staging-secrets allow-list placed and security-reviewed** (`74c5887`..`97f82dd`). Not done: DC-D5/D6/D8/D9, ci.yml §7.1 deploy changes, skeletons, boundaries, wrangler/CSP/ci changes (Next step).
 
 ## Where we are
-- **`d1/integration`** (worktree `.claude/worktrees/d1-integration`) tip = this handoff commit; code tip **`97f82dd`**. `verify:fast` exit 0 at `97f82dd`. Linux CI green on `742bf54` (skeletons + bindings + fixes); CI on `97f82dd` was running at stop. **Local `test:rls` not re-run this session: Docker Desktop stopped and hung on restart**; no SQL changed since the last green full verify (`3abf88f`, rls 2610), and CI `rls` passed on `742bf54`. Run a full `pnpm verify` first.
+- **`d1/integration`** (worktree `.claude/worktrees/d1-integration`) tip = this handoff commit; code tip **`97f82dd`**. **Full `pnpm verify` exit 0 at `eaa8155`** (after Docker came back): 32 files, rls 2610, catalog 142, db-types current. Linux CI green on `742bf54`, `97f82dd` and `eaa8155`. Tag **`cp/d1-02`** = `97f82dd`.
 - Linux CI (draft PR TraceHiring/TraceHiring#4): green on `f6a0144` and on `87bbc8d`; **all green on `bbae037`** (static, rls, migrations, security).
 - Tag **`cp/d1-01`** = `bbae037` (Wave 0 migrations + tests + contracts; full verify and Linux CI green). Unchanged: `milestone/m0a` `7dc8c0d`, `m0a/integration` `c619525`, `milestone/m0b` = `m0b/integration` `56c2641`, `main` `fe77a87` (never commit on or move `main`).
 - Agent branches kept (never delete; all cherry-picked or copied): `worktree-agent-a1597e43a4cfde273` (`d06c4e5`, test drafts), `worktree-agent-a31277c7fe66088f4` (`33af756`, contracts draft), `worktree-agent-a434893532bb816a7` (`c8c0fb3`, contracts fixes).
@@ -31,7 +31,7 @@ Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 pas
 
 ## Next step (in order)
 1. Verify (below), incl. CI on the handoff commit.
-2. Full `pnpm verify` on the tip (Docker first; relaunch it if needed) and CI on PR #4. Then tag `cp/d1-02`.
+2. (Done: full verify green, `cp/d1-02` tagged.)
 3. Wave 0 remainder (spec §11): **ci.yml per §7.1** (deploy order api → jobs → edge, the new `--var`s from GitHub variables with a "no `d` member in a public JWK" guard, idempotent R2 bucket and queue creation, `d1/**` dispatch; security review F4/F5), jobs `queue`/`scheduled` handlers wrapped by `withErrorReporting` (lead-owned `index.ts`), the recruiter `__API_ORIGIN__` CSP, DC-D5 (media link: R2 stream + `MediaLinkDO` burn + canvas CSP), DC-D6 (Playwright Win/Linux; browsers need a download, ask first), DC-D8 (CPU; may slip to Wave 1), DC-D9 (CI E2E stack); pin app dev ports (review F9).
 4. Open DB items carried: m1 m-2 (auto-assign re-add, decide/document), m1 m-4 + m2 n-7 (exact `trace_api` table allow-list in `rls_roles`), m1 m-5 (`test.retire` audit?), m2 m-2 (late `sessionStarted`, decide in R3), m2 n-1 (M3a), m3 n-7 (M4 index).
 5. Then Wave 1 writers R1, R3, C1 (max 3, own worktrees reset to an exact SHA). R3 must implement §6.2 R3-1..R3-9.
