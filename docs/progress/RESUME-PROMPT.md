@@ -8,7 +8,8 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-15 14:05 IST (newest; wins over the lines below):** band-engine and e2e skeletons, boundaries, wrangler bindings and the staging-secrets allow-list are placed and security-reviewed (code tip `97f82dd`; CI green on `742bf54`). Full verify green at `eaa8155`, `cp/d1-02` tagged. Next: ci.yml §7.1, jobs handlers, CSP, DC-D5/D6/D8/D9 (HANDOFF "Next step").
+- **Update 2026-10-15 15:30 IST (newest; wins over the lines below):** Wave 0 code tip `97f82dd` = `cp/d1-02`, full verify and CI green. Founder-queue walkthrough done (answers in build-notes §0). Next: Wave 0 remainder — ci.yml §7.1 + §7.2(b) `workflow_dispatch` staging deploy, jobs handlers, CSP, DC-D5/D6/D8/D9 (HANDOFF "Next step" 2); then the staging evidence that lets M0a and M0b CLOSE (HANDOFF "Path to close").
+- **Update 2026-10-15 14:05 IST:** band-engine and e2e skeletons, boundaries, wrangler bindings and the staging-secrets allow-list are placed and security-reviewed (code tip `97f82dd`; CI green on `742bf54`). Full verify green at `eaa8155`, `cp/d1-02` tagged. Next: ci.yml §7.1, jobs handlers, CSP, DC-D5/D6/D8/D9 (HANDOFF "Next step").
 - **Update 2026-10-15 00:45 IST:** Wave 0: **migrations 1-4 and every §3.6 pgTAP file are placed, reviewed and fixed; contracts `@trace/shared/contracts/{candidate,d1}` and `canonical-json` placed and reviewed**; full verify green at `bbae037` (rls 2610). `cp/d1-01` = `bbae037`; `SIGNAL_CATALOG` and `canonicalNoticeText` added (`b625788`). Next: full verify + CI on the tip, then DC-D5/D6/D8/D9, skeletons, wrangler/CSP/ci (HANDOFF "Next step").
 - **Update 2026-10-14 23:00 IST:** **migration 3 is placed, reviewed (Opus, APPROVE WITH MINOR FIXES) and fixed** (`e253624`, rls 2428; `docs/reviews/D1-db-review-m3.md`). H4 done (`abhayraj.workers.dev`). Next: full verify + PR #4 CI, the small open review items, then **migration 4** (HANDOFF "Next step"); founder walkthrough continues at step 6 (R2).
 - **Update 2026-10-14 21:45 IST:** migration 3 placed and green (`7e9e3fc`), not yet reviewed (superseded by the line above).
@@ -147,18 +148,22 @@ Before changing anything, run HANDOFF "Verify first" and report in 5 lines wheth
 (tip commit, clean tree, verify:fast, pnpm test, PR TraceHiring/TraceHiring#4 CI). If it does not match, stop and
 tell me what differs.
 
-Then do HANDOFF "Next step" in order. Phase: D1 BUILD, Wave 0 (lead-only). Migrations 1-4, all rls_d1_* tests and
-the contracts are placed, reviewed and fixed (code tip bbae037, rls 2610; reviews in docs/reviews/D1-*). cp/d1-01 is tagged;
-shared helpers, band-engine/e2e skeletons, boundaries and wrangler bindings are in (code tip 97f82dd). Full verify and
-CI are green and cp/d1-02 is tagged. Next: the rest of Wave 0 (ci.yml per §7.1, jobs queue/scheduled handlers,
-CSP, DC-D5/D6/D8/D9). Writers R1/R3/C1 start only after Wave 0 is merged.
+Then do HANDOFF "Next step" in order. Phase: D1 BUILD, Wave 0 (lead-only). Done and verified: migrations 1-4, all
+rls_d1_* tests, contracts, shared helpers, band-engine/e2e skeletons, boundaries, wrangler bindings (code tip 97f82dd =
+tag cp/d1-02; full pnpm verify and Linux CI green; reviews in docs/reviews/D1-*). Founder-queue walkthrough of 2026-10-15
+is recorded in docs/build-notes.md §0. Next: the rest of Wave 0 — ci.yml per spec §7.1 and the §7.2(b) workflow_dispatch
+staging deploy from d1/** and milestone/**, the jobs queue/scheduled handlers, the recruiter CSP, DC-D5/D6/D8/D9 — tests
+first, then full verify, CI and tag cp/d1-03. Ask me before the first staging deploy (I must widen the Cloudflare token
+with R2 + Queues Edit) and before any browser download (DC-D6). M0a and M0b are built and reviewed but NOT closed; HANDOFF
+"Path to close" says how. Writers R1/R3/C1 start only after Wave 0 is complete and verified.
 
 Safety rules (never break these): never commit on or move main; never force-push; never delete or move branches,
 tags (cp/*) or worktrees (.claude/worktrees/agent-* hold earlier work); never rewrite pushed history; never deploy
 to production; never read .env* files or secret values (check GitHub secrets by name only); never re-enable
 .git/hooks/post-commit.disabled. Only the lead runs supabase start/stop, db reset, test db, gen types, pnpm verify
 and pnpm test:rls, and it warns running agents before a db reset. Stop to ask me only for the founder gates in
-docs/AUTOPILOT.md §3; I will continue the founder-queue walkthrough at step 6 (enable R2) when I say so.
+docs/AUTOPILOT.md §3. The founder-queue walkthrough is finished (2026-10-15); ask me about a remaining
+FOUNDER-QUEUE item only when HANDOFF says it is due.
 
 Work until 98% of the 5-hour or weekly usage limit (founder, 2026-10-14); at 98% stop new work and do the STEP 5 wrap-up (handoff, log,
 backup, gitleaks via the pre-push hook, push), then print the next prompt. Work multi-agent within
