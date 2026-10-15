@@ -1,5 +1,8 @@
-// Placeholder Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
-// No secrets, no credential vars and no Queue, R2, Durable Object or cron bindings in M0a.
+// Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
+// D1 bindings (specs/d1-demo-slice.md §4.2, §7.1): the mirror Queue consumer and producer, R2 evidence
+// (read) and the every-minute sweep cron, repeated in each env block (bindings and vars are not
+// inherited). Secrets (set by an operator, never in git): the three jobs database logins
+// (check-staging-secrets). Deploy order: services/api, then workers/jobs, then workers/edge.
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "trace-jobs",
@@ -37,12 +40,39 @@
   "env": {
     "dev": {
       "name": "trace-jobs-dev",
-      "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "" },
+      "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "", "TRACE_ENV": "dev" },
+      "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "trace-evidence-dev" }],
+      "queues": {
+        // Consumer, and producer for the cron sweep re-enqueue, of one queue (spec §7.1, L-18).
+        "producers": [{ "binding": "MIRROR_QUEUE", "queue": "trace-session-mirror-dev" }],
+        "consumers": [
+          {
+            "queue": "trace-session-mirror-dev",
+            "max_batch_size": 10,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-session-mirror-dlq-dev",
+          },
+        ],
+      },
+      "triggers": { "crons": ["* * * * *"] },
     },
     "staging": {
       "name": "trace-jobs-staging",
       "workers_dev": true,
-      "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "" },
+      "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "", "TRACE_ENV": "staging" },
+      "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "trace-evidence-staging" }],
+      "queues": {
+        "producers": [{ "binding": "MIRROR_QUEUE", "queue": "trace-session-mirror-staging" }],
+        "consumers": [
+          {
+            "queue": "trace-session-mirror-staging",
+            "max_batch_size": 10,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-session-mirror-dlq-staging",
+          },
+        ],
+      },
+      "triggers": { "crons": ["* * * * *"] },
     },
   },
 }

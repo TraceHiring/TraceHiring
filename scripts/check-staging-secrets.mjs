@@ -2,8 +2,8 @@
 // Worker secret allow-list check (spec specs/m0-foundations.md §7.2 step 6, AT-15).
 // For each staging Worker it runs `pnpm exec wrangler secret list --env staging --format json`
 // in that Worker's folder and fails (exit 1) unless every secret name is in the Worker's
-// allow-list. M0a's lists are all empty; M0b and later extend jobs and api explicitly, and edge
-// stays [] for good. Fails closed: a failed or killed command, output that is not wrangler's JSON
+// allow-list. D1 (specs/d1-demo-slice.md §7.1, L-10) lists the api and jobs secrets explicitly; edge
+// stays [] for good. A DSN or a publishable key is a var, never a secret, so never on a list. Fails closed: a failed or killed command, output that is not wrangler's JSON
 // list, or a Worker with no allow-list entry is a violation, never a pass.
 // wrangler never returns secret values, so only names are printed.
 // Runs only in CI, on the deploy-staging step that holds CLOUDFLARE_API_TOKEN (spec §7.2); this
@@ -13,11 +13,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntryPoint } from './lib/cli.mjs';
 
-/** Secret names each staging Worker may hold (§7.2 step 6). Changing it is a spec change. */
+/**
+ * Secret names each staging Worker may hold (m0 §7.2 step 6; d1 §7.1). Changing it is a spec change.
+ * The Supabase URL and publishable key, SENTRY_DSN_WORKERS and VITE_SENTRY_DSN are public vars (L-10).
+ */
 export const ALLOW_LIST = Object.freeze({
   edge: Object.freeze([]),
-  jobs: Object.freeze([]),
-  api: Object.freeze([]),
+  jobs: Object.freeze(['JOBS_MIRROR_DB_URL', 'JOBS_QUALITY_DB_URL', 'JOBS_INTEGRITY_DB_URL']),
+  api: Object.freeze(['API_DB_URL', 'CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY']),
 });
 
 /** Where each Worker's wrangler.jsonc lives, in check order. */

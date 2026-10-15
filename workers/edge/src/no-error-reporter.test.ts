@@ -21,8 +21,25 @@ type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Assert<T extends true> = T;
 
-/** The only var the edge Worker is configured with is the public build version. */
-export type EnvHoldsOnlyVersion = Assert<Equal<keyof Env, 'VERSION'>>;
+/**
+ * The edge Env holds only the D1 bindings of specs/d1-demo-slice.md §4.2 and public vars: no
+ * TRACE_ENV (L-11), no secret and no database credential (L-10). Adding a key fails this type.
+ */
+export type EnvHoldsOnlyD1Bindings = Assert<
+  Equal<
+    keyof Env,
+    | 'VERSION'
+    | 'CANDIDATE_TOKEN_PUBLIC_JWK'
+    | 'CANDIDATE_APP_ORIGIN'
+    | 'MIRROR_TRANSPORT'
+    | 'SESSION'
+    | 'OTP'
+    | 'PACKAGES'
+    | 'EVIDENCE'
+    | 'MIRROR_QUEUE'
+    | 'API'
+  >
+>;
 /** The app factory accepts a clock and a log sink, and no reporter. */
 export type DepsHaveNoReporter = Assert<Equal<keyof AppDeps, 'now' | 'sink'>>;
 

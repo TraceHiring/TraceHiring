@@ -27,8 +27,30 @@ const listed = (...names) =>
 const ok = (stdout) => ({ status: 0, stdout, stderr: '' });
 
 describe('ALLOW_LIST', () => {
-  it('is exactly the M0a list: edge, jobs and api with no secrets', () => {
-    expect(ALLOW_LIST).toEqual({ edge: [], jobs: [], api: [] });
+  it('is exactly the D1 list (specs/d1-demo-slice.md §7.1, L-10): edge none, api 3, jobs 3', () => {
+    expect(ALLOW_LIST).toEqual({
+      edge: [],
+      api: ['API_DB_URL', 'CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY'],
+      jobs: ['JOBS_MIRROR_DB_URL', 'JOBS_QUALITY_DB_URL', 'JOBS_INTEGRITY_DB_URL'],
+    });
+  });
+
+  it('never lists a public var: a DSN, the Supabase URL or a publishable key', () => {
+    const all = Object.values(ALLOW_LIST).flat();
+    for (const name of [
+      'SENTRY_DSN_WORKERS',
+      'VITE_SENTRY_DSN',
+      'SUPABASE_URL',
+      'SUPABASE_PUBLISHABLE_KEY',
+      'CANDIDATE_TOKEN_PUBLIC_JWK',
+      'CANDIDATE_TOKEN_KID',
+    ])
+      expect(all, name).not.toContain(name);
+  });
+
+  it('gives each secret to exactly one Worker', () => {
+    const all = Object.values(ALLOW_LIST).flat();
+    expect(new Set(all).size).toBe(all.length);
   });
 
   it('cannot be extended at run time', () => {
@@ -83,11 +105,43 @@ describe('checkWorker', () => {
     expect(checkWorker('api', ok(listed()))).toEqual([]);
   });
 
-  it('fails on any secret while the allow-list is empty, naming each one', () => {
+  it('fails on any secret outside the allow-list, naming each one', () => {
     const v = checkWorker('jobs', ok(listed('EXAMPLE_ONE', 'EXAMPLE_TWO')));
     expect(v).toHaveLength(2);
     expect(v[0]).toMatch(/^jobs: secret EXAMPLE_ONE is not in the allow-list/);
     expect(v[1]).toMatch(/^jobs: secret EXAMPLE_TWO is not in the allow-list/);
+  });
+
+  it('passes the exact D1 secrets of api and jobs and nothing else', () => {
+    expect(checkWorker('api', ok(listed(...ALLOW_LIST.api)))).toEqual([]);
+    expect(checkWorker('jobs', ok(listed(...ALLOW_LIST.jobs)))).toEqual([]);
+    expect(checkWorker('api', ok(listed('API_DB_URL')))).toEqual([]);
+  });
+
+  it('rejects the secret of one Worker on another Worker', () => {
+    expect(checkWorker('api', ok(listed('JOBS_MIRROR_DB_URL')))).toEqual([
+      expect.stringMatching(/^api: secret JOBS_MIRROR_DB_URL is not in the allow-list/),
+    ]);
+    expect(checkWorker('jobs', ok(listed('API_DB_URL')))).toEqual([
+      expect.stringMatching(/^jobs: secret API_DB_URL is not in the allow-list/),
+    ]);
+  });
+
+  it.each([
+    ['api', 'SENTRY_DSN_WORKERS'],
+    ['api', 'SUPABASE_PUBLISHABLE_KEY'],
+    ['jobs', 'SENTRY_DSN_WORKERS'],
+    ['api', 'MEDIA_LINK_SECRET'],
+  ])('rejects %s secret %s (a var or a retired name, never a secret)', (worker, name) => {
+    expect(checkWorker(worker, ok(listed(name)))).toEqual([
+      expect.stringMatching(new RegExp(`^${worker}: secret ${name} is not in the allow-list`)),
+    ]);
+  });
+
+  it.each(Object.values(ALLOW_LIST).flat())('rejects %s on the edge', (name) => {
+    expect(checkWorker('edge', ok(listed(name)))).toEqual([
+      expect.stringMatching(new RegExp(`^edge: secret ${name} is not in the allow-list`)),
+    ]);
   });
 
   it('fails on an edge secret', () => {
