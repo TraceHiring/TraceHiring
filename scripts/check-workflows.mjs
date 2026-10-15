@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // GitHub Actions hardening checks (spec specs/m0-foundations.md §7.1, §7.2, AT-12 local part).
 // Reads .github/workflows/*.y{a,}ml and .github/actions/**/action.y{a,}ml and fails (exit 1) unless:
-//   - triggers are only pull_request and push (§7.1); pull_request_target / workflow_run are named
+//   - triggers are only pull_request, push and workflow_dispatch (§7.1; d1 §7.1: a manual staging
+//     deploy from d1/** and milestone/** proves staging before main moves); pull_request_target /
+//     workflow_run are named
 //   - workflow-level permissions are exactly `contents: read`; no job asks for more
 //   - every remote `uses:` is pinned to a full 40-hex commit SHA (docker:// images to a sha256 digest);
 //     local `./` actions (also those used by another local action) must exist under
@@ -21,6 +23,12 @@
 //   - secrets appear only in step-level env:/with: of deploy-staging, never on or before an
 //     install/build step, and each staging secret only on the steps that use it (§7.2, §7.3)
 //   - deploy-staging (when present) has the exact needs / if / environment / concurrency of §7.2
+//     (the if: admits a push on main, or a workflow_dispatch on d1/** or milestone/**, never a PR)
+//   - deploy-staging's D1 chain (specs/d1-demo-slice.md §7.1, docs/reviews/D1-security-review-bindings.md
+//     F4/F5): check-deploy-vars, then migrations, then ensure-staging-resources, then exactly three
+//     `wrangler deploy --env staging` steps in the order services/api, workers/jobs, workers/edge
+//     with the exact `--var NAME:$SOURCE` set per Worker, public values only from `vars.*`, then
+//     check-staging-secrets; no wrangler delete anywhere in the job
 // No YAML library is a root dependency, so this file carries a small parser for the YAML subset
 // workflows use (block mappings and sequences, plain/quoted/block scalars, flow collections).
 // Anything outside that subset (anchors, aliases, tags, merge keys, multiple documents) is an
@@ -528,13 +536,16 @@ export function parseYaml(text) {
 
 export const REQUIRED_JOBS = ['static', 'rls', 'security', 'migrations'];
 export const DEPLOY_JOB = 'deploy-staging';
+// d1 §7.1 (D1-16): main deploys stay push-only; a manual dispatch may deploy from d1/** and
+// milestone/** (staging proof before merge, build-notes §0 founder-queue walkthrough 2026-10-15).
+// A pull_request run matches neither branch of the expression.
 export const DEPLOY_IF =
-  "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'";
+  "(github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/'))) && github.repository == 'TraceHiring/TraceHiring'";
 export const DEPLOY_ENVIRONMENT = 'staging';
 export const DEPLOY_CONCURRENCY = 'deploy-staging';
 export const WORKFLOW_PERMISSIONS = { contents: 'read' };
 export const FORBIDDEN_TRIGGERS = ['pull_request_target', 'workflow_run'];
-export const ALLOWED_TRIGGERS = ['pull_request', 'push'];
+export const ALLOWED_TRIGGERS = ['pull_request', 'push', 'workflow_dispatch'];
 /** Jobs whose checkout needs the full history (§7.1: static and security; §7.1 table: migrations). */
 export const FULL_HISTORY_JOBS = ['static', 'security', 'migrations'];
 export const MIGRATIONS_BASE = 'origin/main';
@@ -542,10 +553,16 @@ export const MIGRATIONS_BASE = 'origin/main';
 /** The org sign-in smoke step's entire run text (m0b AT-B9). */
 const SMOKE_AUTH_RUN = /^\s*node scripts\/smoke-staging-auth\.mjs\s*$/;
 
+// d1 §7.1: the two scripts of the deploy chain. Each step's whole run text is that one command, so
+// no extra line, flag or comment can reach the Cloudflare token or skip the guard.
+const GUARD_RUN = /^\s*node scripts\/check-deploy-vars\.mjs\s*$/;
+const RESOURCES_RUN = /^\s*node scripts\/ensure-staging-resources\.mjs\s*$/;
+
 /** §7.3 staging secrets and the commands a step must run to be allowed to hold each one (§7.2). */
 export const STAGING_SECRET_USERS = {
   SUPABASE_STAGING_DB_URL: [/\bsupabase\s+db\s+push\b/, /\bpsql\b/],
-  CLOUDFLARE_API_TOKEN: [/\bwrangler\b/, /\bcheck-staging-secrets\b/],
+  // wrangler (deploy, pages), check-staging-secrets, and d1 §7.1's bucket and queue creation.
+  CLOUDFLARE_API_TOKEN: [/\bwrangler\b/, /\bcheck-staging-secrets\b/, RESOURCES_RUN],
   // specs/m0b-tenancy.md AT-B9, AT-B10 [R5]: the org sign-in smoke step only, whose whole run text
   // is that one command (no other line, comment or argument can read the secrets; B4-SEC-2).
   STAGING_SMOKE_EMAIL: [SMOKE_AUTH_RUN],
@@ -564,6 +581,58 @@ export const BUILD_ONLY_ENV = Object.freeze({
   // d1 AT-D22 (m0-foundations §7.3): the recruiter's Sentry DSN, a public value (H6).
   VITE_SENTRY_DSN: '${{ vars.VITE_SENTRY_DSN }}',
 });
+
+/**
+ * Public values the deploy-staging steps read (d1 §7.1, review F4): wrangler.jsonc ships them as
+ * empty placeholders and `wrangler deploy` replaces dashboard vars, so the deploy passes them with
+ * `--var` from GitHub variables. Wherever one is set in a deploy-staging step's env:, it must be
+ * exactly its `vars.*` expression: never a secret (they are public) and never a literal.
+ */
+export const PUBLIC_DEPLOY_ENV = Object.freeze({
+  CANDIDATE_TOKEN_KID: '${{ vars.CANDIDATE_TOKEN_KID }}',
+  CANDIDATE_TOKEN_PUBLIC_JWK: '${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}',
+  SENTRY_DSN_WORKERS: '${{ vars.SENTRY_DSN_WORKERS }}',
+  SUPABASE_STAGING_URL: '${{ vars.SUPABASE_STAGING_URL }}',
+  SUPABASE_STAGING_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+});
+
+/** What the guard step must see (the variables scripts/check-deploy-vars.mjs requires). */
+const GUARD_ENV = Object.freeze([
+  'CANDIDATE_TOKEN_KID',
+  'CANDIDATE_TOKEN_PUBLIC_JWK',
+  'SUPABASE_STAGING_URL',
+  'SUPABASE_STAGING_PUBLISHABLE_KEY',
+]);
+
+/**
+ * The three Worker deploys in the order spec §7.1 requires (edge's service binding targets api, so
+ * api first). `vars` maps each `--var NAME` to the shell variable that must feed it, exactly:
+ * `--var "NAME:$SOURCE"`. These are the wrangler.jsonc vars the deploy supplies (empty
+ * placeholders or "dev"): VERSION everywhere, the Sentry DSN to jobs and api only (never edge,
+ * m0-foundations §9.2), the candidate-token public values and the Supabase pair as the bindings
+ * table (d1 §4.2) assigns them. Changing the set is a spec change.
+ */
+export const WORKER_DEPLOYS = Object.freeze([
+  {
+    dir: 'services/api',
+    vars: {
+      VERSION: 'GITHUB_SHA',
+      SENTRY_DSN_WORKERS: 'SENTRY_DSN_WORKERS',
+      CANDIDATE_TOKEN_KID: 'CANDIDATE_TOKEN_KID',
+      CANDIDATE_TOKEN_PUBLIC_JWK: 'CANDIDATE_TOKEN_PUBLIC_JWK',
+      SUPABASE_URL: 'SUPABASE_STAGING_URL',
+      SUPABASE_PUBLISHABLE_KEY: 'SUPABASE_STAGING_PUBLISHABLE_KEY',
+    },
+  },
+  {
+    dir: 'workers/jobs',
+    vars: { VERSION: 'GITHUB_SHA', SENTRY_DSN_WORKERS: 'SENTRY_DSN_WORKERS' },
+  },
+  {
+    dir: 'workers/edge',
+    vars: { VERSION: 'GITHUB_SHA', CANDIDATE_TOKEN_PUBLIC_JWK: 'CANDIDATE_TOKEN_PUBLIC_JWK' },
+  },
+]);
 
 const INSTALL_RE = /\b(?:pnpm|npm|yarn)\s+(?:install|i|ci|add)\b/;
 const BUILD_RE = /\bpnpm\s+(?:(?:-r|--recursive|--filter\s+\S+)\s+)*(?:run\s+)?build\b/;
@@ -720,6 +789,10 @@ export const ENV_ALLOW_LIST = Object.freeze([
   // d1 AT-D22 (specs/d1-demo-slice.md §7.1, L-24): the Workers deploy step passes it to jobs and api
   // only, as a var (a DSN is public, not a secret).
   'SENTRY_DSN_WORKERS',
+  // d1 §7.1 (security review F4): the candidate-token public values. The check-deploy-vars step and
+  // the api/edge deploy steps read them (PUBLIC_DEPLOY_ENV: exactly a GitHub variable, never a secret).
+  'CANDIDATE_TOKEN_KID',
+  'CANDIDATE_TOKEN_PUBLIC_JWK',
   // specs/m0b-tenancy.md AT-B9 [R5]: the org sign-in smoke step (public variables, then the three
   // smoke secrets bound by STAGING_SECRET_USERS).
   'SUPABASE_STAGING_URL',
@@ -1230,9 +1303,173 @@ export function checkWorkflow(doc, file, ctx = {}) {
         ),
       );
     }
+    checkDeployChain(d, where, file, out);
   }
   checkBuildOnlyEnv(doc, file, out);
   return out;
+}
+
+const WORKER_DEPLOY_RE = /\bwrangler\s+deploy\b/;
+const DRY_RUN_RE = /--dry-run\b/;
+const WRANGLER_DELETE_RE = /\bwrangler\b[^\n]*\b(?:delete|remove)\b/;
+const joinContinuations = (run) => run.replace(/\\\r?\n/g, ' ');
+
+/**
+ * deploy-staging's D1 chain (specs/d1-demo-slice.md §7.1; docs/reviews/D1-security-review-bindings.md
+ * F4, F5): the public-variable guard, then migrations, then bucket and queue creation, then exactly
+ * three Worker deploys in the order api, jobs, edge, each `--env staging` with its exact `--var` set
+ * from GitHub variables, then check-staging-secrets. `d` is the job; `where` is `jobs.deploy-staging`.
+ */
+function checkDeployChain(d, where, file, out) {
+  const steps = Array.isArray(d.steps) ? d.steps : [];
+  const runOf = (s) => (isObj(s) && typeof s.run === 'string' ? s.run : '');
+  const indexOf = (pred) => steps.findIndex((s) => pred(s));
+  const sw = (i) => `${where}.steps[${i}]`;
+
+  // Public values: wherever a deploy-staging step sets one, it is exactly its GitHub variable.
+  steps.forEach((s, i) => {
+    if (!isObj(s) || !isObj(s.env)) return;
+    for (const [name, want] of Object.entries(PUBLIC_DEPLOY_ENV)) {
+      if (Object.hasOwn(s.env, name) && normExpr(s.env[name]) !== normExpr(want)) {
+        out.push(
+          v(
+            file,
+            sw(i),
+            `env: ${name} must be exactly ${want} (a public GitHub variable; never a secret or a literal)`,
+          ),
+        );
+      }
+    }
+    // CI never deletes a staging resource (F5: create only if missing).
+    if (WRANGLER_DELETE_RE.test(joinContinuations(runOf(s)))) {
+      out.push(
+        v(
+          file,
+          sw(i),
+          'wrangler delete commands are not allowed in deploy-staging (CI only creates staging resources, never removes them)',
+        ),
+      );
+    }
+  });
+
+  // The guard: exactly check-deploy-vars, seeing the four required variables, before the migrations
+  // and before every Worker deploy.
+  const guard = indexOf((s) => GUARD_RUN.test(runOf(s)));
+  const migrate = indexOf((s) => /\bsupabase\s+db\s+push\b/.test(runOf(s)));
+  const deploys = steps
+    .map((s, i) => [s, i])
+    .filter(([s]) => WORKER_DEPLOY_RE.test(runOf(s)) && !DRY_RUN_RE.test(runOf(s)));
+  const firstDeploy = deploys.length > 0 ? deploys[0][1] : -1;
+  if (guard < 0) {
+    out.push(
+      v(
+        file,
+        where,
+        'a step must run exactly node scripts/check-deploy-vars.mjs (it fails the deploy on an empty public variable or a private JWK member, F4)',
+      ),
+    );
+  } else {
+    if ((migrate >= 0 && guard > migrate) || (firstDeploy >= 0 && guard > firstDeploy)) {
+      out.push(
+        v(
+          file,
+          sw(guard),
+          'node scripts/check-deploy-vars.mjs must run before the migrations and before the Worker deploys',
+        ),
+      );
+    }
+    const env = isObj(steps[guard].env) ? steps[guard].env : {};
+    for (const name of GUARD_ENV) {
+      if (!Object.hasOwn(env, name)) {
+        out.push(
+          v(
+            file,
+            sw(guard),
+            `the check-deploy-vars step must set ${name} in env: (${PUBLIC_DEPLOY_ENV[name]})`,
+          ),
+        );
+      }
+    }
+  }
+
+  // Bucket and queue creation, before the first Worker deploy.
+  const resources = indexOf((s) => RESOURCES_RUN.test(runOf(s)));
+  if (resources < 0) {
+    out.push(
+      v(
+        file,
+        where,
+        'a step must run exactly node scripts/ensure-staging-resources.mjs (idempotent bucket and queue creation, F5)',
+      ),
+    );
+  } else if (firstDeploy >= 0 && resources > firstDeploy) {
+    out.push(
+      v(
+        file,
+        sw(resources),
+        'node scripts/ensure-staging-resources.mjs must run before the first Worker deploy',
+      ),
+    );
+  }
+
+  // Exactly three Worker deploys, in order.
+  const order = WORKER_DEPLOYS.map((w) => w.dir);
+  const dirs = deploys.map(([s]) => (isObj(s) ? s['working-directory'] : undefined));
+  if (JSON.stringify(dirs) !== JSON.stringify(order)) {
+    out.push(
+      v(
+        file,
+        where,
+        `deploy-staging must run exactly three wrangler deploy steps, in the order ${order.join(', ')} (a service-binding target must exist first), each with working-directory: set to its Worker; found ${dirs.length === 0 ? 'none' : dirs.map((x) => x ?? '(none)').join(', ')}`,
+      ),
+    );
+  } else {
+    deploys.forEach(([step, i], k) => checkWorkerDeploy(step, sw(i), WORKER_DEPLOYS[k], file, out));
+  }
+
+  // check-staging-secrets stays, after the last deploy.
+  const secrets = indexOf((s) => /\bcheck-staging-secrets\b/.test(runOf(s)));
+  const lastDeploy = deploys.length > 0 ? deploys[deploys.length - 1][1] : -1;
+  if (secrets < 0 || secrets < lastDeploy) {
+    out.push(
+      v(file, where, 'check-staging-secrets must run after the last Worker deploy (§7.2 step 6)'),
+    );
+  }
+}
+
+/** One Worker deploy step: --env staging, and exactly the --var set `spec.vars`, each from its source. */
+function checkWorkerDeploy(step, sw, spec, file, out) {
+  const text = joinContinuations(step.run);
+  if (!/(?<![\w-])--env\s+staging(?![\w-])/.test(text)) {
+    out.push(v(file, sw, `wrangler deploy must use --env staging (${spec.dir})`));
+  }
+  const found = [...text.matchAll(/--var\s+"([A-Z][A-Z0-9_]*):([^"]*)"/g)].map((m) => [m[1], m[2]]);
+  if ((text.match(/--var\b/g) ?? []).length !== found.length) {
+    out.push(
+      v(file, sw, 'every --var must be written --var "NAME:$SOURCE" (quoted, no other form)'),
+    );
+  }
+  const seen = new Set();
+  for (const [name, value] of found) {
+    const source = spec.vars[name];
+    if (source === undefined) {
+      out.push(v(file, sw, `--var ${name} is not allowed on ${spec.dir}`));
+    } else if (seen.has(name)) {
+      out.push(v(file, sw, `--var ${name} is given twice`));
+    } else if (value !== `$${source}`) {
+      out.push(v(file, sw, `--var ${name} must be "${name}:$${source}"`));
+    }
+    seen.add(name);
+  }
+  const env = isObj(step.env) ? step.env : {};
+  for (const [name, source] of Object.entries(spec.vars)) {
+    if (!seen.has(name)) out.push(v(file, sw, `--var ${name} is missing on ${spec.dir}`));
+    else if (source !== 'GITHUB_SHA' && !Object.hasOwn(env, source)) {
+      out.push(
+        v(file, sw, `the step uses $${source} for --var ${name} but does not set it in env:`),
+      );
+    }
+  }
 }
 
 /**

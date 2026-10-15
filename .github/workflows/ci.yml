@@ -1,6 +1,8 @@
 # Trace CI (spec specs/m0-foundations.md §7.1). One workflow, so there is no `workflow_run`
-# trigger to abuse. The last job, deploy-staging (§7.2), runs only on a push to main in this
-# repository, after the four required jobs pass; pull requests never reach it or its secrets.
+# trigger to abuse. The last job, deploy-staging (§7.2), runs only on a push to main, or on a manual
+# workflow_dispatch from a d1/** or milestone/** branch (staging proof before main moves; d1 §7.1,
+# build-notes §0), in this repository, after the four required jobs pass; pull requests never reach
+# it or its secrets.
 name: ci
 
 on:
@@ -9,6 +11,7 @@ on:
     branches:
       - main
       - 'milestone/**'
+  workflow_dispatch:
 
 # Read-only token for every job. A job that needs more must ask for it explicitly.
 permissions:
@@ -113,16 +116,18 @@ jobs:
       - name: Check migrations
         run: node scripts/check-migrations.mjs --base origin/main
 
-  # Not a required check. Deploys main to staging (§7.2). The steps follow the §15.1 states:
-  # built -> output_scanned -> migrated -> catalog_checked -> workers_deployed -> secrets_checked
-  # -> pages_deployed -> smoke_passed. Any failure stops the job; nothing is rolled back, migrations
-  # are forward-only and a re-run is idempotent. Each secret is set only on the steps that use it
-  # (never at job level, never on or before install/build); CLOUDFLARE_ACCOUNT_ID is a public
-  # environment variable. The wrangler steps append to one output file in RUNNER_TEMP, which the
-  # smoke step reads for the deployed URLs.
+  # Not a required check. Deploys main (push) or a d1/** or milestone/** branch (manual
+  # workflow_dispatch) to staging (§7.2; d1 §7.1). The steps follow the §15.1 states:
+  # built -> output_scanned -> vars_checked -> migrated -> catalog_checked -> resources_ready ->
+  # workers_deployed -> secrets_checked -> pages_deployed -> smoke_passed. Any failure stops the job;
+  # nothing is rolled back, migrations are forward-only and a re-run is idempotent. Each secret is
+  # set only on the steps that use it (never at job level, never on or before install/build);
+  # CLOUDFLARE_ACCOUNT_ID and every value passed to a Worker with --var are public GitHub variables
+  # (vars.*, never secrets). The wrangler steps append to one output file in RUNNER_TEMP, which the
+  # smoke step reads for the deployed URLs. scripts/check-workflows.mjs pins the whole chain.
   deploy-staging:
     needs: [static, rls, security, migrations]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/'))) && github.repository == 'TraceHiring/TraceHiring'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: staging
@@ -156,6 +161,18 @@ jobs:
       # §7.2 step 2: gitleaks over every app, Worker and service dist/ (AT-16).
       - name: Scan the build output
         run: node scripts/scan-dist.mjs
+      # d1 §7.1 (security review F4): the public values the Workers get with --var. wrangler.jsonc
+      # ships them as empty placeholders and `wrangler deploy` replaces dashboard vars, so an empty
+      # variable would deploy a Worker that rejects every candidate token. Fails before any migration
+      # or deploy when one is empty, the JWK is not JSON, a key lacks a kid, or a key has a private
+      # member (`d`); it holds no secret and prints no value.
+      - name: Check the public deploy variables
+        env:
+          CANDIDATE_TOKEN_KID: ${{ vars.CANDIDATE_TOKEN_KID }}
+          CANDIDATE_TOKEN_PUBLIC_JWK: ${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}
+          SUPABASE_STAGING_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+        run: node scripts/check-deploy-vars.mjs
       # §7.2 step 3. --yes answers the CLI's "push these migrations?" prompt.
       - name: Apply migrations to staging
         env:
@@ -170,9 +187,41 @@ jobs:
           set -euo pipefail
           psql --version
           node scripts/staging-catalog-checks.mjs
-      # §7.2 step 5 (AT-11). jobs and api also get the Sentry DSN as a var (d1 AT-D22, L-24); edge never
-      # (no reporter on the edge Worker, m0-foundations §9.2).
-      - name: Deploy the Workers (edge, jobs, api)
+      # d1 §7.1 (security review F5): the R2 buckets and Queues the Workers bind to, created only if
+      # missing ("already exists" is success; nothing is ever deleted). Before the first deploy, so
+      # the bindings and the jobs queue consumer have their targets.
+      - name: Create the staging buckets and queues
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node scripts/ensure-staging-resources.mjs
+      # §7.2 step 5 (AT-11), d1 §7.1: api -> jobs -> edge, because the edge's service binding targets
+      # api. Each Worker gets exactly its --var set from GitHub variables (check-workflows pins it).
+      # Sentry DSN: jobs and api only (d1 AT-D22, L-24); edge never (no reporter on the edge Worker,
+      # m0-foundations §9.2). The candidate-token public JWK goes to api and edge, the Supabase URL and
+      # publishable key to api only.
+      - name: Deploy the api Worker
+        working-directory: services/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SENTRY_DSN_WORKERS: ${{ vars.SENTRY_DSN_WORKERS }}
+          CANDIDATE_TOKEN_KID: ${{ vars.CANDIDATE_TOKEN_KID }}
+          CANDIDATE_TOKEN_PUBLIC_JWK: ${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}
+          SUPABASE_STAGING_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
+          pnpm exec wrangler deploy dist/index.js --no-bundle --env staging \
+            --var "VERSION:$GITHUB_SHA" \
+            --var "SENTRY_DSN_WORKERS:$SENTRY_DSN_WORKERS" \
+            --var "CANDIDATE_TOKEN_KID:$CANDIDATE_TOKEN_KID" \
+            --var "CANDIDATE_TOKEN_PUBLIC_JWK:$CANDIDATE_TOKEN_PUBLIC_JWK" \
+            --var "SUPABASE_URL:$SUPABASE_STAGING_URL" \
+            --var "SUPABASE_PUBLISHABLE_KEY:$SUPABASE_STAGING_PUBLISHABLE_KEY"
+      - name: Deploy the jobs Worker
+        working-directory: workers/jobs
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -180,10 +229,21 @@ jobs:
         run: |
           set -euo pipefail
           export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
-          (cd workers/edge && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA")
-          for dir in workers/jobs services/api; do
-            (cd "$dir" && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA" --var "SENTRY_DSN_WORKERS:$SENTRY_DSN_WORKERS")
-          done
+          pnpm exec wrangler deploy dist/index.js --no-bundle --env staging \
+            --var "VERSION:$GITHUB_SHA" \
+            --var "SENTRY_DSN_WORKERS:$SENTRY_DSN_WORKERS"
+      - name: Deploy the edge Worker
+        working-directory: workers/edge
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CANDIDATE_TOKEN_PUBLIC_JWK: ${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}
+        run: |
+          set -euo pipefail
+          export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
+          pnpm exec wrangler deploy dist/index.js --no-bundle --env staging \
+            --var "VERSION:$GITHUB_SHA" \
+            --var "CANDIDATE_TOKEN_PUBLIC_JWK:$CANDIDATE_TOKEN_PUBLIC_JWK"
       # §7.2 step 6: the staging Workers' secrets must be a subset of the allow-list (AT-15).
       - name: Check Worker secrets
         env:
