@@ -63,8 +63,16 @@ const RULE1_ROOTS = '{services/api/src/modules,workers/jobs/src}';
 const CONFIG_EXT = '{,.{js,mjs,cjs,ts,mts,cts}}';
 
 const files = [
-  { category: 'quality', pattern: `${RULE1_ROOTS}/**/quality/**` },
-  { category: 'integrity', pattern: `${RULE1_ROOTS}/**/integrity/**` },
+  // The api's two report card modules are the two sides as well (d1 §6.2, L-19): report-quality and
+  // report-integrity import neither each other nor any neutral module.
+  {
+    category: 'quality',
+    pattern: [`${RULE1_ROOTS}/**/quality/**`, 'services/api/src/modules/report-quality/**'],
+  },
+  {
+    category: 'integrity',
+    pattern: [`${RULE1_ROOTS}/**/integrity/**`, 'services/api/src/modules/report-integrity/**'],
+  },
   // The recruiter app reads the rule table labels, so it may import @trace/band-engine (d1 §7.4, R-19).
   { category: 'recruiter-app', pattern: 'apps/recruiter/**' },
   // Build tooling: root config files (classified only by this category; elements match folders)
