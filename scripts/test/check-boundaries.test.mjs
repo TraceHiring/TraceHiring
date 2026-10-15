@@ -9,6 +9,7 @@ import {
   SUPABASE_JS_FORBIDDEN_SCOPES,
   checkAuthConfig,
   checkSupabaseJsScope,
+  checkPackagesReadOnly,
   checkCredentialNames,
   checkCrlf,
   checkEslintDisables,
@@ -608,5 +609,40 @@ describe('runChecks over a fixture repository', () => {
     git(repo, 'add', '-A');
     git(repo, 'commit', '-q', '-m', 'x');
     expect(runChecks(repo).map((x) => x.path)).toEqual(['apps/candidate/src/x.ts']);
+  });
+});
+
+describe('rule 11: the edge reads PACKAGES only (d1 §4.2; bindings security review F2)', () => {
+  const edge = (content) => checkPackagesReadOnly([f('workers/edge/src/session.ts', content)]);
+  it.each([
+    'await env.PACKAGES.get(key);',
+    'await env.PACKAGES?.head(key);',
+    'const o = await this.env.PACKAGES.get(`packages/${id}.json`);',
+    'interface X { PACKAGES: R2Bucket; PACKAGES2?: R2Bucket }',
+  ])('allows %s', (code) => {
+    expect(edge(code)).toEqual([]);
+  });
+  it.each([
+    'await env.PACKAGES.put(key, body);',
+    'await env.PACKAGES.delete(key);',
+    'await env.PACKAGES.list();',
+    'await env.PACKAGES.createMultipartUpload(key);',
+    "await env.PACKAGES['put'](key, body);",
+    'const bucket = env.PACKAGES;',
+    'const { put } = env.PACKAGES;',
+    'write(env.PACKAGES);',
+  ])('flags %s', (code) => {
+    const v = edge(code);
+    expect(v).toHaveLength(1);
+    expect(v[0].rule).toBe(11);
+  });
+  it('ignores tests, generated types and other Workers', () => {
+    expect(
+      checkPackagesReadOnly([
+        f('workers/edge/src/session.test.ts', 'await env.PACKAGES.put(k, b);'),
+        f('workers/edge/worker-configuration.d.ts', 'PACKAGES: R2Bucket;'),
+        f('services/api/src/modules/tests/publish.ts', 'await env.PACKAGES.put(k, b);'),
+      ]),
+    ).toEqual([]);
   });
 });

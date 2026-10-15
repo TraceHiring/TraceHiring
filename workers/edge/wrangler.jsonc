@@ -55,7 +55,7 @@
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SessionDO", "InviteOtpDO"] }],
       "r2_buckets": [
-        // Edge code only calls get/head on PACKAGES (asserted by a source test, AT-D31).
+        // Edge code only calls get/head on PACKAGES (scripts/check-boundaries.mjs rule 11).
         { "binding": "PACKAGES", "bucket_name": "trace-packages-dev" },
         { "binding": "EVIDENCE", "bucket_name": "trace-evidence-dev" },
       ],

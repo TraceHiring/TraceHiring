@@ -18,6 +18,7 @@
 //   9. supabase/config.toml Auth settings other than REQUIRED_AUTH_CONFIG, or a magic-link template
 //      without the {{ .Token }} code (specs/m0b-tenancy.md §4.1; checked only when config.toml exists)
 //  10. an @supabase/* import in apps/candidate/, workers/edge/ or packages/shared/ (specs/m0b-tenancy.md §4.3)
+//  11. a use of the PACKAGES binding in workers/edge/ source other than .get/.head or a type declaration (d1 §4.2)
 // Prints only paths and rule names, never file contents.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -294,6 +295,31 @@ export function checkSupabaseJsScope(files) {
   return out;
 }
 
+// ---------- rule 11 ----------
+// The edge may only read the published test packages (d1 §4.2: PACKAGES is read only for the edge; an R2 binding is
+// always writable at the platform level, so the source is the guard; bindings security review F2). Every use of the
+// name in edge source must be a `.get(` / `.head(` call or a type declaration (`PACKAGES: R2Bucket`); a put, delete,
+// list, bracket access, alias or destructuring is flagged.
+const PACKAGES_SCOPES = ['workers/edge/'];
+const PACKAGES_USE = /\bPACKAGES\b/g;
+const PACKAGES_ALLOWED = /^PACKAGES(?:\??\.(?:get|head)\s*\(|\??\s*:)/;
+export function checkPackagesReadOnly(files) {
+  const out = [];
+  for (const { path: p, content } of files) {
+    if (!inScope(p, PACKAGES_SCOPES) || !SOURCE_EXT.test(p)) continue;
+    if (isGenerated(p) || isTestFile(p)) continue;
+    for (const m of content.matchAll(PACKAGES_USE)) {
+      if (!PACKAGES_ALLOWED.test(content.slice(m.index))) {
+        out.push(
+          violation(11, p, 'uses PACKAGES other than get/head (d1 §4.2: read only for the edge)'),
+        );
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 // ---------- rule 5 ----------
 /** @param {string} eolOutput output of `git ls-files --eol -z` */
 export function checkCrlf(eolOutput) {
@@ -505,6 +531,7 @@ export function runChecks(root) {
         })
       : []),
     ...checkSupabaseJsScope(files),
+    ...checkPackagesReadOnly(files),
   ];
 }
 
