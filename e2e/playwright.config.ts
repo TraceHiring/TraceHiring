@@ -19,7 +19,9 @@ export default defineConfig({
   use: {
     baseURL,
     video: 'on',
-    trace: 'retain-on-failure',
+    // Traces record filled values and network bodies (passwords, TOTP codes, tokens), so they are off unless a
+    // local run asks for them; a staging run never keeps or uploads one (d1 bindings security review F8).
+    trace: process.env.E2E_TRACE === '1' ? 'retain-on-failure' : 'off',
     launchOptions: {
       // A synthetic camera feed, no permission prompt (candidate start photo, RT-9).
       args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],

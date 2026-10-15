@@ -36,6 +36,9 @@ export const CREDENTIAL_NAMES = [
   'postgresql://',
   'DB_URL',
   'DATABASE_URL',
+  // services/api-only secrets (d1 §4.2): the edge verifies with the public JWK and holds no secret.
+  'PRIVATE_JWK',
+  'HMAC_KEY',
 ];
 
 /**

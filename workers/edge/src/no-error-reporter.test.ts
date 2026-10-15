@@ -64,8 +64,10 @@ const edgeSources: Record<string, string> = Object.fromEntries(
 );
 
 describe('edge Worker has no secrets and no error reporter', () => {
-  it('is bound to nothing but the VERSION var', () => {
-    // The test pool adds its own __VITEST_POOL_WORKERS_* services to env; they are not in the config.
+  it('the test pool config (top level, never deployed) is bound to nothing but the VERSION var', () => {
+    // The test pool adds its own __VITEST_POOL_WORKERS_* services to env; they are not in the config. The
+    // deployed dev/staging blocks are pinned by the type assertion above and scripts/test/wrangler-bindings.test.mjs;
+    // a pool that loads an env block must expect that exact key set here, never a looser one (security review F1).
     const bindings = Object.keys(env).filter((name) => !name.startsWith('__VITEST_POOL_WORKERS_'));
 
     expect(bindings).toEqual(['VERSION']);

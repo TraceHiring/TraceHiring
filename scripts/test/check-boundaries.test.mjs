@@ -36,6 +36,12 @@ afterEach(cleanupTempDirs);
 const f = (p, content) => ({ path: p, content });
 
 describe('rule 1: credential names in apps, packages, workers/edge', () => {
+  it('covers the api-only signing and link secrets (d1 bindings security review F3)', () => {
+    for (const name of ['CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY']) {
+      const v = checkCredentialNames([f('workers/edge/src/token.ts', `env.${name};\n`)]);
+      expect(v.map((x) => x.rule)).toEqual([1]);
+    }
+  });
   it.each(CREDENTIAL_NAMES)('flags %s in edge code', (name) => {
     const v = checkCredentialNames([f('workers/edge/src/index.ts', `const x = '${name}';\n`)]);
     expect(v).toHaveLength(1);
