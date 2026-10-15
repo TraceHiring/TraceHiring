@@ -8,7 +8,8 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-15 15:30 IST (newest; wins over the lines below):** Wave 0 code tip `97f82dd` = `cp/d1-02`, full verify and CI green. Founder-queue walkthrough done (answers in build-notes §0). Next: Wave 0 remainder — ci.yml §7.1 + §7.2(b) `workflow_dispatch` staging deploy, jobs handlers, CSP, DC-D5/D6/D8/D9 (HANDOFF "Next step" 2); then the staging evidence that lets M0a and M0b CLOSE (HANDOFF "Path to close").
+- **Update 2026-10-15 17:45 IST (newest; wins over the lines below):** jobs queue/sweep wiring placed (`289cea1`); the ci.yml staging-deploy draft was reverted (`2e679fc`, broke S3B-1) and must be reworked from `b0d2c8c`. Next: verify:fast + full verify + CI on `2e679fc`, the ci.yml rework, then the ES256 key ops script, recruiter CSP, DC-D5/D6/D8/D9, tag `cp/d1-03` (HANDOFF "Next step").
+- **Update 2026-10-15 15:30 IST:** Wave 0 code tip `97f82dd` = `cp/d1-02`, full verify and CI green. Founder-queue walkthrough done (answers in build-notes §0). Next: Wave 0 remainder — ci.yml §7.1 + §7.2(b) `workflow_dispatch` staging deploy, jobs handlers, CSP, DC-D5/D6/D8/D9 (HANDOFF "Next step" 2); then the staging evidence that lets M0a and M0b CLOSE (HANDOFF "Path to close").
 - **Update 2026-10-15 14:05 IST:** band-engine and e2e skeletons, boundaries, wrangler bindings and the staging-secrets allow-list are placed and security-reviewed (code tip `97f82dd`; CI green on `742bf54`). Full verify green at `eaa8155`, `cp/d1-02` tagged. Next: ci.yml §7.1, jobs handlers, CSP, DC-D5/D6/D8/D9 (HANDOFF "Next step").
 - **Update 2026-10-15 00:45 IST:** Wave 0: **migrations 1-4 and every §3.6 pgTAP file are placed, reviewed and fixed; contracts `@trace/shared/contracts/{candidate,d1}` and `canonical-json` placed and reviewed**; full verify green at `bbae037` (rls 2610). `cp/d1-01` = `bbae037`; `SIGNAL_CATALOG` and `canonicalNoticeText` added (`b625788`). Next: full verify + CI on the tip, then DC-D5/D6/D8/D9, skeletons, wrangler/CSP/ci (HANDOFF "Next step").
 - **Update 2026-10-14 23:00 IST:** **migration 3 is placed, reviewed (Opus, APPROVE WITH MINOR FIXES) and fixed** (`e253624`, rls 2428; `docs/reviews/D1-db-review-m3.md`). H4 done (`abhayraj.workers.dev`). Next: full verify + PR #4 CI, the small open review items, then **migration 4** (HANDOFF "Next step"); founder walkthrough continues at step 6 (R2).
@@ -151,9 +152,11 @@ tell me what differs.
 Then do HANDOFF "Next step" in order. Phase: D1 BUILD, Wave 0 (lead-only). Done and verified: migrations 1-4, all
 rls_d1_* tests, contracts, shared helpers, band-engine/e2e skeletons, boundaries, wrangler bindings (code tip 97f82dd =
 tag cp/d1-02; full pnpm verify and Linux CI green; reviews in docs/reviews/D1-*). Founder-queue walkthrough of 2026-10-15
-is recorded in docs/build-notes.md §0. Next: the rest of Wave 0 — ci.yml per spec §7.1 and the §7.2(b) workflow_dispatch
-staging deploy from d1/** and milestone/**, the jobs queue/scheduled handlers, the recruiter CSP, DC-D5/D6/D8/D9 — tests
-first, then full verify, CI and tag cp/d1-03. Ask me before the first staging deploy (I must widen the Cloudflare token
+is recorded in docs/build-notes.md §0. Session 3 placed the jobs queue/sweep wiring (289cea1); its ci.yml staging-deploy draft was
+REVERTED (2e679fc) because it broke the scanned-bundle deploy guard S3B-1 — rework it from agent commit b0d2c8c as HANDOFF
+"Next step" 2a says (run the whole scripts suite, then an Opus security re-review). First run verify:fast and a full pnpm
+verify on 2e679fc. Then the rest of Wave 0 — ES256 key ops script, recruiter CSP, DC-D5/D6/D8/D9 — tests first, then
+full verify, CI and tag cp/d1-03. Ask me before the first staging deploy (I must widen the Cloudflare token
 with R2 + Queues Edit) and before any browser download (DC-D6). M0a and M0b are built and reviewed but NOT closed; HANDOFF
 "Path to close" says how. Writers R1/R3/C1 start only after Wave 0 is complete and verified.
 
