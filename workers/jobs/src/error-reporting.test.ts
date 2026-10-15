@@ -11,7 +11,13 @@ import { type ErrorReporter, type SerializedError } from '@trace/shared/log';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SENTRY_DATA_COLLECTION } from '@trace/shared/sentry';
 import { createApp } from './app.js';
-import { sentryReporter, withErrorReporting, workerSentryOptions } from './error-reporting.js';
+import {
+  sentryReporter,
+  withErrorReporting,
+  workerSentryOptions,
+  type Handlers,
+} from './error-reporting.js';
+import { fakeBatch, fakeMessage, validMessage } from './queue/test-fixtures.js';
 
 interface Captured {
   err: SerializedError;
@@ -306,5 +312,133 @@ describe('jobs Sentry wiring (AT-D22)', () => {
     );
     expect(types).toEqual(['event']);
     expect(JSON.stringify(sentry.envelopes)).not.toContain(mobile());
+  });
+
+  // The queue consumer and the sweep cron are wrapped the same way as fetch (spec d1 §5.1, §7.1).
+  describe('queue and scheduled handlers', () => {
+    const controller = { cron: '* * * * *', scheduledTime: 0, noRetry() {} } as ScheduledController;
+    const batch = () => fakeBatch([fakeMessage(validMessage())]);
+    const noFetch = () => new Response(null, { status: 204 });
+    const dsnEnv = () => ({ SENTRY_DSN_WORKERS: dsn(), VERSION: SHA }) as Env;
+    const noDsnEnv = () => ({ SENTRY_DSN_WORKERS: '', VERSION: SHA }) as Env;
+
+    /** A fake SDK that records which handlers it was asked to instrument. */
+    const recordingSdk = () => {
+      const seen: string[] = [];
+      return {
+        seen,
+        sdk: {
+          withSentry: (_options: unknown, inner: Handlers): Handlers => {
+            seen.push(...Object.keys(inner));
+            return {
+              fetch: inner.fetch,
+              ...(inner.queue === undefined
+                ? {}
+                : {
+                    queue: (...args: Parameters<NonNullable<Handlers['queue']>>) => {
+                      seen.push('queue:instrumented');
+                      return inner.queue?.(...args);
+                    },
+                  }),
+              ...(inner.scheduled === undefined
+                ? {}
+                : {
+                    scheduled: (...args: Parameters<NonNullable<Handlers['scheduled']>>) => {
+                      seen.push('scheduled:instrumented');
+                      return inner.scheduled?.(...args);
+                    },
+                  }),
+            };
+          },
+        },
+      };
+    };
+
+    it('hands the SDK queue and scheduled only when the Worker has them', () => {
+      const withBoth = recordingSdk();
+      withErrorReporting(
+        { fetch: noFetch, queue: () => {}, scheduled: () => {} },
+        {},
+        withBoth.sdk,
+      );
+      expect(withBoth.seen).toEqual(['fetch', 'queue', 'scheduled']);
+
+      const fetchOnly = recordingSdk();
+      const handler = withErrorReporting({ fetch: noFetch }, {}, fetchOnly.sdk);
+      expect(fetchOnly.seen).toEqual(['fetch']);
+      expect(handler).not.toHaveProperty('queue');
+      expect(handler).not.toHaveProperty('scheduled');
+    });
+
+    it('runs queue and scheduled through the SDK with a DSN, and directly without one', async () => {
+      const calls: string[] = [];
+      const { seen, sdk } = recordingSdk();
+      const handler: Handlers = withErrorReporting(
+        {
+          fetch: noFetch,
+          queue: () => void calls.push('queue'),
+          scheduled: () => void calls.push('scheduled'),
+        },
+        {},
+        sdk,
+      );
+      const { ctx } = execution();
+
+      await handler.queue?.(batch(), noDsnEnv(), ctx);
+      await handler.scheduled?.(controller, noDsnEnv(), ctx);
+      expect(seen.filter((s) => s.endsWith(':instrumented'))).toEqual([]);
+
+      await handler.queue?.(batch(), dsnEnv(), ctx);
+      await handler.scheduled?.(controller, dsnEnv(), ctx);
+      expect(seen.filter((s) => s.endsWith(':instrumented'))).toEqual([
+        'queue:instrumented',
+        'scheduled:instrumented',
+      ]);
+      expect(calls).toEqual(['queue', 'scheduled', 'queue', 'scheduled']);
+    });
+
+    it('sends one scrubbed event when a queue batch throws', async () => {
+      const handler: Handlers = withErrorReporting(
+        {
+          fetch: noFetch,
+          queue: () => throwValue(new TypeError(piiMessage())),
+        },
+        { transport: sentry.transport },
+      );
+      const { ctx, settle } = execution();
+
+      await expect(handler.queue?.(batch(), dsnEnv(), ctx)).rejects.toThrow(TypeError);
+      await settle();
+
+      const events = sentry.events();
+      expect(events).toHaveLength(1);
+      expect(
+        (events[0] as { exception?: { values?: { value?: string }[] } }).exception?.values?.[0],
+      ).toMatchObject({ value: '[REDACTED]' });
+      const everything = JSON.stringify(sentry.envelopes);
+      for (const sensitive of [email(), mobile(), 'failed for', validMessage().receiptRef]) {
+        expect(everything).not.toContain(sensitive);
+      }
+    });
+
+    it('sends one scrubbed event when the cron handler throws', async () => {
+      const handler: Handlers = withErrorReporting(
+        {
+          fetch: noFetch,
+          scheduled: () => throwValue(new EvalError(piiMessage())),
+        },
+        { transport: sentry.transport },
+      );
+      const { ctx, settle } = execution();
+
+      await expect(handler.scheduled?.(controller, dsnEnv(), ctx)).rejects.toThrow(EvalError);
+      await settle();
+
+      expect(sentry.events()).toHaveLength(1);
+      const everything = JSON.stringify(sentry.envelopes);
+      for (const sensitive of [email(), mobile(), 'failed for']) {
+        expect(everything).not.toContain(sensitive);
+      }
+    });
   });
 });

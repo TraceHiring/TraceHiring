@@ -54,36 +54,65 @@ interface FetchHandler {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 }
 
+/**
+ * The handlers this Worker exports: `fetch` always, `queue` (the session-mirror consumer) and
+ * `scheduled` (the sweep cron) when the Worker has them (spec d1 §5.1, §7.1).
+ */
+export interface Handlers extends FetchHandler {
+  queue?: ExportedHandlerQueueHandler<Env, unknown>;
+  scheduled?: ExportedHandlerScheduledHandler<Env>;
+}
+
 /** The part of @sentry/cloudflare used here; tests pass their own. */
 interface Sdk {
   withSentry: (
     options: (env: Env) => Sentry.CloudflareOptions | undefined,
-    handler: FetchHandler,
-  ) => FetchHandler;
+    handler: Handlers,
+  ) => Handlers;
 }
 
 /**
  * Wraps `handler` with the SDK when the env has a DSN, and serves it unwrapped when it has none.
+ * The SDK instruments `fetch`, `queue` and `scheduled`, so a request, a queue batch or a cron run
+ * that throws sends one scrubbed event. The choice is made per call, from that call's env.
  * `overrides` is for tests only (a capturing transport); production passes nothing.
  */
-export const withErrorReporting = (
-  handler: FetchHandler,
+export const withErrorReporting = <H extends Handlers>(
+  handler: H,
   overrides: Pick<Sentry.CloudflareOptions, 'transport'> = {},
   sdk: Sdk = { withSentry: Sentry.withSentry },
-): FetchHandler => {
+): H => {
+  const { queue, scheduled } = handler;
   // withSentry instruments the object it is given in place, so it gets its own.
   const instrumented = sdk.withSentry(
     (env) => {
       const options = workerSentryOptions(env);
       return options && { ...options, ...overrides };
     },
-    { fetch: handler.fetch },
+    {
+      fetch: handler.fetch,
+      ...(queue === undefined ? {} : { queue }),
+      ...(scheduled === undefined ? {} : { scheduled }),
+    },
   );
-  return {
+  const wrapped: Handlers = {
     fetch(request, env, ctx) {
       return workerSentryOptions(env) === undefined
         ? handler.fetch(request, env, ctx)
         : instrumented.fetch(request, env, ctx);
     },
   };
+  if (queue !== undefined) {
+    wrapped.queue = (batch, env, ctx) =>
+      workerSentryOptions(env) === undefined
+        ? queue(batch, env, ctx)
+        : (instrumented.queue ?? queue)(batch, env, ctx);
+  }
+  if (scheduled !== undefined) {
+    wrapped.scheduled = (controller, env, ctx) =>
+      workerSentryOptions(env) === undefined
+        ? scheduled(controller, env, ctx)
+        : (instrumented.scheduled ?? scheduled)(controller, env, ctx);
+  }
+  return wrapped as H;
 };

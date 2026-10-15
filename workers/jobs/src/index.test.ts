@@ -6,6 +6,7 @@ import { HealthResponse, LogLine } from '@trace/shared/contracts';
 import { env, exports } from 'cloudflare:workers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from './index.js';
+import { fakeBatch, fakeMessage, validMessage } from './queue/test-fixtures.js';
 
 const SERVICE = 'jobs';
 const SHA_40 = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
@@ -192,5 +193,58 @@ describe('the error path', () => {
     const line = LogLine.parse(JSON.parse(lines[0] ?? ''));
     expect(line).toMatchObject({ level: 'error', service: SERVICE, version: 'dev' });
     expect(lines[0]).not.toContain(secret);
+  });
+});
+
+// Wiring of the queue consumer and the sweep cron (spec d1 §5.1, §7.1; lead-wired). Until stream R2
+// replaces the placeholder stages, a message goes to retry (then the DLQ), never to ack, and the
+// sweep fails closed without its bindings. Reporting of a thrown error through Sentry is pinned in
+// error-reporting.test.ts, with a capturing transport.
+describe('queue and scheduled wiring', () => {
+  const controller = { cron: '* * * * *', scheduledTime: 0, noRetry() {} } as ScheduledController;
+
+  it('exports fetch, queue and scheduled', () => {
+    expect(typeof worker.fetch).toBe('function');
+    expect(typeof worker.queue).toBe('function');
+    expect(typeof worker.scheduled).toBe('function');
+  });
+
+  it('retries every message of a batch and acks none with the placeholder stages', async () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: unknown) => {
+      lines.push(String(line));
+    });
+    const messages = [fakeMessage(validMessage(), 'a'), fakeMessage(validMessage(), 'b')];
+
+    await worker.queue?.(fakeBatch(messages), withEnv({}), ctx);
+
+    expect(messages.map((m) => [m.acked(), m.retried()])).toEqual([
+      [0, 1],
+      [0, 1],
+    ]);
+    // Logged by stage name and ids only, through the redacting logger.
+    const failures = lines.filter((l) => l.includes('queue.stage_failed'));
+    expect(failures).toHaveLength(2);
+    expect(LogLine.parse(JSON.parse(failures[0] ?? '')).service).toBe(SERVICE);
+  });
+
+  it('acks a malformed message so it is not retried forever', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const bad = fakeMessage({ not: 'a mirror message' });
+
+    await worker.queue?.(fakeBatch([bad]), withEnv({}), ctx);
+
+    expect(bad.acked()).toBe(1);
+    expect(bad.retried()).toBe(0);
+  });
+
+  it('fails closed on a cron tick when MIRROR_QUEUE or EVIDENCE is not bound', async () => {
+    await expect(
+      worker.scheduled?.(
+        controller,
+        withEnv({ MIRROR_QUEUE: undefined, EVIDENCE: undefined }),
+        ctx,
+      ),
+    ).rejects.toThrow('binding_unavailable');
   });
 });
