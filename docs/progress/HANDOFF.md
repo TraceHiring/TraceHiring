@@ -37,7 +37,8 @@ Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`** (its §4 pas
 5. Then Wave 1 writers R1, R3, C1 (max 3, own worktrees reset to an exact SHA). R3 must implement §6.2 R3-1..R3-9.
 
 ## Founder items still open (`docs/progress/FOUNDER-QUEUE.md`)
-- Confirm the rule-6 decision (non-blocking). Walkthrough continues at **step 6: R2** (enable R2 on the Cloudflare account), then `staging` branch rules for `d1/**`, GitHub plan / branch protection, staging-evidence choice, H8, H11, SES, DNS, AWS OIDC, H9, the reviewer smoke user.
+- Walkthrough of 2026-10-15 finished: rule 6 keep; GitHub Free (AT-13 NOT MET, known gap); staging proof (b) deploy before merge (ci.yml/§7.2 change is lead work); staging branches widened; R2 enabled; SES verified; DNS on Cloudflare, demo live; email-code form hides account existence (M1); H8 done except the email template (needs SES SMTP) and session limits (needs Supabase Pro, left off); AWS OIDC before first AWS use; tag `cp/m0b-03` deleted on request.
+- Open, all for later: H9 and the reviewer smoke user (after the first staging deploy), H11 (`db push` to trace-dev before M0b CLOSE), widen the Cloudflare CI token with R2 + Queues Edit (when ci.yml §7.1 is ready), SES SMTP for the email template, Workers Paid only if the DC-D checks need it.
 
 ## Gotchas
 - Docker Desktop can stop mid-session: relaunch via a node `spawn` script (the worktree guard blocks direct launches); the Supabase containers restart by themselves.

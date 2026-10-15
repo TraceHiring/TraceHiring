@@ -15,7 +15,7 @@ Status key: **live**: exists and verified · **pending**: approved, not created 
 | --- | --- | --- | --- |
 | GitHub | repo **`TraceHiring/TraceHiring`** (private), `gh` logged in as `TraceHiring` | Personal account | Moved from `AbhayRajGit/Tracehiring` (founder, 2026-10-11). The founder repointed the local `trace` remote to `https://github.com/TraceHiring/TraceHiring.git` and pushed `main`, `milestone/m0a` and the tags. Visibility `PRIVATE` (checked with `gh repo view`). |
 | Supabase | org **"rajabhay.work@gmail.com's Org"** (slug `vfrqfcytlcbylylqqtdl`) | Free | Free plan allows **2 active projects** across every org you own or administer; paused projects don't count. |
-| Cloudflare | **"Rajabhay.work@gmail.com's Account"**, account ID `94fef930c2ecd2e37fbd5dc3151d99ba` | Workers Free | Account ID is not a secret (it appears in every `workers.dev`/API URL). R2 is **not enabled** on this account. The registered `*.workers.dev` subdomain is **not yet known**: the founder's answer of 2026-10-11 contained the template placeholder `<your-subdomain>.workers.dev`, not a real name (H4, FOUNDER-QUEUE). |
+| Cloudflare | **"Rajabhay.work@gmail.com's Account"**, account ID `94fef930c2ecd2e37fbd5dc3151d99ba` | Workers Free | Account ID is not a secret (it appears in every `workers.dev`/API URL). R2 is **enabled** (free tier, founder 2026-10-15; no bucket yet: the CI deploy creates them). The registered `*.workers.dev` subdomain is **not yet known**: the founder's answer of 2026-10-11 contained the template placeholder `<your-subdomain>.workers.dev`, not a real name (H4, FOUNDER-QUEUE). |
 
 ## Resources
 
