@@ -32,6 +32,13 @@ describe('rule 1: quality and integrity stay apart', () => {
     ['workers/jobs/src/quality/grade.ts', '../index'],
     // and never the other host's code
     ['workers/jobs/src/quality/grade.ts', '../../../../services/api/src/modules/quality/score'],
+    // the band engine is integrity-only: quality code may not import it (specs/d1-demo-slice.md §5.1)
+    ['workers/jobs/src/quality/score.ts', '@trace/band-engine'],
+    ['workers/jobs/src/quality/score.ts', '@trace/band-engine/rules/d1-v1.json'],
+    ['services/api/src/modules/quality/score.ts', '@trace/band-engine'],
+    ['services/api/src/modules/report-quality/quality/dto.ts', '@trace/band-engine'],
+    // a neutral jobs file is not an integrity file
+    ['workers/jobs/src/queue/consumer.ts', '@trace/band-engine'],
   ])('%s may not import %s', (from, source) => {
     expect(violations(from, source)).toBeGreaterThan(0);
   });
@@ -62,6 +69,10 @@ describe('rule 1: quality and integrity stay apart', () => {
     ['workers/jobs/src/integrity/detect.ts', '@trace/vendors'],
     ['workers/jobs/src/quality/grade.ts', 'zod'],
     ['workers/jobs/src/integrity/detect.ts', 'node:crypto'],
+    // the band engine: integrity code may import it (workers/jobs and services/api), quality never
+    ['workers/jobs/src/integrity/band.ts', '@trace/band-engine'],
+    ['workers/jobs/src/integrity/band.ts', '@trace/band-engine/rules/d1-v1.json'],
+    ['services/api/src/modules/report-integrity/integrity/dto.ts', '@trace/band-engine'],
     // neutral code may import either side (a router wires both)
     ['services/api/src/modules/router.ts', './quality/score'],
     ['services/api/src/modules/router.ts', './integrity/band'],

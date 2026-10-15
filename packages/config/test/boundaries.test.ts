@@ -37,6 +37,16 @@ const allowed: Case[] = [
   ['packages/workers-http/src/index.ts', 'hono'],
   ['packages/workers-http/src/index.ts', './errors'],
   ['packages/workers-http/vitest.config.ts', '@trace/config/vitest'],
+  // band-engine: services/api and the recruiter app may import it (integrity files in jobs: rule1 tests)
+  ['services/api/src/modules/reports/report-meta.ts', '@trace/band-engine'],
+  ['services/api/src/modules/reports/report-meta.ts', '@trace/band-engine/rules/d1-v1.json'],
+  ['apps/recruiter/src/reports/RuleTable.tsx', '@trace/band-engine'],
+  // band-engine and e2e files may import their own files
+  ['packages/band-engine/src/index.ts', './types'],
+  ['packages/band-engine/src/rules/parse.ts', '../types'],
+  ['packages/band-engine/vitest.config.ts', '@trace/config/vitest'],
+  ['e2e/tests/d1-slice.spec.ts', '../support/auth'],
+  ['e2e/tests/d1-slice.spec.ts', '@playwright/test'],
   // ui → shared; vendors → shared
   ['packages/ui/src/index.ts', '@trace/shared'],
   ['packages/vendors/src/index.ts', '@trace/shared'],
@@ -117,8 +127,38 @@ const denied: Case[] = [
   ['packages/workers-http/src/index.ts', '@trace/api'],
   ['packages/workers-http/src/index.ts', '../../../workers/edge/src/app'],
   ['packages/workers-http/src/index.ts', '@trace/config/vitest'],
+  // band-engine imports nothing internal (pure TypeScript, specs/d1-demo-slice.md §5.2)
+  ['packages/band-engine/src/index.ts', '@trace/shared'],
+  ['packages/band-engine/src/index.ts', '@trace/shared/canonical-json'],
+  ['packages/band-engine/src/index.ts', '@trace/vendors'],
+  ['packages/band-engine/src/index.ts', '@trace/db-types'],
+  ['packages/band-engine/src/index.ts', '@trace/api'],
+  ['packages/band-engine/src/index.ts', '../../shared/src/index'],
+  ['packages/band-engine/src/index.ts', '@trace/config/vitest'],
+  // only integrity files, services/api and the recruiter app may import band-engine
+  ['apps/candidate/src/main.tsx', '@trace/band-engine'],
+  ['workers/edge/src/index.ts', '@trace/band-engine'],
+  ['workers/jobs/src/index.ts', '@trace/band-engine'],
+  ['packages/shared/src/index.ts', '@trace/band-engine'],
+  ['packages/ui/src/index.ts', '@trace/band-engine'],
+  ['packages/vendors/src/index.ts', '@trace/band-engine'],
+  ['packages/workers-http/src/index.ts', '@trace/band-engine'],
+  ['scripts/check-boundaries.mjs', '@trace/band-engine'],
+  ['scripts/check-boundaries.mjs', '../packages/band-engine/src/index.ts'],
+  ['e2e/tests/d1-slice.spec.ts', '@trace/band-engine'],
+  // e2e imports no workspace code, and nothing imports e2e
+  ['e2e/support/totp.ts', '@trace/shared'],
+  ['e2e/support/totp.ts', '@trace/recruiter'],
+  ['e2e/support/totp.ts', '../../packages/shared/src/index'],
+  ['e2e/playwright.config.ts', '@trace/config/vitest'],
+  ['apps/recruiter/src/main.tsx', '@trace/e2e'],
+  ['apps/recruiter/src/main.tsx', '../../../e2e/support/auth'],
+  ['services/api/src/index.ts', '@trace/e2e'],
+  ['workers/jobs/src/integrity/band.ts', '@trace/e2e'],
+  ['packages/band-engine/src/index.ts', '@trace/e2e'],
   // config imports no other workspace
   ['packages/config/eslint/index.js', '@trace/shared'],
+  ['packages/config/eslint/index.js', '@trace/band-engine'],
   // only tooling files may import config
   ['packages/shared/src/index.ts', '@trace/config/vitest'],
   // a workspace missing from the package map fails closed

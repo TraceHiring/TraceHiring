@@ -4,6 +4,7 @@ packages:
   - packages/*
   - workers/*
   - services/*
+  - e2e
 
 # Shared versions (spec §4). Dependabot groups updates by catalog entry.
 catalog:
@@ -35,6 +36,9 @@ catalog:
   '@types/node': 22.20.5
   globals: 17.13.0
   fast-check: 4.10.2
+  # Dev tooling for e2e/ (specs/d1-demo-slice.md §7.2, no ADR): the newest release older than two weeks
+  # (1.63.0, published 2026-09-04; 1.64.0 came out 2026-10-07).
+  '@playwright/test': 1.63.0
   # Sentry adapter (m0-foundations §9.2, d1 AT-D22): recruiter app, workers/jobs, services/api only.
   '@sentry/cloudflare': 11.1.0
   '@sentry/react': 11.1.0
