@@ -16,6 +16,7 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { isEntryPoint } from '../lib/cli.mjs';
 import { line, parseFlags, realDeps } from './lib.mjs';
@@ -267,6 +268,22 @@ export async function main({ argv, deps = realDeps() }) {
       2,
       'refused: --out-dir is inside the git working tree; a private key must never sit where it could be committed. Choose a folder outside the repository',
     );
+  }
+  // Security review S5: on Windows a new file takes its folder's ACL; only the user profile is
+  // owner-only by default, so the key folder must sit inside it.
+  if (deps.platform === 'win32') {
+    let profile = deps.homeDir ?? homedir();
+    try {
+      profile = realpathSync.native(profile);
+    } catch {
+      // an unresolvable profile counts as typed
+    }
+    if (!isInside(profile, dir)) {
+      return fail(
+        2,
+        'refused: on Windows --out-dir must be inside your user profile (%USERPROFILE%), whose permissions are owner-only',
+      );
+    }
   }
   const names = fileNames(kid);
   const privFile = join(dir, names.priv);

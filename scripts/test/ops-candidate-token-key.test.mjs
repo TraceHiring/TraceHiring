@@ -231,6 +231,43 @@ describe('arguments (exit 2, nothing written)', () => {
   });
 });
 
+// Security review S5 (docs/reviews/D1-security-review-wave0-rest.md): on Windows a file takes its
+// folder's ACL, so the key folder must sit inside the user profile (owner-only by default).
+describe('Windows: --out-dir inside the user profile', () => {
+  it('refuses an out-dir outside the profile on win32, before any key exists', async () => {
+    const profile = tempDir();
+    const outside = tempDir();
+    const r = await run(['--kid', KID, '--out-dir', outside], {
+      platform: 'win32',
+      homeDir: profile,
+    });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/user profile/);
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  it('accepts an out-dir inside the profile on win32', async () => {
+    const profile = tempDir();
+    const inside = join(profile, 'trace-keys');
+    const r = await run(['--kid', KID, '--out-dir', inside], {
+      platform: 'win32',
+      homeDir: profile,
+    });
+    expect(r.code).toBe(0);
+    expect(readdirSync(inside).sort()).toEqual([names(KID).priv, names(KID).pub].sort());
+  });
+
+  it('does not apply the profile rule on other platforms (POSIX uses mode 0600)', async () => {
+    const profile = tempDir();
+    const outside = tempDir();
+    const r = await run(['--kid', KID, '--out-dir', outside], {
+      platform: 'linux',
+      homeDir: profile,
+    });
+    expect(r.code).toBe(0);
+  });
+});
+
 describe('the generated key pair', () => {
   it('writes exactly the two files and prints exit 0', async () => {
     const dir = tempDir();

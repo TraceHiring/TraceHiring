@@ -64,7 +64,7 @@ Cloudflare as a secret and then the file is deleted. It never goes into git, cha
    new pair with a new `kid` (the old public key then simply stops being needed).
 
 On Windows the file mode bits do not apply. The private file keeps the permissions of its folder, which is
-why the folder should sit in your own user profile.
+why the script refuses a folder outside your own user profile on Windows (security review S5).
 
 ### Rotating the key
 
