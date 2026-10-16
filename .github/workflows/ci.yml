@@ -146,12 +146,14 @@ jobs:
       # --env staging into the same dist/, so the next step scans, and the Workers step deploys,
       # the staging bytes (an env.staging define or alias cannot ship unscanned). No secret here:
       # the recruiter's Supabase URL and publishable key are public staging variables (m0b §2.7, H10),
-      # and so is its Sentry DSN (d1 AT-D22, H6).
+      # and so are its Sentry DSN (d1 AT-D22, H6) and the api origin its CSP connect-src names
+      # (https://trace-api-staging.<label>.workers.dev; d1 §7.1 check-headers).
       - name: Build
         env:
           VITE_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
           VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
+          VITE_API_ORIGIN: ${{ vars.API_STAGING_ORIGIN }}
         run: |
           set -euo pipefail
           VITE_APP_VERSION="$GITHUB_SHA" pnpm build
@@ -196,7 +198,11 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: node scripts/ensure-staging-resources.mjs
       # §7.2 step 5 (AT-11), d1 §7.1: api -> jobs -> edge, because the edge's service binding targets
-      # api. Each Worker gets exactly its --var set from GitHub variables (check-workflows pins it).
+      # api. S3B-1: each step uploads exactly the dist/index.js the Build step wrote and scan-dist
+      # scanned, with --no-bundle (no re-bundle); the env block's bindings, DO migrations, queues and
+      # crons still apply. Each Worker gets exactly its --var set from GitHub variables; wrangler
+      # splits --var at the first ':' only, so the JWK JSON arrives intact (check-workflows and
+      # scripts/test/deploy-staging-job.test.mjs pin all of it).
       # Sentry DSN: jobs and api only (d1 AT-D22, L-24); edge never (no reporter on the edge Worker,
       # m0-foundations §9.2). The candidate-token public JWK goes to api and edge, the Supabase URL and
       # publishable key to api only.

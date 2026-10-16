@@ -1,7 +1,9 @@
 // D1 staging deploy guard (specs/d1-demo-slice.md §7.1; docs/reviews/D1-security-review-bindings.md
 // F4): scripts/check-deploy-vars.mjs fails the deploy before any Worker is deployed when a public
-// var is empty, or when CANDIDATE_TOKEN_PUBLIC_JWK is not valid JSON, has a key without `kid`, or has
-// a key with a private member (`d`). All values here are synthetic; no violation may echo a value.
+// var is empty, or when CANDIDATE_TOKEN_PUBLIC_JWK is not valid JSON, is not a JSON array of one or two
+// public JWKs with the current signing key (CANDIDATE_TOKEN_KID) first (lead decision 2026-10-16: the
+// one shape the key script writes and the api/edge parsers accept), has a key without `kid`, or has a
+// key with a private member (`d`). All values here are synthetic; no violation may echo a value.
 import { describe, expect, it } from 'vitest';
 import { REQUIRED_VARS, checkDeployVars, main, parseJwkSet } from '../check-deploy-vars.mjs';
 
@@ -13,7 +15,7 @@ const jwt = (payload) => [b64url({ alg: 'HS256' }), b64url(payload), 'c2lnbmF0dX
 
 const GOOD = () => ({
   CANDIDATE_TOKEN_KID: 'd1-2026-10',
-  CANDIDATE_TOKEN_PUBLIC_JWK: JSON.stringify(key('d1-2026-10')),
+  CANDIDATE_TOKEN_PUBLIC_JWK: JSON.stringify([key('d1-2026-10')]),
   SUPABASE_STAGING_URL: 'https://example-ref.supabase.co',
   SUPABASE_STAGING_PUBLISHABLE_KEY: 'sb_publishable_synthetic',
 });
@@ -31,12 +33,12 @@ describe('REQUIRED_VARS', () => {
 });
 
 describe('parseJwkSet', () => {
-  it('reads one JWK, a list of JWKs and a {keys} set', () => {
-    expect(parseJwkSet(JSON.stringify(key('a')))).toEqual({ keys: [key('a')] });
+  it('reads a JSON array of one JWK, or two during rotation, in order', () => {
+    expect(parseJwkSet(JSON.stringify([key('a')]))).toEqual({ keys: [key('a')] });
     expect(parseJwkSet(JSON.stringify([key('a'), key('b')]))).toEqual({
       keys: [key('a'), key('b')],
     });
-    expect(parseJwkSet(JSON.stringify({ keys: [key('a')] }))).toEqual({ keys: [key('a')] });
+    expect(parseJwkSet(` [\n ${JSON.stringify(key('a'))}\n] `)).toEqual({ keys: [key('a')] });
   });
 
   it.each([
@@ -45,11 +47,25 @@ describe('parseJwkSet', () => {
     ['null', 'null'],
     ['a number', '1'],
     ['an empty list', '[]'],
-    ['an empty set', '{"keys":[]}'],
     ['three keys', JSON.stringify([key('a'), key('b'), key('c')])],
     ['a list entry that is not an object', JSON.stringify([key('a'), 'x'])],
+    ['a list entry that is null', JSON.stringify([key('a'), null])],
+    ['a list entry that is a list', JSON.stringify([[key('a')]])],
   ])('rejects %s', (_label, text) => {
     expect(parseJwkSet(text)).toHaveProperty('error');
+  });
+
+  // Lead decision 2026-10-16: one shape only. A bare JWK object and a {"keys":[...]} set are
+  // refused, whatever they hold, with a message that names the shape and never the value.
+  it.each([
+    ['a bare JWK object', JSON.stringify(key('d1-2026-10'))],
+    ['a {keys} set', JSON.stringify({ keys: [key('d1-2026-10')] })],
+    ['an empty {keys} set', '{"keys":[]}'],
+    ['an empty object', '{}'],
+  ])('refuses %s: it must be a JSON array', (_label, text) => {
+    const r = parseJwkSet(text);
+    expect(r).toEqual({ error: expect.stringMatching(/must be a JSON array/) });
+    expect(r.error).not.toMatch(/d1-2026-10|synthetic/);
   });
 });
 
@@ -58,10 +74,29 @@ describe('checkDeployVars', () => {
     expect(checkDeployVars(GOOD())).toEqual([]);
   });
 
-  it('passes two keys during rotation when the kid names one of them', () => {
+  it('passes two keys during rotation when the kid names the first (current) one', () => {
+    const env = GOOD();
+    env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify([key('d1-2026-10'), key('d1-2026-09')]);
+    expect(checkDeployVars(env)).toEqual([]);
+  });
+
+  it('fails two keys when the kid names the second (previous) one: the signing key comes first', () => {
     const env = GOOD();
     env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify([key('d1-2026-09'), key('d1-2026-10')]);
-    expect(checkDeployVars(env)).toEqual([]);
+    const m = checkDeployVars(env).join('\n');
+    expect(m).toMatch(/CANDIDATE_TOKEN_KID: .*first/);
+    expect(m).not.toMatch(/d1-2026-09|d1-2026-10/);
+  });
+
+  it.each([
+    ['a bare JWK object', () => JSON.stringify(key('d1-2026-10'))],
+    ['a {keys} set', () => JSON.stringify({ keys: [key('d1-2026-10')] })],
+  ])('fails %s, without printing it', (_label, text) => {
+    const env = GOOD();
+    env.CANDIDATE_TOKEN_PUBLIC_JWK = text();
+    const m = checkDeployVars(env).join('\n');
+    expect(m).toMatch(/CANDIDATE_TOKEN_PUBLIC_JWK: must be a JSON array/);
+    expect(m).not.toMatch(/d1-2026-10|synthetic|EC|P-256/);
   });
 
   it.each(REQUIRED_VARS)('fails when %s is missing', (name) => {
@@ -103,20 +138,28 @@ describe('checkDeployVars', () => {
     }
   });
 
-  it('fails the single-key and {keys} forms with a d member too', () => {
+  it('fails a d member on the first (signing) key too', () => {
+    const env = GOOD();
+    env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify([key('d1-2026-10', { d: 'x' })]);
+    expect(checkDeployVars(env).join('\n')).toMatch(/key 0 .*private member "d"/);
+  });
+
+  it('fails a bare object or a {keys} set even when it holds a private key (refused before reading it)', () => {
     for (const text of [
-      JSON.stringify(key('d1-2026-10', { d: 'x' })),
-      JSON.stringify({ keys: [key('d1-2026-10', { d: 'x' })] }),
+      JSON.stringify(key('d1-2026-10', { d: 'private-marker' })),
+      JSON.stringify({ keys: [key('d1-2026-10', { d: 'private-marker' })] }),
     ]) {
       const env = GOOD();
       env.CANDIDATE_TOKEN_PUBLIC_JWK = text;
-      expect(checkDeployVars(env).join('\n')).toMatch(/private member "d"/);
+      const m = checkDeployVars(env).join('\n');
+      expect(m).toMatch(/must be a JSON array/);
+      expect(m).not.toMatch(/private-marker/);
     }
   });
 
-  it.each(['p', 'q', 'dp', 'dq', 'qi', 'k'])('fails the private member %s', (member) => {
+  it.each(['p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'])('fails the private member %s', (member) => {
     const env = GOOD();
-    env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify(key('d1-2026-10', { [member]: 'x' }));
+    env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify([key('d1-2026-10', { [member]: 'x' })]);
     expect(checkDeployVars(env).join('\n')).toMatch(new RegExp(`private member "${member}"`));
   });
 
@@ -161,9 +204,9 @@ describe('checkDeployVars', () => {
 
   it('never prints a value in any violation', () => {
     const env = GOOD();
-    env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify(
+    env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify([
       key('kid-secret-marker', { d: 'private-marker' }),
-    );
+    ]);
     env.CANDIDATE_TOKEN_KID = 'other-kid-marker';
     env.SUPABASE_STAGING_URL = 'http://url-marker.example';
     const m = checkDeployVars(env).join('\n');
@@ -184,7 +227,7 @@ describe('main', () => {
 
   it('exits 1 and prints each violation on stderr', () => {
     const env = GOOD();
-    env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify(key('d1-2026-10', { d: 'x' }));
+    env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify([key('d1-2026-10', { d: 'x' })]);
     const errs = [];
     const outs = [];
     expect(main({ env, out: (l) => outs.push(l), err: (l) => errs.push(l) })).toBe(1);

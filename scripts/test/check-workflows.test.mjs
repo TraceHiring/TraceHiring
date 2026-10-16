@@ -7,9 +7,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEPLOY_IF,
   BUILD_ONLY_ENV,
+  DEPLOY_GUARD_ENV,
   ENV_ALLOW_LIST,
   PUBLIC_DEPLOY_ENV,
   REQUIRED_JOBS,
+  WORKER_BUILD_CMD,
+  WORKER_DEPLOY_CMD,
   YamlError,
   checkAction,
   checkWorkflow,
@@ -17,6 +20,7 @@ import {
   runChecks,
   secretRefs,
 } from '../check-workflows.mjs';
+import { REQUIRED_VARS } from '../check-deploy-vars.mjs';
 import { cleanupTempDirs, makeTempDir, writeFiles } from './fixtures/checks/temp-repo.mjs';
 
 afterEach(cleanupTempDirs);
@@ -672,6 +676,8 @@ describe('checkWorkflow', () => {
           // d1 AT-D22: the Sentry DSNs (public vars): the recruiter build and the jobs/api deploy
           'VITE_SENTRY_DSN',
           'SENTRY_DSN_WORKERS',
+          // d1 §7.1 check-headers: the recruiter CSP api origin, on the staging build only
+          'VITE_API_ORIGIN',
           // d1 §7.1 (review F4): the candidate-token public values, passed to the api and edge
           // Workers with --var from GitHub variables (never secrets) and checked first
           'CANDIDATE_TOKEN_KID',
@@ -1178,12 +1184,52 @@ describe('checkWorkflow', () => {
   });
 
   describe('VITE_SUPABASE_* only on the deploy build step (m0b §2.7)', () => {
-    it('lists exactly the three build variables and their public vars sources (m0b §2.7, d1 AT-D22)', () => {
+    it('lists exactly the four build variables and their public vars sources (m0b §2.7, d1 AT-D22, d1 §7.1 recruiter CSP)', () => {
       expect(BUILD_ONLY_ENV).toEqual({
         VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
         VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
         VITE_SENTRY_DSN: '${{ vars.VITE_SENTRY_DSN }}',
+        VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
       });
+      for (const name of Object.keys(BUILD_ONLY_ENV)) expect(ENV_ALLOW_LIST).toContain(name);
+    });
+
+    it.each([
+      ['a literal', 'https://trace-api-staging.example.workers.dev'],
+      ['a secret', '${{ secrets.API_STAGING_ORIGIN }}'],
+      ['another variable', '${{ vars.SUPABASE_STAGING_URL }}'],
+    ])(
+      'rejects VITE_API_ORIGIN as %s on the build step (vars.API_STAGING_ORIGIN only)',
+      (_l, value) => {
+        const d = doc();
+        d.jobs['deploy-staging'].steps[2].env.VITE_API_ORIGIN = value;
+        expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/VITE_API_ORIGIN must be exactly/);
+      },
+    );
+
+    it.each([
+      ['workflow env', (d) => (d.env.VITE_API_ORIGIN = '${{ vars.API_STAGING_ORIGIN }}')],
+      [
+        'a deploy step that does not build',
+        (d) =>
+          (d.jobs['deploy-staging'].steps[3].env = {
+            VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
+          }),
+      ],
+      [
+        'a static step',
+        (d) => (d.jobs.static.steps[2].env = { VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}' }),
+      ],
+    ])('rejects VITE_API_ORIGIN in %s', (_label, mutate) => {
+      const d = doc();
+      mutate(d);
+      expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/VITE_API_ORIGIN may be set only/);
+    });
+
+    it('accepts VITE_API_ORIGIN from vars.API_STAGING_ORIGIN on the deploy build step', () => {
+      const d = doc();
+      d.jobs['deploy-staging'].steps[2].env.VITE_API_ORIGIN = '${{ vars.API_STAGING_ORIGIN }}';
+      expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
     });
 
     it('allows the Workers Sentry DSN variable (d1 AT-D22: a public var, passed to jobs and api only)', () => {
@@ -1349,7 +1395,7 @@ describe('deploy-staging chain (d1 §7.1)', () => {
     const d = doc();
     expect(checkWorkflow(d, 'ci.yml', ctx)).toEqual([]);
     const dirs = stepsOf(d)
-      .filter((s) => /wrangler deploy/.test(s.run ?? ''))
+      .filter((s) => /wrangler deploy/.test(s.run ?? '') && !/--dry-run/.test(s.run))
       .map((s) => s['working-directory']);
     expect(dirs).toEqual(['services/api', 'workers/jobs', 'workers/edge']);
   });
@@ -1708,6 +1754,124 @@ describe('deploy-staging chain (d1 §7.1)', () => {
       ).toMatch(/only deploy-staging may use an environment/);
     });
   });
+
+  // m0-foundations §7.2 step 5 (S3B-1): the build writes each Worker's staging bundle into dist/,
+  // scan-dist scans it, and each Worker deploy uploads exactly that dist/index.js with --no-bundle,
+  // so the deployed bytes are the scanned bytes. No step may re-bundle.
+  describe('the scanned bundle is what ships (S3B-1)', () => {
+    const BUILD = 'Build';
+    const SCAN = 'Scan the build output';
+    const buildStep = (d) => stepsOf(d)[2];
+
+    it('pins the build and deploy command forms, and the guard variables to check-deploy-vars', () => {
+      expect(WORKER_BUILD_CMD).toBe(
+        'pnpm exec wrangler deploy --dry-run --env staging --outdir dist',
+      );
+      expect(WORKER_DEPLOY_CMD).toBe(
+        'pnpm exec wrangler deploy dist/index.js --no-bundle --env staging',
+      );
+      expect([...DEPLOY_GUARD_ENV]).toEqual([...REQUIRED_VARS]);
+      expect(buildStep(doc()).run).toContain(WORKER_BUILD_CMD);
+      expect(BUILD).toBe('Build');
+    });
+
+    it.each([
+      ['without --no-bundle', (r) => r.replace(' --no-bundle', '')],
+      ['re-bundling from wrangler.jsonc main', (r) => r.replace(' dist/index.js --no-bundle', '')],
+      ['from the source entry', (r) => r.replace('dist/index.js', 'src/index.ts')],
+      ['with --bundle after the vars', (r) => r.replace(/"\n?$/, '" --bundle\n')],
+      ['with a --define', (r) => r.replace('--env staging', '--env staging --define X:1')],
+      ['with --outdir', (r) => r.replace('--env staging', '--env staging --outdir other')],
+      [
+        'with --no-bundle after the env',
+        (r) => r.replace(' --no-bundle --env staging', ' --env staging --no-bundle'),
+      ],
+      ['through npx', (r) => r.replace('pnpm exec wrangler', 'npx wrangler')],
+    ])('rejects each Worker deploy %s', (_label, edit) => {
+      for (const name of [API, JOBS, EDGE]) {
+        expect(
+          check((d) => {
+            const s = find(d, name);
+            const before = s.run;
+            s.run = edit(s.run);
+            if (s.run === before) throw new Error(`no edit on ${name}`);
+          }),
+          name,
+        ).toMatch(/--no-bundle/);
+      }
+    });
+
+    it('rejects two wrangler deploy commands in one Worker deploy step', () => {
+      expect(
+        check((d) => {
+          const s = find(d, JOBS);
+          s.run += `${WORKER_DEPLOY_CMD} --var "VERSION:$GITHUB_SHA"\n`;
+        }),
+      ).toMatch(/exactly one wrangler deploy/);
+    });
+
+    it('rejects a real deploy next to the dry-run build, whatever its form', () => {
+      for (const extra of [
+        'pnpm exec wrangler deploy --env staging',
+        `${WORKER_DEPLOY_CMD} --var "VERSION:$GITHUB_SHA"`,
+      ]) {
+        expect(
+          check((d) => (buildStep(d).run += `${extra}\n`)),
+          extra,
+        ).toMatch(/--no-bundle|dry-run|services\/api, workers\/jobs, workers\/edge/);
+      }
+    });
+
+    it.each([
+      ['without --env staging', (r) => r.replace(' --env staging', '')],
+      ['for production', (r) => r.replace('--env staging', '--env production')],
+      ['into another directory', (r) => r.replace('--outdir dist', '--outdir build')],
+      ['with a --define', (r) => r.replace('--outdir dist', '--outdir dist --define X:1')],
+      ['with an --alias', (r) => r.replace('--dry-run', '--dry-run --alias a:b')],
+    ])('rejects the dry-run build %s', (_label, edit) => {
+      expect(
+        check((d) => {
+          const s = buildStep(d);
+          s.run = edit(s.run);
+        }),
+      ).toMatch(/dry-run/);
+    });
+
+    it('requires the staging dry-run build, then scan-dist, before the first Worker deploy', () => {
+      expect(
+        check((d) => {
+          const s = buildStep(d);
+          s.run = 'pnpm build\n';
+        }),
+      ).toMatch(/dry-run.*before.*scan-dist/);
+      expect(
+        check((d) => (d.jobs['deploy-staging'].steps = stepsOf(d).filter((s) => s.name !== SCAN))),
+      ).toMatch(/scan-dist/);
+      expect(check((d) => swap(d, SCAN, API))).toMatch(/scan-dist.*before the first Worker deploy/);
+      expect(check((d) => (find(d, SCAN).run = 'node scripts/scan-dist.mjs || true'))).toMatch(
+        /scan-dist/,
+      );
+      // A dry-run after the scan rebuilds dist/ with bytes that were never scanned.
+      expect(
+        check((d) => {
+          const s = find(d, EDGE);
+          s.run = `(cd "$dir" && ${WORKER_BUILD_CMD})\n${s.run}`;
+        }),
+      ).toMatch(/dry-run.*before.*scan-dist/);
+    });
+
+    it('never runs wrangler versions (an upload re-bundles) in deploy-staging', () => {
+      for (const extra of [
+        'pnpm exec wrangler versions upload --env staging',
+        'pnpm exec wrangler versions deploy',
+      ]) {
+        expect(
+          check((d) => (find(d, EDGE).run += `${extra}\n`)),
+          extra,
+        ).toMatch(/wrangler versions/);
+      }
+    });
+  });
 });
 
 describe('the real ci.yml deploy chain (d1 §7.1)', () => {
@@ -1783,7 +1947,11 @@ const BUILD_STEP = [
   '      - env:',
   '          VITE_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}',
   '          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
-  '        run: pnpm build',
+  '        run: |',
+  '          pnpm build',
+  '          for dir in workers/edge workers/jobs services/api; do',
+  '            (cd "$dir" && pnpm exec wrangler deploy --dry-run --env staging --outdir dist)',
+  '          done',
 ].join('\n');
 
 describe('runChecks over a fixture repository', () => {
