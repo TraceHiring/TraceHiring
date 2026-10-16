@@ -7,7 +7,14 @@
 import { describe, expect, it } from 'vitest';
 import { REQUIRED_VARS, checkDeployVars, main, parseJwkSet } from '../check-deploy-vars.mjs';
 
-const PUBLIC_KEY = { kty: 'EC', crv: 'P-256', x: 'synthetic-x', y: 'synthetic-y' };
+const PUBLIC_KEY = {
+  kty: 'EC',
+  crv: 'P-256',
+  x: 'synthetic-x',
+  y: 'synthetic-y',
+  alg: 'ES256',
+  use: 'sig',
+};
 const key = (kid, extra = {}) => ({ ...PUBLIC_KEY, kid, ...extra });
 const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
 // Built at run time so no JWT-shaped literal sits in the repository.
@@ -18,15 +25,17 @@ const GOOD = () => ({
   CANDIDATE_TOKEN_PUBLIC_JWK: JSON.stringify([key('d1-2026-10')]),
   SUPABASE_STAGING_URL: 'https://example-ref.supabase.co',
   SUPABASE_STAGING_PUBLISHABLE_KEY: 'sb_publishable_synthetic',
+  API_STAGING_ORIGIN: 'https://trace-api-staging.abhayraj.workers.dev',
 });
 
 describe('REQUIRED_VARS', () => {
-  it('is the four values the deploy cannot work without', () => {
+  it('is the five values the deploy cannot work without', () => {
     expect([...REQUIRED_VARS]).toEqual([
       'CANDIDATE_TOKEN_KID',
       'CANDIDATE_TOKEN_PUBLIC_JWK',
       'SUPABASE_STAGING_URL',
       'SUPABASE_STAGING_PUBLISHABLE_KEY',
+      'API_STAGING_ORIGIN',
     ]);
     expect(Object.isFrozen(REQUIRED_VARS)).toBe(true);
   });
@@ -211,6 +220,71 @@ describe('checkDeployVars', () => {
     env.SUPABASE_STAGING_URL = 'http://url-marker.example';
     const m = checkDeployVars(env).join('\n');
     expect(m).not.toMatch(/private-marker|url-marker|other-kid-marker|kid-secret-marker/);
+  });
+
+  // Security review S3 (docs/reviews/D1-security-review-wave0-rest.md): an allow-list, not only a
+  // deny-list of private members.
+  it.each([
+    ['a jku member', { jku: 'https://keys.example.test/jwks' }],
+    ['an x5u member', { x5u: 'https://keys.example.test/cert' }],
+    ['a nested private object', { priv: { d: 'private-marker' } }],
+  ])('fails a key with %s (only kty, crv, x, y, kid, alg, use are allowed)', (_label, extra) => {
+    const env = GOOD();
+    env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify([key('d1-2026-10', extra)]);
+    const m = checkDeployVars(env).join('\n');
+    expect(m).toMatch(/CANDIDATE_TOKEN_PUBLIC_JWK: key 0 has a member outside/);
+    expect(m).not.toMatch(/private-marker|keys\.example/);
+  });
+
+  it.each([
+    ['kty RSA', { kty: 'RSA' }],
+    ['crv P-384', { crv: 'P-384' }],
+    ['alg RS256', { alg: 'RS256' }],
+    ['no alg', { alg: undefined }],
+    ['use enc', { use: 'enc' }],
+    ['an empty x', { x: '' }],
+    ['a numeric y', { y: 7 }],
+  ])('fails a key with %s (an ES256 P-256 signing key only)', (_label, extra) => {
+    const env = GOOD();
+    env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify([key('d1-2026-10', extra)]);
+    expect(checkDeployVars(env).join('\n')).toMatch(/key 0 is not an ES256 P-256 signing key/);
+  });
+
+  it.each(['a', 'd1-2026-13', 'd1-26-10', 'D1-2026-10'])(
+    'fails the kid %s, which is not d1-YYYY-MM',
+    (kid) => {
+      const env = GOOD();
+      env.CANDIDATE_TOKEN_KID = kid;
+      env.CANDIDATE_TOKEN_PUBLIC_JWK = JSON.stringify([key(kid)]);
+      const m = checkDeployVars(env).join('\n');
+      expect(m).toMatch(/key 0 .*kid/);
+      expect(m).toMatch(/CANDIDATE_TOKEN_KID: must be exactly d1-YYYY-MM/);
+    },
+  );
+
+  it.each([' d1-2026-10', 'd1-2026-10 ', 'd1-2026-10\n'])(
+    'fails a CANDIDATE_TOKEN_KID with surrounding whitespace (%j), which --var would deploy as is',
+    (kid) => {
+      const env = GOOD();
+      env.CANDIDATE_TOKEN_KID = kid;
+      expect(checkDeployVars(env).join('\n')).toMatch(
+        /CANDIDATE_TOKEN_KID: must be exactly d1-YYYY-MM/,
+      );
+    },
+  );
+
+  // Security review S8: the recruiter build reads it; a wrong label would aim bearer traffic elsewhere.
+  it.each([
+    ['another account label', 'https://trace-api-staging.other.workers.dev'],
+    ['http', 'http://trace-api-staging.abhayraj.workers.dev'],
+    ['a trailing slash', 'https://trace-api-staging.abhayraj.workers.dev/'],
+    ['the edge Worker', 'https://trace-edge-staging.abhayraj.workers.dev'],
+  ])('fails an API_STAGING_ORIGIN that is %s, without printing it', (_label, value) => {
+    const env = GOOD();
+    env.API_STAGING_ORIGIN = value;
+    const m = checkDeployVars(env).join('\n');
+    expect(m).toMatch(/API_STAGING_ORIGIN: must be exactly/);
+    expect(m).not.toContain(value);
   });
 
   it('reports every problem, not only the first', () => {

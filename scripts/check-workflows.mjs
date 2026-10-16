@@ -602,6 +602,8 @@ export const PUBLIC_DEPLOY_ENV = Object.freeze({
   SENTRY_DSN_WORKERS: '${{ vars.SENTRY_DSN_WORKERS }}',
   SUPABASE_STAGING_URL: '${{ vars.SUPABASE_STAGING_URL }}',
   SUPABASE_STAGING_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+  // Security review S8: check-deploy-vars pins it to the exact staging api origin.
+  API_STAGING_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
 });
 
 /** What the guard step must see: exactly the variables scripts/check-deploy-vars.mjs requires. */
@@ -803,6 +805,8 @@ export const ENV_ALLOW_LIST = Object.freeze([
   'VITE_SENTRY_DSN',
   // d1 §7.1 check-headers: the recruiter CSP api origin, the deploy-staging build step only.
   'VITE_API_ORIGIN',
+  // The check-deploy-vars step reads the same public variable (security review S8).
+  'API_STAGING_ORIGIN',
   // d1 AT-D22 (specs/d1-demo-slice.md §7.1, L-24): the Workers deploy step passes it to jobs and api
   // only, as a var (a DSN is public, not a secret).
   'SENTRY_DSN_WORKERS',
@@ -923,6 +927,13 @@ const GITHUB_PATH_LINE_RE = /^\s*echo "\$RUNNER_TEMP\/gitleaks" >> "\$GITHUB_PAT
  */
 function checkRun(run, file, where, out) {
   if (typeof run !== 'string') return;
+  // Security review S7: GitHub expands ${{ }} into the script text before bash runs it, so an
+  // attacker-chosen value (a branch name, a PR title) would become code. Values go through env:.
+  if (run.includes('${{')) {
+    out.push(
+      v(file, where, 'run: may not contain a ${{ }} expression; pass the value through env:'),
+    );
+  }
   const text = run.replace(/\\\r?\n/g, '');
   // An empty $'' or $"" inside a word disappears too (re-review of dbb20c7, Low).
   const unquoted = text.replace(/\$(?=["'])/g, '').replace(/["'\\]/g, '');

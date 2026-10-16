@@ -86,12 +86,13 @@ const EXPECTED_ENV = {
   // BUILD_ONLY_ENV pins the list and its sources).
   built: { ...BUILD_ONLY_ENV },
   output_scanned: {},
-  // F4: exactly the four values check-deploy-vars requires, all public GitHub variables.
+  // F4 and S8: exactly the five values check-deploy-vars requires, all public GitHub variables.
   vars_checked: {
     CANDIDATE_TOKEN_KID: V('CANDIDATE_TOKEN_KID'),
     CANDIDATE_TOKEN_PUBLIC_JWK: V('CANDIDATE_TOKEN_PUBLIC_JWK'),
     SUPABASE_STAGING_URL: V('SUPABASE_STAGING_URL'),
     SUPABASE_STAGING_PUBLISHABLE_KEY: V('SUPABASE_STAGING_PUBLISHABLE_KEY'),
+    API_STAGING_ORIGIN: V('API_STAGING_ORIGIN'),
   },
   migrated: { SUPABASE_STAGING_DB_URL: S('SUPABASE_STAGING_DB_URL') },
   catalog_checked: { SUPABASE_STAGING_DB_URL: S('SUPABASE_STAGING_DB_URL') },

@@ -10,7 +10,11 @@
 //   - CANDIDATE_TOKEN_KID is not the kid of the FIRST key in that array (the current signing key comes
 //     first; the second, during rotation, is the previous key, spec §4.3),
 //   - SUPABASE_STAGING_URL is not an https URL,
-//   - SUPABASE_STAGING_PUBLISHABLE_KEY is a secret key (`sb_secret_…` or a service_role JWT).
+//   - SUPABASE_STAGING_PUBLISHABLE_KEY is a secret key (`sb_secret_…` or a service_role JWT),
+//   - API_STAGING_ORIGIN is not exactly the staging api Worker origin (the recruiter CSP reads it).
+// Security review S3/S8 (docs/reviews/D1-security-review-wave0-rest.md): every key is allow-listed
+// (only kty, crv, x, y, kid, alg, use; an ES256 P-256 signing key; kid d1-YYYY-MM), and
+// CANDIDATE_TOKEN_KID must be exactly d1-YYYY-MM with no surrounding whitespace (--var deploys it as is).
 // A violation names the variable and the problem and never prints a value (a value that fails here
 // may be a secret). It holds no secret itself and calls nothing: it only reads process.env.
 import { isEntryPoint } from './lib/cli.mjs';
@@ -21,7 +25,19 @@ export const REQUIRED_VARS = Object.freeze([
   'CANDIDATE_TOKEN_PUBLIC_JWK',
   'SUPABASE_STAGING_URL',
   'SUPABASE_STAGING_PUBLISHABLE_KEY',
+  'API_STAGING_ORIGIN',
 ]);
+
+/** The staging api Worker origin (H4 subdomain, spec §7.1): the only value API_STAGING_ORIGIN may hold. */
+export const API_STAGING_ORIGIN = 'https://trace-api-staging.abhayraj.workers.dev';
+
+/** The only members a public candidate-token key may carry (as scripts/ops/candidate-token-key.mjs writes). */
+const PUBLIC_MEMBERS = Object.freeze(['kty', 'crv', 'x', 'y', 'kid', 'alg', 'use']);
+
+/** Spec §4.3: `d1-YYYY-MM`, a real month. */
+const KID_RE = /^d1-\d{4}-(?:0[1-9]|1[0-2])$/;
+
+const isText = (x) => typeof x === 'string' && x !== '';
 
 /** JWK members that only a private or symmetric key has (RFC 7517/7518). */
 const PRIVATE_MEMBERS = Object.freeze(['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k']);
@@ -73,8 +89,10 @@ export function checkDeployVars(env) {
       kids = [];
       let sound = true;
       parsed.keys.forEach((key, i) => {
-        if (typeof key.kid !== 'string' || key.kid.trim() === '') {
-          out.push(`CANDIDATE_TOKEN_PUBLIC_JWK: key ${i} has no kid (every key needs one)`);
+        if (typeof key.kid !== 'string' || !KID_RE.test(key.kid)) {
+          out.push(
+            `CANDIDATE_TOKEN_PUBLIC_JWK: key ${i} has no kid of the form d1-YYYY-MM (every key needs one)`,
+          );
           sound = false;
         } else if (kids.includes(key.kid)) {
           out.push(`CANDIDATE_TOKEN_PUBLIC_JWK: key ${i} has a duplicate kid`);
@@ -88,14 +106,39 @@ export function checkDeployVars(env) {
             sound = false;
           }
         }
+        if (
+          Object.keys(key).some((m) => !PUBLIC_MEMBERS.includes(m) && !PRIVATE_MEMBERS.includes(m))
+        ) {
+          out.push(
+            `CANDIDATE_TOKEN_PUBLIC_JWK: key ${i} has a member outside ${PUBLIC_MEMBERS.join(', ')}`,
+          );
+          sound = false;
+        }
+        if (
+          key.kty !== 'EC' ||
+          key.crv !== 'P-256' ||
+          key.alg !== 'ES256' ||
+          key.use !== 'sig' ||
+          !isText(key.x) ||
+          !isText(key.y)
+        ) {
+          out.push(
+            `CANDIDATE_TOKEN_PUBLIC_JWK: key ${i} is not an ES256 P-256 signing key (kty EC, crv P-256, alg ES256, use sig, x and y)`,
+          );
+          sound = false;
+        }
       });
       if (!sound) kids = null;
     }
   }
 
   // Only the current kid signs (spec §4.3), and it is the first key of the array.
-  if (kids !== null && !empty.has('CANDIDATE_TOKEN_KID')) {
-    const kid = raw('CANDIDATE_TOKEN_KID').trim();
+  const kid = raw('CANDIDATE_TOKEN_KID');
+  const kidWellFormed = KID_RE.test(kid);
+  if (!empty.has('CANDIDATE_TOKEN_KID') && !kidWellFormed) {
+    out.push('CANDIDATE_TOKEN_KID: must be exactly d1-YYYY-MM, with no surrounding whitespace');
+  }
+  if (kids !== null && !empty.has('CANDIDATE_TOKEN_KID') && kidWellFormed) {
     if (!kids.includes(kid)) {
       out.push('CANDIDATE_TOKEN_KID: is not the kid of any key in CANDIDATE_TOKEN_PUBLIC_JWK');
     } else if (kids[0] !== kid) {
@@ -122,6 +165,9 @@ export function checkDeployVars(env) {
       out.push('SUPABASE_STAGING_PUBLISHABLE_KEY: is a secret key, not a publishable one');
     else if (jwtRole(key) === 'service_role')
       out.push('SUPABASE_STAGING_PUBLISHABLE_KEY: is a service_role key, not a publishable one');
+  }
+  if (!empty.has('API_STAGING_ORIGIN') && raw('API_STAGING_ORIGIN') !== API_STAGING_ORIGIN) {
+    out.push(`API_STAGING_ORIGIN: must be exactly ${API_STAGING_ORIGIN}`);
   }
   return out;
 }

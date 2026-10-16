@@ -408,6 +408,18 @@ describe('checkWorkflow', () => {
     expect(m).toMatch(/jobs\.security.*environment/);
   });
 
+  // Security review S7 (docs/reviews/D1-security-review-wave0-rest.md): a ${{ }} expression in run
+  // text is expanded into the script before bash parses it (script injection, e.g. through a branch
+  // name); a value must reach a script through env: instead.
+  it('rejects a ${{ }} expression in any run: text', () => {
+    const d = doc();
+    d.jobs.rls.steps[2].run = 'echo "${{ github.ref_name }}"';
+    expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/jobs\.rls\.steps\[2\].*\$\{\{/);
+    const ok = doc();
+    ok.jobs.rls.steps[2].run = 'echo "$GITHUB_REF_NAME"';
+    expect(checkWorkflow(ok, 'ci.yml', ctx)).toEqual([]);
+  });
+
   it('rejects continue-on-error on a job or a step', () => {
     const d = doc();
     d.jobs.static['continue-on-error'] = true;
@@ -678,6 +690,8 @@ describe('checkWorkflow', () => {
           'SENTRY_DSN_WORKERS',
           // d1 §7.1 check-headers: the recruiter CSP api origin, on the staging build only
           'VITE_API_ORIGIN',
+          // security review S8: the same origin, read by the check-deploy-vars step
+          'API_STAGING_ORIGIN',
           // d1 §7.1 (review F4): the candidate-token public values, passed to the api and edge
           // Workers with --var from GitHub variables (never secrets) and checked first
           'CANDIDATE_TOKEN_KID',
@@ -911,7 +925,8 @@ describe('checkWorkflow', () => {
         'export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/out.ndjson"',
         'echo "$PATH" "${PATH}" "${#NODE_OPTIONS}" "${NODE_OPTIONS:-none}" "${!RUNNER_TEMP}"',
         'MY_PATH=./x node_modules/.bin/tsc --env staging',
-        'node scripts/smoke-staging.mjs --sha "$GITHUB_SHA" ${{ github.sha }}',
+        // (no ${{ }} here: run text may not hold an expression, security review S7)
+        'node scripts/smoke-staging.mjs --sha "$GITHUB_SHA"',
         // bash names are case-sensitive: these lower-case names are not the denied ones.
         'bash_env=x path=y pnpm test',
         'echo "${PATH[0]}" "${NODE_OPTIONS:+set}" "${#PATH[@]}" >> "$GITHUB_OUTPUT"',
@@ -1600,13 +1615,14 @@ describe('deploy-staging chain (d1 §7.1)', () => {
       }
     });
 
-    it('lists the five public deploy variables and their vars sources', () => {
+    it('lists the six public deploy variables and their vars sources', () => {
       expect(PUBLIC_DEPLOY_ENV).toEqual({
         CANDIDATE_TOKEN_KID: '${{ vars.CANDIDATE_TOKEN_KID }}',
         CANDIDATE_TOKEN_PUBLIC_JWK: '${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}',
         SENTRY_DSN_WORKERS: '${{ vars.SENTRY_DSN_WORKERS }}',
         SUPABASE_STAGING_URL: '${{ vars.SUPABASE_STAGING_URL }}',
         SUPABASE_STAGING_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+        API_STAGING_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
       });
       expect(Object.isFrozen(PUBLIC_DEPLOY_ENV)).toBe(true);
     });
