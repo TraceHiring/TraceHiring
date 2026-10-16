@@ -44,12 +44,11 @@ function guardParseJwkSet(text) {
   } catch {
     return { error: 'is not valid JSON' };
   }
-  let keys;
-  if (Array.isArray(value)) keys = value;
-  else if (isObj(value) && Object.hasOwn(value, 'keys')) keys = value.keys;
-  else if (isObj(value)) keys = [value];
-  else return { error: 'must be one JWK object or a list of JWK objects' };
-  if (!Array.isArray(keys) || keys.length < 1 || keys.length > 2)
+  // Lead decision 2026-10-16: the value is always a list of one or two keys, the signing key first; a bare
+  // object or a { keys } set is refused (the guard rework narrows b0d2c8c's accepted shapes to this one).
+  if (!Array.isArray(value)) return { error: 'must be a JSON list of one or two JWK objects' };
+  const keys = value;
+  if (keys.length < 1 || keys.length > 2)
     return { error: 'must hold one key, or two during rotation' };
   if (!keys.every(isObj)) return { error: 'must hold JWK objects only' };
   return { keys };
@@ -79,6 +78,7 @@ function guardViolations(kidVar, jwkVar) {
     }
   });
   if (sound && !kids.includes(kidVar.trim())) out.push('CANDIDATE_TOKEN_KID names no key');
+  else if (sound && kids[0] !== kidVar.trim()) out.push('CANDIDATE_TOKEN_KID is not the first key');
   return out;
 }
 
@@ -128,13 +128,16 @@ async function generate(dir, kid = KID, more = [], extra = {}) {
   expect(r.stderr, 'stderr of a good run').toBe('');
   expect(r.code).toBe(0);
   const n = names(kid);
+  // The public value is always a list, the new key first (lead decision 2026-10-16); `pub` is that key.
+  const pubValue = readJson(join(dir, n.pub));
   return {
     ...r,
     privFile: join(dir, n.priv),
     pubFile: join(dir, n.pub),
     priv: readJson(join(dir, n.priv)),
     pubText: readFileSync(join(dir, n.pub), 'utf8'),
-    pub: readJson(join(dir, n.pub)),
+    pubValue,
+    pub: Array.isArray(pubValue) ? pubValue[0] : undefined,
   };
 }
 
@@ -233,8 +236,15 @@ describe('the generated key pair', () => {
     const dir = tempDir();
     const g = await generate(dir);
     expect(readdirSync(dir).sort()).toEqual([names(KID).priv, names(KID).pub].sort());
-    expect(g.pubText).toBe(JSON.stringify(g.pub)); // one compact line: it becomes a deploy variable value
+    expect(g.pubText).toBe(JSON.stringify(g.pubValue)); // one compact line: it becomes a deploy variable value
     expect(g.pubText).not.toMatch(/\s/);
+  });
+
+  it('writes the public value as a JSON list even for one key (one shape for the guard and the parsers)', async () => {
+    const g = await generate(tempDir());
+    expect(Array.isArray(g.pubValue)).toBe(true);
+    expect(g.pubValue).toEqual([g.pub]);
+    expect(g.pubText.startsWith('[{')).toBe(true);
   });
 
   it('has the documented members, and no others', async () => {
@@ -470,17 +480,18 @@ describe('--previous-public (rotation)', () => {
   it('merges the previous key after the new one and the guard accepts the set', async () => {
     const prev = await previous();
     const g = await generate(tempDir(), KID, ['--previous-public', prev.pubFile]);
-    expect(Array.isArray(g.pub)).toBe(true);
-    expect(g.pub.map((k) => k.kid)).toEqual([KID, PREV_KID]); // new first
-    expect(g.pub[1]).toEqual(prev.pub); // the previous key is carried over unchanged
-    expect(g.pubText).toBe(JSON.stringify(g.pub));
+    expect(Array.isArray(g.pubValue)).toBe(true);
+    expect(g.pubValue.map((k) => k.kid)).toEqual([KID, PREV_KID]); // new first
+    expect(g.pubValue[1]).toEqual(prev.pub); // the previous key is carried over unchanged
+    expect(g.pubText).toBe(JSON.stringify(g.pubValue));
     expect(guardViolations(KID, g.pubText)).toEqual([]);
-    for (const k of g.pub) for (const m of PRIVATE_MEMBERS) expect(Object.hasOwn(k, m)).toBe(false);
+    for (const k of g.pubValue)
+      for (const m of PRIVATE_MEMBERS) expect(Object.hasOwn(k, m)).toBe(false);
     // the private file holds the new key only, and the new key is the one that verifies
     expect(g.priv.kid).toBe(KID);
     expect(Object.keys(g.priv)).not.toContain('keys');
     const signKey = await subtle.importKey('jwk', g.priv, P256, false, ['sign']);
-    const verifyKey = await subtle.importKey('jwk', g.pub[0], P256, false, ['verify']);
+    const verifyKey = await subtle.importKey('jwk', g.pubValue[0], P256, false, ['verify']);
     const msg = new TextEncoder().encode('rotation');
     expect(await subtle.verify(ES256, verifyKey, await subtle.sign(ES256, signKey, msg), msg)).toBe(
       true,
@@ -500,7 +511,7 @@ describe('--previous-public (rotation)', () => {
       const file = join(dir, name);
       writeFileSync(file, JSON.stringify(body));
       const g = await generate(tempDir(), KID, ['--previous-public', file]);
-      expect(g.pub.map((k) => k.kid)).toEqual([KID, PREV_KID]);
+      expect(g.pubValue.map((k) => k.kid)).toEqual([KID, PREV_KID]);
     }
   });
 

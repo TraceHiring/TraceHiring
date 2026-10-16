@@ -7,8 +7,8 @@
 //   candidate-token-<kid>.private.jwk.json  {kty,crv,x,y,d,kid,alg:'ES256',use:'sig'}  mode 0600 on POSIX
 //       -> the api secret CANDIDATE_TOKEN_PRIVATE_JWK (`wrangler secret put`), then delete the file
 //   candidate-token-<kid>.public.json       the value of the GitHub variable CANDIDATE_TOKEN_PUBLIC_JWK:
-//       one public JWK {kty,crv,x,y,kid,alg,use}, or, with --previous-public, a JSON list [new, previous]
-//       (the new key first; scripts/check-deploy-vars.mjs accepts one key, or two during rotation)
+//       always a JSON list of public JWKs {kty,crv,x,y,kid,alg,use}: [new], or with --previous-public
+//       [new, previous] (the signing key first; scripts/check-deploy-vars.mjs accepts exactly this shape)
 // The key is made with WebCrypto (Node 22, no dependency). --out-dir must be outside every git working
 // tree (a private key must never be committable) and an existing file is never overwritten. The private
 // key is never printed: not to stdout, not to stderr, not in an error. Failures print a fixed message
@@ -324,8 +324,9 @@ export async function main({ argv, deps = realDeps() }) {
   }
   if (!ok) return fail(1, 'the generated key pair failed its self-test');
 
-  // One public key as a bare JWK; during rotation a list with the new key first.
-  const publicValue = previous.length === 0 ? jwks.publicJwk : [jwks.publicJwk, ...previous];
+  // Always a list (one shape for the deploy guard and the api/edge parsers; lead, 2026-10-16): the new key
+  // first, then the previous one during rotation.
+  const publicValue = [jwks.publicJwk, ...previous];
   const publicText = JSON.stringify(publicValue);
   // No trailing newline in either file: `gh variable set < file` and `wrangler secret put < file`
   // then read the exact value.

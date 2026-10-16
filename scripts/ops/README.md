@@ -78,12 +78,12 @@ token, capped at 3 hours (10 800 s). So the variable holds both public keys for 
      --previous-public ~/trace-keys/candidate-token-d1-2026-10.public.json
    ```
 
-   The new public file is then a JSON list: the new key first, the previous key second. The script refuses
+   The new public file is then a two-element JSON list: the new key first, the previous key second. The script refuses
    a previous key that has a private member, a repeated `kid`, and a result of more than two keys.
 2. Run the same three commands it prints (the `kid` variable now names the new key; the secret is the new
    private key), then deploy.
-3. After at least 3 hours, drop the old key: set `CANDIDATE_TOKEN_PUBLIC_JWK` to the first element of the
-   list only (the new key's own public JWK, which is public data), and deploy again.
+3. After at least 3 hours, drop the old key: set `CANDIDATE_TOKEN_PUBLIC_JWK` to a list holding only the
+   first element (`[<new key>]`, which is public data), and deploy again.
 4. Delete the new private file after `secret put`, as above.
 
 ### What the script guarantees
@@ -91,8 +91,9 @@ token, capped at 3 hours (10 800 s). So the variable holds both public keys for 
 - The key is made with WebCrypto in Node 22; there is no dependency. Before anything is written it signs a
   test message with the private JWK and checks it with the public JWK, so a broken pair is never saved.
 - The private JWK is `{kty, crv, x, y, d, kid, alg: "ES256", use: "sig"}`. The public JWK is the same without
-  `d`. With `--previous-public` the public value is a list `[new, previous]`; without it, one bare JWK.
-  The staging deploy's variable check (`scripts/check-deploy-vars.mjs`, part of the deploy rework) accepts
-  one key or a list of one or two, and fails the deploy if the public variable holds a private member.
+  `d`. The public value is always a JSON list, the signing key first: `[new]`, or `[new, previous]` with
+  `--previous-public` (one shape for the deploy check and the api/edge parsers). The staging deploy's
+  variable check (`scripts/check-deploy-vars.mjs`) accepts exactly that list of one or two keys, requires
+  `CANDIDATE_TOKEN_KID` to be the first key, and fails the deploy if any key holds a private member.
 - Standard output has only the `kid`, the public value and the commands. Neither stream, nor any error
   message, ever contains the private key.
