@@ -368,7 +368,14 @@ describe('output files', () => {
   });
 
   it('prints the Windows ACL note when the platform is win32 and not otherwise', async () => {
-    const win = await run(['--kid', KID, '--out-dir', tempDir()], { platform: 'win32' });
+    // An explicit profile: on Linux CI os.tmpdir() is not inside the home folder, so the S5 rule
+    // would refuse a bare temp dir before the note is printed.
+    const profile = tempDir();
+    const win = await run(['--kid', KID, '--out-dir', join(profile, 'keys')], {
+      platform: 'win32',
+      homeDir: profile,
+    });
+    expect(win.code).toBe(0);
     expect(win.stdout).toContain('ACL');
     const linux = await run(['--kid', KID, '--out-dir', tempDir()], { platform: 'linux' });
     expect(linux.stdout).not.toContain('ACL');
