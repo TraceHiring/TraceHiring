@@ -327,6 +327,17 @@ describe('deploy-staging: commands', () => {
     for (const s of STEPS) expect(run(s), String(stateOf(s))).not.toContain('${{');
   });
 
+  it('builds the recruiter with its public build variables only, all from vars (m0b §2.7, d1 AT-D22, d1 §7.1 CSP)', () => {
+    expect(stepIn('built').env).toEqual({
+      VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
+      VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+      VITE_SENTRY_DSN: '${{ vars.VITE_SENTRY_DSN }}',
+      // The recruiter CSP's connect-src api origin (https://trace-api-staging.<label>.workers.dev);
+      // the headers plugin drops the token when it is unset.
+      VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
+    });
+  });
+
   it('builds the staging Worker bundles into dist/ with no secret, before the scan (S3B-1)', () => {
     const built = stepIn('built');
     expect(secretRefs(built)).toEqual([]);
@@ -556,7 +567,8 @@ describe('wrangler --var transport (installed wrangler, S3B-1 deploy of public v
       'verify',
     ]);
     const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', pair.publicKey);
-    const jwk = JSON.stringify({ keys: [{ kty, crv, x, y, kid: 'd1-2026-10', alg: 'ES256' }] });
+    // The one shape check-deploy-vars accepts: a JSON array, the signing key first.
+    const jwk = JSON.stringify([{ kty, crv, x, y, kid: 'd1-2026-10', alg: 'ES256' }]);
     expect(jwk).toMatch(/:.*:/);
     expect(
       collectKeyValues([

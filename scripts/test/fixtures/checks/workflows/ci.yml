@@ -82,7 +82,11 @@ jobs:
       - env:
           VITE_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
-        run: pnpm build
+        run: |
+          pnpm build
+          for dir in workers/edge workers/jobs services/api; do
+            (cd "$dir" && pnpm exec wrangler deploy --dry-run --env staging --outdir dist)
+          done
       - name: Scan the build output
         run: node scripts/scan-dist.mjs
       - name: Check the public deploy variables

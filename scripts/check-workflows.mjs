@@ -29,6 +29,10 @@
 //     `wrangler deploy --env staging` steps in the order services/api, workers/jobs, workers/edge
 //     with the exact `--var NAME:$SOURCE` set per Worker, public values only from `vars.*`, then
 //     check-staging-secrets; no wrangler delete anywhere in the job
+//   - the scanned bundle is what ships (m0-foundations §7.2 step 5, S3B-1): every dry-run line is
+//     exactly WORKER_BUILD_CMD and runs before scan-dist, scan-dist runs before the first Worker
+//     deploy, every other `wrangler deploy` is exactly WORKER_DEPLOY_CMD plus `--var`s (one per
+//     step), and `wrangler versions` (an upload re-bundles) never runs in deploy-staging
 // No YAML library is a root dependency, so this file carries a small parser for the YAML subset
 // workflows use (block mappings and sequences, plain/quoted/block scalars, flow collections).
 // Anything outside that subset (anchors, aliases, tags, merge keys, multiple documents) is an
@@ -36,6 +40,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { REQUIRED_VARS } from './check-deploy-vars.mjs';
 
 // ===================== YAML subset parser =====================
 
@@ -580,6 +585,9 @@ export const BUILD_ONLY_ENV = Object.freeze({
   VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
   // d1 AT-D22 (m0-foundations §7.3): the recruiter's Sentry DSN, a public value (H6).
   VITE_SENTRY_DSN: '${{ vars.VITE_SENTRY_DSN }}',
+  // d1 §7.1 check-headers: the recruiter CSP's connect-src api origin
+  // (https://trace-api-staging.<label>.workers.dev), a public value; unset drops the CSP token.
+  VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
 });
 
 /**
@@ -596,13 +604,20 @@ export const PUBLIC_DEPLOY_ENV = Object.freeze({
   SUPABASE_STAGING_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
 });
 
-/** What the guard step must see (the variables scripts/check-deploy-vars.mjs requires). */
-const GUARD_ENV = Object.freeze([
-  'CANDIDATE_TOKEN_KID',
-  'CANDIDATE_TOKEN_PUBLIC_JWK',
-  'SUPABASE_STAGING_URL',
-  'SUPABASE_STAGING_PUBLISHABLE_KEY',
-]);
+/** What the guard step must see: exactly the variables scripts/check-deploy-vars.mjs requires. */
+export const DEPLOY_GUARD_ENV = REQUIRED_VARS;
+
+/**
+ * S3B-1 (m0-foundations §7.2 step 5): the no-secret build step writes each Worker's staging bundle
+ * into its dist/ with WORKER_BUILD_CMD, scan-dist scans it, and each Worker deploy uploads exactly
+ * that dist/index.js with WORKER_DEPLOY_CMD (plus its `--var`s), so the deployed bytes are the
+ * scanned bytes. wrangler --no-bundle still applies the env block's bindings, DO migrations, queue
+ * producers and consumers and crons: they come from the wrangler.jsonc env, not from the build.
+ */
+export const WORKER_BUILD_CMD = 'pnpm exec wrangler deploy --dry-run --env staging --outdir dist';
+export const WORKER_DEPLOY_CMD =
+  'pnpm exec wrangler deploy dist/index.js --no-bundle --env staging';
+const SCAN_RUN = /^\s*node scripts\/scan-dist\.mjs\s*$/;
 
 /**
  * The three Worker deploys in the order spec §7.1 requires (edge's service binding targets api, so
@@ -786,6 +801,8 @@ export const ENV_ALLOW_LIST = Object.freeze([
   'VITE_SUPABASE_URL',
   'VITE_SUPABASE_PUBLISHABLE_KEY',
   'VITE_SENTRY_DSN',
+  // d1 §7.1 check-headers: the recruiter CSP api origin, the deploy-staging build step only.
+  'VITE_API_ORIGIN',
   // d1 AT-D22 (specs/d1-demo-slice.md §7.1, L-24): the Workers deploy step passes it to jobs and api
   // only, as a var (a DSN is public, not a secret).
   'SENTRY_DSN_WORKERS',
@@ -1312,7 +1329,21 @@ export function checkWorkflow(doc, file, ctx = {}) {
 const WORKER_DEPLOY_RE = /\bwrangler\s+deploy\b/;
 const DRY_RUN_RE = /--dry-run\b/;
 const WRANGLER_DELETE_RE = /\bwrangler\b[^\n]*\b(?:delete|remove)\b/;
+const WRANGLER_VERSIONS_RE = /\bwrangler\s+versions\b/;
 const joinContinuations = (run) => run.replace(/\\\r?\n/g, ' ');
+/** A step's run text as commands: continuations joined, one per line, whitespace normalised. */
+const commandLines = (run) =>
+  joinContinuations(run)
+    .split('\n')
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter((l) => l !== '');
+/** The dry-run line ends with exactly WORKER_BUILD_CMD (inside `(cd "$dir" && …)` or bare). */
+const isDryRunBuild = (line) =>
+  [WORKER_BUILD_CMD, `${WORKER_BUILD_CMD})`].some(
+    (tail) => line === tail || line.endsWith(` ${tail}`) || line.endsWith(`(${tail}`),
+  );
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const SCANNED_DEPLOY_LINE = new RegExp(`^${escapeRe(WORKER_DEPLOY_CMD)}(?: --var "[^"]*")*$`);
 
 /**
  * deploy-staging's D1 chain (specs/d1-demo-slice.md §7.1; docs/reviews/D1-security-review-bindings.md
@@ -1352,14 +1383,90 @@ function checkDeployChain(d, where, file, out) {
     }
   });
 
+  // S3B-1: classify every `wrangler deploy` command line (not `wrangler pages deploy`). A dry-run
+  // line builds a staging bundle into dist/; any other is a Worker deploy and must upload exactly
+  // that scanned dist/index.js. A step is a Worker deploy step if it holds one such line.
+  const lines = steps.map((s) => commandLines(runOf(s)));
+  const dryRunSteps = [];
+  const deploys = [];
+  lines.forEach((ls, i) => {
+    const wranglerDeploys = ls.filter((l) => WORKER_DEPLOY_RE.test(l));
+    const real = wranglerDeploys.filter((l) => !DRY_RUN_RE.test(l));
+    for (const l of wranglerDeploys) {
+      if (DRY_RUN_RE.test(l) && !isDryRunBuild(l)) {
+        out.push(
+          v(
+            file,
+            sw(i),
+            `a dry-run build must be exactly ${WORKER_BUILD_CMD} (S3B-1: each Worker's staging bundle, into the dist/ that scan-dist scans)`,
+          ),
+        );
+      } else if (!DRY_RUN_RE.test(l) && !SCANNED_DEPLOY_LINE.test(l)) {
+        out.push(
+          v(
+            file,
+            sw(i),
+            `a Worker deploy must be exactly ${WORKER_DEPLOY_CMD} followed only by --var "NAME:$SOURCE" (S3B-1: --no-bundle uploads the dist/index.js that scan-dist checked; any other form re-bundles)`,
+          ),
+        );
+      }
+    }
+    if (wranglerDeploys.length > real.length) dryRunSteps.push(i);
+    if (real.length > 1) {
+      out.push(v(file, sw(i), 'a Worker deploy step must run exactly one wrangler deploy (S3B-1)'));
+    }
+    if (real.length > 0) deploys.push([steps[i], i]);
+    if (ls.some((l) => WRANGLER_VERSIONS_RE.test(l))) {
+      out.push(
+        v(
+          file,
+          sw(i),
+          'wrangler versions is not allowed in deploy-staging (an upload re-bundles; the scanned dist/index.js must be what ships, S3B-1)',
+        ),
+      );
+    }
+  });
+  const firstDeploy = deploys.length > 0 ? deploys[0][1] : -1;
+  const scan = indexOf((s) => SCAN_RUN.test(runOf(s)));
+  if (dryRunSteps.length === 0) {
+    out.push(
+      v(
+        file,
+        where,
+        `the staging Worker bundles must be built with the dry-run ${WORKER_BUILD_CMD} before scan-dist (S3B-1)`,
+      ),
+    );
+  } else if (scan >= 0 && Math.max(...dryRunSteps) > scan) {
+    out.push(
+      v(
+        file,
+        sw(Math.max(...dryRunSteps)),
+        'every dry-run build must come before scan-dist (S3B-1: a later build would ship bytes that were never scanned)',
+      ),
+    );
+  }
+  if (scan < 0) {
+    out.push(
+      v(
+        file,
+        where,
+        'a step must run exactly node scripts/scan-dist.mjs before the first Worker deploy (S3B-1)',
+      ),
+    );
+  } else if (firstDeploy >= 0 && scan > firstDeploy) {
+    out.push(
+      v(
+        file,
+        sw(scan),
+        'node scripts/scan-dist.mjs must run before the first Worker deploy (S3B-1)',
+      ),
+    );
+  }
+
   // The guard: exactly check-deploy-vars, seeing the four required variables, before the migrations
   // and before every Worker deploy.
   const guard = indexOf((s) => GUARD_RUN.test(runOf(s)));
   const migrate = indexOf((s) => /\bsupabase\s+db\s+push\b/.test(runOf(s)));
-  const deploys = steps
-    .map((s, i) => [s, i])
-    .filter(([s]) => WORKER_DEPLOY_RE.test(runOf(s)) && !DRY_RUN_RE.test(runOf(s)));
-  const firstDeploy = deploys.length > 0 ? deploys[0][1] : -1;
   if (guard < 0) {
     out.push(
       v(
@@ -1379,7 +1486,7 @@ function checkDeployChain(d, where, file, out) {
       );
     }
     const env = isObj(steps[guard].env) ? steps[guard].env : {};
-    for (const name of GUARD_ENV) {
+    for (const name of DEPLOY_GUARD_ENV) {
       if (!Object.hasOwn(env, name)) {
         out.push(
           v(
