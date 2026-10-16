@@ -125,6 +125,8 @@ export const AUDIT_ACTIONS = [
   // D1 migration 1 (specs/d1-demo-slice.md §3.1): authoring and assignments.
   'test.create',
   'test.publish',
+  // DB review m1 m-5: published -> retired is audited like publish.
+  'test.retire',
   'assignment.create',
   'assignment.delete',
   // D1 migration 2: invitations.
@@ -178,6 +180,7 @@ export const AuditDetails = {
     .strict(),
   'test.create': empty,
   'test.publish': z.object({ version_no: z.number().int().positive() }).strict(),
+  'test.retire': z.object({ version_no: z.number().int().positive() }).strict(),
   'assignment.create': z.object({ test_id: z.uuid(), membership_id: z.uuid() }).strict(),
   'assignment.delete': z.object({ test_id: z.uuid(), membership_id: z.uuid() }).strict(),
   'invitation.create': z.object({ test_version_id: z.uuid(), status: InvitationStatus }).strict(),

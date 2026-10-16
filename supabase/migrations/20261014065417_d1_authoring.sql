@@ -787,6 +787,10 @@ begin
   if old.status = 'draft' and new.status = 'published' then
     perform private.audit(new.org_id, 'test.publish', 'test_versions', new.id,
       jsonb_build_object('version_no', new.version_no), new.workspace_id);
+  elsif old.status = 'published' and new.status = 'retired' then
+    -- DB review m1 m-5: retire is audited like publish.
+    perform private.audit(new.org_id, 'test.retire', 'test_versions', new.id,
+      jsonb_build_object('version_no', new.version_no), new.workspace_id);
   end if;
   return null;
 end

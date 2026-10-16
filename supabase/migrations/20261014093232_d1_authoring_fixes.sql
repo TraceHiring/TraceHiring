@@ -198,7 +198,8 @@ begin
 
   -- The creator is assigned automatically so they can view evidence (R-15). as_role = the highest of
   -- org_owner | admin | recruiter that their membership holds; skipped if the membership is no longer active, or
-  -- is scoped to another workspace than the test's (M-1).
+  -- is scoped to another workspace than the test's (M-1). Only on the test's first publish (DB review m1 m-2): a
+  -- later version's publish never re-adds a creator that an owner or admin unassigned.
   select m.id,
     case
       when 'org_owner' = any (m.roles) then 'org_owner'::public.org_role
@@ -209,7 +210,11 @@ begin
   from public.tests as t
   join public.memberships as m on m.org_id = t.org_id and m.user_id = t.created_by and m.status = 'active'
   where t.org_id = new.org_id and t.id = new.test_id
-    and (m.workspace_id is null or m.workspace_id = t.workspace_id);
+    and (m.workspace_id is null or m.workspace_id = t.workspace_id)
+    and not exists (
+      select 1 from public.test_versions as v
+      where v.org_id = new.org_id and v.test_id = new.test_id and v.id <> new.id and v.published_at is not null
+    );
   if v_member is not null and v_role is not null then
     insert into public.assignments (org_id, membership_id, test_id, as_role)
       values (new.org_id, v_member, new.test_id, v_role)

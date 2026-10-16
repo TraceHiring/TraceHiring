@@ -20,6 +20,6 @@ Migration 2 was never applied to a shared database (no `workflow_dispatch` deplo
 | n-4 | Note | The `mirror_seq` update branch of `mirror_session` is unreachable in D1 (the key is per session). | Accepted for D1; M3a redesigns it. |
 | n-5 | Note | A null inviter answer still yields `adult_confirmed_at_start = true` (allowed by D1-12, §3.2 "is not false"). | Accepted; the column name overstates it, note for M2. |
 | n-6 | Note | `expires_at` has no CHECK. | OPEN: `expires_at > created_at` with migration 3. |
-| n-7 | Note | No two-connection test for duplicate mirrors; the lock order gives exactly-once under READ COMMITTED (40001 under REPEATABLE READ, retried). `rls_roles` still has no exact `trace_api` table allow-list (migration-1 review m-4). | OPEN: a two-connection test in `workers/jobs` (AT-D16); the `trace_api` allow-list with the migration-1 m-4 item. |
+| n-7 | Note | No two-connection test for duplicate mirrors; the lock order gives exactly-once under READ COMMITTED (40001 under REPEATABLE READ, retried). `rls_roles` still has no exact `trace_api` table allow-list (migration-1 review m-4). | OPEN: a two-connection test in `workers/jobs` (AT-D16, stream R2). The `trace_api` allow-list is **done** (2026-10-16, with the migration-1 m-4 item, `rls_roles`). |
 
 Result after the fixes: `pnpm test:rls` 24 files, rls 1840, catalog 142, db-types current.

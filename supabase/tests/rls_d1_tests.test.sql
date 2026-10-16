@@ -19,7 +19,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(236);
+select plan(237);
 
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
@@ -721,6 +721,9 @@ select is(pg_temp.try($$update public.test_versions set status = 'retired' where
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select is(pg_temp.try($$update public.test_versions set status = 'retired' where id = 'f1000000-0000-4000-8000-000000000003'$$), 'OK 0', 'retire: org B admin retires nothing in org A (cross-org)');
+reset role;
+reset request.jwt.claims;
+select is((select string_agg(a.object_id::text || '|' || pg_temp.keys(a.details) || '|' || (a.details ->> 'version_no') || '|' || a.actor_kind || '|' || a.actor_user_id::text, ';' order by a.object_id) from public.audit_log a where a.action = 'test.retire'), 'f1000000-0000-4000-8000-000000000001|version_no|1|org_user|00000000-0000-4000-8000-000000000003;f1000000-0000-4000-8000-000000000002|version_no|1|org_user|00000000-0000-4000-8000-000000000005', 'event: each successful retire writes one test.retire row with exactly version_no and the retiring user as actor; refused retires write none (DB review m1 m-5)');
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
 select matches(pg_temp.try($$delete from public.test_versions where id = 'f1000000-0000-4000-8000-000000000001'$$), '^OK 0$', 'test_versions D: reviewer DELETE hits no row (RLS)');
@@ -740,7 +743,7 @@ select is(pg_temp.try($$delete from public.test_versions where test_id = (select
 reset role;
 reset request.jwt.claims;
 select is((select count(*)::int from public.ruleset_versions where test_id = (select id from public.tests where name = 'Test Four')), 0, 'test_versions D: deleting a draft also deletes its unpublished ruleset row');
-select is((select count(*)::int from public.audit_log where action in ('test.create', 'test.publish') and details::text ~* '(Test Four|Test One|Reviewer|persona|@example)'), 0, 'event: authoring audit details never carry names or emails');
+select is((select count(*)::int from public.audit_log where action in ('test.create', 'test.publish', 'test.retire') and details::text ~* '(Test Four|Test One|Reviewer|persona|@example)'), 0, 'event: authoring audit details never carry names or emails');
 
 select * from finish();
 rollback;

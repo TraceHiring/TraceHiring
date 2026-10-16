@@ -19,7 +19,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(87);
+select plan(91);
 
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
@@ -357,6 +357,30 @@ set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", 
 select is((select count(*)::int from public.tests), 0, 'reviewer: aal1 still sees nothing after the assignments');
 reset role;
 reset request.jwt.claims;
+
+-- ===== DB review m1 m-2: the creator is auto-assigned on the test's first publish only =====
+-- The admin unassigns T2's creator (the workspace recruiter); version 2 of T2 is drafted on the operator path and
+-- published by the admin. The creator is not re-added and no new assignment.create row is written for them.
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$delete from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000002' and membership_id = pg_temp.mid('00000000-0000-4000-8000-000000000009')$$), 'OK 1', 'm-2: the admin unassigns the creator of T2');
+reset role;
+reset request.jwt.claims;
+insert into public.test_versions (id, org_id, test_id, version_no, total_time_seconds, quality_cutoff, created_by) values
+  ('f1000000-0000-4000-8000-000000000006', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000002', 2, 1800, 40, '00000000-0000-4000-8000-000000000003');
+insert into public.sections (id, org_id, test_version_id, position, name, format, weight) values
+  ('51000000-0000-4000-8000-000000000006', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000006', 1, 'Choices Two v2', 'mcq', 1);
+insert into public.item_versions (id, org_id, test_version_id, section_id, format, position, stem, options, rubric_version_id, origin, content_sha256, created_by) values
+  ('61000000-0000-4000-8000-000000000006', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000006', '51000000-0000-4000-8000-000000000006', 'mcq', 1, 'Pick one, again (v2).', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', null, 'human', repeat('c', 64), '00000000-0000-4000-8000-000000000003');
+insert into public.item_answer_keys (org_id, item_version_id, format, key, created_by) values
+  ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000006', 'mcq', '{"option_id": "o1"}', '00000000-0000-4000-8000-000000000003');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = 'f1000000-0000-4000-8000-000000000006'$$), 'OK 1', 'm-2: the admin publishes version 2 of T2');
+reset role;
+reset request.jwt.claims;
+select is((select count(*)::int from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000002' and membership_id = pg_temp.mid('00000000-0000-4000-8000-000000000009')), 0, 'm-2: a later version''s publish does not re-add a creator who was unassigned (auto-assignment on the first publish only)');
+select is((select count(*)::int from public.audit_log where action = 'assignment.create' and details ->> 'test_id' = 'e1000000-0000-4000-8000-000000000002' and details ->> 'membership_id' = pg_temp.mid('00000000-0000-4000-8000-000000000009')::text), 1, 'm-2: the creator of T2 has exactly one assignment.create row (the first publish), none from version 2');
 
 select * from finish();
 rollback;

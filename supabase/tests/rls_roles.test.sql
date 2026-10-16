@@ -21,7 +21,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(64);
+select plan(65);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -164,6 +164,9 @@ select is((select array_agg(c.relname::text || case when has_table_privilege('tr
 select is((select count(*)::int from pg_catalog.pg_class as c where c.relnamespace in ('public'::regnamespace, 'quality'::regnamespace, 'integrity'::regnamespace) and c.relkind in ('r', 'p', 'v', 'm') and (has_table_privilege('anon', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') or has_any_column_privilege('anon', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))), 0, 'tables: anon holds no privilege on any table');
 select is((select count(*)::int from pg_catalog.pg_class as c where c.relnamespace in ('public'::regnamespace, 'quality'::regnamespace, 'integrity'::regnamespace) and c.relkind in ('r', 'p', 'v', 'm') and (has_table_privilege('service_role', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') or has_any_column_privilege('service_role', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))), 0, 'tables: service_role holds no table grant (the baseline revoked the defaults)');
 select is((select array_agg(c.relname::text order by c.relname) from pg_catalog.pg_class as c where c.relnamespace in ('public'::regnamespace, 'quality'::regnamespace, 'integrity'::regnamespace) and c.relkind in ('r', 'p', 'v', 'm') and (has_table_privilege('trace_worker', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') or has_any_column_privilege('trace_worker', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))), array['consents', 'idempotency_keys', 'invitations', 'media_objects', 'reports', 'responses', 'session_items', 'sessions'], 'tables: trace_worker holds privileges on exactly idempotency_keys and the D1 mirror tables (spec §3.3)');
+-- DB review m1 m-4 / m2 n-7: the exact trace_api allow-list, with the operations it may perform on each table (table
+-- or column grants); private is included so a helper table can never slip in. Column limits are pinned in rls_d1_api.
+select is((select array_agg(c.relname::text || ':' || (select string_agg(p, ',' order by p) from unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) as p where has_table_privilege('trace_api', c.oid, p) or (p in ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') and has_any_column_privilege('trace_api', c.oid, p))) order by c.relname) from pg_catalog.pg_class as c where c.relnamespace in ('public'::regnamespace, 'quality'::regnamespace, 'integrity'::regnamespace, 'private'::regnamespace) and c.relkind in ('r', 'p', 'v', 'm') and (has_table_privilege('trace_api', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') or has_any_column_privilege('trace_api', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))), array['consents:INSERT,SELECT', 'invitations:SELECT,UPDATE', 'notice_versions:SELECT', 'test_versions:SELECT'], 'tables: trace_api holds exactly S I on consents, S(c) U(c) on invitations, S on notice_versions and S(c) on test_versions, nothing else (spec §3.3 matrix column trace_api)');
 set local role trace_candidate;
 select matches(pg_temp.try('select * from public.orgs'), '^42501 permission denied', 'tables: trace_candidate cannot read orgs');
 select matches(pg_temp.try('select * from public.workspaces'), '^42501 permission denied', 'tables: trace_candidate cannot read workspaces');
