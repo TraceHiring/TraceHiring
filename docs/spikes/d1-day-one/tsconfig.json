@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "types": []
   },
-  "include": ["src", "test", "workers", "scripts"]
+  "include": ["src", "test", "workers", "scripts", "browser", "playwright.config.ts"]
 }

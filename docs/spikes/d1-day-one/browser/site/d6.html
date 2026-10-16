@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>D6 candidate stand-in</title>
+  </head>
+  <body>
+    <h1>D6 candidate stand-in</h1>
+    <input id="t" type="text" autocomplete="off" />
+    <video id="v" autoplay muted playsinline width="320" height="240"></video>
+    <canvas id="c" width="320" height="240"></canvas>
+    <script>
+      window.__events = [];
+      const input = document.getElementById('t');
+      for (const type of ['keydown', 'keyup', 'input', 'paste']) {
+        input.addEventListener(type, (e) => {
+          window.__events.push({
+            type,
+            isTrusted: e.isTrusted,
+            key: e.key,
+            inputType: e.inputType,
+            pasted: type === 'paste' ? e.clipboardData.getData('text/plain') : undefined,
+          });
+        });
+      }
+    </script>
+  </body>
+</html>

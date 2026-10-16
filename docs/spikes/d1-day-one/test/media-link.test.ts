@@ -9,7 +9,7 @@ import {
   TTL_SECONDS,
   type Env,
   type LinkRecord,
-} from '../workers/media-link/src/index.ts';
+} from '../workers/media-link/src/handler.ts';
 
 const ORIGIN = 'https://recruiter.synthetic.example';
 const ORG = 'org-synthetic-1';
