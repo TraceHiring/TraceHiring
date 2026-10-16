@@ -30,6 +30,14 @@ export function versionFilePlugin(app: 'recruiter'): Plugin {
   };
 }
 
+/**
+ * The dev and preview port, pinned with `strictPort` (d1 security review F9): if it is taken, Vite fails
+ * to start instead of moving to the next port, which the api Worker's CORS list would not allow. It is the
+ * port in `ALLOWED_ORIGINS` (env.dev) of services/api; scripts/test/app-dev-ports.test.mjs fails when the
+ * two drift apart. `vite preview` uses it too, so the local E2E run needs no other origin.
+ */
+const PORT = 5174;
+
 // No `define` that reads process.env, and envPrefix stays the default `VITE_` (spec §10.1).
 export default defineConfig({
   plugins: [
@@ -38,4 +46,6 @@ export default defineConfig({
     versionFilePlugin('recruiter'),
     headersTemplatePlugin(),
   ],
+  server: { port: PORT, strictPort: true },
+  preview: { port: PORT, strictPort: true },
 });
