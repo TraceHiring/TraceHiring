@@ -3,10 +3,12 @@
 // F4). The staging deploy runs this before it applies migrations or deploys a Worker. It reads four
 // GitHub variables from the environment and exits 1 when
 //   - any is empty,
-//   - CANDIDATE_TOKEN_PUBLIC_JWK is not valid JSON, is not one JWK or a list/set of one or two,
+//   - CANDIDATE_TOKEN_PUBLIC_JWK is not valid JSON, is not a JSON array of one or two JWK objects
+//     (the one shape: lead decision 2026-10-16; a bare JWK object or a {"keys":[...]} set is refused),
 //     has a key without a `kid`, has two keys with the same `kid`, or has a key with a private member
 //     (`d` first of all: a private key pasted into a public var must never be deployed),
-//   - CANDIDATE_TOKEN_KID names no key in that JWK var,
+//   - CANDIDATE_TOKEN_KID is not the kid of the FIRST key in that array (the current signing key comes
+//     first; the second, during rotation, is the previous key, spec §4.3),
 //   - SUPABASE_STAGING_URL is not an https URL,
 //   - SUPABASE_STAGING_PUBLISHABLE_KEY is a secret key (`sb_secret_…` or a service_role JWT).
 // A violation names the variable and the problem and never prints a value (a value that fails here
@@ -27,8 +29,11 @@ const PRIVATE_MEMBERS = Object.freeze(['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', '
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 
 /**
- * CANDIDATE_TOKEN_PUBLIC_JWK text → { keys } or { error }. Spec §4.3: one public JWK, or two during
- * rotation, each with a kid. A JSON list or a `{ "keys": [...] }` set holds them too.
+ * CANDIDATE_TOKEN_PUBLIC_JWK text → { keys } or { error }. The one shape (spec §4.2, §4.3; lead
+ * decision 2026-10-16, which the key script writes and the api/edge parsers accept): a JSON array of
+ * one public JWK, or two during rotation, the current signing key first, each with a kid. A bare JWK
+ * object and a `{ "keys": [...] }` set are refused before any key in them is read. An error never
+ * holds the value.
  */
 export function parseJwkSet(text) {
   let value;
@@ -37,15 +42,15 @@ export function parseJwkSet(text) {
   } catch {
     return { error: 'is not valid JSON' };
   }
-  let keys;
-  if (Array.isArray(value)) keys = value;
-  else if (isObj(value) && Object.hasOwn(value, 'keys')) keys = value.keys;
-  else if (isObj(value)) keys = [value];
-  else return { error: 'must be one JWK object or a list of JWK objects' };
-  if (!Array.isArray(keys) || keys.length < 1 || keys.length > 2)
+  if (!Array.isArray(value))
+    return {
+      error:
+        'must be a JSON array of one or two public JWKs, the current signing key first (not a single JWK object or a {"keys": [...]} set)',
+    };
+  if (value.length < 1 || value.length > 2)
     return { error: 'must hold one key, or two during rotation' };
-  if (!keys.every(isObj)) return { error: 'must hold JWK objects only' };
-  return { keys };
+  if (!value.every(isObj)) return { error: 'must hold JWK objects only' };
+  return { keys: value };
 }
 
 /** Violations for one environment mapping ({ NAME: value }). Never includes a value. */
@@ -88,12 +93,16 @@ export function checkDeployVars(env) {
     }
   }
 
-  if (
-    kids !== null &&
-    !empty.has('CANDIDATE_TOKEN_KID') &&
-    !kids.includes(raw('CANDIDATE_TOKEN_KID').trim())
-  ) {
-    out.push('CANDIDATE_TOKEN_KID: is not the kid of any key in CANDIDATE_TOKEN_PUBLIC_JWK');
+  // Only the current kid signs (spec §4.3), and it is the first key of the array.
+  if (kids !== null && !empty.has('CANDIDATE_TOKEN_KID')) {
+    const kid = raw('CANDIDATE_TOKEN_KID').trim();
+    if (!kids.includes(kid)) {
+      out.push('CANDIDATE_TOKEN_KID: is not the kid of any key in CANDIDATE_TOKEN_PUBLIC_JWK');
+    } else if (kids[0] !== kid) {
+      out.push(
+        'CANDIDATE_TOKEN_KID: names a later key of CANDIDATE_TOKEN_PUBLIC_JWK; the current signing key must come first',
+      );
+    }
   }
 
   if (!empty.has('SUPABASE_STAGING_URL')) {
