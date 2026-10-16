@@ -80,11 +80,17 @@ token, capped at 3 hours (10 800 s). So the variable holds both public keys for 
 
    The new public file is then a two-element JSON list: the new key first, the previous key second. The script refuses
    a previous key that has a private member, a repeated `kid`, and a result of more than two keys.
-2. Run the same three commands it prints (the `kid` variable now names the new key; the secret is the new
-   private key), then deploy.
-3. After at least 3 hours, drop the old key: set `CANDIDATE_TOKEN_PUBLIC_JWK` to a list holding only the
+2. **Phase 1, verify-only (security review S4):** set `CANDIDATE_TOKEN_PUBLIC_JWK` to the same two keys
+   in the other order, `[<previous key>, <new key>]`, keep `CANDIDATE_TOKEN_KID` on the previous kid and
+   do not touch the secret, then deploy. Every verifier now accepts the new key while the old one still
+   signs.
+3. **Phase 2, switch:** run the three commands the script printed (`CANDIDATE_TOKEN_KID` = the new kid,
+   `CANDIDATE_TOKEN_PUBLIC_JWK` = the new file `[<new key>, <previous key>]`, then `secret put` of the new
+   private key), then deploy. `secret put` makes the api sign with the new key at once; that is safe
+   because the api takes the `kid` from the private JWK and phase 1 already deployed the new public key.
+4. After at least 3 hours, drop the old key: set `CANDIDATE_TOKEN_PUBLIC_JWK` to a list holding only the
    first element (`[<new key>]`, which is public data), and deploy again.
-4. Delete the new private file after `secret put`, as above.
+5. Delete the new private file after `secret put`, as above.
 
 ### What the script guarantees
 
