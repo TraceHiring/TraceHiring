@@ -1887,6 +1887,117 @@ describe('deploy-staging chain (d1 §7.1)', () => {
         ).toMatch(/wrangler versions/);
       }
     });
+
+    // Security review S2 (docs/reviews/D1-security-review-wave0-rest.md): the pin matched only
+    // `wrangler\s+deploy`, so other deploy forms passed with no violation.
+    describe('no other wrangler deploy form anywhere in deploy-staging (S2)', () => {
+      const STRAY = [
+        'pnpm exec wrangler --env staging deploy',
+        'pnpm dlx wrangler@4.149.0 deploy dist/index.js --no-bundle --env staging',
+        'npx wrangler@4 deploy',
+        'pnpm exec wrangler -c ../edge/wrangler.jsonc deploy dist/index.js --no-bundle --env staging',
+        'pnpm exec wrangler pages deploy apps/candidate/dist --project-name x && pnpm exec wrangler deploy',
+        'pnpm exec wrangler pages deploy apps/candidate/dist; wrangler --env staging deploy',
+        'pnpm exec wrangler pages deploy "$(pnpm exec wrangler deploy)"',
+      ];
+
+      it.each(STRAY)('rejects %s in a step of its own', (line) => {
+        expect(
+          check((d) => {
+            const s = stepsOf(d);
+            s.splice(s.indexOf(find(d, EDGE)) + 1, 0, { name: 'extra', run: `${line}\n` });
+          }),
+        ).toMatch(/wrangler and deploy|--no-bundle/);
+      });
+
+      it.each(STRAY)('rejects %s added to the Build step', (line) => {
+        expect(check((d) => (buildStep(d).run += `${line}\n`))).toMatch(
+          /wrangler and deploy|--no-bundle|dry-run/,
+        );
+      });
+
+      it('rejects a dry-run line that runs another command first', () => {
+        for (const line of [
+          `pnpm exec wrangler deploy --env staging; ${WORKER_BUILD_CMD}`,
+          `echo hi && ${WORKER_BUILD_CMD}`,
+          `(cd "$dir" && pnpm exec wrangler --env staging deploy && ${WORKER_BUILD_CMD})`,
+          `(cd ../other && ${WORKER_BUILD_CMD})`,
+        ]) {
+          expect(
+            check((d) => {
+              const s = buildStep(d);
+              s.run = s.run.replace(`(cd "$dir" && ${WORKER_BUILD_CMD})`, line);
+              if (!s.run.includes(line)) throw new Error('no edit');
+            }),
+            line,
+          ).toMatch(/dry-run/);
+        }
+      });
+
+      it('still accepts a plain wrangler pages deploy line', () => {
+        expect(
+          check((d) =>
+            stepsOf(d).push({
+              name: 'Pages',
+              run: 'pnpm exec wrangler pages deploy apps/recruiter/dist --project-name trace-recruiter-staging --branch main\n',
+            }),
+          ),
+        ).toBe('');
+      });
+
+      it.each([
+        ['a cd before the deploy', (r) => `cd ../edge\n${r}`],
+        ['a pushd before the deploy', (r) => `pushd ../edge\n${r}`],
+        ['an extra command after the deploy', (r) => `${r}echo done\n`],
+        ['no set -euo pipefail', (r) => r.replace('set -euo pipefail\n', '')],
+        [
+          'another wrangler output file',
+          (r) => r.replace('$RUNNER_TEMP/wrangler-output.ndjson', '/tmp/x.ndjson'),
+        ],
+        ['--cwd on the deploy', (r) => r.replace(' --no-bundle', ' --no-bundle --cwd ../edge')],
+        ['-c on the deploy', (r) => r.replace(' --env staging', ' --env staging -c x.jsonc')],
+        [
+          '--config on the deploy',
+          (r) => r.replace(' --env staging', ' --env staging --config x.jsonc'),
+        ],
+        ['dlx', (r) => r.replace('pnpm exec wrangler', 'pnpm dlx wrangler')],
+        ['npx', (r) => r.replace('pnpm exec wrangler', 'npx wrangler')],
+      ])('pins each Worker deploy step whole: rejects %s', (_label, edit) => {
+        for (const name of [API, JOBS, EDGE]) {
+          expect(
+            check((d) => {
+              const s = find(d, name);
+              const before = s.run;
+              s.run = edit(s.run);
+              if (s.run === before) throw new Error(`no edit on ${name}`);
+            }),
+            name,
+          ).toMatch(
+            /Worker deploy step must run exactly|--no-bundle|not allowed in a Worker deploy/,
+          );
+        }
+      });
+
+      it('names the forbidden words in a Worker deploy step', () => {
+        for (const [word, edit] of [
+          ['cd', (r) => `cd ../edge\n${r}`],
+          ['pushd', (r) => `pushd ../edge\n${r}`],
+          ['--cwd', (r) => r.replace(' --no-bundle', ' --no-bundle --cwd ../edge')],
+          ['-c', (r) => r.replace(' --env staging', ' --env staging -c x.jsonc')],
+          ['--config', (r) => r.replace(' --env staging', ' --env staging --config=x.jsonc')],
+          ['dlx', (r) => r.replace('pnpm exec wrangler', 'pnpm dlx wrangler')],
+          ['npx', (r) => r.replace('pnpm exec wrangler', 'npx wrangler')],
+        ]) {
+          expect(
+            check((d) => {
+              const s = find(d, JOBS);
+              s.run = edit(s.run);
+            }),
+            word,
+          ).toContain(`${word} is not allowed in a Worker deploy step`);
+        }
+      });
+    });
   });
 });
 

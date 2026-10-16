@@ -31,8 +31,10 @@
 //     check-staging-secrets; no wrangler delete anywhere in the job
 //   - the scanned bundle is what ships (m0-foundations §7.2 step 5, S3B-1): every dry-run line is
 //     exactly WORKER_BUILD_CMD and runs before scan-dist, scan-dist runs before the first Worker
-//     deploy, every other `wrangler deploy` is exactly WORKER_DEPLOY_CMD plus `--var`s (one per
-//     step), and `wrangler versions` (an upload re-bundles) never runs in deploy-staging
+//     deploy, every other line naming wrangler and deploy (any form, D1 security review S2) is
+//     exactly WORKER_DEPLOY_CMD plus `--var`s (one per step) unless it is a plain
+//     `wrangler pages deploy`, each Worker deploy step's whole run text is pinned (no cd, pushd,
+//     --cwd, -c/--config, dlx or npx), and `wrangler versions` (an upload re-bundles) never runs
 // No YAML library is a root dependency, so this file carries a small parser for the YAML subset
 // workflows use (block mappings and sequences, plain/quoted/block scalars, flow collections).
 // Anything outside that subset (anchors, aliases, tags, merge keys, multiple documents) is an
@@ -1337,7 +1339,6 @@ export function checkWorkflow(doc, file, ctx = {}) {
   return out;
 }
 
-const WORKER_DEPLOY_RE = /\bwrangler\s+deploy\b/;
 const DRY_RUN_RE = /--dry-run\b/;
 const WRANGLER_DELETE_RE = /\bwrangler\b[^\n]*\b(?:delete|remove)\b/;
 const WRANGLER_VERSIONS_RE = /\bwrangler\s+versions\b/;
@@ -1348,13 +1349,33 @@ const commandLines = (run) =>
     .split('\n')
     .map((l) => l.replace(/\s+/g, ' ').trim())
     .filter((l) => l !== '');
-/** The dry-run line ends with exactly WORKER_BUILD_CMD (inside `(cd "$dir" && …)` or bare). */
+/** The dry-run line is exactly WORKER_BUILD_CMD, bare or as `(cd "$dir" && …)` (S2: nothing else on it). */
 const isDryRunBuild = (line) =>
-  [WORKER_BUILD_CMD, `${WORKER_BUILD_CMD})`].some(
-    (tail) => line === tail || line.endsWith(` ${tail}`) || line.endsWith(`(${tail}`),
-  );
+  line === WORKER_BUILD_CMD || line === `(cd "$dir" && ${WORKER_BUILD_CMD})`;
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const SCANNED_DEPLOY_LINE = new RegExp(`^${escapeRe(WORKER_DEPLOY_CMD)}(?: --var "[^"]*")*$`);
+/**
+ * Security review S2: any command line naming both wrangler and deploy is a deploy line, whatever
+ * its form (`wrangler --env staging deploy`, `pnpm dlx wrangler@… deploy`, a `-c` config). Only a
+ * plain `pnpm exec wrangler pages deploy` with no shell syntax (so no second command) is not one.
+ */
+const isWranglerDeployLine = (line) => /\bwrangler\b/.test(line) && /\bdeploy\b/.test(line);
+const PAGES_DEPLOY_LINE = /^pnpm exec wrangler pages deploy [\w./ =-]+$/;
+/** The run text of a Worker deploy step, before its deploy line (S2: the whole step is pinned). */
+export const WORKER_DEPLOY_STEP_PREFIX = Object.freeze([
+  'set -euo pipefail',
+  'export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"',
+]);
+/** Words that change where or what a Worker deploy step runs (S2), each with its own pattern. */
+const WORKER_DEPLOY_FORBIDDEN = Object.freeze([
+  ['cd', /(?:^|[\s;&|(])cd(?:\s|$)/m],
+  ['pushd', /(?:^|[\s;&|(])pushd(?:\s|$)/m],
+  ['--cwd', /(?:^|\s)--cwd(?:[\s=]|$)/m],
+  ['-c', /(?:^|\s)-c(?:[\s=]|$)/m],
+  ['--config', /(?:^|\s)--config(?:[\s=]|$)/m],
+  ['dlx', /\bdlx\b/],
+  ['npx', /\bnpx\b/],
+]);
 
 /**
  * deploy-staging's D1 chain (specs/d1-demo-slice.md §7.1; docs/reviews/D1-security-review-bindings.md
@@ -1394,14 +1415,15 @@ function checkDeployChain(d, where, file, out) {
     }
   });
 
-  // S3B-1: classify every `wrangler deploy` command line (not `wrangler pages deploy`). A dry-run
-  // line builds a staging bundle into dist/; any other is a Worker deploy and must upload exactly
-  // that scanned dist/index.js. A step is a Worker deploy step if it holds one such line.
+  // S3B-1 and S2: classify every command line naming wrangler and deploy (except a plain
+  // `wrangler pages deploy`). A dry-run line builds a staging bundle into dist/; any other is a
+  // Worker deploy and must upload exactly that scanned dist/index.js. A step is a Worker deploy
+  // step if it holds one such line.
   const lines = steps.map((s) => commandLines(runOf(s)));
   const dryRunSteps = [];
   const deploys = [];
   lines.forEach((ls, i) => {
-    const wranglerDeploys = ls.filter((l) => WORKER_DEPLOY_RE.test(l));
+    const wranglerDeploys = ls.filter((l) => isWranglerDeployLine(l) && !PAGES_DEPLOY_LINE.test(l));
     const real = wranglerDeploys.filter((l) => !DRY_RUN_RE.test(l));
     for (const l of wranglerDeploys) {
       if (DRY_RUN_RE.test(l) && !isDryRunBuild(l)) {
@@ -1417,7 +1439,7 @@ function checkDeployChain(d, where, file, out) {
           v(
             file,
             sw(i),
-            `a Worker deploy must be exactly ${WORKER_DEPLOY_CMD} followed only by --var "NAME:$SOURCE" (S3B-1: --no-bundle uploads the dist/index.js that scan-dist checked; any other form re-bundles)`,
+            `a line with wrangler and deploy must be a plain wrangler pages deploy, the dry-run build or exactly ${WORKER_DEPLOY_CMD} followed only by --var "NAME:$SOURCE" (S3B-1, S2: --no-bundle uploads the dist/index.js that scan-dist checked; any other form re-bundles)`,
           ),
         );
       }
@@ -1558,6 +1580,25 @@ function checkDeployChain(d, where, file, out) {
 /** One Worker deploy step: --env staging, and exactly the --var set `spec.vars`, each from its source. */
 function checkWorkerDeploy(step, sw, spec, file, out) {
   const text = joinContinuations(step.run);
+  // S2: the whole run text is pinned (the prefix, then the one scanned deploy line), and no word
+  // that moves the step to another directory, config or wrangler copy may appear in it.
+  const ls = commandLines(step.run);
+  const pinned =
+    ls.length === WORKER_DEPLOY_STEP_PREFIX.length + 1 &&
+    WORKER_DEPLOY_STEP_PREFIX.every((l, k) => ls[k] === l) &&
+    SCANNED_DEPLOY_LINE.test(ls[ls.length - 1]);
+  if (!pinned) {
+    out.push(
+      v(
+        file,
+        sw,
+        `a Worker deploy step must run exactly: ${WORKER_DEPLOY_STEP_PREFIX.join('; ')}; then ${WORKER_DEPLOY_CMD} with its --var set, and nothing else (S2)`,
+      ),
+    );
+  }
+  for (const [word, re] of WORKER_DEPLOY_FORBIDDEN) {
+    if (re.test(text)) out.push(v(file, sw, `${word} is not allowed in a Worker deploy step (S2)`));
+  }
   if (!/(?<![\w-])--env\s+staging(?![\w-])/.test(text)) {
     out.push(v(file, sw, `wrangler deploy must use --env staging (${spec.dir})`));
   }
