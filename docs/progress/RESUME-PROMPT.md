@@ -8,7 +8,8 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-15 17:45 IST (newest; wins over the lines below):** jobs queue/sweep wiring placed (`289cea1`); the ci.yml staging-deploy draft was reverted (`2e679fc`, broke S3B-1) and must be reworked from `b0d2c8c`. Next: verify:fast + full verify + CI on `2e679fc`, the ci.yml rework, then the ES256 key ops script, recruiter CSP, DC-D5/D6/D8/D9, tag `cp/d1-03` (HANDOFF "Next step").
+- **Update 2026-10-16 08:15 IST (newest; wins over the lines below):** carried DB items fixed (`cfd3a67`, rls 2616, CI green); ES256 key ops script placed (`9429559`, `19152dc`) and its public value made a JSON array (`e0121f3`, verify:fast green). Three writer branches stopped at the usage limit, **not reviewed or placed**: ci.yml rework `worktree-agent-a5a448b74d436d19a` (`a48545b`), recruiter CSP + strictPort `worktree-agent-a59431baa68efcdfb` (`958e1e4`), DC-D5/D6 spikes `worktree-agent-a9c30de5fc651e33c` (`d9d96a6`); each worktree may hold uncommitted work. Next: HANDOFF "Next step" 2a–2e, then tag `cp/d1-03`. On the Pro plan run at most 2 agents at once.
+- **Update 2026-10-15 17:45 IST:** jobs queue/sweep wiring placed (`289cea1`); the ci.yml staging-deploy draft was reverted (`2e679fc`, broke S3B-1) and must be reworked from `b0d2c8c`. Next: verify:fast + full verify + CI on `2e679fc`, the ci.yml rework, then the ES256 key ops script, recruiter CSP, DC-D5/D6/D8/D9, tag `cp/d1-03` (HANDOFF "Next step").
 - **Update 2026-10-15 15:30 IST:** Wave 0 code tip `97f82dd` = `cp/d1-02`, full verify and CI green. Founder-queue walkthrough done (answers in build-notes §0). Next: Wave 0 remainder — ci.yml §7.1 + §7.2(b) `workflow_dispatch` staging deploy, jobs handlers, CSP, DC-D5/D6/D8/D9 (HANDOFF "Next step" 2); then the staging evidence that lets M0a and M0b CLOSE (HANDOFF "Path to close").
 - **Update 2026-10-15 14:05 IST:** band-engine and e2e skeletons, boundaries, wrangler bindings and the staging-secrets allow-list are placed and security-reviewed (code tip `97f82dd`; CI green on `742bf54`). Full verify green at `eaa8155`, `cp/d1-02` tagged. Next: ci.yml §7.1, jobs handlers, CSP, DC-D5/D6/D8/D9 (HANDOFF "Next step").
 - **Update 2026-10-15 00:45 IST:** Wave 0: **migrations 1-4 and every §3.6 pgTAP file are placed, reviewed and fixed; contracts `@trace/shared/contracts/{candidate,d1}` and `canonical-json` placed and reviewed**; full verify green at `bbae037` (rls 2610). `cp/d1-01` = `bbae037`; `SIGNAL_CATALOG` and `canonicalNoticeText` added (`b625788`). Next: full verify + CI on the tip, then DC-D5/D6/D8/D9, skeletons, wrangler/CSP/ci (HANDOFF "Next step").
@@ -150,15 +151,19 @@ Before changing anything, run HANDOFF "Verify first" and report in 5 lines wheth
 tell me what differs.
 
 Then do HANDOFF "Next step" in order. Phase: D1 BUILD, Wave 0 (lead-only). Done and verified: migrations 1-4, all
-rls_d1_* tests, contracts, shared helpers, band-engine/e2e skeletons, boundaries, wrangler bindings (code tip 97f82dd =
-tag cp/d1-02; full pnpm verify and Linux CI green; reviews in docs/reviews/D1-*). Founder-queue walkthrough of 2026-10-15
-is recorded in docs/build-notes.md §0. Session 3 placed the jobs queue/sweep wiring (289cea1); its ci.yml staging-deploy draft was
-REVERTED (2e679fc) because it broke the scanned-bundle deploy guard S3B-1 — rework it from agent commit b0d2c8c as HANDOFF
-"Next step" 2a says (run the whole scripts suite, then an Opus security re-review). First run verify:fast and a full pnpm
-verify on 2e679fc. Then the rest of Wave 0 — ES256 key ops script, recruiter CSP, DC-D5/D6/D8/D9 — tests first, then
-full verify, CI and tag cp/d1-03. Ask me before the first staging deploy (I must widen the Cloudflare token
-with R2 + Queues Edit) and before any browser download (DC-D6). M0a and M0b are built and reviewed but NOT closed; HANDOFF
-"Path to close" says how. Writers R1/R3/C1 start only after Wave 0 is complete and verified.
+rls_d1_* tests, contracts, shared helpers, skeletons, boundaries, wrangler bindings (cp/d1-02), jobs queue/sweep wiring
+(289cea1), the carried DB items (cfd3a67, rls 2616, CI green) and the ES256 key ops script (9429559, 19152dc, e0121f3;
+verify:fast green, NOT yet security-reviewed). Three writer branches were stopped at the usage limit and are NOT reviewed
+or placed: ci.yml rework (worktree-agent-a5a448b74d436d19a @ a48545b), recruiter CSP + strictPort
+(worktree-agent-a59431baa68efcdfb @ 958e1e4), DC-D5/D6 spikes (worktree-agent-a9c30de5fc651e33c @ d9d96a6). Each worktree
+may hold uncommitted work: inspect it (EnterWorktree, git status) and commit any useful WIP there before resuming; never
+discard or delete it. Finish them as HANDOFF "In progress" and "Next step" 2a-2e say (keep S3B-1; the public JWK
+variable is always a JSON array, signing key first; whole scripts suite; ONE Opus security review over key script +
+ci.yml + CSP), then DC-D5(c)/D6/D9 (DC-D8 slips to Wave 1/2), full pnpm verify, CI and tag cp/d1-03. Playwright
+Chromium 1.63.0 is already installed and the founder approved that download (local and CI). Ask me before the first
+staging deploy (I must widen the Cloudflare token with R2 + Queues Edit and set the candidate-token variables). M0a and
+M0b are built and reviewed but NOT closed; HANDOFF "Path to close" says how, and merging into main needs my explicit
+go-ahead. Writers R1/R3/C1 start only after Wave 0 is complete and verified.
 
 Safety rules (never break these): never commit on or move main; never force-push; never delete or move branches,
 tags (cp/*) or worktrees (.claude/worktrees/agent-* hold earlier work); never rewrite pushed history; never deploy
@@ -169,7 +174,10 @@ docs/AUTOPILOT.md §3. The founder-queue walkthrough is finished (2026-10-15); a
 FOUNDER-QUEUE item only when HANDOFF says it is due.
 
 Work until 98% of the 5-hour or weekly usage limit (founder, 2026-10-14); at 98% stop new work and do the STEP 5 wrap-up (handoff, log,
-backup, gitleaks via the pre-push hook, push), then print the next prompt. Work multi-agent within
-docs/AUTOPILOT.md §2 (max 3 writers, each in its own worktree reset to an exact SHA), check usage after every agent
-result, and keep every quality gate (tests first, Opus reviews, full pnpm verify, Linux CI) before any merge.
+backup, gitleaks via the pre-push hook, push), then print the next prompt. When context passes ~60%, run the
+trace-handoff skill and stop with the next prompt. Work multi-agent within docs/AUTOPILOT.md §2, but on the Pro plan run
+at most 2 agents at once (four agents took the 5-hour window from 13% to 97% in ~40 minutes on 2026-10-16); each
+writer works in its own worktree reset to an exact SHA, lead-only files are reviewed, placed and verified by the lead,
+and the lead re-runs verify:fast after every placement. Check usage after every agent result, and keep every quality
+gate (tests first, Opus reviews, full pnpm verify, Linux CI) before any merge.
 ```
