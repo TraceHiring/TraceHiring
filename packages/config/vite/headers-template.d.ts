@@ -7,11 +7,18 @@ export declare const SUPABASE_ORIGIN_TOKEN: '__SUPABASE_ORIGIN__';
 /** The connect-src placeholder for the Sentry ingest origin (recruiter, d1 AT-D22). */
 export declare const SENTRY_ORIGIN_TOKEN: '__SENTRY_ORIGIN__';
 
-/** The `_headers` text: each token replaced by its origin (Supabase URL, Sentry DSN), or dropped when unset. */
+/** The connect-src placeholder for the staging api Worker origin (recruiter, d1 spec §7.1). */
+export declare const API_ORIGIN_TOKEN: '__API_ORIGIN__';
+
+/**
+ * The `_headers` text: each token replaced by its origin (Supabase URL, Sentry DSN, api origin), or dropped
+ * when its variable is unset. A bad value throws without echoing it.
+ */
 export declare function renderHeaders(
   template: string,
   supabaseUrl: unknown,
   sentryDsn?: unknown,
+  apiOrigin?: unknown,
 ): string;
 
 export interface EmittedAsset {
