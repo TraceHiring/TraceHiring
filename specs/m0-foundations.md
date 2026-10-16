@@ -429,6 +429,8 @@ Fixing a finding locally is safe because the pre-push scan and the AUTOPILOT §6
 - **Rule:** `osv-scanner.toml` says every entry needs a reason and an expiry, so it is re-checked instead of forgotten. `pnpm-workspace.yaml` is a lead-only file (§14).
 
 ### 7.2 `deploy-staging` job
+
+> **Superseded in part (2026-10-16):** from D1 the gate, the step order (api → jobs → edge, plus `vars_checked` and `resources_ready`) and the manual `workflow_dispatch` from `d1/**` and `milestone/**` follow `specs/d1-demo-slice.md` §7.1; `scripts/check-workflows.mjs` and `scripts/test/deploy-staging-job.test.mjs` pin the current job. The S3B-1 rule here (deploy the scanned `dist/index.js` with `--no-bundle`) is unchanged and is now enforced by `check-workflows`.
 - **Gate:** `needs: [static, rls, security, migrations]` and `if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'` (revision 10).
 - **Environment:** `environment: staging`. Its branch policy allows only `main` (H3).
 - **Concurrency:** `concurrency: deploy-staging`, without cancel-in-progress.
