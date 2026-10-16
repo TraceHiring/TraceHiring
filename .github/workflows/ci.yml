@@ -12,6 +12,12 @@ on:
       - main
       - 'milestone/**'
   workflow_dispatch:
+    inputs:
+      # d1 §7.1: the e2e jobs run on a dispatch unless this is turned off.
+      run_e2e:
+        description: Run the e2e jobs
+        type: boolean
+        default: true
 
 # Read-only token for every job. A job that needs more must ask for it explicitly.
 permissions:
@@ -115,6 +121,42 @@ jobs:
         uses: ./.github/actions/setup
       - name: Check migrations
         run: node scripts/check-migrations.mjs --base origin/main
+
+  # Not a required check. DC-D9 and the Linux half of DC-D6 (d1 §7.1, §8): the local stack
+  # (Supabase, the three Workers under wrangler dev, both apps under vite preview) and Playwright
+  # Chromium, inside 25 minutes. Runs on a dispatch with run_e2e, or on a pull request from a d1/**
+  # branch (the draft PR from d1/integration), not on every PR, to spare the free minutes. No secret
+  # and no environment: every value is local and synthetic. The Chromium download is approved by
+  # the founder (2026-10-16) and cached by the lockfile hash.
+  e2e-local:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up toolchain and install
+        uses: ./.github/actions/setup
+      - name: Cache the Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: pnpm --filter @trace/e2e exec playwright install --with-deps chromium
+      - name: Local E2E stack
+        run: node scripts/e2e-local.mjs --ci
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-local-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
 
   # Not a required check. Deploys main (push) or a d1/** or milestone/** branch (manual
   # workflow_dispatch) to staging (§7.2; d1 §7.1). The steps follow the §15.1 states:

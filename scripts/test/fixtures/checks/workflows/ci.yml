@@ -9,6 +9,11 @@ on:
       - main
       - 'milestone/**'
   workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: Run the e2e jobs
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -67,6 +72,34 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/setup
       - run: node scripts/check-migrations.mjs --base origin/main
+
+  e2e-local:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@1111111111111111111111111111111111111111
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Cache the Playwright browsers
+        uses: actions/cache@1111111111111111111111111111111111111111
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: pnpm --filter @trace/e2e exec playwright install --with-deps chromium
+      - name: Local E2E stack
+        run: node scripts/e2e-local.mjs --ci
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@1111111111111111111111111111111111111111
+        with:
+          name: e2e-local-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
 
   deploy-staging:
     needs: [static, rls, security, migrations]

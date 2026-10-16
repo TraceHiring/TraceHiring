@@ -550,6 +550,21 @@ export const DEPLOY_IF =
   "(github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/'))) && github.repository == 'TraceHiring/TraceHiring'";
 export const DEPLOY_ENVIRONMENT = 'staging';
 export const DEPLOY_CONCURRENCY = 'deploy-staging';
+/**
+ * DC-D9 and the Linux half of DC-D6 (specs/d1-demo-slice.md §7.1, §8): the local E2E stack
+ * (scripts/e2e-local.mjs) runs in its own job on a manual dispatch with run_e2e, or on a pull
+ * request from a d1/** branch (the draft PR from d1/integration), never on every PR, to spare the
+ * free CI minutes. It holds no secret and no environment (the general rules), and its artifact is
+ * only the Playwright report and test results (synthetic data), kept at most 7 days.
+ */
+export const E2E_JOB = 'e2e-local';
+export const E2E_IF =
+  "github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/')";
+export const E2E_MAX_MINUTES = 25;
+export const E2E_RUNNER = 'ubuntu-24.04';
+export const E2E_ARTIFACT_PATHS = Object.freeze(['e2e/playwright-report', 'e2e/test-results']);
+export const E2E_ARTIFACT_MAX_DAYS = 7;
+const E2E_RUN = /^\s*node scripts\/e2e-local\.mjs --ci\s*$/;
 export const WORKFLOW_PERMISSIONS = { contents: 'read' };
 export const FORBIDDEN_TRIGGERS = ['pull_request_target', 'workflow_run'];
 export const ALLOWED_TRIGGERS = ['pull_request', 'push', 'workflow_dispatch'];
@@ -1335,6 +1350,7 @@ export function checkWorkflow(doc, file, ctx = {}) {
     }
     checkDeployChain(d, where, file, out);
   }
+  checkE2eLocal(doc, file, out);
   checkBuildOnlyEnv(doc, file, out);
   return out;
 }
@@ -1573,6 +1589,95 @@ function checkDeployChain(d, where, file, out) {
   if (secrets < 0 || secrets < lastDeploy) {
     out.push(
       v(file, where, 'check-staging-secrets must run after the last Worker deploy (§7.2 step 6)'),
+    );
+  }
+}
+
+/**
+ * The e2e-local job (E2E_JOB; DC-D9): its exact if:, runner and time limit, no container or
+ * services, one unconditional step running exactly `node scripts/e2e-local.mjs --ci`, artifacts
+ * only from E2E_ARTIFACT_PATHS and kept at most E2E_ARTIFACT_MAX_DAYS, and the run_e2e dispatch
+ * input it reads. Secrets and environments are already refused for every job but deploy-staging.
+ */
+function checkE2eLocal(doc, file, out) {
+  const j = doc.jobs[E2E_JOB];
+  if (!isObj(j)) return;
+  const where = `jobs.${E2E_JOB}`;
+  if (typeof j.if !== 'string' || normExpr(j.if) !== normExpr(E2E_IF)) {
+    out.push(v(file, where, `${E2E_JOB} must have exactly if: ${E2E_IF}`));
+  }
+  if (j['runs-on'] !== E2E_RUNNER) {
+    out.push(v(file, where, `${E2E_JOB} must run on ${E2E_RUNNER}`));
+  }
+  const t = j['timeout-minutes'];
+  if (typeof t !== 'number' || !Number.isInteger(t) || t < 1 || t > E2E_MAX_MINUTES) {
+    out.push(
+      v(file, where, `${E2E_JOB} must set timeout-minutes: 1 to ${E2E_MAX_MINUTES} (DC-D9)`),
+    );
+  }
+  if (j.container !== undefined || j.services !== undefined) {
+    out.push(v(file, where, `${E2E_JOB} may not use container: or services:`));
+  }
+  const steps = Array.isArray(j.steps) ? j.steps : [];
+  const runs = steps.filter(
+    (s) => isObj(s) && typeof s.run === 'string' && /e2e-local\.mjs/.test(s.run),
+  );
+  if (runs.length !== 1 || !E2E_RUN.test(runs[0].run) || runs[0].if !== undefined) {
+    out.push(
+      v(
+        file,
+        where,
+        `${E2E_JOB} must run exactly node scripts/e2e-local.mjs --ci in one step with no if:`,
+      ),
+    );
+  }
+  steps.forEach((s, i) => {
+    if (!isObj(s) || typeof s.uses !== 'string' || !/^actions\/upload-artifact@/i.test(s.uses)) {
+      return;
+    }
+    const w = isObj(s.with) ? s.with : {};
+    const paths =
+      typeof w.path === 'string'
+        ? w.path
+            .split(/\r?\n/)
+            .map((p) => p.trim())
+            .filter((p) => p !== '')
+        : [];
+    const days = w['retention-days'];
+    const ok =
+      paths.length > 0 &&
+      paths.every((p) => E2E_ARTIFACT_PATHS.includes(p)) &&
+      typeof days === 'number' &&
+      Number.isInteger(days) &&
+      days >= 1 &&
+      days <= E2E_ARTIFACT_MAX_DAYS;
+    if (!ok) {
+      out.push(
+        v(
+          file,
+          `${where}.steps[${i}]`,
+          `${E2E_JOB} artifacts must be only ${E2E_ARTIFACT_PATHS.join(' and ')}, kept at most ${E2E_ARTIFACT_MAX_DAYS} days (retention-days; synthetic data only)`,
+        ),
+      );
+    }
+  });
+  // The job reads inputs.run_e2e; the dispatch declares exactly that one input.
+  const wd = isObj(doc.on) ? doc.on.workflow_dispatch : undefined;
+  const inputs = isObj(wd) && isObj(wd.inputs) ? wd.inputs : undefined;
+  const runE2e = inputs !== undefined && isObj(inputs.run_e2e) ? inputs.run_e2e : undefined;
+  if (
+    inputs === undefined ||
+    Object.keys(inputs).length !== 1 ||
+    runE2e === undefined ||
+    runE2e.type !== 'boolean' ||
+    runE2e.default !== true
+  ) {
+    out.push(
+      v(
+        file,
+        'on.workflow_dispatch',
+        'workflow_dispatch must declare exactly one input, run_e2e (type: boolean, default: true)',
+      ),
     );
   }
 }

@@ -6,6 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEPLOY_IF,
+  E2E_ARTIFACT_PATHS,
+  E2E_IF,
+  E2E_JOB,
+  E2E_MAX_MINUTES,
   BUILD_ONLY_ENV,
   DEPLOY_GUARD_ENV,
   ENV_ALLOW_LIST,
@@ -131,7 +135,13 @@ describe('parseYaml (the subset GitHub workflows use)', () => {
 
   it('reads the fixture workflow', () => {
     const d = doc();
-    expect(Object.keys(d.jobs)).toEqual([...REQUIRED_JOBS, 'deploy-staging']);
+    expect(Object.keys(d.jobs)).toEqual([...REQUIRED_JOBS, 'e2e-local', 'deploy-staging']);
+    expect(d.on.workflow_dispatch.inputs.run_e2e).toEqual({
+      description: 'Run the e2e jobs',
+      type: 'boolean',
+      default: true,
+    });
+    expect(d.jobs['e2e-local']['timeout-minutes']).toBe(25);
     expect(d.permissions).toEqual({ contents: 'read' });
     expect(d.jobs.static.steps[0].with['persist-credentials']).toBe(false);
     expect(d.jobs['deploy-staging'].if).toBe(DEPLOY_IF);
@@ -2001,6 +2011,128 @@ describe('deploy-staging chain (d1 §7.1)', () => {
   });
 });
 
+// DC-D9 and the Linux half of DC-D6 (specs/d1-demo-slice.md §7.1, §8): the local E2E stack runs in
+// its own job, on a manual dispatch (run_e2e) or a pull request from a d1/** branch, never on every
+// PR, with no secret and no environment, inside the 25-minute limit.
+describe('e2e-local job (d1 §7.1, DC-D9)', () => {
+  const job = (d) => d.jobs[E2E_JOB];
+  const step = (d, re) => job(d).steps.find((s) => re.test(s.run ?? s.uses ?? ''));
+  const check = (mutate) => {
+    const d = doc();
+    mutate(d);
+    return msgs(checkWorkflow(d, 'ci.yml', ctx));
+  };
+
+  it('pins the job id, the condition, the time limit and the artifact paths', () => {
+    expect(E2E_JOB).toBe('e2e-local');
+    expect(E2E_IF).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/')",
+    );
+    expect(E2E_MAX_MINUTES).toBe(25);
+    expect([...E2E_ARTIFACT_PATHS]).toEqual(['e2e/playwright-report', 'e2e/test-results']);
+    expect(job(doc()).if).toBe(E2E_IF);
+    expect(check(() => {})).toBe('');
+  });
+
+  it.each([
+    ['no if', (j) => delete j.if],
+    ['every pull request', (j) => (j.if = "github.event_name == 'pull_request'")],
+    [
+      'dispatch without run_e2e',
+      (j) =>
+        (j.if =
+          "github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/')"),
+    ],
+    [
+      'a pull request from any branch',
+      (j) =>
+        (j.if =
+          "github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request'"),
+    ],
+    ['always()', (j) => (j.if = 'always()')],
+  ])('rejects %s', (_label, edit) => {
+    expect(check((d) => edit(job(d)))).toMatch(/e2e-local must have exactly if:/);
+  });
+
+  it.each([
+    ['no timeout', (j) => delete j['timeout-minutes']],
+    ['30 minutes', (j) => (j['timeout-minutes'] = 30)],
+    ['0 minutes', (j) => (j['timeout-minutes'] = 0)],
+    ['a string', (j) => (j['timeout-minutes'] = '25')],
+    ['an expression', (j) => (j['timeout-minutes'] = '${{ inputs.minutes }}')],
+  ])('rejects a time limit with %s', (_label, edit) => {
+    expect(check((d) => edit(job(d)))).toMatch(/e2e-local must set timeout-minutes: 1 to 25/);
+  });
+
+  it('rejects another runner', () => {
+    expect(check((d) => (job(d)['runs-on'] = 'self-hosted'))).toMatch(
+      /e2e-local must run on ubuntu-24.04/,
+    );
+  });
+
+  it('rejects a container or services (they decide the shell and hold their own env)', () => {
+    expect(check((d) => (job(d).container = 'node:22'))).toMatch(
+      /e2e-local may not use container: or services:/,
+    );
+    expect(check((d) => (job(d).services = { db: { image: 'postgres' } }))).toMatch(
+      /e2e-local may not use container: or services:/,
+    );
+  });
+
+  it('rejects an environment or a secret anywhere in the job', () => {
+    expect(check((d) => (job(d).environment = 'staging'))).toMatch(/only deploy-staging may use/);
+    expect(
+      check((d) => (step(d, /e2e-local\.mjs/).env = { X: '${{ secrets.CLOUDFLARE_API_TOKEN }}' })),
+    ).toMatch(/not allowed outside deploy-staging/);
+  });
+
+  it.each([
+    [
+      'no script step',
+      (d) => (job(d).steps = job(d).steps.filter((s) => !/e2e-local/.test(s.run ?? ''))),
+    ],
+    ['without --ci', (d) => (step(d, /e2e-local\.mjs/).run = 'node scripts/e2e-local.mjs')],
+    [
+      'with || true',
+      (d) => (step(d, /e2e-local\.mjs/).run = 'node scripts/e2e-local.mjs --ci || true'),
+    ],
+    ['twice', (d) => job(d).steps.push({ name: 'again', run: 'node scripts/e2e-local.mjs --ci' })],
+    ['a step if:', (d) => (step(d, /e2e-local\.mjs/).if = 'false')],
+  ])(
+    'requires one step running exactly node scripts/e2e-local.mjs --ci: rejects %s',
+    (_l, edit) => {
+      expect(check(edit)).toMatch(/e2e-local must run exactly node scripts\/e2e-local\.mjs --ci/);
+    },
+  );
+
+  it.each([
+    ['30 days', (w) => (w['retention-days'] = 30)],
+    ['no retention', (w) => delete w['retention-days']],
+    ['a path outside e2e/', (w) => (w.path = 'e2e/playwright-report\n.\n')],
+    ['the browser cache', (w) => (w.path = '~/.cache/ms-playwright')],
+    ['the whole e2e folder', (w) => (w.path = 'e2e')],
+    ['no path', (w) => delete w.path],
+  ])('keeps the uploaded artifact small and synthetic: rejects %s', (_label, edit) => {
+    expect(check((d) => edit(step(d, /upload-artifact/).with))).toMatch(
+      /e2e-local artifacts must be only e2e\/playwright-report and e2e\/test-results, kept at most 7 days/,
+    );
+  });
+
+  it.each([
+    ['no inputs', (d) => (d.on.workflow_dispatch = null)],
+    [
+      'an extra input',
+      (d) => (d.on.workflow_dispatch.inputs.ref = { type: 'string', default: 'main' }),
+    ],
+    ['run_e2e as a string', (d) => (d.on.workflow_dispatch.inputs.run_e2e.type = 'string')],
+    ['run_e2e off by default', (d) => (d.on.workflow_dispatch.inputs.run_e2e.default = false)],
+  ])('requires the run_e2e dispatch input: rejects %s', (_label, edit) => {
+    expect(check(edit)).toMatch(
+      /workflow_dispatch must declare exactly one input, run_e2e \(type: boolean, default: true\)/,
+    );
+  });
+});
+
 describe('the real ci.yml deploy chain (d1 §7.1)', () => {
   const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
   const real = parseYaml(
@@ -2033,6 +2165,17 @@ describe('the real ci.yml deploy chain (d1 §7.1)', () => {
     expect(resources).toBeGreaterThan(migrate);
     expect(resources).toBeLessThan(deploys[0][1]);
     expect(at(/check-staging-secrets/)).toBeGreaterThan(deploys[2][1]);
+  });
+
+  it('runs the local E2E stack in its own job, on dispatch or a d1/** pull request', () => {
+    const e2e = real.jobs[E2E_JOB];
+    expect(e2e.if).toBe(E2E_IF);
+    expect(e2e['timeout-minutes']).toBeLessThanOrEqual(E2E_MAX_MINUTES);
+    expect(e2e.steps.some((s) => s.run === 'node scripts/e2e-local.mjs --ci')).toBe(true);
+    expect(real.on.workflow_dispatch.inputs).toEqual({
+      run_e2e: expect.objectContaining({ type: 'boolean', default: true }),
+    });
+    expect(checkWorkflow(real, 'ci.yml', ctx)).toEqual([]);
   });
 
   it('passes every public var with --var from a GitHub variable, none from a secret', () => {

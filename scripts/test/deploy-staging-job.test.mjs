@@ -164,8 +164,9 @@ describe('deploy-staging: the whole workflow', () => {
     expect(runChecks(REPO)).toEqual([]);
   });
 
-  it('is the last job, after the four required jobs, which stay as they are', () => {
-    expect(Object.keys(CI.jobs)).toEqual([...REQUIRED_JOBS, 'deploy-staging']);
+  it('is the last job, after the four required jobs, which stay as they are, and e2e-local', () => {
+    // e2e-local (d1 §7.1, DC-D9) is not required and deploy-staging does not need it.
+    expect(Object.keys(CI.jobs)).toEqual([...REQUIRED_JOBS, 'e2e-local', 'deploy-staging']);
   });
 
   it('never references AWS_* anywhere in the file', () => {
@@ -183,9 +184,17 @@ describe('deploy-staging: gate (§7.2; d1 §7.1, D1-16)', () => {
     expect(norm(JOB.if)).toBe(norm(DEPLOY_IF));
   });
 
-  it('can be dispatched by hand, with no inputs a run could read', () => {
+  it('can be dispatched by hand, with no input a run could read as text', () => {
     expect(Object.hasOwn(CI.on, 'workflow_dispatch')).toBe(true);
-    expect(CI.on.workflow_dispatch).toBeNull();
+    // The one input is the d1 §7.1 boolean run_e2e (DC-D9): no string a dispatcher could inject.
+    expect(CI.on.workflow_dispatch).toEqual({
+      inputs: { run_e2e: { description: 'Run the e2e jobs', type: 'boolean', default: true } },
+    });
+    // Only the e2e-local job's if: reads it; no step, and nothing in deploy-staging, reads an input.
+    expect(JSON.stringify(JOB)).not.toMatch(/inputs\./);
+    for (const job of Object.values(CI.jobs)) {
+      for (const s of job.steps ?? []) expect(JSON.stringify(s)).not.toMatch(/inputs\./);
+    }
   });
 
   it('uses the staging environment, one deploy at a time without cancelling, and read-only permissions', () => {
