@@ -4,8 +4,8 @@
 // Nothing here reads a secret; the base URL comes from the environment with a local default.
 import { defineConfig, devices } from '@playwright/test';
 
-/** Recruiter app origin: `E2E_RECRUITER_URL`, else the local `vite preview` default. */
-const baseURL = process.env['E2E_RECRUITER_URL'] ?? 'http://localhost:4173';
+/** Recruiter app origin: `E2E_RECRUITER_URL`, else the local `vite preview` port pinned in apps/recruiter (F9). */
+const baseURL = process.env['E2E_RECRUITER_URL'] ?? 'http://localhost:5174';
 
 export default defineConfig({
   testDir: './tests',

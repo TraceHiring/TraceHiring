@@ -47,6 +47,8 @@ Planned: deployment branches limited to `main` (H3). **Checked 2026-10-11: the e
 | `CLOUDFLARE_API_TOKEN` | **secret** | API token limited to this account: Workers Scripts: Edit, Cloudflare Pages: Edit, Account Settings: Read; no IP filter, no TTL | steps 5–7 only | **live** (set 2026-10-14; old token rolled; misnamed secret deleted; checked by name) | **Founder only** |
 | `SUPABASE_STAGING_DB_URL` | **secret** | `trace-staging` Session-pooler string (port 5432, `?sslmode=require`), with password | steps 3–4 only | **live** (set 2026-10-14; `SUPABASE_DB_URL` deleted; checked by name) | **Founder only** |
 | `VITE_SENTRY_DSN` (recruiter build; the D1 spec name, L-24), `SENTRY_DSN_WORKERS` | variable | Sentry DSNs of `trace-recruiter` and `trace-workers` (EU region, `*.ingest.de.sentry.io`) | Sentry adapter (D1, AT-D22) | **live** (set 2026-10-14, H6) | Founder |
+| `API_STAGING_ORIGIN` (recruiter build `VITE_API_ORIGIN`) | variable | `https://trace-api-staging.abhayraj.workers.dev`, the staging api Worker origin in the recruiter connect-src (d1 §7.1); the build refuses any other form | D1 staging deploy | **not set** (2026-10-16) | Founder |
+| `CANDIDATE_TOKEN_KID`, `CANDIDATE_TOKEN_PUBLIC_JWK` | variable | candidate-token signing kid (`d1-YYYY-MM`) and the public JSON array, signing key first (d1 §4.3), from `scripts/ops/candidate-token-key.mjs`; the private JWK is the api Worker secret `CANDIDATE_TOKEN_PRIVATE_JWK` (wrangler, not GitHub) | D1 staging deploy | **not set** (2026-10-16) | Founder |
 
 The autopilot never sets or reads a secret value. `trace-dev` gets no GitHub variables: dev runs locally.
 
