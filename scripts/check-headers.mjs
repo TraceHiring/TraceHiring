@@ -35,12 +35,16 @@ export const CSP_DIRECTIVES = {
 /**
  * Origins an app may add to connect-src (§10.3): exact https origins only, never a wildcard.
  * candidate: the staging edge Worker. recruiter: the Supabase staging project (M0b) and, from D1, the
- * Sentry ingest host (d1 AT-D22, L-24).
+ * staging api Worker (d1 §7.1) and the Sentry ingest host (d1 AT-D22, L-24). Each entry is one regular
+ * expression, and a CSP may hold at most one origin per entry (see checkCsp).
  */
 export const CONNECT_SRC_EXTRAS = {
   candidate: [/^https:\/\/trace-edge-staging\.[a-z0-9-]+\.workers\.dev$/],
   recruiter: [
     /^https:\/\/[a-z0-9]{20}\.supabase\.co$/,
+    // The staging api Worker (d1 §7.1): the recruiter's API calls and the start-photo fetch. Staging only: the
+    // production api is a tracehiring.tech custom domain and needs its own entry (and a spec change).
+    /^https:\/\/trace-api-staging\.[a-z0-9-]+\.workers\.dev$/,
     // The Sentry ingest origin of VITE_SENTRY_DSN (d1 AT-D22, L-24); EU (H6) or US host.
     /^https:\/\/o[0-9]+\.ingest(?:\.[a-z]{2})?\.sentry\.io$/,
   ],
