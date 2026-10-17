@@ -1,9 +1,9 @@
 // Media routes (spec §6.2 table rows `start-photo-link` and `GET /media/:jti`; R3-5, R3-6). The lead mounts them with
-// registerMediaRoutes(app, deps). The fetch route answers every method but GET with the generic 404 before any DO
+// `app.route('/', createMediaRoutes({ org, media: mediaFromEnv }))`. The fetch route answers every method but GET with the generic 404 before any DO
 // call (it never burns a link), and every answer carries no-store, no-referrer, nosniff, CORP same-origin,
 // Vary: Origin and, for an allowed origin only, that exact ACAO with no credentials header.
 import { MediaLinkResponse } from '@trace/shared/contracts/d1';
-import type { Hono } from 'hono';
+import { Hono } from 'hono';
 import { openApiDb } from '../candidate/api-db.js';
 import { handleOrg, orgFail, orgJson, pathId, type OrgDeps } from '../tests/org-context.js';
 import type { LinkRecord } from './link-store.js';
@@ -106,8 +106,12 @@ const mediaNotFound = (request: Request, env: Env): Response => {
   return new Response('{"error":{"code":"not_found"}}', { status: 404, headers });
 };
 
-export const registerMediaRoutes = (app: Hono<{ Bindings: Env }>, deps: MediaRouteDeps): void => {
-  app.post('/v1/orgs/:orgId/reports/:reportId/start-photo-link', (c) =>
+export const START_PHOTO_LINK_PATH = '/v1/orgs/:orgId/reports/:reportId/start-photo-link';
+export const MEDIA_PATH = '/media/:jti';
+
+export const createMediaRoutes = (deps: MediaRouteDeps): Hono<{ Bindings: Env }> => {
+  const app = new Hono<{ Bindings: Env }>();
+  app.post(START_PHOTO_LINK_PATH, (c) =>
     handleOrg(async () => {
       const orgId = pathId(c.req.param('orgId'));
       const reportId = pathId(c.req.param('reportId'));
@@ -132,7 +136,7 @@ export const registerMediaRoutes = (app: Hono<{ Bindings: Env }>, deps: MediaRou
     }),
   );
 
-  app.all('/media/:jti', async (c) => {
+  app.all(MEDIA_PATH, async (c) => {
     if (c.req.method !== 'GET') return mediaNotFound(c.req.raw, c.env);
     const call = await deps.media(c.env);
     if (call === null) return mediaNotFound(c.req.raw, c.env);
@@ -153,4 +157,5 @@ export const registerMediaRoutes = (app: Hono<{ Bindings: Env }>, deps: MediaRou
       await call.close();
     }
   });
+  return app;
 };

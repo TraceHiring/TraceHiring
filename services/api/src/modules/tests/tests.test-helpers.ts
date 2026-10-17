@@ -3,10 +3,9 @@
 // children, the publish preconditions and the frozen published row), a fake R2 package bucket, and a draft body.
 // Synthetic data only.
 import type { UpdateTestDraftRequest } from '@trace/shared/contracts/d1';
-import { Hono } from 'hono';
 import { guardError, idMaker, fakeDb, type FakeDb, type Row } from './rest.test-helpers.js';
 import type { OrgCaller, OrgContext } from './org-context.js';
-import { registerTestRoutes, type PackageBucket } from './routes.js';
+import { createTestsRoutes, type PackageBucket } from './routes.js';
 
 export const ORG = 'a1000000-0000-4000-8000-000000000001';
 export const ORG_B = 'a1000000-0000-4000-8000-000000000003';
@@ -148,8 +147,7 @@ export const testsApp = (
   db: FakeDb & { rest: OrgContext['rest'] },
   bucket: PackageBucket | null = fakeBucket(),
 ) => {
-  const app = new Hono<{ Bindings: Env }>();
-  registerTestRoutes(app, {
+  const app = createTestsRoutes({
     org: { context: async () => ({ caller: callerOf(), rest: db.rest }) },
     packages: () => bucket,
   });

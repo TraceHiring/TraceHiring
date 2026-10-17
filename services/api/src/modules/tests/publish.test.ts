@@ -222,7 +222,9 @@ describe('PUT …/tests/:testId (cutoff required, draft only)', () => {
   it('refuses a null, missing, fractional or out-of-range cutoff with 400 cutoff_required', async () => {
     const s = await setup();
     const base = draftBody() as unknown as Record<string, unknown>;
-    const { qualityCutoff: _drop, ...missing } = base;
+    const missing = Object.fromEntries(
+      Object.entries(base).filter(([key]) => key !== 'qualityCutoff'),
+    );
     for (const body of [
       { ...base, qualityCutoff: null },
       { ...base, qualityCutoff: 101 },

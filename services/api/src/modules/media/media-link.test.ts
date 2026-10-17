@@ -3,7 +3,6 @@
 // with the R3-6 headers. The grant functions are modelled in media.test-helpers.ts; the database side is
 // supabase/tests/rls_d1_media_view.test.sql (lead).
 import { MediaLinkResponse } from '@trace/shared/contracts/d1';
-import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
 import type { OrgContext } from '../tests/org-context.js';
 import {
@@ -29,7 +28,7 @@ import {
   mediaTables,
   orgDeps,
 } from './media.test-helpers.js';
-import { registerMediaRoutes } from './routes.js';
+import { createMediaRoutes } from './routes.js';
 
 const T0 = Date.parse('2026-10-17T08:00:00.000Z');
 const RECRUITER_ORIGIN = 'https://trace-recruiter-staging.pages.dev';
@@ -57,9 +56,8 @@ const setup = async (
   };
   const rest = fakeRest(opts.tables ?? mediaTables());
   const context: OrgContext = { caller: caller(), rest, ...opts.ctx };
-  const app = new Hono<{ Bindings: Env }>();
   let closed = 0;
-  registerMediaRoutes(app, {
+  const app = createMediaRoutes({
     org: orgDeps(context),
     media: async () => ({
       deps,

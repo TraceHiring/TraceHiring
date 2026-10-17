@@ -4,7 +4,8 @@
 // constant codes. Runs on the fake PostgREST of tests.test-helpers.ts.
 import { TestDetailResponse, TestListResponse } from '@trace/shared/contracts/d1';
 import { describe, expect, it } from 'vitest';
-import { RestError } from './org-context.js';
+import { RestError, orgFail } from './org-context.js';
+import { createTestsRoutes } from './routes.js';
 import { ORG, ORG_B, WS, authoringDb, draftBody, rowsOf, testsApp } from './tests.test-helpers.js';
 
 const create = async (
@@ -240,5 +241,45 @@ describe('PUT /v1/orgs/:orgId/tests/:testId', () => {
     );
     expect(res.status).toBe(404);
     expect(db.calls.filter((c) => c.method !== 'select')).toEqual([]);
+  });
+});
+
+describe('the tests router: caller and contract failures', () => {
+  it('a failed caller check answers its constant code and touches no table', async () => {
+    const db = authoringDb();
+    const app = createTestsRoutes({
+      org: { context: async () => orgFail('unauthorized') },
+      packages: () => null,
+    });
+    const test = 'e1000000-0000-4000-8000-000000000001';
+    for (const [method, path] of [
+      ['GET', `/v1/orgs/${ORG}/tests`],
+      ['POST', `/v1/orgs/${ORG}/tests`],
+      ['GET', `/v1/orgs/${ORG}/tests/${test}`],
+      ['PUT', `/v1/orgs/${ORG}/tests/${test}`],
+      ['POST', `/v1/orgs/${ORG}/tests/${test}/publish`],
+    ] as const) {
+      const res = await app.request(
+        `https://api.test${path}`,
+        { method, ...(method === 'GET' ? {} : { body: '{}' }) },
+        {} as Env,
+      );
+      expect(res.status, `${method} ${path}`).toBe(401);
+      expect(await res.text()).toBe('{"error":{"code":"unauthorized"}}');
+    }
+    expect(db.calls).toEqual([]);
+  });
+
+  it('a stored row that does not fit the contract is 503 unavailable, never echoed', async () => {
+    const db = authoringDb();
+    const { call } = testsApp(db);
+    const created = TestDetailResponse.parse(await (await create(call)).json());
+    const t = rowsOf(db, 'tests')[0];
+    if (t !== undefined) t.name = 'x'.repeat(201);
+    for (const path of [`/v1/orgs/${ORG}/tests`, `/v1/orgs/${ORG}/tests/${created.test.id}`]) {
+      const res = await call('GET', path);
+      expect(res.status).toBe(503);
+      expect(await res.text()).toBe('{"error":{"code":"unavailable"}}');
+    }
   });
 });

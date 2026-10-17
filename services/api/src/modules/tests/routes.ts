@@ -15,7 +15,7 @@ import {
   TestListResponse,
   UpdateTestDraftRequest,
 } from '@trace/shared/contracts/d1';
-import type { Hono } from 'hono';
+import { Hono } from 'hono';
 import { z } from 'zod';
 import { sha256Hex } from '../candidate/encoding.js';
 import {
@@ -80,15 +80,31 @@ const DEFAULT_CUTOFF = 40;
 const cutoffValid = (value: unknown): boolean =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100;
 
+/** Every answer is parsed against its contract first; a row that does not fit is `unavailable`, never echoed. */
+const answer = <T>(
+  schema: { safeParse(v: unknown): { success: true; data: T } | { success: false } },
+  body: unknown,
+  status = 200,
+): Response => {
+  const out = schema.safeParse(body);
+  return out.success ? orgJson(out.data, status) : orgFail('unavailable');
+};
+
 const detailOf = async (ctx: OrgContext, orgId: string, testId: string) => {
   const test = (await findTest(ctx.rest, orgId, testId)) ?? orgFail('not_found');
   const version = (await latestVersion(ctx.rest, orgId, testId)) ?? orgFail('not_found');
   const content = await loadContent(ctx.rest, orgId, version.id);
-  return TestDetailResponse.parse(toDetail(test, version, content));
+  return toDetail(test, version, content);
 };
 
-export const registerTestRoutes = (app: Hono<{ Bindings: Env }>, deps: TestRouteDeps): void => {
-  app.get('/v1/orgs/:orgId/tests', (c) =>
+export const TESTS_PATH = '/v1/orgs/:orgId/tests';
+export const TEST_PATH = '/v1/orgs/:orgId/tests/:testId';
+export const PUBLISH_PATH = '/v1/orgs/:orgId/tests/:testId/publish';
+
+/** The sub-router the lead mounts with `app.route('/', createTestsRoutes({ org, packages: packagesFromEnv }))`. */
+export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> => {
+  const app = new Hono<{ Bindings: Env }>();
+  app.get(TESTS_PATH, (c) =>
     handleOrg(async () => {
       const orgId = pathId(c.req.param('orgId'));
       const ctx = await deps.org.context(c.req.raw, c.env);
@@ -128,11 +144,11 @@ export const registerTestRoutes = (app: Hono<{ Bindings: Env }>, deps: TestRoute
               },
             ];
       });
-      return orgJson(TestListResponse.parse({ tests: rows }));
+      return answer(TestListResponse, { tests: rows });
     }),
   );
 
-  app.post('/v1/orgs/:orgId/tests', (c) =>
+  app.post(TESTS_PATH, (c) =>
     handleOrg(async () => {
       const orgId = pathId(c.req.param('orgId'));
       const ctx = await deps.org.context(c.req.raw, c.env);
@@ -169,20 +185,20 @@ export const registerTestRoutes = (app: Hono<{ Bindings: Env }>, deps: TestRoute
         },
         { select: 'id' },
       );
-      return orgJson(await detailOf(ctx, orgId, test.id), 201);
+      return answer(TestDetailResponse, await detailOf(ctx, orgId, test.id), 201);
     }),
   );
 
-  app.get('/v1/orgs/:orgId/tests/:testId', (c) =>
+  app.get(TEST_PATH, (c) =>
     handleOrg(async () => {
       const orgId = pathId(c.req.param('orgId'));
       const testId = pathId(c.req.param('testId'));
       const ctx = await deps.org.context(c.req.raw, c.env);
-      return orgJson(await detailOf(ctx, orgId, testId));
+      return answer(TestDetailResponse, await detailOf(ctx, orgId, testId));
     }),
   );
 
-  app.put('/v1/orgs/:orgId/tests/:testId', (c) =>
+  app.put(TEST_PATH, (c) =>
     handleOrg(async () => {
       const orgId = pathId(c.req.param('orgId'));
       const testId = pathId(c.req.param('testId'));
@@ -204,11 +220,11 @@ export const registerTestRoutes = (app: Hono<{ Bindings: Env }>, deps: TestRoute
         if (err instanceof RestError && err.sqlstate === '42501') return orgFail('conflict');
         throw err;
       }
-      return orgJson(await detailOf(ctx, orgId, testId));
+      return answer(TestDetailResponse, await detailOf(ctx, orgId, testId));
     }),
   );
 
-  app.post('/v1/orgs/:orgId/tests/:testId/publish', (c) =>
+  app.post(PUBLISH_PATH, (c) =>
     handleOrg(async () => {
       const orgId = pathId(c.req.param('orgId'));
       const testId = pathId(c.req.param('testId'));
@@ -292,16 +308,16 @@ export const registerTestRoutes = (app: Hono<{ Bindings: Env }>, deps: TestRoute
         return await retire();
       }
 
-      return orgJson(
-        PublishTestResponse.parse({
-          testVersionId: frozen.id,
-          versionNo: frozen.version_no,
-          status: 'published',
-          publishedAt: frozen.published_at,
-          contentSha256: encoded.sha256,
-          qualityCutoff: frozen.quality_cutoff,
-        }),
-      );
+      return answer(PublishTestResponse, {
+        testVersionId: frozen.id,
+        versionNo: frozen.version_no,
+        status: 'published',
+        publishedAt: frozen.published_at,
+        contentSha256: encoded.sha256,
+        qualityCutoff: frozen.quality_cutoff,
+      });
     }),
   );
+
+  return app;
 };
