@@ -50,9 +50,21 @@ export interface BandInput {
 }
 
 /**
+ * The observed value of a flag or context item: metadata only, never content (§4.6). The keys mirror the
+ * `observed` object of the D1 card contract (`@trace/shared/contracts/d1`): `len` sums the numeric `attrs.len`
+ * (paste/drop length), `count` sums the numeric `attrs.count` (coalesced untrusted input), `durationMs` sums the
+ * events' `durationMs`. A key is present only when at least one event carried it.
+ */
+export interface Observed {
+  len?: number;
+  durationMs?: number;
+  count?: number;
+}
+
+/**
  * A flag from a validated rule: timestamp, rule, observed value and evidence refs (plan §5 F).
- * `signalSeqs` holds at most 50 `gseq` values. `observed` is a short human-readable value
- * (assumption of the Wave 0 skeleton; §5.2 names the field only).
+ * One flag per validated rule that matched; `count` events matched it, the first at `firstAtMs`.
+ * `signalSeqs` holds at most 50 `gseq` values, in event order.
  */
 export interface Flag {
   ruleId: string;
@@ -62,12 +74,13 @@ export interface Flag {
   count: number;
   firstAtMs: number;
   signalSeqs: readonly number[];
-  observed: string;
+  observed: Observed;
 }
 
 /**
  * An unvalidated or unmatched signal, or a connectivity gap: shown on the timeline, never counted.
- * (Shape is an assumption of the Wave 0 skeleton; §5.2 describes it in prose only.)
+ * One item per event. `ruleId` and `family` name the first unvalidated rule the event matched (table order);
+ * an unmatched event has neither; a `connectivity_gap` has family `connectivity` (never `focus`, D1-6).
  */
 export interface ContextItem {
   kind: string;
@@ -76,6 +89,7 @@ export interface ContextItem {
   family?: string;
   ruleId?: string;
   durationMs?: number;
+  observed: Observed;
 }
 
 export interface BandOutput {

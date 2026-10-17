@@ -4,7 +4,14 @@ import type { Band, BandInput, BandOutput, Rule, RuleTable, Severity, Tier } fro
 
 describe('@trace/band-engine contract skeleton', () => {
   it('exports exactly the §5.2 runtime names', () => {
-    expect(Object.keys(engine).sort()).toEqual(['BAND_ENGINE_VERSION', 'canonicalJson']);
+    expect(Object.keys(engine).sort()).toEqual([
+      'BAND_ENGINE_VERSION',
+      'BandInputError',
+      'RuleTableError',
+      'canonicalJson',
+      'computeBand',
+      'parseRuleTable',
+    ]);
     expect(engine.BAND_ENGINE_VERSION).toBe('band-engine-1');
   });
 

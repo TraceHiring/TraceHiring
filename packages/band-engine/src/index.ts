@@ -6,12 +6,15 @@ export type {
   BandOutput,
   ContextItem,
   Flag,
+  Observed,
   Rule,
   RuleTable,
   Severity,
   SignalEvent,
   Tier,
 } from './types.js';
+export type { BandInputErrorCode } from './band.js';
+export type { RuleTableErrorCode } from './rules/parse.js';
+export { BAND_ENGINE_VERSION, BandInputError, computeBand } from './band.js';
 export { canonicalJson } from './canonical-json.js';
-
-export const BAND_ENGINE_VERSION = 'band-engine-1';
+export { RuleTableError, parseRuleTable } from './rules/parse.js';
