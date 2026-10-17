@@ -151,6 +151,12 @@ const decodePart = (part: string): unknown => {
   }
 };
 
+/** A fetch that never runs with a foreign `this` (workerd's global fetch refuses to be called as a method). */
+export const unbound =
+  (f: typeof fetch): typeof fetch =>
+  (input, init) =>
+    f(input, init);
+
 export interface SupabaseVerifierOptions {
   supabaseUrl: string;
   fetch: typeof fetch;
@@ -161,6 +167,8 @@ export interface SupabaseVerifierOptions {
 export const createSupabaseVerifier = (opts: SupabaseVerifierOptions) => {
   const base = opts.supabaseUrl.replace(/\/+$/, '');
   const issuer = `${base}/auth/v1`;
+  // Called unbound, never as `opts.fetch(...)`: workerd's fetch throws "Illegal invocation" with a foreign `this`.
+  const doFetch = unbound(opts.fetch);
   const now = opts.now ?? (() => Date.now());
   let cache: CachedKeys | null = null;
   let lastFetch = -Infinity;
@@ -170,7 +178,7 @@ export const createSupabaseVerifier = (opts: SupabaseVerifierOptions) => {
     if (force && now() - lastFetch < JWKS_REFETCH_MIN_MS) return cache;
     lastFetch = now();
     try {
-      const res = await opts.fetch(`${issuer}/.well-known/jwks.json`, {
+      const res = await doFetch(`${issuer}/.well-known/jwks.json`, {
         headers: { accept: 'application/json' },
       });
       if (!res.ok) return cache;
@@ -264,6 +272,7 @@ export interface RestOptions {
 
 export const createRest = (opts: RestOptions, caller: OrgCaller): Rest => {
   const base = `${opts.supabaseUrl.replace(/\/+$/, '')}/rest/v1`;
+  const doFetch = unbound(opts.fetch);
   const call = async <T>(
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     table: string,
@@ -283,7 +292,7 @@ export const createRest = (opts: RestOptions, caller: OrgCaller): Rest => {
     }
     let res: Response;
     try {
-      res = await opts.fetch(`${base}/${table}${qs === '' ? '' : `?${qs}`}`, {
+      res = await doFetch(`${base}/${table}${qs === '' ? '' : `?${qs}`}`, {
         method,
         headers,
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -371,7 +380,9 @@ export interface OrgDeps {
 }
 
 /** The production OrgDeps: SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY vars, the global fetch. Fails closed. */
-export const createOrgDeps = (fetcher: typeof fetch = fetch): OrgDeps => {
+export const createOrgDeps = (
+  fetcher: typeof fetch = (input, init) => fetch(input, init),
+): OrgDeps => {
   const verifiers = new Map<string, ReturnType<typeof createSupabaseVerifier>>();
   return {
     async context(request, env) {
