@@ -193,6 +193,9 @@ export const fetchStartPhoto = async (
   } catch {
     return null;
   }
+  // Only the canonical encoding: 43 characters carry 258 bits for a 256-bit tag, so the last character's two low
+  // bits are padding the decoder ignores; without this a link would have four valid `sig` spellings.
+  if (base64UrlEncode(signature) !== sig) return null;
   if (!(await crypto.subtle.verify('HMAC', deps.hmacKey, signature, signingInput(jti, exp)))) {
     return null;
   }

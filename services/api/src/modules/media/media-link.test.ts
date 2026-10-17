@@ -234,6 +234,23 @@ describe('GET /media/:jti', () => {
     expect((await s.fetchLink(url.toString())).status).toBe(200);
   });
 
+  it('a non-canonical spelling of a valid sig (padding bits set) is 404 before the DO', async () => {
+    const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    for (let i = 0; i < 8; i += 1) {
+      const s = await setup();
+      const url = new URL(await issuedUrl(await s.issue()));
+      const sig = url.searchParams.get('sig') ?? '';
+      const last = ALPHABET.indexOf(sig.slice(-1));
+      for (const bits of [1, 2, 3]) {
+        const variant = new URL(url);
+        variant.searchParams.set('sig', `${sig.slice(0, -1)}${ALPHABET[last | bits] ?? ''}`);
+        expect((await s.fetchLink(variant.toString())).status).toBe(404);
+      }
+      expect(s.links.calls.filter((c) => c === 'burn')).toEqual([]);
+      expect((await s.fetchLink(url.toString())).status).toBe(200);
+    }
+  });
+
   it('a DB denial at fetch (viewer lost access) gives no bytes and burns the link', async () => {
     const s = await setup();
     const url = await issuedUrl(await s.issue());
