@@ -152,3 +152,22 @@ describe('GET /v1/orgs/:orgId/reports/:reportId (AT-D3)', () => {
     expect(r.body).toStrictEqual({ error: { code: 'unavailable' } });
   });
 });
+
+describe('reports routes (AT-D13 api part: no reject path)', () => {
+  it('serves exactly three GET routes, none naming a decision, and no write verb', async () => {
+    const app = createReportsRoutes(fakeDeps(baseTables()).deps);
+    expect(app.routes.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'GET /v1/orgs/:orgId/tests/:testId/results',
+      'GET /v1/orgs/:orgId/reports/:reportId',
+      'GET /v1/orgs/:orgId/review/reports',
+    ]);
+    for (const r of app.routes) {
+      expect(r.path).not.toMatch(
+        /reject|decision|decide|confirm|overturn|appeal|notice|shortlist/i,
+      );
+    }
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      expect((await app.request(url(), { method }, ENV)).status, method).toBe(404);
+    }
+  });
+});

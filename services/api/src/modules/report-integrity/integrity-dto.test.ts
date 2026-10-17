@@ -236,3 +236,15 @@ describe('GET …/reports/:id/integrity (AT-D3, AT-D19)', () => {
     expect(body).toStrictEqual({ error: { code: 'unavailable' } });
   });
 });
+
+describe('report-integrity routes (AT-D13 api part: no reject path)', () => {
+  it('serves exactly one GET route and no write verb (no confirm or decision in D1)', async () => {
+    const app = createReportIntegrityRoutes(fakeIntegritySource(fullTables()).source);
+    expect(app.routes.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'GET /v1/orgs/:orgId/reports/:reportId/integrity',
+    ]);
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      expect((await app.request(url(), { method }, ENV)).status, method).toBe(404);
+    }
+  });
+});

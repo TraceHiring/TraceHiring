@@ -143,3 +143,15 @@ describe('GET …/reports/:id/quality (AT-D3, AT-D15 api part)', () => {
     expect(qualityCardFromRow(qualityCardRow(), new Map())).toBeNull();
   });
 });
+
+describe('report-quality routes (AT-D13 api part: no reject path)', () => {
+  it('serves exactly one GET route and no write verb', async () => {
+    const app = createReportQualityRoutes(fakeQualitySource(fullTables()).source);
+    expect(app.routes.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'GET /v1/orgs/:orgId/reports/:reportId/quality',
+    ]);
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      expect((await app.request(url(), { method }, ENV)).status, method).toBe(404);
+    }
+  });
+});
