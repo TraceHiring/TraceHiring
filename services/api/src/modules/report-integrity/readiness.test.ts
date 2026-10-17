@@ -122,3 +122,28 @@ describe('integrity card readiness (AT-D17)', () => {
     expect(body).toStrictEqual({ error: { code: 'not_found' } });
   });
 });
+
+// Every flag comes with evidence: a reviewer never sees a cut timeline as a complete `ready` card (spec review R3
+// reports, finding 4). At the read cap the card is served; one entry past it fails closed.
+describe('integrity timeline read cap', () => {
+  const readyWith = (n: number): Tables => ({
+    reports: [reportRow()],
+    quality_cards: [qualityRow(true)],
+    integrity_cards: [integrityCardRow()],
+    integrity_timeline_entries: Array.from({ length: n }, (_, i) =>
+      entryRow({ position: i + 1, offset_ms: 1000 + i }),
+    ),
+  });
+
+  it('serves the card with exactly 500 entries', async () => {
+    const { status, body } = await stateOf(readyWith(500));
+    expect(status).toBe(200);
+    expect(body.state).toBe('ready');
+  });
+
+  it('answers 503 unavailable with 501 entries instead of a cut card', async () => {
+    const { status, body } = await stateOf(readyWith(501));
+    expect(status).toBe(503);
+    expect(body).toStrictEqual({ error: { code: 'unavailable' } });
+  });
+});

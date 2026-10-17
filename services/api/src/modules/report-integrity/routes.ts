@@ -94,8 +94,10 @@ export const loadIntegrityCard = async (
     integrity_card_id: `eq.${card.id}`,
     session_id: `eq.${card.session_id}`,
     order: 'position.asc',
-    limit: String(MAX_ENTRIES),
+    // One past the cap, so a longer timeline fails closed instead of a cut flag list served as `ready`.
+    limit: String(MAX_ENTRIES + 1),
   });
+  if (rawEntries.length > MAX_ENTRIES) return integrityFail('unavailable');
   const entries = z.array(IntegrityTimelineEntryRow).safeParse(rawEntries);
   if (!entries.success) return integrityFail('unavailable');
   return projectIntegrityCard({
