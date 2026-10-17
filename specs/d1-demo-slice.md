@@ -635,6 +635,7 @@ There is no per-item paste policy and no `D1-PASTE-ALLOWED`. A paste from within
 ### 5.3 `packages/vendors`
 
 Each interface is a TS interface plus a mock in the same package; no vendor SDK; `@trace/vendors` imports only `@trace/shared`. `VENDOR_INTERFACES` gains `LlmGrader` and `Messaging`.
+**Lead decisions (2026-10-17, R1 spec review `docs/reviews/D1-spec-review-r1.md`):** (a) "strict zod type" below is met by a hand-written strict `parseGradeRequest` (no zod dependency in vendors; the key set is pinned by a test and identity keys are refused); (b) mock-grader anchors match as phrases: an anchor is tokenised and normalised like the answer (NFKC, lower case) and hits when its tokens prefix-match consecutive answer tokens; `parseGradeRequest` rejects an anchor with no tokens and a criterion with fewer distinct normalised anchors than `minHits`; (c) the band engine's `reasons` list is capped at 10 in table order (the card contract maximum).
 
 **`LlmGrader`** (`src/llm-grader.ts`):
 ```ts
