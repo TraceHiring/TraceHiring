@@ -30,7 +30,9 @@ export interface AppDeps {
 
 export const createApp = (deps: AppDeps): Hono<{ Bindings: Env }> => {
   const now = deps.now ?? (() => new Date());
-  const org = deps.org ?? createOrgDeps();
+  // The global fetch is wrapped, never passed bare: org-context calls it as `opts.fetch(...)`, and a host method
+  // called with another `this` throws "Illegal invocation" in workerd (spec review R3 reports, finding 1).
+  const org = deps.org ?? createOrgDeps((input, init) => fetch(input, init));
   const app = createHttpApp<{ Bindings: Env }>(SERVICE, deps);
 
   app.get('/health', (c) =>
