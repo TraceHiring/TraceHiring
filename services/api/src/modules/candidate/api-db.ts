@@ -57,10 +57,42 @@ export interface ApiDbHandle {
   close(): Promise<void>;
 }
 
-/** Opens the trace_api connection, or null when API_DB_URL is not bound (the caller answers 503 `unavailable`). */
+const LOCAL_DB_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+const STRONG_SSLMODES = new Set(['require', 'verify-full']);
+
+/**
+ * The TLS mode for the trace_api connection (security review R3 #1, ADR-031; the rule of scripts/ops/lib.mjs
+ * pgEnvOf, B0-SEC1). A non-local host gets `require` unless the URL asks for `verify-full`; a weak or unknown
+ * sslmode (disable, allow, prefer, verify-ca, which postgres.js does not verify), a repeated one or any other query
+ * parameter is refused (null). The local stack may run without TLS. The URL itself never leaves this function.
+ */
+export const apiDbSsl = (url: string): 'require' | 'verify-full' | false | null => {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if ((u.protocol !== 'postgres:' && u.protocol !== 'postgresql:') || u.hostname === '')
+    return null;
+  const keys = [...u.searchParams.keys()];
+  if (keys.some((k) => k !== 'sslmode') || u.searchParams.getAll('sslmode').length > 1) return null;
+  const sslmode = u.searchParams.get('sslmode');
+  if (LOCAL_DB_HOSTS.has(u.hostname.toLowerCase())) return false;
+  if (sslmode === null) return 'require';
+  return STRONG_SSLMODES.has(sslmode) ? (sslmode as 'require' | 'verify-full') : null;
+};
+
+/**
+ * Opens the trace_api connection, or null when API_DB_URL is not bound or its TLS mode is refused (the caller answers
+ * 503 `unavailable`). `ssl` is always passed explicitly, so the URL's sslmode cannot weaken it.
+ */
 export const openApiDb = (url: string | undefined): ApiDbHandle | null => {
   if (url === undefined || url === '') return null;
+  const ssl = apiDbSsl(url);
+  if (ssl === null) return null;
   const sql = postgres(url, {
+    ssl,
     fetch_types: false,
     max: 1,
     prepare: false,
