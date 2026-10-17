@@ -1,6 +1,8 @@
 {
   "extends": "@trace/config/tsconfig.base.json",
   "compilerOptions": {
+    // DOM: code passed to page.evaluate runs in the browser (DC-D6 spec).
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"]
   },
   "include": ["tests", "support", "*.ts"]
