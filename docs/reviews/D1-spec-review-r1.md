@@ -19,3 +19,8 @@
 
 ## Still due before the merge
 The R1 fixes above. The security-reviewer pass on the vendors production guard (§11: the demo outbox and the mock grader must refuse production). Then the merge `--no-ff` into `d1/integration`, verify:fast, full `pnpm verify` and CI.
+
+## Security pass on the production guard (lead, Opus, 2026-10-17; spec section 11)
+- `packages/vendors/src/messaging.ts` at `89a29fe`: the mock Messaging accepts only `dev` and `staging` (an allow-list held in a module-private, unexported array), checked in `createMessaging`, in the `OutboxMessaging` constructor and on every `send`; any other value, `production` or a missing one, throws `MessagingMockInProductionError` (fail closed). Recipients must match `@example.test`; error messages carry only a code (no PII). AT-D18 tests cover the factory, the constructor and idempotency. **PASS, no finding.**
+- **For R3 (L-11):** the api passes `env.TRACE_ENV` to `createMessaging` and must treat a missing or unknown `TRACE_ENV` as production (refuse), never default to `dev`.
+- Merged `--no-ff` into `d1/integration` after this pass.
