@@ -10,10 +10,15 @@ import { healthBody } from '@trace/shared/health';
 import { type ErrorReporter } from '@trace/shared/log';
 import { createHttpApp, NO_STORE } from '@trace/workers-http';
 import type { Hono } from 'hono';
+import { createAssignmentsRoutes } from './modules/assignments/routes.js';
+import { createInvitationsRoutes, deliveryFromEnv } from './modules/invitations/routes.js';
+import { createMediaRoutes, mediaFromEnv } from './modules/media/routes.js';
+import { createOutboxRoutes, outboxReaderFromEnv } from './modules/outbox/routes.js';
 import { createReportIntegrityRoutes } from './modules/report-integrity/routes.js';
 import { createReportQualityRoutes } from './modules/report-quality/routes.js';
 import { createReportsRoutes } from './modules/reports/routes.js';
 import { cardSource, createOrgDeps, type OrgDeps } from './modules/tests/org-context.js';
+import { createTestsRoutes, packagesFromEnv } from './modules/tests/routes.js';
 
 const SERVICE = 'api';
 
@@ -30,15 +35,19 @@ export interface AppDeps {
 
 export const createApp = (deps: AppDeps): Hono<{ Bindings: Env }> => {
   const now = deps.now ?? (() => new Date());
-  // The global fetch is wrapped, never passed bare: org-context calls it as `opts.fetch(...)`, and a host method
-  // called with another `this` throws "Illegal invocation" in workerd (spec review R3 reports, finding 1).
-  const org = deps.org ?? createOrgDeps((input, init) => fetch(input, init));
+  // createOrgDeps never calls fetch as a method (7734f06; spec review R3 reports, finding 1).
+  const org = deps.org ?? createOrgDeps();
   const app = createHttpApp<{ Bindings: Env }>(SERVICE, deps);
 
   app.get('/health', (c) =>
     c.json(healthBody(SERVICE, resolveVersion(c.env.VERSION), now()), 200, NO_STORE),
   );
 
+  app.route('/', createTestsRoutes({ org, packages: packagesFromEnv }));
+  app.route('/', createAssignmentsRoutes(org));
+  app.route('/', createInvitationsRoutes({ org, delivery: deliveryFromEnv }));
+  app.route('/', createOutboxRoutes({ org, reader: outboxReaderFromEnv }));
+  app.route('/', createMediaRoutes({ org, media: mediaFromEnv }));
   app.route('/', createReportsRoutes(org));
   app.route('/', createReportQualityRoutes(cardSource(org)));
   app.route('/', createReportIntegrityRoutes(cardSource(org)));
