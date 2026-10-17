@@ -6,7 +6,14 @@ import { MediaLinkResponse } from '@trace/shared/contracts/d1';
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
 import type { OrgContext } from '../tests/org-context.js';
-import { LINK_TTL_SECONDS, importHmacKey, signLink, type MediaDeps } from './media-link.js';
+import {
+  LINK_TTL_SECONDS,
+  MEDIA_SQL,
+  amrLiteral,
+  importHmacKey,
+  signLink,
+  type MediaDeps,
+} from './media-link.js';
 import {
   KEY,
   MEDIA,
@@ -263,5 +270,66 @@ describe('GET /media/:jti', () => {
     const url = await issuedUrl(await s.issue());
     const res = await s.app.request(url, { headers: { origin: 'https://evil.test' } }, ENV);
     expect(res.headers.get('access-control-allow-origin')).toBeNull();
+  });
+});
+
+describe('R3-1 identity and R3-3 key (grant parameters)', () => {
+  it('passes the verified sub, aal and amr verbatim: path org at issue, record org at fetch', async () => {
+    const amr = ['password', 'totp', 'odd"method\\x'];
+    const s = await setup({ ctx: { caller: caller({ aal: 'aal2', amr }) } });
+    const url = await issuedUrl(await s.issue());
+    expect((await s.fetchLink(url)).status).toBe(200);
+    const jti = new URL(url).pathname.split('/').pop();
+    const literal = '{"password","totp","odd\\"method\\\\x"}';
+    expect(s.db.calls).toEqual([
+      { orgId: ORG, text: MEDIA_SQL.linkGrant, params: [MEDIA, VIEWER, 'aal2', literal, jti] },
+      { orgId: ORG, text: MEDIA_SQL.viewGrant, params: [MEDIA, VIEWER, 'aal2', literal, jti] },
+    ]);
+  });
+
+  it('stores exactly the verified values in the MediaLinkDO record', async () => {
+    const s = await setup({ ctx: { caller: caller({ aal: 'aal1', amr: ['otp'] }) } });
+    const url = new URL(await issuedUrl(await s.issue()));
+    const jti = url.pathname.split('/').pop() ?? '';
+    const record = await s.links.burn(jti, Math.floor(T0 / 1000));
+    expect(record).toEqual({
+      mediaId: MEDIA,
+      orgId: ORG,
+      viewerUserId: VIEWER,
+      aal: 'aal1',
+      amr: ['otp'],
+      exp: Number(url.searchParams.get('exp')),
+    });
+  });
+
+  it('encodes amr as a quoted text[] literal that drops nothing', () => {
+    expect(amrLiteral([])).toBe('{}');
+    expect(amrLiteral(['otp'])).toBe('{"otp"}');
+    expect(amrLiteral(['a,b', '{c}', 'd"e', 'f\\g', ''])).toBe('{"a,b","{c}","d\\"e","f\\\\g",""}');
+  });
+
+  it('streams nothing when the database returns a key of another org or another shape', async () => {
+    for (const key of [
+      `media/${ORG_B}/5e000000-0000-4000-8000-000000000001/start_photo.jpg`,
+      `media/${ORG}/5e000000-0000-4000-8000-000000000001/events.ndjson`,
+      `packages/${ORG}.json`,
+    ]) {
+      const s = await setup();
+      s.db.state.key = key;
+      const url = await issuedUrl(await s.issue());
+      expect((await s.fetchLink(url)).status).toBe(404);
+      expect(s.evidence.reads).toEqual([]);
+    }
+  });
+
+  it('an R2 miss is the same 404 with the media headers', async () => {
+    const s = await setup();
+    s.db.state.key = `media/${ORG}/5e000000-0000-4000-8000-000000000009/start_photo.jpg`;
+    const url = await issuedUrl(await s.issue());
+    const res = await s.fetchLink(url);
+    expect(res.status).toBe(404);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(res.headers.get('vary')).toBe('Origin');
+    expect(await res.json()).toEqual({ error: { code: 'not_found' } });
   });
 });

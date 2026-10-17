@@ -3,6 +3,7 @@
 // LINK_SQL; a real-DO run needs the MEDIA_LINKS binding in the test pool's config (lead request).
 import { describe, expect, it } from 'vitest';
 import { LINK_SQL, LinkStore, type LinkRecord } from './link-store.js';
+import { linkGuard } from './media-link-do.js';
 import { fakeLinkSql, MEDIA, ORG, VIEWER } from './media.test-helpers.js';
 
 const JTI = '9a000000-0000-4000-8000-000000000001';
@@ -48,6 +49,27 @@ describe('LinkStore', () => {
     expect(LINK_SQL.burn).toMatch(
       /^update links set state = 'burnt' where jti = \? and state = 'open' and exp >= \? returning record$/,
     );
+  });
+
+  it('keeps the verified amr verbatim in the stored record', () => {
+    const store = new LinkStore(fakeLinkSql());
+    const odd = { ...record(1000), amr: ['otp', 'odd"method\\x', ''] };
+    store.issue(JTI, odd);
+    expect(store.burn(JTI, 900)).toEqual(odd);
+  });
+
+  it('MediaLinkDO re-checks its inputs: a malformed jti or record is refused, a bad burn is null', () => {
+    const dob = linkGuard(new LinkStore(fakeLinkSql()));
+    expect(() => dob.issue('not-a-uuid', record(1000))).toThrow('bad_request');
+    expect(() => dob.issue(JTI, { ...record(1000), aal: 'aal3' as 'aal2' })).toThrow('bad_request');
+    expect(() => dob.issue(JTI, { ...record(1000), extra: 1 } as unknown as LinkRecord)).toThrow(
+      'bad_request',
+    );
+    dob.issue(JTI, record(1000));
+    expect(dob.burn(JTI, -1)).toBeNull();
+    expect(dob.burn('x', 900)).toBeNull();
+    expect(dob.burn(JTI, 900)).toEqual(record(1000));
+    expect(dob.allowIssue(1.5)).toBe(false);
   });
 
   it('allows 20 issues a minute per viewer, then refuses until the next minute', () => {

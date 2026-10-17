@@ -89,7 +89,9 @@ export const fakeMediaDb = (opts: { now: () => number }) => {
   const audit: AuditRow[] = [];
   const allowed = new Set<string>([`${MEDIA}|${VIEWER}`]);
   const mediaOrg = new Map<string, string>([[MEDIA, ORG]]);
-  const state = { failCommit: false, dbCalls: 0 };
+  const state = { failCommit: false, dbCalls: 0, key: KEY };
+  /** Every grant call: the org bound for its transaction and the bound parameters, in order. */
+  const calls: { orgId: string | null; text: string; params: readonly SqlParam[] }[] = [];
   const denied = () =>
     Object.assign(new Error('TRACE_GUARD: media access denied'), { code: '42501' });
   const db: ApiDb = {
@@ -98,6 +100,7 @@ export const fakeMediaDb = (opts: { now: () => number }) => {
       const pending: AuditRow[] = [];
       const tx: SqlTx = {
         async query<R extends object>(text: string, params: readonly SqlParam[] = []) {
+          calls.push({ orgId, text, params });
           const [media, viewer, , , link] = params.map(String) as [
             string,
             string,
@@ -138,7 +141,7 @@ export const fakeMediaDb = (opts: { now: () => number }) => {
               actor: viewer,
               at: opts.now(),
             });
-            return [{ r2_key: KEY }] as unknown as R[];
+            return [{ r2_key: state.key }] as unknown as R[];
           }
           throw new Error('unexpected statement');
         },
@@ -149,7 +152,7 @@ export const fakeMediaDb = (opts: { now: () => number }) => {
       return out;
     },
   };
-  return { db, audit, allowed, mediaOrg, state };
+  return { db, audit, allowed, mediaOrg, state, calls };
 };
 
 export const fakeEvidence = (): EvidenceReader & { reads: string[] } => {

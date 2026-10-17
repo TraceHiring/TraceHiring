@@ -66,9 +66,15 @@ const signingInput = (jti: string, exp: number) => utf8(`v1|${jti}|${exp}`);
 export const signLink = async (key: CryptoKey, jti: string, exp: number): Promise<string> =>
   base64UrlEncode(new Uint8Array(await crypto.subtle.sign('HMAC', key, signingInput(jti, exp))));
 
-/** `amr` as a text[] literal; only method names of the form [a-z_]{1,32} pass (they match the SQL mapping). */
-const amrLiteral = (amr: readonly string[]): string =>
-  `{${amr.filter((m) => /^[a-z_]{1,32}$/.test(m)).join(',')}}`;
+/**
+ * `amr` as a Postgres text[] literal, every method verbatim (R3-1): private.membership_counts maps the JWT's `amr` to
+ * `e ->> 'method'` of each object element, and org-context keeps exactly the string methods in order. Each element is
+ * double-quoted with `\` and `"` escaped, so no value is dropped, split or reinterpreted. (A non-string `method`,
+ * which SQL would turn into its JSON text or NULL, is dropped by org-context; such a value can never equal `otp`,
+ * `magiclink` or `password`, the only methods membership_counts_for reads, so the answer is the same.)
+ */
+export const amrLiteral = (amr: readonly string[]): string =>
+  `{${amr.map((m) => `"${m.replace(/[\\"]/g, (ch) => `\\${ch}`)}"`).join(',')}}`;
 
 export interface IssueInput {
   caller: OrgCaller;
@@ -146,7 +152,7 @@ export const issueStartPhotoLink = async (
     orgId: input.orgId,
     viewerUserId: input.caller.userId,
     aal: input.caller.aal,
-    amr: input.caller.amr.filter((m) => /^[a-z_]{1,32}$/.test(m)),
+    amr: [...input.caller.amr],
     exp,
   };
   try {
