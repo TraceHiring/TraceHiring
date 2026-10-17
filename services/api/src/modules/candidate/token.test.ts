@@ -19,7 +19,7 @@ const NOW = 1_800_000_000;
 
 interface TestKeys {
   privateText: string;
-  publicJwk: JsonWebKey & { kid: string };
+  publicJwk: Record<string, string | undefined> & { kid: string };
 }
 
 const makeKeys = async (kid: string): Promise<TestKeys> => {

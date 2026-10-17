@@ -109,7 +109,7 @@ export const signCandidateToken = async (
 const decodeJson = (part: string): unknown => {
   try {
     return JSON.parse(
-      new TextDecoder('utf-8', { fatal: true }).decode(base64UrlDecode(part)),
+      new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(base64UrlDecode(part)),
     ) as unknown;
   } catch {
     return undefined;
