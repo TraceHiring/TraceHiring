@@ -1,6 +1,12 @@
 // AT-D18 (api half): the demo outbox never reaches production or a real address, and stores no address
 // (spec D1-1, D1-2, L-11). The store runs on a fake of the DO SQLite surface that interprets only OUTBOX_SQL; a
 // real-DO test needs the OUTBOX binding in the test pool's config (lead request).
+import {
+  createMessaging,
+  MessagingInputError,
+  MessagingMockInProductionError,
+  type MessagingEnv,
+} from '@trace/vendors';
 import { describe, expect, it } from 'vitest';
 import { OUTBOX_KEEP, OutboxStore } from './outbox-store.js';
 import { fakeOutboxNamespace, fakeOutboxSql } from './outbox.test-helpers.js';
@@ -24,6 +30,9 @@ describe('demoOutboxEnabled', () => {
     [{ TRACE_ENV: 'staging', DEMO_OUTBOX: '0' }, false],
     [{ DEMO_OUTBOX: '1' }, false],
     [{ TRACE_ENV: '', DEMO_OUTBOX: '1' }, false],
+    // Only the environments the vendors mock accepts (createMessaging refuses every other value).
+    [{ TRACE_ENV: 'preview', DEMO_OUTBOX: '1' }, false],
+    [{ TRACE_ENV: 'Production', DEMO_OUTBOX: '1' }, false],
   ])('%j -> %s', (env, expected) => {
     expect(demoOutboxEnabled(env)).toBe(expected);
   });
@@ -56,6 +65,44 @@ describe('createDemoOutbox', () => {
     expect(entries.map((e) => e.kind)).toEqual(['invite', 'otp']);
     expect(JSON.stringify(entries)).not.toContain('@example.test');
     expect(await outbox?.list('22222222-2222-4222-8222-222222222222')).toEqual([]);
+  });
+});
+
+describe('createDemoOutbox through the vendors Messaging mock', () => {
+  it('createMessaging itself refuses production and a missing TRACE_ENV', () => {
+    const store = { append: async () => ({ id: 'x', created: true }), list: async () => [] };
+    expect(() => createMessaging('production', store)).toThrow(MessagingMockInProductionError);
+    expect(() => createMessaging(undefined as unknown as MessagingEnv, store)).toThrow(
+      MessagingMockInProductionError,
+    );
+  });
+
+  it('a message the vendors mock refuses (empty body) writes nothing', async () => {
+    const ns = fakeOutboxNamespace();
+    const outbox = createDemoOutbox({ TRACE_ENV: 'staging', DEMO_OUTBOX: '1' }, ns);
+    await expect(outbox?.write(ORG, { ...message(), bodyText: '' })).rejects.toBeInstanceOf(
+      MessagingInputError,
+    );
+    expect(await outbox?.list(ORG)).toEqual([]);
+  });
+
+  it('the DO append is idempotent and answers the first entry id', () => {
+    const store = new OutboxStore(fakeOutboxSql());
+    const entry = {
+      kind: 'invite' as const,
+      candidateLabel: 'Candidate 2',
+      bodyText: 'x',
+      idempotencyKey: 'k',
+    };
+    expect(store.append(entry, 'id-1', '2026-10-17T08:00:00.000Z')).toEqual({
+      id: 'id-1',
+      created: true,
+    });
+    expect(store.append(entry, 'id-2', '2026-10-17T08:00:01.000Z')).toEqual({
+      id: 'id-1',
+      created: false,
+    });
+    expect(store.list()).toHaveLength(1);
   });
 });
 

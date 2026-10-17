@@ -28,20 +28,30 @@ export type OrgErrorCode =
   | 'not_found'
   | 'conflict'
   | 'cutoff_required'
+  | 'draft_incomplete'
   | 'rate_limited'
+  | 'internal'
   | 'unavailable';
 
-export const ORG_ERROR_STATUS: Record<OrgErrorCode, 400 | 401 | 403 | 404 | 409 | 422 | 429 | 503> =
-  {
-    bad_request: 400,
-    unauthorized: 401,
-    aal2_required: 403,
-    not_found: 404,
-    conflict: 409,
-    cutoff_required: 422,
-    rate_limited: 429,
-    unavailable: 503,
-  };
+export const ORG_ERROR_STATUS: Record<
+  OrgErrorCode,
+  400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 503
+> = {
+  bad_request: 400,
+  unauthorized: 401,
+  aal2_required: 403,
+  not_found: 404,
+  conflict: 409,
+  cutoff_required: 422,
+  // Publish of a draft the guard trigger would refuse (no section, an empty section, an mcq item without a valid key,
+  // a written item without a rubric).
+  draft_incomplete: 422,
+  rate_limited: 429,
+  // Publish failed closed after the guarded UPDATE (spec §6.2: the rebuilt package hash differed; the version is
+  // retired).
+  internal: 500,
+  unavailable: 503,
+};
 
 export class OrgError extends Error {
   readonly code: OrgErrorCode;
@@ -141,6 +151,12 @@ const decodePart = (part: string): unknown => {
   }
 };
 
+/** A fetch that never runs with a foreign `this` (workerd's global fetch refuses to be called as a method). */
+export const unbound =
+  (f: typeof fetch): typeof fetch =>
+  (input, init) =>
+    f(input, init);
+
 export interface SupabaseVerifierOptions {
   supabaseUrl: string;
   fetch: typeof fetch;
@@ -151,6 +167,8 @@ export interface SupabaseVerifierOptions {
 export const createSupabaseVerifier = (opts: SupabaseVerifierOptions) => {
   const base = opts.supabaseUrl.replace(/\/+$/, '');
   const issuer = `${base}/auth/v1`;
+  // Called unbound, never as `opts.fetch(...)`: workerd's fetch throws "Illegal invocation" with a foreign `this`.
+  const doFetch = unbound(opts.fetch);
   const now = opts.now ?? (() => Date.now());
   let cache: CachedKeys | null = null;
   let lastFetch = -Infinity;
@@ -160,7 +178,7 @@ export const createSupabaseVerifier = (opts: SupabaseVerifierOptions) => {
     if (force && now() - lastFetch < JWKS_REFETCH_MIN_MS) return cache;
     lastFetch = now();
     try {
-      const res = await opts.fetch(`${issuer}/.well-known/jwks.json`, {
+      const res = await doFetch(`${issuer}/.well-known/jwks.json`, {
         headers: { accept: 'application/json' },
       });
       if (!res.ok) return cache;
@@ -254,6 +272,7 @@ export interface RestOptions {
 
 export const createRest = (opts: RestOptions, caller: OrgCaller): Rest => {
   const base = `${opts.supabaseUrl.replace(/\/+$/, '')}/rest/v1`;
+  const doFetch = unbound(opts.fetch);
   const call = async <T>(
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     table: string,
@@ -273,7 +292,7 @@ export const createRest = (opts: RestOptions, caller: OrgCaller): Rest => {
     }
     let res: Response;
     try {
-      res = await opts.fetch(`${base}/${table}${qs === '' ? '' : `?${qs}`}`, {
+      res = await doFetch(`${base}/${table}${qs === '' ? '' : `?${qs}`}`, {
         method,
         headers,
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -309,6 +328,8 @@ export const restErrorCode = (err: unknown): OrgErrorCode => {
   if (err instanceof OrgError) return err.code;
   if (err instanceof RestError) {
     if (err.sqlstate === '23505') return 'conflict';
+    // A foreign key or guard naming a parent the caller cannot see (a test or membership of another org).
+    if (err.sqlstate === '23503') return 'not_found';
     if (
       err.sqlstate === '42501' ||
       err.status === 401 ||
@@ -359,7 +380,9 @@ export interface OrgDeps {
 }
 
 /** The production OrgDeps: SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY vars, the global fetch. Fails closed. */
-export const createOrgDeps = (fetcher: typeof fetch = fetch): OrgDeps => {
+export const createOrgDeps = (
+  fetcher: typeof fetch = (input, init) => fetch(input, init),
+): OrgDeps => {
   const verifiers = new Map<string, ReturnType<typeof createSupabaseVerifier>>();
   return {
     async context(request, env) {

@@ -13,6 +13,7 @@ export const fakeOutboxSql = (): SqlStorageLike & { rows: Record<string, SqlStor
       if (query === OUTBOX_SQL.insert) {
         if (!rows.some((r) => r.idem === b[5])) {
           seq += 1;
+          const id = b[0] ?? null;
           rows.push({
             seq,
             id: b[0] ?? null,
@@ -22,8 +23,13 @@ export const fakeOutboxSql = (): SqlStorageLike & { rows: Record<string, SqlStor
             body_text: b[4] ?? null,
             idem: b[5] ?? null,
           });
+          return { toArray: () => [{ id }] };
         }
         return { toArray: () => [] };
+      }
+      if (query === OUTBOX_SQL.byIdem) {
+        const hit = rows.filter((r) => r.idem === b[0]).map((r) => ({ id: r.id ?? null }));
+        return { toArray: () => hit };
       }
       if (query === OUTBOX_SQL.trim) {
         const keepFrom = seq - Number(b[0]);
@@ -59,7 +65,7 @@ export const fakeOutboxNamespace = (): OutboxNamespace & { stores: Map<string, O
       return {
         append: (e) => {
           n += 1;
-          s.append(
+          return s.append(
             e,
             `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
             '2026-10-17T08:00:00.000Z',

@@ -2,7 +2,13 @@
 // (signature against the JWKS, iss, aud, exp, role). Keys are generated at run time; the JWKS is served by a fake fetch.
 import { describe, expect, it } from 'vitest';
 import { base64UrlEncode, utf8 } from '../candidate/encoding.js';
-import { createRest, createSupabaseVerifier, restErrorCode, RestError } from './org-context.js';
+import {
+  createRest,
+  createSupabaseVerifier,
+  restErrorCode,
+  RestError,
+  unbound,
+} from './org-context.js';
 
 const SUPA = 'http://127.0.0.1:54321';
 const USER = '0f000000-0000-4000-8000-000000000001';
@@ -160,5 +166,44 @@ describe('createRest', () => {
     expect(String((failure as Error).message)).toBe('rest_failed');
     expect(restErrorCode(failure)).toBe('not_found');
     await expect(rest.select('Robert; drop', {})).rejects.toBeInstanceOf(RestError);
+  });
+});
+
+describe('fetch is never called as a method (workerd: "Illegal invocation")', () => {
+  // A strict-mode function standing in for workerd's fetch: it refuses any `this` but none or the global one.
+  const strictFetch = (seen: unknown[]) =>
+    function (this: unknown, url: string) {
+      seen.push(this);
+      if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation');
+      if (url.endsWith('/.well-known/jwks.json'))
+        return Promise.resolve(Response.json({ keys: [] }));
+      return Promise.resolve(Response.json([]));
+    } as unknown as typeof fetch;
+
+  it('the verifier and the PostgREST client call the injected fetch unbound', async () => {
+    const seen: unknown[] = [];
+    const verify = createSupabaseVerifier({
+      supabaseUrl: SUPA,
+      fetch: strictFetch(seen),
+      now: () => NOW,
+    });
+    const issuer = await makeIssuer();
+    // An empty JWKS: the token is refused as unauthorized (not unavailable), so the fetch itself succeeded.
+    expect(await code(verify(`Bearer ${await issuer.sign(goodClaims())}`))).toBe('unauthorized');
+    const rest = createRest(
+      { supabaseUrl: SUPA, publishableKey: 'pk', fetch: strictFetch(seen) },
+      { userId: USER, aal: 'aal1', amr: ['otp'], jwt: 'h.p.s' },
+    );
+    expect(await rest.select('tests', { select: 'id' })).toEqual([]);
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    for (const t of seen) expect(t === undefined || t === globalThis).toBe(true);
+  });
+
+  it('unbound() drops a foreign this', async () => {
+    const seen: unknown[] = [];
+    const holder = { f: unbound(strictFetch(seen)) };
+    await holder.f('https://api.test/x');
+    expect(seen).toHaveLength(1);
+    expect(seen[0] === undefined || seen[0] === globalThis).toBe(true);
   });
 });
