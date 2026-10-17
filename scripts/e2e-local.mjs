@@ -158,7 +158,27 @@ export function startProcess(spec, root) {
     }
     await exited;
   };
-  return { name: spec.name, output: () => output, exited, stop, exitCode: () => exitedWith };
+  /** Synchronous kill of the whole tree, for a signal handler that exits right after it. */
+  const killNow = () => {
+    if (exitedWith !== null || child.pid === undefined) return;
+    try {
+      if (process.platform === 'win32') {
+        spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      } else {
+        process.kill(-child.pid, 'SIGKILL');
+      }
+    } catch {
+      // already gone
+    }
+  };
+  return {
+    name: spec.name,
+    output: () => output,
+    exited,
+    stop,
+    killNow,
+    exitCode: () => exitedWith,
+  };
 }
 
 /** Runs a command with inherited output (Playwright's progress shows in the CI log). */
@@ -173,6 +193,15 @@ export function runInherit(cmd, args, { cwd, env }) {
     child.on('error', () => resolve(null));
     child.on('exit', (code) => resolve(code));
   });
+}
+
+/** True when `url` answers 200 now (one try, short timeout). */
+async function answers(fetch, url) {
+  try {
+    return (await fetch(url, { signal: AbortSignal.timeout(2000) })).status === 200;
+  } catch {
+    return false;
+  }
 }
 
 /** Polls `url` until it answers 200, the process exits, or the time runs out; returns '' or a problem. */
@@ -225,6 +254,16 @@ export async function main(options) {
   const t0 = now();
   const phases = {};
   let playwright = null;
+  // Security review 2026-10-17 L2: the lock's signal handler exits at once, so the finally below
+  // never runs on Ctrl+C, and on POSIX the detached process groups would survive. This handler is
+  // registered first, so it runs first: it kills every process tree and removes the state folder.
+  const live = { handles: [], stateDir: null };
+  const onSignal = () => {
+    for (const h of live.handles) h.killNow();
+    if (live.stateDir !== null) deps.removeDir(live.stateDir);
+  };
+  const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'];
+  for (const s of SIGNALS) deps.proc.on(s, onSignal);
 
   const result = await withLocalStack(deps, { stop: argv.includes('--stop') }, async () => {
     phases.supabase_ms = now() - t0;
@@ -240,11 +279,22 @@ export async function main(options) {
     }
 
     const stateDir = deps.makeStateDir();
-    const handles = [];
+    live.stateDir = stateDir;
+    const handles = live.handles;
     const problems = [];
     try {
       const ts = now();
       const specs = stackProcesses(stateDir.split(path.sep).join('/'));
+      // An earlier, interrupted run may still hold a port: then the new process (strictPort)
+      // would fail while the old one answers, and the run would test a stale build (L2).
+      for (const spec of specs) {
+        if (await answers(fetch, spec.ready)) {
+          problems.push(
+            `${spec.ready} already answers before ${spec.name} started (an earlier stack may still be running; stop it first)`,
+          );
+        }
+      }
+      if (problems.length > 0) return problems;
       for (const spec of specs) {
         log(`${TOOL}: starting ${spec.name}`);
         handles.push(start(spec, root));
@@ -283,8 +333,10 @@ export async function main(options) {
         deps.writeFile(file, redact(h.output()));
       }
       deps.removeDir(stateDir);
+      live.stateDir = null;
     }
   });
+  for (const s of SIGNALS) deps.proc.off(s, onSignal);
 
   const totalMs = now() - t0;
   const problems = [...result.problems];

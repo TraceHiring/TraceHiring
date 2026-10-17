@@ -29,6 +29,8 @@ function harness({
   outputs = {},
   exitEarly = {},
   playwright = 0,
+  occupied = [],
+  onPlaywright = () => {},
 } = {}) {
   const root = makeTempDir('trace-e2e-root-');
   writeFiles(root, { 'supabase/config.toml': 'project_id = "trace-e2e-test"\n' });
@@ -39,8 +41,10 @@ function harness({
     stopped: [],
     written: {},
     removed: [],
+    killed: [],
     lines: [],
     pw: null,
+    exitAt: null,
     root,
   };
   h.deps = {
@@ -59,7 +63,10 @@ function harness({
     isPidAlive: () => false,
     pid: 4242,
     proc: new EventEmitter(),
-    exit: () => {},
+    // The lock's signal handler calls exit(); record what was already cleaned up at that moment.
+    exit: (code) => {
+      h.exitAt = { code, killed: [...h.killed], removed: [...h.removed] };
+    },
     log: (m) => h.lines.push(m),
     warn: (m) => h.lines.push(m),
     error: (m) => h.lines.push(m),
@@ -74,12 +81,22 @@ function harness({
         stop: async () => {
           h.stopped.push(spec.name);
         },
+        killNow: () => {
+          h.killed.push(spec.name);
+        },
       };
     },
-    fetch: async (url) => ({ status: ready(url) ? 200 : 503 }),
+    // A URL answers once its process has started (or when something else already holds the port).
+    fetch: async (url) => ({
+      status:
+        occupied.includes(url) || (ready(url) && h.started.some((s) => s.ready === url))
+          ? 200
+          : 503,
+    }),
     runInherit: async (cmd, args, opts) => {
       h.calls.push(`playwright ${args.slice(1).join(' ')}`);
       h.pw = { cmd, args, opts };
+      onPlaywright(h);
       return playwright;
     },
     makeStateDir: () => STATE,
@@ -275,6 +292,32 @@ describe('main', () => {
     expect(h.lines.join('\n')).toMatch(/Playwright exited 1/);
     expect(h.stopped).toHaveLength(4);
     expect(manifestOf(h)).toMatchObject({ playwright_exit: 1, result: 'fail' });
+  });
+
+  // Security review 2026-10-17 L2: an orphaned stack from an interrupted run must not be tested.
+  it('refuses to start when a port already answers (an earlier stack is still running)', async () => {
+    const h = harness({ occupied: ['http://127.0.0.1:8787/health'] });
+    expect(await main(h.deps)).toBe(1);
+    expect(h.started).toEqual([]);
+    expect(h.lines.join('\n')).toMatch(
+      /http:\/\/127\.0\.0\.1:8787\/health already answers before edge\+jobs started/,
+    );
+  });
+
+  it('on a signal, kills every process tree and removes the state folder before the lock handler exits', async () => {
+    const h = harness({ onPlaywright: (state) => state.deps.proc.emit('SIGINT') });
+    await main(h.deps);
+    expect(h.exitAt.code).toBe(130);
+    expect(h.exitAt.killed.sort()).toEqual(['api', 'candidate', 'edge+jobs', 'recruiter']);
+    expect(h.exitAt.removed).toEqual([STATE]);
+  });
+
+  it('leaves no signal handler behind', async () => {
+    const h = harness();
+    await main(h.deps);
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK', 'exit']) {
+      expect(h.deps.proc.listenerCount(signal), signal).toBe(0);
+    }
   });
 
   it('fails when the whole run is over the 25-minute CI job limit', async () => {
