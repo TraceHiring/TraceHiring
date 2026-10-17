@@ -28,20 +28,30 @@ export type OrgErrorCode =
   | 'not_found'
   | 'conflict'
   | 'cutoff_required'
+  | 'draft_incomplete'
   | 'rate_limited'
+  | 'internal'
   | 'unavailable';
 
-export const ORG_ERROR_STATUS: Record<OrgErrorCode, 400 | 401 | 403 | 404 | 409 | 422 | 429 | 503> =
-  {
-    bad_request: 400,
-    unauthorized: 401,
-    aal2_required: 403,
-    not_found: 404,
-    conflict: 409,
-    cutoff_required: 422,
-    rate_limited: 429,
-    unavailable: 503,
-  };
+export const ORG_ERROR_STATUS: Record<
+  OrgErrorCode,
+  400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 503
+> = {
+  bad_request: 400,
+  unauthorized: 401,
+  aal2_required: 403,
+  not_found: 404,
+  conflict: 409,
+  cutoff_required: 422,
+  // Publish of a draft the guard trigger would refuse (no section, an empty section, an mcq item without a valid key,
+  // a written item without a rubric).
+  draft_incomplete: 422,
+  rate_limited: 429,
+  // Publish failed closed after the guarded UPDATE (spec §6.2: the rebuilt package hash differed; the version is
+  // retired).
+  internal: 500,
+  unavailable: 503,
+};
 
 export class OrgError extends Error {
   readonly code: OrgErrorCode;
