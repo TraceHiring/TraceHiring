@@ -42,6 +42,9 @@ catalog:
   # Sentry adapter (m0-foundations §9.2, d1 AT-D22): recruiter app, workers/jobs, services/api only.
   '@sentry/cloudflare': 11.1.0
   '@sentry/react': 11.1.0
+  # Workers -> Postgres driver (ADR-031, DC-D7): services/api and workers/jobs only, exactly 3.4.9
+  # (published 2026-04-05).
+  postgres: 3.4.9
 
 # Build-script allow-list (pnpm 12 key, checked in S1.0).
 allowBuilds:

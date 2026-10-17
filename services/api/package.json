@@ -17,6 +17,7 @@
     "@trace/vendors": "workspace:*",
     "@trace/workers-http": "workspace:*",
     "hono": "catalog:",
+    "postgres": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
