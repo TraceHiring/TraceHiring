@@ -8,7 +8,8 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-16 17:30 IST (newest; wins over the lines below):** all four writer branches are placed and reviewed (key script, recruiter CSP + strictPort, DC-D5/D6 spikes, staging-deploy rework); full `pnpm verify` green on `6640b42`; Opus security review PASS WITH NOTES with S3/S7/S8 fixed, S4 in the runbook, S1 a founder gate. Next: HANDOFF "Next step" 2a (S2, S6; S5 is done), 2b (DC-D9 + DC-D6 Linux `e2e-local` job), 2c (full verify, CI, tag `cp/d1-03`), then Wave 1. On the Pro plan run at most 2 agents at once.
+- **Update 2026-10-17 08:45 IST (newest; wins over the lines below):** **Wave 0 is complete**: S2, S6 and the tail review's L1/L2/I1 fixed, `e2e-local` CI job + `scripts/e2e-local.mjs` (DC-D9 PASS, DC-D6 Linux PASS), full `pnpm verify` and CI green on `1dff4d6` = **`cp/d1-03`**; postgres 3.4.9 added (`c514c7a`). **Wave 1:** R1 **merged** (`df865ca` = **`cp/d1-04`**, full verify + CI green) and R3 (`d1/r3-api`: partial, not reviewed) from `c514c7a`; both pushed, neither merged. Next: HANDOFF "Next step" 2b-2c (finish and review R3, merge, cp/d1-05, then C1). On the Pro plan run at most 2 agents at once; on this machine run verify with `npm_config_workspace_concurrency=1`.
+- **Update 2026-10-16 17:30 IST:** all four writer branches are placed and reviewed (key script, recruiter CSP + strictPort, DC-D5/D6 spikes, staging-deploy rework); full `pnpm verify` green on `6640b42`; Opus security review PASS WITH NOTES with S3/S7/S8 fixed, S4 in the runbook, S1 a founder gate. Next: HANDOFF "Next step" 2a (S2, S6; S5 is done), 2b (DC-D9 + DC-D6 Linux `e2e-local` job), 2c (full verify, CI, tag `cp/d1-03`), then Wave 1. On the Pro plan run at most 2 agents at once.
 - **Update 2026-10-16 08:15 IST:** carried DB items fixed (`cfd3a67`, rls 2616, CI green); ES256 key ops script placed (`9429559`, `19152dc`) and its public value made a JSON array (`e0121f3`, verify:fast green). Three writer branches stopped at the usage limit, **not reviewed or placed**: ci.yml rework `worktree-agent-a5a448b74d436d19a` (`a48545b`), recruiter CSP + strictPort `worktree-agent-a59431baa68efcdfb` (`958e1e4`), DC-D5/D6 spikes `worktree-agent-a9c30de5fc651e33c` (`d9d96a6`); each worktree may hold uncommitted work. Next: HANDOFF "Next step" 2a–2e, then tag `cp/d1-03`. On the Pro plan run at most 2 agents at once.
 - **Update 2026-10-15 17:45 IST:** jobs queue/sweep wiring placed (`289cea1`); the ci.yml staging-deploy draft was reverted (`2e679fc`, broke S3B-1) and must be reworked from `b0d2c8c`. Next: verify:fast + full verify + CI on `2e679fc`, the ci.yml rework, then the ES256 key ops script, recruiter CSP, DC-D5/D6/D8/D9, tag `cp/d1-03` (HANDOFF "Next step").
 - **Update 2026-10-15 15:30 IST:** Wave 0 code tip `97f82dd` = `cp/d1-02`, full verify and CI green. Founder-queue walkthrough done (answers in build-notes §0). Next: Wave 0 remainder — ci.yml §7.1 + §7.2(b) `workflow_dispatch` staging deploy, jobs handlers, CSP, DC-D5/D6/D8/D9 (HANDOFF "Next step" 2); then the staging evidence that lets M0a and M0b CLOSE (HANDOFF "Path to close").
@@ -151,18 +152,17 @@ Before changing anything, run HANDOFF "Verify first" and report in 5 lines wheth
 (tip commit, clean tree, verify:fast, pnpm test, PR TraceHiring/TraceHiring#4 CI). If it does not match, stop and
 tell me what differs.
 
-Then do HANDOFF "Next step" in order. Phase: D1 BUILD, Wave 0 (lead-only). Done and verified: migrations 1-4, all
-rls_d1_* tests, contracts, shared helpers, skeletons, boundaries, wrangler bindings (cp/d1-02), jobs queue/sweep wiring
-(289cea1), the carried DB items (cfd3a67), the ES256 key ops script, the recruiter CSP + strictPort, DC-D5 and DC-D6
-(Windows) and the staging-deploy rework (full pnpm verify green on 6640b42; Opus security review PASS WITH NOTES in
-docs/reviews/D1-security-review-wave0-rest.md, S3/S7/S8 fixed, verify:fast green on dc2d08d). Finish Wave 0 as HANDOFF
-"Next step" 2a-2c says: the open Lows S2 and S6 (tests first), then DC-D9 + the Linux half of DC-D6 (an e2e-local CI
-job and scripts/e2e-local.mjs), then full pnpm verify, CI and tag cp/d1-03 (DC-D8 runs in Waves 1-2). Playwright
-Chromium 1.63.0 is already installed and the founder approved that download (local and CI). Ask me before the first
+Then do HANDOFF "Next step" in order. Phase: D1 BUILD, Wave 1. Wave 0 is complete and verified (cp/d1-03 = 1dff4d6:
+full pnpm verify and Linux CI green incl. the e2e-local job; DC-D9 and DC-D6 Linux PASS; security reviews
+D1-security-review-wave0-rest.md and D1-security-review-wave0-tail.md, all findings fixed or founder-gated); postgres
+3.4.9 added (c514c7a). Writers R1 (branch d1/r1-band-engine) and R3 (branch d1/r3-api) were started from c514c7a in
+their own agent-* worktrees: read each branch and its final report if present (or continue an unfinished writer from its
+branch), review it with the reviewers spec §11 names, apply the lead requests (R3's app.ts/index.ts mount diff), merge
+--no-ff into d1/integration, verify, CI, tag cp/d1-04; then C1 (edge). DC-D8 runs in Waves 1-2. Ask me before the first
 staging deploy (I must widen the Cloudflare token with R2 + Queues Edit and set CANDIDATE_TOKEN_KID,
 CANDIDATE_TOKEN_PUBLIC_JWK and API_STAGING_ORIGIN, per scripts/ops/README.md). M0a and
 M0b are built and reviewed but NOT closed; HANDOFF "Path to close" says how, and merging into main needs my explicit
-go-ahead. Writers R1/R3/C1 start only after Wave 0 is complete and verified.
+go-ahead. This machine is short of RAM: run pnpm verify / verify:fast with npm_config_workspace_concurrency=1.
 
 Safety rules (never break these): never commit on or move main; never force-push; never delete or move branches,
 tags (cp/*) or worktrees (.claude/worktrees/agent-* hold earlier work); never rewrite pushed history; never deploy
