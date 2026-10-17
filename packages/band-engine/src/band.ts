@@ -29,6 +29,9 @@ export const BAND_ENGINE_VERSION = 'band-engine-1';
 /** At most this many gseq values are kept per flag (§5.2). */
 export const MAX_SIGNAL_SEQS = 50;
 
+/** At most this many reasons are returned (the integrity card contract's maximum). */
+export const MAX_REASONS = 10;
+
 /** Coverage times above this would lose integer precision in `coveredMs · 1000` (about 285 years). */
 const MAX_COVERAGE_MS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 
@@ -137,22 +140,32 @@ function checkInput(raw: unknown): CheckedInput {
   if (typeof photoMissing !== 'boolean') {
     throw new BandInputError('bad_photo_missing', '$.photoMissing');
   }
-  if (!Array.isArray(capturedFamilies) || capturedFamilies.some((f) => typeof f !== 'string')) {
+  // Index loops, never map/some: those skip the holes of a sparse array, and a hole must fail (review L4).
+  if (!Array.isArray(capturedFamilies)) {
     throw new BandInputError('bad_captured_families', '$.capturedFamilies');
+  }
+  const families: string[] = [];
+  for (let i = 0; i < capturedFamilies.length; i += 1) {
+    const family: unknown = capturedFamilies[i];
+    if (typeof family !== 'string') {
+      throw new BandInputError('bad_captured_families', '$.capturedFamilies');
+    }
+    families.push(family);
   }
   if (!Array.isArray(events)) throw new BandInputError('bad_events', '$.events');
   const seen = new Set<number>();
-  const checked = events.map((event: unknown, index) => {
-    const e = checkEvent(event, `$.events[${index}]`);
-    if (seen.has(e.seq)) throw new BandInputError('duplicate_seq', `$.events[${index}].seq`);
+  const checked: SignalEvent[] = [];
+  for (let i = 0; i < events.length; i += 1) {
+    const e = checkEvent(events[i], `$.events[${i}]`);
+    if (seen.has(e.seq)) throw new BandInputError('duplicate_seq', `$.events[${i}].seq`);
     seen.add(e.seq);
-    return e;
-  });
+    checked.push(e);
+  }
   return {
     events: checked,
     activeMs,
     coveredMs,
-    capturedFamilies: capturedFamilies as string[],
+    capturedFamilies: families,
     photoMissing,
   };
 }
@@ -305,7 +318,8 @@ export function computeBand(table: RuleTable, input: BandInput): BandOutput {
 
   return {
     band,
-    reasons,
+    // Reasons are in rule-table order (the t3_families reason last); the card contract keeps at most 10.
+    reasons: reasons.slice(0, MAX_REASONS),
     evidenceStrength: hundredths(usable, rules.families.length),
     coveragePermille,
     flags,

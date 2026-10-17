@@ -78,7 +78,8 @@ const isPermille = (value: unknown): value is number =>
 function parseNameList(value: unknown, path: string, code: RuleTableErrorCode): string[] {
   if (!Array.isArray(value) || value.length === 0) throw new RuleTableError(code, path);
   const names: string[] = [];
-  for (const item of value) {
+  for (let i = 0; i < value.length; i += 1) {
+    const item: unknown = value[i]; // a hole reads as undefined and fails
     if (typeof item !== 'string' || !NAME_RE.test(item) || names.includes(item)) {
       throw new RuleTableError(code, path);
     }
@@ -180,12 +181,14 @@ export function parseRuleTable(raw: unknown): RuleTable {
   }
   if (!Array.isArray(rules)) throw new RuleTableError('bad_rules', '$.rules');
   const ids = new Set<string>();
-  const ruleList = rules.map((rule: unknown, index) => {
-    const parsed = parseRule(rule, familyList, `$.rules[${index}]`);
+  // An index loop, never map: map skips the holes of a sparse array, and a hole must fail as bad_rule (review L4).
+  const ruleList: Rule[] = [];
+  for (let index = 0; index < rules.length; index += 1) {
+    const parsed = parseRule(rules[index], familyList, `$.rules[${index}]`);
     if (ids.has(parsed.id)) throw new RuleTableError('duplicate_rule_id', `$.rules[${index}].id`);
     ids.add(parsed.id);
-    return parsed;
-  });
+    ruleList.push(parsed);
+  }
   return Object.freeze({
     version,
     coverageFloorPermille,

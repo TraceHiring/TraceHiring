@@ -120,7 +120,7 @@ describe('parseRuleTable (strict, hand-written)', () => {
       ruleEdit({ kinds: ['connectivity_gap'] }),
       'connectivity_reserved',
     ],
-    ['a family outside the table', ruleEdit({ family: 'gaze' }), 'unknown_family'],
+    ['a family outside the table', ruleEdit({ family: 'not_a_family' }), 'unknown_family'],
     ['an unknown tier', ruleEdit({ tier: 'T4' }), 'bad_rule'],
     ['an unknown severity', ruleEdit({ severity: 'critical' }), 'bad_rule'],
     ['validated as a string', ruleEdit({ validated: 'true' }), 'bad_rule'],
@@ -406,7 +406,7 @@ describe('computeBand on rule table v1 (D1 examples, AT-D5, AT-D6)', () => {
     );
     expect(computeBand(TABLE, { ...base, capturedFamilies: [] }).evidenceStrength).toBe(0);
     expect(
-      computeBand(TABLE, { ...base, capturedFamilies: ['gaze', 'paste', 'paste'] })
+      computeBand(TABLE, { ...base, capturedFamilies: ['not_a_family', 'paste', 'paste'] })
         .evidenceStrength,
     ).toBe(0.33);
   });
@@ -506,5 +506,162 @@ describe('computeBand refuses malformed input (fail closed)', () => {
   it('refuses a table that does not parse', () => {
     const bad = { ...clone(d1v1), coverageFloorPermille: 0 };
     expect(() => computeBand(bad as never, ok)).toThrow(RuleTableError);
+  });
+});
+
+// ---- Escalation branches on small synthetic tables (rule 3; review M1) -----------------------------------------------
+
+const synth = (rules: Record<string, unknown>[], families: string[] = ['a', 'b']) =>
+  parseRuleTable({
+    version: 'synth-v1',
+    coverageFloorPermille: 700,
+    coveragePhotoMissingFactorPermille: 750,
+    families,
+    rules,
+  });
+const synthRule = (id: string, kind: string, patch: Record<string, unknown> = {}) => ({
+  id,
+  kinds: [kind],
+  family: 'a',
+  tier: 'T3',
+  severity: 'soft',
+  validated: true,
+  ...patch,
+});
+const full = (events: SignalEvent[]): BandInput => ({
+  events,
+  coverage: { activeMs: 1_000, coveredMs: 1_000 },
+  capturedFamilies: ['a', 'b'],
+  photoMissing: false,
+});
+const sev = (seq: number, kind: string, extra: Partial<SignalEvent> = {}): SignalEvent => ({
+  seq,
+  atMs: 100 * seq,
+  kind,
+  attrs: {},
+  ...extra,
+});
+
+describe('computeBand escalation branches (synthetic tables)', () => {
+  it('a validated T1 rule -> strong_concern [tier_t1:X]', () => {
+    const out = computeBand(synth([synthRule('X', 'k1', { tier: 'T1' })]), full([sev(1, 'k1')]));
+    expect(out.band).toBe('strong_concern');
+    expect(out.reasons).toEqual(['tier_t1:X']);
+  });
+
+  it('a validated T2 rule -> strong_concern [tier_t2:X]', () => {
+    const out = computeBand(synth([synthRule('X', 'k1', { tier: 'T2' })]), full([sev(1, 'k1')]));
+    expect(out.band).toBe('strong_concern');
+    expect(out.reasons).toEqual(['tier_t2:X']);
+  });
+
+  it('a T3 rawMedia rule whose event carries a mediaRef -> strong_concern [raw_media:X]', () => {
+    const table = synth([synthRule('X', 'k1', { rawMedia: true })]);
+    const out = computeBand(table, full([sev(1, 'k1', { mediaRef: 'clip-1' })]));
+    expect(out.band).toBe('strong_concern');
+    expect(out.reasons).toEqual(['raw_media:X']);
+  });
+
+  it('the same rawMedia event without a mediaRef stays under the T3 cap (soft -> clear, medium -> review)', () => {
+    const soft = computeBand(
+      synth([synthRule('X', 'k1', { rawMedia: true })]),
+      full([sev(1, 'k1')]),
+    );
+    expect(soft.band).toBe('clear');
+    expect(soft.flags).toHaveLength(1);
+    const medium = computeBand(
+      synth([synthRule('X', 'k1', { rawMedia: true, severity: 'medium' })]),
+      full([sev(1, 'k1')]),
+    );
+    expect(medium.band).toBe('review');
+    expect(medium.reasons).toEqual(['t3_severity:X']);
+  });
+
+  it('validated soft T3 flags in two families -> review [t3_families:a+b]', () => {
+    const table = synth([synthRule('X', 'k1'), synthRule('Y', 'k2', { family: 'b' })]);
+    const out = computeBand(table, full([sev(1, 'k1'), sev(2, 'k2')]));
+    expect(out.band).toBe('review');
+    expect(out.reasons).toEqual(['t3_families:a+b']);
+  });
+
+  it('two soft flags in ONE family -> clear', () => {
+    const table = synth([synthRule('X', 'k1'), synthRule('Y', 'k2')]);
+    const out = computeBand(table, full([sev(1, 'k1'), sev(2, 'k2')]));
+    expect(out.flags).toHaveLength(2);
+    expect(out.band).toBe('clear');
+    expect(out.reasons).toEqual([]);
+  });
+
+  it('an untrusted rule that is not validated -> context only, not strong_concern', () => {
+    const table = synth([
+      synthRule('X', 'k1', { untrusted: true, severity: 'hard', validated: false }),
+    ]);
+    const out = computeBand(table, full([sev(1, 'k1')]));
+    expect(out.band).toBe('clear');
+    expect(out.flags).toEqual([]);
+    expect(out.context.map((c) => c.ruleId)).toEqual(['X']);
+  });
+});
+
+describe('BandOutput.reasons is capped at 10 (card contract; review L3)', () => {
+  it('keeps the first 10 reasons in rule-table order', () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `R${String(i).padStart(2, '0')}`);
+    const table = synth(ids.map((id) => synthRule(id, 'k1', { tier: 'T1' })));
+    const out = computeBand(table, full([sev(1, 'k1')]));
+    expect(out.band).toBe('strong_concern');
+    expect(out.flags).toHaveLength(12);
+    expect(out.reasons).toEqual(ids.slice(0, 10).map((id) => `tier_t1:${id}`));
+  });
+});
+
+describe('sparse arrays are refused (review L4)', () => {
+  const holey = <T>(items: T[], at: number): T[] => {
+    const arr = [...items];
+    arr.length = Math.max(arr.length, at + 1);
+    delete arr[at];
+    return arr;
+  };
+
+  it('a hole in rules -> bad_rule', () => {
+    expectRuleTableError({ ...rawTable(), rules: holey(rawTable().rules, 1) }, 'bad_rule');
+  });
+
+  it('a hole in families -> bad_families', () => {
+    expectRuleTableError(
+      { ...rawTable(), families: holey(['paste', 'input_origin', 'focus'], 1) },
+      'bad_families',
+    );
+  });
+
+  it('a hole in a rule kinds list -> bad_rule', () => {
+    const t = rawTable();
+    t.rules[0]!['kinds'] = holey(['paste', 'drop'], 0);
+    expectRuleTableError(t, 'bad_rule');
+  });
+
+  const expectInputError = (raw: unknown, code: string) => {
+    let caught: unknown;
+    try {
+      computeBand(TABLE, raw as BandInput);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(BandInputError);
+    expect((caught as BandInputError).code).toBe(code);
+  };
+
+  it('a hole in events -> bad_event', () => {
+    expectInputError({ ...input([]), events: holey([ev('paste', 1)], 1) }, 'bad_event');
+    expectInputError(
+      { ...input([]), events: holey([ev('paste', 1), ev('paste', 2)], 0) },
+      'bad_event',
+    );
+  });
+
+  it('a hole in capturedFamilies -> bad_captured_families', () => {
+    expectInputError(
+      { ...input([]), capturedFamilies: holey(['paste', 'focus'], 0) },
+      'bad_captured_families',
+    );
   });
 });
