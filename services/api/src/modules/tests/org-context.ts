@@ -319,6 +319,8 @@ export const restErrorCode = (err: unknown): OrgErrorCode => {
   if (err instanceof OrgError) return err.code;
   if (err instanceof RestError) {
     if (err.sqlstate === '23505') return 'conflict';
+    // A foreign key or guard naming a parent the caller cannot see (a test or membership of another org).
+    if (err.sqlstate === '23503') return 'not_found';
     if (
       err.sqlstate === '42501' ||
       err.status === 401 ||

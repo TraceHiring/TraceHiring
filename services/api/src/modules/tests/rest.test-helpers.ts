@@ -17,6 +17,10 @@ export interface TableHooks {
   remove?: (row: Row, db: FakeDb) => void;
   /** Row-level visibility for every operation (RLS). Default: every row is visible. */
   visible?: (row: Row) => boolean;
+  /** The DELETE policy's USING clause: rows it hides are silently not deleted (0 rows), as in Postgres. */
+  deletable?: (row: Row) => boolean;
+  /** The UPDATE policy's USING clause: rows it hides are silently not updated. */
+  updatable?: (row: Row) => boolean;
 }
 
 export interface FakeDb {
@@ -127,7 +131,10 @@ export const fakeDb = (
       db.calls.push({ method: 'update', table, query });
       take('update', table);
       const rows = rowsOf(table);
-      const targets = apply(rows.filter(visible(table)), query);
+      const targets = apply(
+        rows.filter(visible(table)).filter((r) => db.hooks[table]?.updatable?.(r) ?? true),
+        query,
+      );
       const next = targets.map((old) => {
         const merged = { ...old, ...(patch as Row) };
         return { old, row: db.hooks[table]?.update?.(old, merged, db) ?? merged };
@@ -139,7 +146,10 @@ export const fakeDb = (
       db.calls.push({ method: 'remove', table, query });
       take('remove', table);
       const rows = rowsOf(table);
-      const targets = apply(rows.filter(visible(table)), query);
+      const targets = apply(
+        rows.filter(visible(table)).filter((r) => db.hooks[table]?.deletable?.(r) ?? true),
+        query,
+      );
       for (const row of targets) db.hooks[table]?.remove?.(row, db);
       db.tables[table] = rows.filter((r) => !targets.includes(r));
       return targets.map((r) => project(r, query.select)) as T[];
