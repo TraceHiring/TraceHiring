@@ -20,6 +20,11 @@ export interface OutboxEntryInput {
   idempotencyKey: string;
 }
 
+export interface AppendResult {
+  id: string;
+  created: boolean;
+}
+
 export interface OutboxEntry {
   id: string;
   createdAt: string;
@@ -36,7 +41,8 @@ export const OUTBOX_SQL = {
   create:
     'create table if not exists entries (seq integer primary key autoincrement, id text not null unique, created_at text not null, kind text not null, candidate_label text not null, body_text text not null, idem text not null unique)',
   insert:
-    'insert into entries (id, created_at, kind, candidate_label, body_text, idem) values (?, ?, ?, ?, ?, ?) on conflict (idem) do nothing',
+    'insert into entries (id, created_at, kind, candidate_label, body_text, idem) values (?, ?, ?, ?, ?, ?) on conflict (idem) do nothing returning id',
+  byIdem: 'select id from entries where idem = ?',
   trim: 'delete from entries where seq <= (select max(seq) from entries) - ?',
   list: 'select id, created_at, kind, candidate_label, body_text from entries order by seq desc limit ?',
 } as const;
@@ -49,18 +55,25 @@ export class OutboxStore {
     this.#sql.exec(OUTBOX_SQL.create);
   }
 
-  /** Idempotent by key: a retried send writes one entry. */
-  append(entry: OutboxEntryInput, id: string, createdAt: string): void {
-    this.#sql.exec(
-      OUTBOX_SQL.insert,
-      id,
-      createdAt,
-      entry.kind,
-      entry.candidateLabel,
-      entry.bodyText,
-      entry.idempotencyKey,
-    );
-    this.#sql.exec(OUTBOX_SQL.trim, OUTBOX_KEEP);
+  /** Idempotent by key: a retried send writes one entry and answers the first entry's id. */
+  append(entry: OutboxEntryInput, id: string, createdAt: string): AppendResult {
+    const inserted = this.#sql
+      .exec(
+        OUTBOX_SQL.insert,
+        id,
+        createdAt,
+        entry.kind,
+        entry.candidateLabel,
+        entry.bodyText,
+        entry.idempotencyKey,
+      )
+      .toArray();
+    if (inserted.length === 1) {
+      this.#sql.exec(OUTBOX_SQL.trim, OUTBOX_KEEP);
+      return { id, created: true };
+    }
+    const [first] = this.#sql.exec(OUTBOX_SQL.byIdem, entry.idempotencyKey).toArray();
+    return { id: String(first?.id ?? id), created: false };
   }
 
   list(limit: number = OUTBOX_LIST_LIMIT): OutboxEntry[] {

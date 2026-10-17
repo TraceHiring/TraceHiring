@@ -2,7 +2,12 @@
 // services/api code over the DO RPC stub; it has no fetch route. Inputs are zod-checked again here.
 import { DurableObject } from 'cloudflare:workers';
 import { z } from 'zod';
-import { OutboxStore, type OutboxEntry, type OutboxEntryInput } from './outbox-store.js';
+import {
+  OutboxStore,
+  type AppendResult,
+  type OutboxEntry,
+  type OutboxEntryInput,
+} from './outbox-store.js';
 
 const EntryInput = z.strictObject({
   kind: z.enum(['invite', 'otp']),
@@ -19,10 +24,10 @@ export class DemoOutboxDO extends DurableObject<Env> {
     this.#store = new OutboxStore(ctx.storage.sql);
   }
 
-  append(entry: OutboxEntryInput): void {
+  append(entry: OutboxEntryInput): AppendResult {
     const parsed = EntryInput.safeParse(entry);
     if (!parsed.success) throw new Error('bad_request');
-    this.#store.append(parsed.data, crypto.randomUUID(), new Date().toISOString());
+    return this.#store.append(parsed.data, crypto.randomUUID(), new Date().toISOString());
   }
 
   list(limit?: number): OutboxEntry[] {
