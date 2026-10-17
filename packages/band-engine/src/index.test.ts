@@ -3,8 +3,8 @@ import * as engine from './index.js';
 import type { Band, BandInput, BandOutput, Rule, RuleTable, Severity, Tier } from './index.js';
 
 describe('@trace/band-engine contract skeleton', () => {
-  it('exports the version constant and nothing else at runtime', () => {
-    expect(Object.keys(engine)).toEqual(['BAND_ENGINE_VERSION']);
+  it('exports exactly the §5.2 runtime names', () => {
+    expect(Object.keys(engine).sort()).toEqual(['BAND_ENGINE_VERSION', 'canonicalJson']);
     expect(engine.BAND_ENGINE_VERSION).toBe('band-engine-1');
   });
 
