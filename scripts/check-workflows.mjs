@@ -559,7 +559,7 @@ export const DEPLOY_CONCURRENCY = 'deploy-staging';
  */
 export const E2E_JOB = 'e2e-local';
 export const E2E_IF =
-  "github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/')";
+  "github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/') && github.event.pull_request.head.repo.full_name == github.repository";
 export const E2E_MAX_MINUTES = 25;
 export const E2E_RUNNER = 'ubuntu-24.04';
 export const E2E_ARTIFACT_PATHS = Object.freeze(['e2e/playwright-report', 'e2e/test-results']);
@@ -1358,7 +1358,9 @@ export function checkWorkflow(doc, file, ctx = {}) {
 const DRY_RUN_RE = /--dry-run\b/;
 const WRANGLER_DELETE_RE = /\bwrangler\b[^\n]*\b(?:delete|remove)\b/;
 const WRANGLER_VERSIONS_RE = /\bwrangler\s+versions\b/;
-const joinContinuations = (run) => run.replace(/\\\r?\n/g, ' ');
+// Bash removes a backslash-newline outright (no space), so `wrang\<newline>ler` is `wrangler`
+// (S2 re-review L1).
+const joinContinuations = (run) => run.replace(/\\\r?\n/g, '');
 /** A step's run text as commands: continuations joined, one per line, whitespace normalised. */
 const commandLines = (run) =>
   joinContinuations(run)
@@ -1382,6 +1384,25 @@ export const WORKER_DEPLOY_STEP_PREFIX = Object.freeze([
   'set -euo pipefail',
   'export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"',
 ]);
+/**
+ * The Pages deploy step's whole run text, as command lines (S2 re-review L1): with the Cloudflare
+ * token, any other line could deploy a Worker without spelling `wrangler deploy` (`de''ploy`, a
+ * variable, a backslash-newline split), so the step is pinned like the Worker deploy steps.
+ */
+export const PAGES_STEP_LINES = Object.freeze([
+  'set -euo pipefail',
+  'export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"',
+  'projects="$(pnpm exec wrangler pages project list --json)"',
+  `jq -e 'type == "array"' <<<"$projects" >/dev/null`,
+  'for project in trace-candidate-staging trace-recruiter-staging; do',
+  `if ! jq -e --arg p "$project" 'any(.[]; .["Project Name"] == $p)' <<<"$projects" >/dev/null; then`,
+  'pnpm exec wrangler pages project create "$project" --production-branch main',
+  'fi',
+  'done',
+  'pnpm exec wrangler pages deploy apps/candidate/dist --project-name trace-candidate-staging --branch main',
+  'pnpm exec wrangler pages deploy apps/recruiter/dist --project-name trace-recruiter-staging --branch main',
+]);
+const SECRETS_CHECK_LINE = 'node scripts/check-staging-secrets.mjs';
 /** Words that change where or what a Worker deploy step runs (S2), each with its own pattern. */
 const WORKER_DEPLOY_FORBIDDEN = Object.freeze([
   ['cd', /(?:^|[\s;&|(])cd(?:\s|$)/m],
@@ -1471,6 +1492,28 @@ function checkDeployChain(d, where, file, out) {
           file,
           sw(i),
           'wrangler versions is not allowed in deploy-staging (an upload re-bundles; the scanned dist/index.js must be what ships, S3B-1)',
+        ),
+      );
+    }
+  });
+  // S2 re-review L1: a step holding the Cloudflare token is one of the Worker deploy steps (pinned
+  // below), or its whole run text is the bucket and queue step, the secrets check or the pinned
+  // Pages step. No other command may run next to the token.
+  const sameLines = (ls, want) => ls.length === want.length && want.every((l, k) => ls[k] === l);
+  steps.forEach((s, i) => {
+    if (!isObj(s) || !secretRefs(s).includes('CLOUDFLARE_API_TOKEN')) return;
+    const ls = lines[i];
+    const allowed =
+      deploys.some(([step]) => step === s) ||
+      (ls.length === 1 && RESOURCES_RUN.test(ls[0])) ||
+      sameLines(ls, [SECRETS_CHECK_LINE]) ||
+      sameLines(ls, PAGES_STEP_LINES);
+    if (!allowed) {
+      out.push(
+        v(
+          file,
+          sw(i),
+          'a step holding CLOUDFLARE_API_TOKEN must be a pinned Worker deploy step, or exactly node scripts/ensure-staging-resources.mjs, node scripts/check-staging-secrets.mjs or the pinned Pages deploy (PAGES_STEP_LINES; S2 re-review L1)',
         ),
       );
     }

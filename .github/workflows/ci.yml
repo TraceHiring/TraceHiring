@@ -125,11 +125,12 @@ jobs:
   # Not a required check. DC-D9 and the Linux half of DC-D6 (d1 §7.1, §8): the local stack
   # (Supabase, the three Workers under wrangler dev, both apps under vite preview) and Playwright
   # Chromium, inside 25 minutes. Runs on a dispatch with run_e2e, or on a pull request from a d1/**
-  # branch (the draft PR from d1/integration), not on every PR, to spare the free minutes. No secret
+  # branch of this repository (the draft PR from d1/integration; a fork's own d1/x branch does not
+  # count), not on every PR, to spare the free minutes. No secret
   # and no environment: every value is local and synthetic. The Chromium download is approved by
   # the founder (2026-10-16) and cached by the lockfile hash.
   e2e-local:
-    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/')
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:

@@ -74,7 +74,7 @@ jobs:
       - run: node scripts/check-migrations.mjs --base origin/main
 
   e2e-local:
-    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/')
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:

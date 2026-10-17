@@ -10,6 +10,7 @@ import {
   E2E_IF,
   E2E_JOB,
   E2E_MAX_MINUTES,
+  PAGES_STEP_LINES,
   BUILD_ONLY_ENV,
   DEPLOY_GUARD_ENV,
   ENV_ALLOW_LIST,
@@ -2008,6 +2009,98 @@ describe('deploy-staging chain (d1 §7.1)', () => {
         }
       });
     });
+
+    // Re-review of S2 (2026-10-17, L1): a deploy line need not spell `wrangler deploy` (bash
+    // joins `de''ploy`, `$d` and a backslash-newline split), so every deploy-staging step that
+    // holds the Cloudflare token is allow-listed by its whole run text.
+    describe('every step holding CLOUDFLARE_API_TOKEN is an allow-listed step (S2 re-review L1)', () => {
+      const TOKEN = '${{ secrets.CLOUDFLARE_API_TOKEN }}';
+      const PAGES = {
+        name: 'Deploy Pages (candidate, recruiter)',
+        env: {
+          CLOUDFLARE_API_TOKEN: TOKEN,
+          CLOUDFLARE_ACCOUNT_ID: '${{ vars.CLOUDFLARE_ACCOUNT_ID }}',
+        },
+        run: `${PAGES_STEP_LINES.join('\n')}\n`,
+      };
+      const withPages = (d, run = PAGES.run) => {
+        const s = stepsOf(d);
+        s.splice(s.indexOf(find(d, 'Check Worker secrets')) + 1, 0, { ...PAGES, run });
+      };
+      const BYPASSES = [
+        "pnpm exec wrangler de''ploy -c services/api/wrangler.jsonc --env staging",
+        'd=deploy\npnpm exec wrangler $d -c services/api/wrangler.jsonc --env staging',
+        'cd services/api && pnpm exec wrang\\\nler deploy --env staging',
+        'pnpm exec wrangler "deploy" --env staging',
+      ];
+      // A line that still names wrangler and deploy is caught by the S2 deploy-line rule; one that
+      // hides either word is caught by the token-step allow-list.
+      const REJECTED =
+        /a step holding CLOUDFLARE_API_TOKEN must be|a line with wrangler and deploy must be/;
+
+      it('accepts the pinned Pages step, the bucket and queue step and the secrets check', () => {
+        expect(PAGES_STEP_LINES.at(-1)).toBe(
+          'pnpm exec wrangler pages deploy apps/recruiter/dist --project-name trace-recruiter-staging --branch main',
+        );
+        expect(check((d) => withPages(d))).toBe('');
+      });
+
+      it.each(BYPASSES)('rejects a token step of its own running %s', (line) => {
+        expect(
+          check((d) => {
+            const s = stepsOf(d);
+            s.splice(s.indexOf(find(d, EDGE)) + 1, 0, {
+              name: 'extra',
+              env: { CLOUDFLARE_API_TOKEN: TOKEN },
+              run: `${line}\n`,
+            });
+          }),
+        ).toMatch(REJECTED);
+      });
+
+      it.each(BYPASSES)('rejects the Pages step with %s added', (line) => {
+        expect(check((d) => withPages(d, `${PAGES.run}${line}\n`))).toMatch(REJECTED);
+      });
+
+      it('rejects a Pages step that deploys another folder or project', () => {
+        for (const [from, to] of [
+          ['apps/candidate/dist', 'workers/edge/dist'],
+          ['--project-name trace-recruiter-staging', '--project-name other'],
+          ['--branch main', '--branch preview'],
+        ]) {
+          expect(
+            check((d) => withPages(d, PAGES.run.replace(from, to))),
+            to,
+          ).toMatch(/a step holding CLOUDFLARE_API_TOKEN must be/);
+        }
+      });
+
+      it('rejects the bucket and queue step or the secrets check with another line', () => {
+        for (const name of [RESOURCES, 'Check Worker secrets']) {
+          expect(
+            check((d) => (find(d, name).run += '\npnpm exec wrangler $d\n')),
+            name,
+          ).toMatch(/a step holding CLOUDFLARE_API_TOKEN must be/);
+        }
+      });
+
+      it('joins a backslash-newline the way bash does (no space), so a split word is the word', () => {
+        // Bash runs `wrang\<newline>ler` as `wrangler`: the pinned deploy, so it is accepted, and the
+        // same split hides nothing in a token step (the BYPASSES case above).
+        expect(
+          check((d) => {
+            const s = find(d, JOBS);
+            s.run = s.run.replace('pnpm exec wrangler', 'pnpm exec wrang\\\nler');
+          }),
+        ).toBe('');
+        expect(
+          check((d) => {
+            const s = find(d, JOBS);
+            s.run = s.run.replace('--no-bundle', '--no-bun\\\ndle --bundle');
+          }),
+        ).toMatch(/--no-bundle/);
+      });
+    });
   });
 });
 
@@ -2026,7 +2119,9 @@ describe('e2e-local job (d1 §7.1, DC-D9)', () => {
   it('pins the job id, the condition, the time limit and the artifact paths', () => {
     expect(E2E_JOB).toBe('e2e-local');
     expect(E2E_IF).toBe(
-      "github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/')",
+      // Same-repository head (security review 2026-10-17, Info): a fork's own d1/x branch cannot
+      // opt into the 25-minute job.
+      "github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/') && github.event.pull_request.head.repo.full_name == github.repository",
     );
     expect(E2E_MAX_MINUTES).toBe(25);
     expect([...E2E_ARTIFACT_PATHS]).toEqual(['e2e/playwright-report', 'e2e/test-results']);
@@ -2048,6 +2143,12 @@ describe('e2e-local job (d1 §7.1, DC-D9)', () => {
       (j) =>
         (j.if =
           "github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request'"),
+    ],
+    [
+      'a d1/** pull request from a fork',
+      (j) =>
+        (j.if =
+          "github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/')"),
     ],
     ['always()', (j) => (j.if = 'always()')],
   ])('rejects %s', (_label, edit) => {
