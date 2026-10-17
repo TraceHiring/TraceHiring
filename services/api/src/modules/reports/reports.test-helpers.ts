@@ -118,6 +118,10 @@ export const candidateRows = (spec: CandidateSpec): Tables => {
               rubric_set_sha256: 'ab'.repeat(32),
               grader_model_id: 'mock-grader-v1',
               test_version_id: TV,
+              quality_score_id: qc,
+              rubric_version_ids: [],
+              grader_adapter_version: 'mock-1',
+              computed_at: T0,
             },
           ],
     integrity_cards:
@@ -127,12 +131,25 @@ export const candidateRows = (spec: CandidateSpec): Tables => {
             {
               id: icardId(spec.n),
               org_id: org,
+              workspace_id: WS,
+              test_id: test,
               session_id: sid,
+              integrity_result_id: icardId(spec.n),
+              ruleset_version_id: RULESET,
+              band_rule_version_id: uuidOf('7', 1),
+              rule_table_version: 'd1-v1',
+              engine_version: 'band-engine-1',
               review_state: spec.integrity,
               band: 'strong_concern',
-              rule_table_version: 'd1-v1',
+              evidence_strength: 1,
+              coverage_permille: 900,
+              coverage_floor_permille: 700,
+              photo_missing: false,
+              computed_at: T0,
             },
           ],
+    sections: [],
+    integrity_timeline_entries: [],
   };
   return tables;
 };

@@ -92,44 +92,15 @@ describe('rule 1: no payload blends the two results (AT-D3)', () => {
   ]);
   const FORBIDDEN_KEY = /overall|combined|total|trust|honesty|composite/i;
 
-  // One cohort covering every card state; the integrity rows are full table rows so a card can be `ready`.
-  const cohort = (): Tables => {
-    const t = merge(
+  // One cohort covering every card state (full table rows, so both cards can be `ready`).
+  const cohort = (): Tables =>
+    merge(
       baseTables(),
       candidateRows({ n: 1, score: 72, integrity: 'reviewed' }),
       candidateRows({ n: 2, score: 15, integrity: 'not_reviewed_below_cutoff' }),
       candidateRows({ n: 3, score: null, integrity: 'awaiting_quality' }),
       candidateRows({ n: 4, score: 55 }),
     );
-    for (const qc of t.quality_cards ?? []) {
-      Object.assign(qc, {
-        workspace_id: qc.workspace_id,
-        quality_score_id: qc.id,
-        section_scores: [],
-        rubric_version_ids: [],
-        grader_adapter_version: 'mock-1',
-        computed_at: '2026-10-17T08:00:00+00:00',
-      });
-    }
-    t.integrity_cards = (t.integrity_cards ?? []).map((c) => ({
-      ...c,
-      workspace_id: '33333333-3333-4333-8333-333333333333',
-      test_id: TEST,
-      integrity_result_id: c.id,
-      ruleset_version_id: '99999999-9999-4999-8999-999999999999',
-      band_rule_version_id: '99999999-9999-4999-8999-999999999998',
-      engine_version: 'band-engine-1',
-      band: 'review',
-      evidence_strength: 0.5,
-      coverage_permille: 900,
-      coverage_floor_permille: 700,
-      photo_missing: false,
-      computed_at: '2026-10-17T08:00:00+00:00',
-    }));
-    t.sections = [];
-    t.integrity_timeline_entries = [];
-    return t;
-  };
 
   const payloads = async () => {
     const tables = cohort();
