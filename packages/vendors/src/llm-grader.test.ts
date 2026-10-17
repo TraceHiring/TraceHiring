@@ -254,3 +254,82 @@ describe('MockLlmGrader (deterministic, rubric-anchored)', () => {
     await expect(grader.grade(request('queue'), { signal: controller.signal })).rejects.toThrow();
   });
 });
+
+// ---- Phrase anchors (lead decision, review M2) ----------------------------------------------------------------------
+
+const oneCriterion = (anchors: string[], minHits: number, max = 4): RubricSnapshot => ({
+  rubricVersionId: 'rv-phrase',
+  criteria: [{ id: 'p', label: 'Phrase', max, anchors, minHits }],
+});
+const pointsFor = async (answer: string, r: RubricSnapshot): Promise<number> =>
+  (await grader.grade(request(answer, r))).criteria[0]!.points;
+
+describe('MockLlmGrader phrase anchors', () => {
+  const r = oneCriterion(['binary search'], 1);
+
+  it('"binary search" matches the same consecutive words, after NFKC and lower case', async () => {
+    expect(await pointsFor('I used Binary Search here.', r)).toBe(4);
+    expect(await pointsFor('ＢＩＮＡＲＹ-search', r)).toBe(4);
+  });
+
+  it('each anchor token prefix-matches its answer token', async () => {
+    expect(await pointsFor('binary searching works', r)).toBe(4);
+    expect(await pointsFor('a binary-searched list', r)).toBe(4);
+  });
+
+  it('does not match when the words are not consecutive, out of order, or only one is present', async () => {
+    expect(await pointsFor('binary tree search', r)).toBe(0);
+    expect(await pointsFor('search binary', r)).toBe(0);
+    expect(await pointsFor('binary', r)).toBe(0);
+    expect(await pointsFor('a search', r)).toBe(0);
+  });
+
+  it('does not match inside a token', async () => {
+    expect(await pointsFor('nonbinary search', r)).toBe(0);
+  });
+
+  it('a single-token anchor keeps the token-prefix behaviour', async () => {
+    const single = oneCriterion(['amortis'], 1);
+    expect(await pointsFor('amortised cost', single)).toBe(4);
+    expect(await pointsFor('unamortised cost', single)).toBe(0);
+  });
+
+  it('"Queue" and "queue" are one distinct anchor and count once', async () => {
+    // anchors normalise to {queue, stack}: one hit of minHits 2 -> floor(4·1/2) = 2, never 4.
+    expect(await pointsFor('a queue', oneCriterion(['Queue', 'queue', 'stack'], 2))).toBe(2);
+    expect(await pointsFor('a queue', oneCriterion(['Queue', 'queue'], 1))).toBe(4);
+  });
+
+  it('parseGradeRequest rejects an anchor of only punctuation (zero tokens)', () => {
+    expect(() => parseGradeRequest(request('x', oneCriterion(['!!!'], 1)))).toThrow(
+      GradeRequestError,
+    );
+    expect(() => parseGradeRequest(request('x', oneCriterion(['queue', ' - '], 1)))).toThrow(
+      GradeRequestError,
+    );
+  });
+
+  it('parseGradeRequest rejects fewer distinct normalised anchors than minHits', () => {
+    expect(() => parseGradeRequest(request('x', oneCriterion(['Queue', 'queue'], 2)))).toThrow(
+      GradeRequestError,
+    );
+    expect(() =>
+      parseGradeRequest(request('x', oneCriterion(['binary search', 'Binary-Search'], 2))),
+    ).toThrow(GradeRequestError);
+    expect(() =>
+      parseGradeRequest(request('x', oneCriterion(['queue', 'stack'], 2))),
+    ).not.toThrow();
+  });
+
+  it('parseGradeRequest rejects sparse arrays (holes in criteria or anchors)', () => {
+    const holeyAnchors = ['queue', 'stack'];
+    delete holeyAnchors[0];
+    expect(() => parseGradeRequest(request('x', oneCriterion(holeyAnchors, 1)))).toThrow(
+      GradeRequestError,
+    );
+    const base = rubric();
+    const criteria = [...base.criteria];
+    criteria.length = 3;
+    expect(() => parseGradeRequest(request('x', { ...base, criteria }))).toThrow(GradeRequestError);
+  });
+});

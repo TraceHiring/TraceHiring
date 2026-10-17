@@ -90,6 +90,31 @@ function int(value: unknown, path: string, min: number, max: number): number {
   return value;
 }
 
+const TOKEN_RE = /[\p{L}\p{N}]+/gu;
+
+/** NFKC, lower case, then the `[\p{L}\p{N}]+` tokens. Answers and anchors go through the same function. */
+function tokensOf(value: string): string[] {
+  return value.normalize('NFKC').toLowerCase().match(TOKEN_RE) ?? [];
+}
+
+/** Identity of a normalised anchor: its token sequence ("Binary-Search" and "binary search" are one). */
+const anchorKey = (tokens: readonly string[]): string => tokens.join(' ');
+
+/** True when the anchor tokens prefix-match consecutive answer tokens, in order. */
+function phraseHit(answer: readonly string[], anchor: readonly string[]): boolean {
+  for (let start = 0; start + anchor.length <= answer.length; start += 1) {
+    let all = true;
+    for (let j = 0; j < anchor.length; j += 1) {
+      if (!answer[start + j]!.startsWith(anchor[j]!)) {
+        all = false;
+        break;
+      }
+    }
+    if (all) return true;
+  }
+  return false;
+}
+
 function parseCriterion(raw: unknown, path: string): RubricCriterion {
   const c = plainObject(raw, path);
   exactKeys(c, ['id', 'label', 'max', 'anchors', 'minHits'], path);
@@ -100,15 +125,25 @@ function parseCriterion(raw: unknown, path: string): RubricCriterion {
   ) {
     throw new GradeRequestError('bad_value', `${path}.anchors`);
   }
-  const anchors = c['anchors'].map((a: unknown, i) =>
-    text(a, `${path}.anchors[${i}]`, LIMITS.anchor),
-  );
+  // Index loops, never map: map skips the holes of a sparse array, and a hole must fail.
+  const rawAnchors: unknown[] = c['anchors'];
+  const anchors: string[] = [];
+  const distinct = new Set<string>();
+  for (let i = 0; i < rawAnchors.length; i += 1) {
+    const anchor = text(rawAnchors[i], `${path}.anchors[${i}]`, LIMITS.anchor);
+    const tokens = tokensOf(anchor);
+    // An anchor with no letter or digit could never be matched (lead, review M2).
+    if (tokens.length === 0) throw new GradeRequestError('bad_value', `${path}.anchors[${i}]`);
+    anchors.push(anchor);
+    distinct.add(anchorKey(tokens));
+  }
   return {
     id: text(c['id'], `${path}.id`, LIMITS.id),
     label: text(c['label'], `${path}.label`, LIMITS.label),
     max: int(c['max'], `${path}.max`, 1, LIMITS.max),
     anchors,
-    minHits: int(c['minHits'], `${path}.minHits`, 1, anchors.length),
+    // minHits cannot exceed the DISTINCT normalised anchors ('Queue' and 'queue' are one), or full marks are unreachable.
+    minHits: int(c['minHits'], `${path}.minHits`, 1, distinct.size),
   };
 }
 
@@ -126,7 +161,10 @@ export function parseGradeRequest(raw: unknown): GradeRequest {
   ) {
     throw new GradeRequestError('bad_value', '$.rubric.criteria');
   }
-  const criteria = rawCriteria.map((c: unknown, i) => parseCriterion(c, `$.rubric.criteria[${i}]`));
+  const criteria: RubricCriterion[] = [];
+  for (let i = 0; i < rawCriteria.length; i += 1) {
+    criteria.push(parseCriterion(rawCriteria[i], `$.rubric.criteria[${i}]`));
+  }
   if (new Set(criteria.map((c) => c.id)).size !== criteria.length) {
     throw new GradeRequestError('bad_value', '$.rubric.criteria');
   }
@@ -145,15 +183,14 @@ export function parseGradeRequest(raw: unknown): GradeRequest {
   };
 }
 
-const normalise = (value: string): string => value.normalize('NFKC').toLowerCase();
-const TOKEN_RE = /[\p{L}\p{N}]+/gu;
-
 /** round-half-up of 100·n/d for non-negative integers, d > 0. */
 const roundHalfUpPercent = (n: number, d: number): number => Math.floor((200 * n + d) / (2 * d));
 
 /**
  * Deterministic, rubric-anchored mock (§5.3). The answer is normalised (NFKC, lower case) and tokenised on
- * `[\p{L}\p{N}]+`; per criterion `hits` = distinct anchors (normalised the same way) that prefix-match a token;
+ * `[\p{L}\p{N}]+`; each anchor is tokenised the same way and matches as a phrase: its tokens prefix-match
+ * consecutive answer tokens (lead decision, review M2; a one-token anchor prefix-matches one token). Per criterion
+ * `hits` = distinct anchors (by normalised token sequence) that match;
  * `points = floor(max · min(hits, minHits) / minHits)`; `totalPercent = roundHalfUp(100 · Σpoints / Σmax)`.
  * An empty answer scores 0. The prompt text never affects the score.
  */
@@ -162,12 +199,17 @@ export class MockLlmGrader implements LlmGrader {
     try {
       opts?.signal?.throwIfAborted();
       const parsed = parseGradeRequest(req);
-      const tokens = normalise(parsed.answer).match(TOKEN_RE) ?? [];
+      const tokens = tokensOf(parsed.answer);
       const criteria = parsed.rubric.criteria.map((criterion) => {
-        const anchors = new Set(criterion.anchors.map(normalise).filter((a) => a.length > 0));
+        // Distinct anchors by normalised token sequence; parse guarantees each has at least one token.
+        const anchors = new Map<string, string[]>();
+        for (const anchor of criterion.anchors) {
+          const anchorTokens = tokensOf(anchor);
+          anchors.set(anchorKey(anchorTokens), anchorTokens);
+        }
         let hits = 0;
-        for (const anchor of anchors) {
-          if (tokens.some((token) => token.startsWith(anchor))) hits += 1;
+        for (const anchorTokens of anchors.values()) {
+          if (phraseHit(tokens, anchorTokens)) hits += 1;
         }
         const points = Math.floor(
           (criterion.max * Math.min(hits, criterion.minHits)) / criterion.minHits,
