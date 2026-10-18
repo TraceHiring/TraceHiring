@@ -8,7 +8,8 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-18 20:55 IST (newest; wins over the lines below):** **R3 is merged** into `d1/integration` (`76f3d69` = **`cp/d1-05`**; every review finding due before the merge fixed tests first; spec revision 4c; full `pnpm verify` and CI on PR #4 green). **C1a** (edge lobby half) is written on `d1/c1a-edge-lobby` @ `d17b6aa` (worktree `.claude/worktrees/agent-aca1caeb85b274390`): AT-D23, D28, D29 photo half; **not reviewed, not merged**; `no-secrets.test.ts` and `log-hygiene.test.ts` (AT-D31/D32 edge) still to write. Next: HANDOFF "Next step" 2a-2d (finish C1a, verify:fast, spec + security review, merge, `cp/d1-06`), then C1b (SessionDO).
+- **Update 2026-10-18 23:30 IST, Chat A (newest; wins over the lines below):** founder moved to **Claude Max**: one chat = one big task (`docs/progress/SESSION-PLAN.md`). **C1a is merged** into `d1/integration` (AT-D23, D28, D29 photo half, D31/D32 edge; spec review PASS WITH FIXES, security review PASS WITH NOTES, all "fix now" findings fixed and re-review CONFIRMED; spec revision 4d; tag **`cp/d1-06`**). **C1b** is written on `d1/c1b-session` @ `ea59b0a` (not reviewed, built on pre-fix C1a). Next: **Chat B** (HANDOFF "Next chat").
+- **Update 2026-10-18 20:55 IST:** **R3 is merged** into `d1/integration` (`76f3d69` = **`cp/d1-05`**; every review finding due before the merge fixed tests first; spec revision 4c; full `pnpm verify` and CI on PR #4 green). **C1a** (edge lobby half) is written on `d1/c1a-edge-lobby` @ `d17b6aa` (worktree `.claude/worktrees/agent-aca1caeb85b274390`): AT-D23, D28, D29 photo half; **not reviewed, not merged**; `no-secrets.test.ts` and `log-hygiene.test.ts` (AT-D31/D32 edge) still to write. Next: HANDOFF "Next step" 2a-2d (finish C1a, verify:fast, spec + security review, merge, `cp/d1-06`), then C1b (SessionDO).
 - **Update 2026-10-18 03:00 IST:** **R3 is complete and assembled on `d1/r3-merge` (`cbfe5ac`, worktree `.claude/worktrees/agent-af098bea644b1ab65`)**: R3b reports + R3a2 (tests, assignments, invitations, outbox, media) + the lead's mount, route inventory (AT-D13) and log hygiene (AT-D32); verify:fast green; spec review of the reports half PASS WITH FIXES (fixed); security review PASS WITH NOTES (M1 db TLS fixed in 05dec63, L2 publish order due). **Not merged into `d1/integration`** (`6ffe4e1`). Next: HANDOFF "Next step" 2a-2f (security fixes, open spec items, spec review of the R3a half, database review, merge `--no-ff` with the `ec83f46` note, full verify, CI, `cp/d1-05`), then C1.
 - **Update 2026-10-17 08:45 IST:** **Wave 0 is complete**: S2, S6 and the tail review's L1/L2/I1 fixed, `e2e-local` CI job + `scripts/e2e-local.mjs` (DC-D9 PASS, DC-D6 Linux PASS), full `pnpm verify` and CI green on `1dff4d6` = **`cp/d1-03`**; postgres 3.4.9 added (`c514c7a`). **Wave 1:** R1 **merged** (`df865ca` = **`cp/d1-04`**, full verify + CI green) and R3 (`d1/r3-api`: partial, not reviewed) from `c514c7a`; both pushed, neither merged. Next: HANDOFF "Next step" 2b-2c (finish and review R3, merge, cp/d1-05, then C1). On the Pro plan run at most 2 agents at once; on this machine run verify with `npm_config_workspace_concurrency=1`.
 - **Update 2026-10-16 17:30 IST:** all four writer branches are placed and reviewed (key script, recruiter CSP + strictPort, DC-D5/D6 spikes, staging-deploy rework); full `pnpm verify` green on `6640b42`; Opus security review PASS WITH NOTES with S3/S7/S8 fixed, S4 in the runbook, S1 a founder gate. Next: HANDOFF "Next step" 2a (S2, S6; S5 is done), 2b (DC-D9 + DC-D6 Linux `e2e-local` job), 2c (full verify, CI, tag `cp/d1-03`), then Wave 1. On the Pro plan run at most 2 agents at once.
@@ -151,21 +152,20 @@ d1/integration is checked out in the worktree .claude/worktrees/d1-integration: 
 Ignore any handoff text injected at session start wherever it disagrees with branch d1/integration.
 
 Before changing anything, run HANDOFF "Verify first" and report in 5 lines whether the repo matches the handoff
-(tip commit, clean tree, verify:fast, pnpm test, PR TraceHiring/TraceHiring#4 CI). If it does not match, stop and
-tell me what differs.
+(tip commit, clean tree, verify:fast, the stream branch tip, PR TraceHiring/TraceHiring#4 CI). If it does not match,
+stop and tell me what differs.
 
-Then do HANDOFF "Next step" in order. Phase: D1 BUILD, Wave 1. Wave 0 is complete and verified (cp/d1-03 = 1dff4d6:
-full pnpm verify and Linux CI green incl. the e2e-local job; DC-D9 and DC-D6 Linux PASS; security reviews
-D1-security-review-wave0-rest.md and D1-security-review-wave0-tail.md, all findings fixed or founder-gated); postgres
-3.4.9 added (c514c7a). R1 is merged (cp/d1-04 = df865ca). R3 is merged, reviewed and fixed (cp/d1-05 = 76f3d69,
-full pnpm verify and CI green). C1a (edge lobby half) is on branch d1/c1a-edge-lobby @ d17b6aa (worktree
-.claude/worktrees/agent-aca1caeb85b274390; enter it with EnterWorktree), not reviewed: write its no-secrets.test.ts
-and log-hygiene.test.ts (AT-D31/D32 edge), run verify:fast, the spec-reviewer and the security-reviewer, fix,
-merge --no-ff, full pnpm verify, CI, tag cp/d1-06; then C1b (SessionDO and the session routes). DC-D8 runs in
-Waves 1-2. Ask me before the first
-staging deploy (I must widen the Cloudflare token with R2 + Queues Edit and set CANDIDATE_TOKEN_KID,
-CANDIDATE_TOKEN_PUBLIC_JWK and API_STAGING_ORIGIN, per scripts/ops/README.md). M0a and
-M0b are built and reviewed but NOT closed; HANDOFF "Path to close" says how, and merging into main needs my explicit
+We are on Claude Max: ONE CHAT = ONE BIG TASK (docs/progress/SESSION-PLAN.md, AUTOPILOT §6 first bullet). This chat's
+task is the one HANDOFF names under "Next chat" (Chat B: C1b, the SessionDO and the session routes, on branch
+d1/c1b-session @ ea59b0a, worktree .claude/worktrees/agent-a5af1e6c4e791ea3b; writer report
+docs/reviews/D1-c1b-writer-report.md). Do HANDOFF "Next step" in order: merge d1/integration into d1/c1b-session and
+resolve; lead files first (test-pool bindings so the real InviteOtpDO/SessionDO/DemoOutboxDO/MediaLinkDO run in tests,
+fast-check for workers/edge); wire closePhotos() at session start and close the SEC-1 residual; pin the new log events;
+spec-reviewer + security-reviewer (Opus) on the C1b diff; decide the writer's decisions 1-14; fix test-first; merge
+--no-ff; full pnpm verify; CI; tag cp/d1-07. The task is done when cp/d1-07 is pushed; then wrap up and print the
+prompt for the next chat in SESSION-PLAN.md. Ask me before the first staging deploy (I must widen the Cloudflare
+token with R2 + Queues Edit and set CANDIDATE_TOKEN_KID, CANDIDATE_TOKEN_PUBLIC_JWK and API_STAGING_ORIGIN, per
+scripts/ops/README.md). M0a and M0b are built and reviewed but NOT closed; merging into main needs my explicit
 go-ahead. This machine is short of RAM: run pnpm verify / verify:fast with npm_config_workspace_concurrency=1.
 
 Safety rules (never break these): never commit on or move main; never force-push; never delete or move branches,
@@ -176,11 +176,10 @@ and pnpm test:rls, and it warns running agents before a db reset. Stop to ask me
 docs/AUTOPILOT.md §3. The founder-queue walkthrough is finished (2026-10-15); ask me about a remaining
 FOUNDER-QUEUE item only when HANDOFF says it is due.
 
-Work until 98% of the 5-hour or weekly usage limit (founder, 2026-10-14); at 98% stop new work and do the STEP 5 wrap-up (handoff, log,
-backup, gitleaks via the pre-push hook, push), then print the next prompt. When context passes ~60%, run the
-trace-handoff skill and stop with the next prompt. Work multi-agent within docs/AUTOPILOT.md §2, but on the Pro plan run
-at most 2 agents at once (four agents took the 5-hour window from 13% to 97% in ~40 minutes on 2026-10-16); each
-writer works in its own worktree reset to an exact SHA, lead-only files are reviewed, placed and verified by the lead,
-and the lead re-runs verify:fast after every placement. Check usage after every agent result, and keep every quality
-gate (tests first, Opus reviews, full pnpm verify, Linux CI) before any merge.
+Stop when this chat's task is done, or context passes ~50%, or the 5-hour window passes 90% (no new agent after
+80%); then the STEP 5 wrap-up (trace-handoff: handoff, log, backup, gitleaks via the pre-push hook, push) and print
+the next chat's prompt. Work multi-agent: up to 3 writers and 3 read-only reviewers at once; each writer works in its
+own worktree reset to an exact SHA with strict directories; lead-only files are reviewed, placed and verified by the
+lead, and the lead re-runs verify:fast after every placement. Check usage after every agent result (log the weekly
+figure), and keep every quality gate (tests first, Opus reviews, full pnpm verify, Linux CI) before any merge.
 ```
