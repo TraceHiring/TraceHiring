@@ -4,25 +4,10 @@
 // allows 3 uploads per session. The `maxChars` batch rejection belongs to the session events route (stream C1b).
 import { describe, expect, it } from 'vitest';
 import { sha256HexBytes } from './encoding.js';
-import { createHarness } from './edge.test-helpers.js';
+import { createHarness, testJpeg as jpeg } from './edge.test-helpers.js';
 import { hasJpegMagic, jpegDimensions } from './jpeg.js';
 import { startPhotoKey } from './routes-photo.js';
 import { ORG, SESSION } from './token.test-helpers.js';
-
-/** A minimal JPEG header: SOI, an APP0 segment, a SOF0 frame of the given size, SOS, then padding and EOI. */
-const jpeg = (width: number, height: number, pad = 64, sof = 0xc0): Uint8Array => {
-  const app0 = [
-    0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0, 0, 1, 0, 1, 0, 0,
-  ];
-  const frame = [
-    0xff, sof, 0x00, 0x11, 0x08,
-    (height >> 8) & 0xff, height & 0xff, (width >> 8) & 0xff, width & 0xff,
-    0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01,
-  ]; // prettier-ignore
-  const sos = [0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3f, 0x00];
-  const body = Array.from({ length: pad }, (_, i) => (i * 37) & 0x7f);
-  return new Uint8Array([0xff, 0xd8, ...app0, ...frame, ...sos, ...body, 0xff, 0xd9]);
-};
 
 const upload = async (
   h: Awaited<ReturnType<typeof createHarness>>,

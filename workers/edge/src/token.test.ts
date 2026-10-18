@@ -2,8 +2,8 @@
 // `typ`, lifetime over the cap, expired `exp`, `iat` beyond the skew, an edited claim with the original signature: all
 // 401. A missing, empty, malformed or private key var fails closed (503), never a pass. Keys are generated at run time.
 import { beforeAll, describe, expect, it } from 'vitest';
-import { base64UrlEncode, utf8 } from './encoding.js';
-import { createHarness } from './edge.test-helpers.js';
+import { base64UrlEncode, sha256HexBytes, utf8 } from './encoding.js';
+import { createHarness, testJpeg, type Harness } from './edge.test-helpers.js';
 import { EdgeError } from './http.js';
 import {
   CANDIDATE,
@@ -216,56 +216,72 @@ describe('the public key var fails closed', () => {
 });
 
 describe('lobby routes refuse a bad token before api is called (AT-D23, route level)', () => {
-  const ROUTES: [string, string, unknown][] = [
-    ['POST', '/v1/lobby/age', { adult: true }],
-    ['GET', '/v1/lobby/notice', undefined],
+  type RouteBody = { json?: unknown; body?: Uint8Array; headers?: Record<string, string> };
+  const photo = testJpeg(640, 480);
+  /** The request body of each lobby route; the photo route sends raw JPEG bytes with their hash header. */
+  const ROUTES: [string, string, () => Promise<RouteBody>][] = [
+    ['POST', '/v1/lobby/age', async () => ({ json: { adult: true } })],
+    ['GET', '/v1/lobby/notice', async () => ({})],
     [
       'POST',
       '/v1/lobby/consent',
-      { noticeVersionId: ORG, renderedSha256: 'a'.repeat(64), accepted: true },
+      async () => ({
+        json: { noticeVersionId: ORG, renderedSha256: 'a'.repeat(64), accepted: true },
+      }),
+    ],
+    [
+      'PUT',
+      '/v1/lobby/photo',
+      async () => ({
+        body: photo,
+        headers: { 'content-type': 'image/jpeg', 'x-photo-sha256': await sha256HexBytes(photo) },
+      }),
     ],
   ];
 
+  /** Nothing reached api and nothing was stored in R2 since `before` calls. */
+  const expectUntouched = (h: Harness, before: number) => {
+    expect(h.calls.length).toBe(before);
+    expect(h.calls.some((c) => c.method === 'photoPermit')).toBe(false);
+    expect(h.evidence.objects.size).toBe(0);
+  };
+
   it.each(ROUTES)(
     '%s %s: a stale lobby nonce (a newer login) is 401 superseded',
-    async (method, path, json) => {
+    async (method, path, init) => {
       const h = await createHarness();
       const first = await h.login();
       h.clock.ms += 31_000;
       const second = await h.login();
       const before = h.calls.length;
 
-      const stale = await h.request(method, path, {
-        token: first,
-        ...(json === undefined ? {} : { json }),
-      });
+      const stale = await h.request(method, path, { token: first, ...(await init()) });
       expect(stale.status).toBe(401);
       expect(await stale.json()).toEqual({ error: 'superseded' });
-      expect(h.calls.length).toBe(before);
+      expectUntouched(h, before);
 
-      const fresh = await h.request(method, path, {
-        token: second,
-        ...(json === undefined ? {} : { json }),
-      });
+      const fresh = await h.request(method, path, { token: second, ...(await init()) });
       expect(fresh.status).toBe(200);
     },
   );
 
   it.each(ROUTES)(
     '%s %s: a cleared lobby nonce (session granted) is 401 token_invalid',
-    async (method, path, json) => {
+    async (method, path, init) => {
       const h = await createHarness();
       const token = await h.login();
+      const before = h.calls.length;
       h.otp.cores.get(INVITATION)?.clearLobbyNonce();
-      const res = await h.request(method, path, { token, ...(json === undefined ? {} : { json }) });
+      const res = await h.request(method, path, { token, ...(await init()) });
       expect(res.status).toBe(401);
       expect(await res.json()).toEqual({ error: 'token_invalid' });
+      expectUntouched(h, before);
     },
   );
 
   it.each(ROUTES)(
     '%s %s: expired, session-typed, none-alg and missing tokens are 401',
-    async (method, path, json) => {
+    async (method, path, init) => {
       const h = await createHarness();
       const token = await h.login();
       const nowSec = Math.floor(h.clock.ms / 1000);
@@ -281,7 +297,7 @@ describe('lobby routes refuse a bad token before api is called (AT-D23, route le
       );
       const none = `${base64UrlEncode(utf8(JSON.stringify({ alg: 'none', typ: 'JWT', kid: KID })))}.${token.split('.')[1]}.`;
       const before = h.calls.length;
-      const body = json === undefined ? {} : { json };
+      const body = await init();
 
       expect((await h.request(method, path, { token: session, ...body })).status).toBe(401);
       expect((await h.request(method, path, { token: none, ...body })).status).toBe(401);
@@ -290,7 +306,7 @@ describe('lobby routes refuse a bad token before api is called (AT-D23, route le
       const expired = await h.request(method, path, { token, ...body });
       expect(expired.status).toBe(401);
       expect(await expired.json()).toEqual({ error: 'token_expired' });
-      expect(h.calls.length).toBe(before);
+      expectUntouched(h, before);
     },
   );
 
