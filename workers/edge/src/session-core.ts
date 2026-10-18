@@ -888,22 +888,46 @@ export class SessionCore implements SessionApi {
    * send (so any stage can rebuild its input, L-18). Success marks `acked`. A failure counts an attempt and schedules
    * the next (5 s, 15 s, 60 s, then every 5 min); 24 h after submit the state becomes `failed` and
    * `session.mirror_failed` is logged. A lease stops two paths (submit and alarm) from sending at once.
+   *
+   * The attempt is counted and the 24 h limit checked when the lease is taken (SEC-C1b-3): an object that dies inside
+   * an attempt leaves its lease behind and never runs the bookkeeping after it, so the retry after the lease must
+   * still count, and still give up.
    */
   async #deliver(): Promise<void> {
-    const taken = this.#tx((): Meta | null => {
+    const taken = this.#tx((): Meta | { gaveUp: number; sessionId: string } | null => {
       const meta = this.#meta();
       const now = this.#now();
       if (meta === undefined || meta.mirror.state !== 'pending') return null;
       if (meta.mirror.leaseUntil !== null && meta.mirror.leaseUntil > now) return null;
       if (meta.mirror.nextAt !== null && meta.mirror.nextAt > now) return null;
+      if (now - (meta.submittedAt ?? now) >= MIRROR_GIVE_UP_MS) {
+        const attempts = meta.mirror.attempts;
+        this.#kv.put<Meta>(K.meta, {
+          ...meta,
+          mirror: { state: 'failed', attempts, nextAt: null, leaseUntil: null },
+        });
+        return { gaveUp: attempts, sessionId: meta.sessionId };
+      }
       const leased: Meta = {
         ...meta,
-        mirror: { ...meta.mirror, leaseUntil: now + MIRROR_LEASE_MS },
+        mirror: {
+          ...meta.mirror,
+          attempts: meta.mirror.attempts + 1,
+          leaseUntil: now + MIRROR_LEASE_MS,
+        },
       };
       this.#kv.put(K.meta, leased);
       return leased;
     });
     if (taken === null) return;
+    const failedNow = 'gaveUp' in taken ? taken.gaveUp : await this.#attempt(taken);
+    if (failedNow !== null) {
+      this.#log.error('session.mirror_failed', { sessionId: taken.sessionId, n: failedNow });
+    }
+  }
+
+  /** One leased attempt and its bookkeeping; returns the attempt count when the mirror just became `failed`. */
+  async #attempt(taken: Meta): Promise<number | null> {
     await this.#schedule();
     let delivered = false;
     try {
@@ -917,11 +941,12 @@ export class SessionCore implements SessionApi {
     } catch {
       delivered = false;
     }
-    const failedNow = this.#tx((): number | null => {
+    return this.#tx((): number | null => {
       const meta = this.#meta();
       if (meta === undefined) return null;
       const now = this.#now();
-      const attempts = meta.mirror.attempts + 1;
+      // Counted when the lease was taken.
+      const attempts = meta.mirror.attempts;
       if (delivered) {
         this.#kv.put<Meta>(K.meta, {
           ...meta,
@@ -944,9 +969,6 @@ export class SessionCore implements SessionApi {
       });
       return giveUp ? attempts : null;
     });
-    if (failedNow !== null) {
-      this.#log.error('session.mirror_failed', { sessionId: taken.sessionId, n: failedNow });
-    }
   }
 
   /** The one alarm slot: the deadline alarm while running, else the next mirror retry (or lease end). */
