@@ -55,9 +55,13 @@ export interface Clock {
   ms: number;
 }
 
-/** A fake DurableObjectNamespace: one OtpCore per name, on the shared clock. `names` records every id asked for. */
+/**
+ * A fake DurableObjectNamespace: one OtpCore per name, on the shared clock. `names` records every id asked for;
+ * `kvs` holds each object's storage so a test can check what was (not) written.
+ */
 export const fakeOtpNamespace = (clock: Clock) => {
   const cores = new Map<string, OtpCore>();
+  const kvs = new Map<string, MapKv>();
   const names: string[] = [];
   const ns = {
     idFromName(name: string) {
@@ -67,13 +71,15 @@ export const fakeOtpNamespace = (clock: Clock) => {
     get(id: { name: string }) {
       let core = cores.get(id.name);
       if (core === undefined) {
-        core = new OtpCore(new MapKv(), { now: () => clock.ms });
+        const kv = new MapKv();
+        core = new OtpCore(kv, { now: () => clock.ms });
         cores.set(id.name, core);
+        kvs.set(id.name, kv);
       }
       return core;
     },
   };
-  return { ns, cores, names };
+  return { ns, cores, kvs, names };
 };
 
 export interface StoredObject {

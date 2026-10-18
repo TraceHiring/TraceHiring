@@ -53,6 +53,7 @@ const K = {
   lockUntil: 'otp:lock_until',
   lobbyNonce: 'lobby:nonce_hash',
   photoUploads: 'photo:uploads',
+  photosClosed: 'photo:closed',
   rate: (bucket: LobbyBucket) => `rate:${bucket}`,
 } as const;
 
@@ -75,7 +76,8 @@ export type IssueResult =
   | Refusal;
 export type VerifyResult = { ok: true; nonce: string } | Refusal;
 export type GateResult = { ok: true } | Refusal;
-export type PhotoSlot = { ok: true; n: number } | { ok: false };
+/** A photo upload slot, or why not: the 3 uploads are used (`rate_limited`) or the session started (`closed`). */
+export type PhotoSlot = { ok: true; n: number } | { ok: false; error: 'rate_limited' | 'closed' };
 
 export interface OtpCoreDeps {
   /** Epoch milliseconds (the object's own clock). */
@@ -237,10 +239,19 @@ export class OtpCore {
     this.#kv.delete(K.lobbyNonce);
   }
 
+  /**
+   * Closes the start photo step for good (set-once; SEC-1). Session start (stream C1b) calls it on the invitation's
+   * object before it reads the stored photo, so an upload still in progress can no longer take a slot and overwrite it.
+   */
+  closePhotos(): void {
+    this.#kv.put(K.photosClosed, true);
+  }
+
   /** Takes one of the 3 photo uploads of this invitation's session; `n` is its number (1..3). */
   takePhotoSlot(): PhotoSlot {
+    if (this.#kv.get<boolean>(K.photosClosed) === true) return { ok: false, error: 'closed' };
     const used = this.#kv.get<number>(K.photoUploads) ?? 0;
-    if (used >= PHOTO_UPLOADS_PER_SESSION) return { ok: false };
+    if (used >= PHOTO_UPLOADS_PER_SESSION) return { ok: false, error: 'rate_limited' };
     this.#kv.put(K.photoUploads, used + 1);
     return { ok: true, n: used + 1 };
   }

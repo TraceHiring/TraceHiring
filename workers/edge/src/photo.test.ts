@@ -4,10 +4,10 @@
 // allows 3 uploads per session. The `maxChars` batch rejection belongs to the session events route (stream C1b).
 import { describe, expect, it } from 'vitest';
 import { sha256HexBytes } from './encoding.js';
-import { createHarness, testJpeg as jpeg } from './edge.test-helpers.js';
+import { createHarness, testJpeg as jpeg, type Harness } from './edge.test-helpers.js';
 import { hasJpegMagic, jpegDimensions } from './jpeg.js';
 import { startPhotoKey } from './routes-photo.js';
-import { ORG, SESSION } from './token.test-helpers.js';
+import { INVITATION, ORG, SESSION } from './token.test-helpers.js';
 
 const upload = async (
   h: Awaited<ReturnType<typeof createHarness>>,
@@ -243,5 +243,88 @@ describe('PUT /v1/lobby/photo (AT-D29)', () => {
     (h.env as unknown as Record<string, unknown>).EVIDENCE = undefined;
     expect((await upload(h, token, jpeg(640, 480))).status).toBe(503);
     expect(h.otp.cores.values().next().value?.takePhotoSlot()).toEqual({ ok: true, n: 1 });
+  });
+});
+
+describe('PUT /v1/lobby/photo after session start (SEC-1)', () => {
+  /** No photo slot was ever written in the invitation's object. */
+  const noSlotUsed = (h: Harness) =>
+    expect(h.otp.kvs.get(INVITATION)?.get('photo:uploads')).toBeUndefined();
+
+  it('every byte check runs before photoPermit: a bad body never reaches api', async () => {
+    const h = await createHarness();
+    const token = await h.login();
+    const good = jpeg(640, 480);
+    const cases: [Uint8Array, { sha?: string }][] = [
+      [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]), {}],
+      [jpeg(100, 100), {}],
+      [new Uint8Array([...good, 0x41]), {}],
+      [good, { sha: 'c'.repeat(64) }],
+    ];
+    for (const [bytes, opts] of cases) {
+      expect((await upload(h, token, bytes, opts)).status).toBeGreaterThanOrEqual(400);
+    }
+    expect(h.calls.some((c) => c.method === 'photoPermit')).toBe(false);
+    expect(h.evidence.objects.size).toBe(0);
+    noSlotUsed(h);
+  });
+
+  it('after closePhotos an upload is 410 closed: nothing stored, no slot used', async () => {
+    const h = await createHarness();
+    const token = await h.login();
+    h.otp.cores.get(INVITATION)?.closePhotos();
+    const res = await upload(h, token, jpeg(640, 480));
+    expect(res.status).toBe(410);
+    expect(await res.json()).toEqual({ error: 'closed' });
+    expect(h.evidence.objects.size).toBe(0);
+    noSlotUsed(h);
+  });
+
+  it('a slow upload that started before session start cannot land after it (closed mid-body)', async () => {
+    const h = await createHarness();
+    const token = await h.login();
+    const bytes = jpeg(640, 480);
+    let releaseRest!: () => void;
+    const rest = new Promise<void>((resolve) => (releaseRest = resolve));
+    let signalReading!: () => void;
+    const reading = new Promise<void>((resolve) => (signalReading = resolve));
+    let pulls = 0;
+    // highWaterMark 0: a chunk is produced only when the route reads, so `reading` means the route got past auth.
+    const body = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          pulls += 1;
+          if (pulls === 1) {
+            controller.enqueue(bytes.slice(0, 16));
+            signalReading();
+            return;
+          }
+          await rest;
+          controller.enqueue(bytes.slice(16));
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const pending = h.request('PUT', '/v1/lobby/photo', {
+      token,
+      body,
+      headers: {
+        'content-type': 'image/jpeg',
+        'content-length': String(bytes.length),
+        'x-photo-sha256': await sha256HexBytes(bytes),
+      },
+    });
+    await reading;
+    // The route is past lobby auth (the photo limit counted this request) and is reading the body now.
+    expect(h.otp.kvs.get(INVITATION)?.get('rate:photo')).toMatchObject({ n: 1 });
+    // Session start (stream C1b) closes the photo step while the body is still arriving.
+    h.otp.cores.get(INVITATION)?.closePhotos();
+    releaseRest();
+    const res = await pending;
+    expect(res.status).toBe(410);
+    expect(await res.json()).toEqual({ error: 'closed' });
+    expect(h.evidence.objects.size).toBe(0);
+    noSlotUsed(h);
   });
 });

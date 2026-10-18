@@ -19,6 +19,8 @@ export interface OtpApi {
   lobbyGate(nonce: string, bucket: LobbyBucket): Promise<GateResult>;
   clearLobbyNonce(): void | Promise<void>;
   takePhotoSlot(): PhotoSlot | Promise<PhotoSlot>;
+  /** Set-once: no photo slot after this (session start calls it before reading the photo, SEC-1). */
+  closePhotos(): void | Promise<void>;
 }
 
 export class InviteOtpDO extends DurableObject<Env> implements OtpApi {
@@ -51,5 +53,9 @@ export class InviteOtpDO extends DurableObject<Env> implements OtpApi {
 
   takePhotoSlot(): PhotoSlot {
     return this.#core.takePhotoSlot();
+  }
+
+  closePhotos(): void {
+    this.#core.closePhotos();
   }
 }

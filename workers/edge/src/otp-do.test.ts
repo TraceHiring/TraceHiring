@@ -249,7 +249,23 @@ describe('OtpCore lobby nonce and limits', () => {
     expect(core.takePhotoSlot()).toEqual({ ok: true, n: 1 });
     expect(core.takePhotoSlot()).toEqual({ ok: true, n: 2 });
     expect(core.takePhotoSlot()).toEqual({ ok: true, n: 3 });
-    expect(core.takePhotoSlot()).toEqual({ ok: false });
+    expect(core.takePhotoSlot()).toEqual({ ok: false, error: 'rate_limited' });
+  });
+
+  it('closePhotos is set-once: every later slot is refused closed, the cap reason no longer matters', () => {
+    const { core, kv } = setup();
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 1 });
+    core.closePhotos();
+    expect(core.takePhotoSlot()).toEqual({ ok: false, error: 'closed' });
+    core.closePhotos();
+    expect(core.takePhotoSlot()).toEqual({ ok: false, error: 'closed' });
+    // Closed with no slot used at all: still closed, and the refusal writes nothing.
+    const fresh = setup();
+    fresh.core.closePhotos();
+    const before = JSON.stringify([...fresh.kv.map.entries()]);
+    expect(fresh.core.takePhotoSlot()).toEqual({ ok: false, error: 'closed' });
+    expect(JSON.stringify([...fresh.kv.map.entries()])).toBe(before);
+    expect(kv.map.size).toBeGreaterThan(0);
   });
 });
 

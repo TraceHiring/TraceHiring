@@ -9,7 +9,13 @@
 // Synthetic values are built at run time (no literal PII-shaped fixture sits in the repo).
 import { describe, expect, it } from 'vitest';
 import { sha256HexBytes, utf8 } from './encoding.js';
-import { createHarness, NOTICE_ID, NOTICE_SHA, type Harness } from './edge.test-helpers.js';
+import {
+  createHarness,
+  NOTICE_ID,
+  NOTICE_SHA,
+  testJpeg,
+  type Harness,
+} from './edge.test-helpers.js';
 import type { CandidateMethod } from './rpc.js';
 
 declare global {
@@ -178,7 +184,13 @@ describe('edge log lines carry no payload, token or code (AT-D32, edge half)', (
     );
     const token = await h.login();
     const loginCodes = h.codes();
-    const photo = utf8(`${SECRETS.answer} ${SECRETS.label}`);
+    // A valid JPEG (the bytes are checked before photoPermit, SEC-1) with the planted values in its scan data.
+    const jpeg = testJpeg(640, 480);
+    const photo = new Uint8Array([
+      ...jpeg.slice(0, -2),
+      ...utf8(`${SECRETS.answer} ${SECRETS.label}`),
+      ...jpeg.slice(-2),
+    ]);
     const photoSha = await sha256HexBytes(photo);
     const sends: [string, string, Parameters<Harness['request']>[2]][] = [
       ['POST', '/v1/lobby/age', { token, json: { adult: true }, headers: noisyHeaders() }],
