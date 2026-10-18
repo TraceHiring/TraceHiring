@@ -279,7 +279,33 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
         throw err;
       }
       const [frozen] = parseRows(VersionRowSchema, published);
-      if (frozen === undefined) return orgFail('conflict');
+      if (frozen === undefined) {
+        // Spec review r3a #2: this attempt lost the race, but its put above may have landed after the winner's
+        // check and overwritten the published package. Rewrite the bytes rebuilt from the frozen rows (identical
+        // from every writer) when they match the stored hash; the answer stays 409 either way.
+        try {
+          const now = await findVersion(ctx.rest, orgId, testId, draft.id);
+          if (now?.status === 'published' && now.content_sha256 !== null) {
+            const frozenTest = await findTest(ctx.rest, orgId, testId);
+            const rebuilt =
+              frozenTest === null
+                ? null
+                : buildPackage(frozenTest, now, await loadContent(ctx.rest, orgId, now.id));
+            const again = rebuilt?.ok === true ? await encodePackage(rebuilt.pkg) : null;
+            const stored = await bucket.getText(key);
+            if (
+              again !== null &&
+              again.sha256 === now.content_sha256 &&
+              (stored === null || (await sha256Hex(stored)) !== again.sha256)
+            ) {
+              await bucket.put(key, again.text, again.sha256);
+            }
+          }
+        } catch {
+          // Best effort: the SessionDO's hash check still refuses a mismatched package (fail closed).
+        }
+        return orgFail('conflict');
+      }
 
       // Rebuild from the frozen rows; any difference retires the version (fail closed).
       const retire = async () => {

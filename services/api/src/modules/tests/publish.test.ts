@@ -152,6 +152,39 @@ describe('POST …/tests/:testId/publish', () => {
     expect(await sha256Hex(text)).toBe(body.contentSha256);
   });
 
+  it('a losing attempt whose stale R2 write lands after the winner restores the frozen package (spec review r3a #2)', async () => {
+    const s = await setup();
+    // Attempt B built the package from draft state 1; while its put is in flight the draft changes to state 2,
+    // attempt A publishes state 2 (and passes its own check), and only then B's stale bytes land in R2.
+    const put = s.bucket.put;
+    let raced = false;
+    let winner: { contentSha256: string } | undefined;
+    s.bucket.put = async (key, text, sha) => {
+      if (!raced) {
+        raced = true;
+        s.bucket.put = put;
+        const edited = await s.call(
+          'PUT',
+          `/v1/orgs/${ORG}/tests/${s.testId}`,
+          draftBody({ name: 'Synthetic Support Test, state 2' }),
+        );
+        expect(edited.status).toBe(200);
+        const a = await s.publish();
+        expect(a.status).toBe(200);
+        winner = PublishTestResponse.parse(await a.json());
+      }
+      await put(key, text, sha);
+    };
+    const b = await s.publish();
+    expect(b.status).toBe(409);
+    expect(await errorCode(b)).toBe('conflict');
+    const row = rowsOf(s.db, 'test_versions').find((v) => v.id === s.versionId);
+    expect(row).toMatchObject({ status: 'published', content_sha256: winner?.contentSha256 });
+    const text = s.bucket.objects.get(`packages/${s.versionId}.json`) ?? '';
+    expect(await sha256Hex(text)).toBe(winner?.contentSha256);
+    expect(TestPackage.parse(JSON.parse(text)).title).toBe('Synthetic Support Test, state 2');
+  });
+
   it('an incomplete draft is 422 draft_incomplete before any R2 write or UPDATE', async () => {
     const empty = await setup({ draft: draftBody({ sections: [] }) });
     expect(await errorCode(await empty.publish())).toBe('draft_incomplete');
