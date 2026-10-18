@@ -35,3 +35,17 @@
 ## Not checked
 
 The real PostgREST v14.4 `return=representation` on column-granted tables (`e2e-local` covers it); the real `api_login` → `trace_api` login and executed trigger paths (the writer probed those with writes); Durable Object SQLite statements; `pnpm verify`.
+
+## Resolution (lead, 2026-10-18, on d1/r3-merge)
+
+| # | State |
+| --- | --- |
+| m-1 | Fixed in `f37b812` (FailAfterCommit: the lazy `expired` commits; the candidate fake is now transactional, which turned the test red first). |
+| m-2 | Fixed in `c26753f` (the outbox needs the RLS-visible org row; test first). |
+| m-3 | Fixed in `71469ce` (tests, invitations, assignments lists cap+1 and fail closed; versions and member names chunked). |
+| m-4 | Fixed in `3d50ee2` (a failed draft insert archives the new test). |
+| n-1 | Accepted, recorded in spec revision 4c (closed, option 1, api-side). |
+| n-2 | Fixed in `9fcdbe6` (lobbyMint re-reads and refuses when the move lost the race). `messagingSend` keeps ignoring a lost `sent` move (harmless: the OTP was written and later steps refuse a revoked link). |
+| n-3 | (b) fixed in `76f203d`; (a) accepted. |
+| n-4 | M1 (migration comment; migrations are not edited after placement). |
+| n-5 | No change for D1. |

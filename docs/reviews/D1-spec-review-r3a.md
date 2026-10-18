@@ -46,3 +46,15 @@ No CLAUDE.md rule is broken and nothing blocks. Rule 9: `blocked_age` is sticky;
 ## Checked and correct
 
 Every §6.2 row owned by these modules matches path, verb, role set, contract and error codes (tests 5, assignments 3, invitations 3, demo outbox, start-photo-link, `/media/:jti`), and the mount test pins that list with no never-build word. Every PostgREST read filters by the path `org_id`; org work runs as the caller with the publishable key; no service key in scope; trace_api is used only for `sent`, CandidateRpc and the two media grants, with constant SQL, bound parameters, `org_id = $1`, `set local role` plus `api_org_id` and a server `request_id` per transaction, over TLS. Candidate path: every lobby method re-verifies; age → consent → session id → photo → grant enforced; `sessionGrant` changes no status; `started`/`started_at` set once from the DO; lazy expiry only without a session id; strict RPC parsing with constant codes; no address returned. The package carries no key, rubric, weight or cutoff. The outbox runs only on dev/staging with `DEMO_OUTBOX=1`, `@example.test` only, no stored address. Media: v4 jti, HMAC over `v1|jti|exp` with canonical sig, `exp` before the DO, atomic burn before the DB, one 404 for every failure, per-viewer rate limit. `index.ts` exports only `default`, `CandidateRpc`, `MediaLinkDO`, `DemoOutboxDO`; the only log line is `candidate_rpc.failed`. No module touches `quality.*` or `integrity.*` or exposes a reject or decision path (rules 1, 2, 6).
+
+## Resolution (lead, 2026-10-18, on d1/r3-merge)
+
+| # | State |
+| --- | --- |
+| 1 | Open, due before D1 CLOSE: the real trace_api SQL of the candidate store runs in `e2e-local` (R5 flow steps 1–7), recorded in the D1 summary. |
+| 2 | Fixed in `ffe674a` (the losing attempt rewrites the frozen package on its 0-row path; race test). |
+| 3 | Open, due before R4 integrates the editor (`toDetail` must tolerate a half-written draft; a lead contract decision). |
+| 4 | Fixed in `76f203d` (POST and PUT tests need an authoring role). |
+| 5 | (a) R5; (b) fixed in `2c11bb5` (default fetch test). |
+| 6 | (a) AT-D33 wording recorded in spec revision 4c; (b) FOUNDER-QUEUE row (rule 9, M3a); (c) and (d) noted, no change in R3. |
+| Open questions 1–6 | Accepted and recorded in spec revision 4c. |
