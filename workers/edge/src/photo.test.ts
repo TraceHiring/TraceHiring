@@ -207,6 +207,22 @@ describe('PUT /v1/lobby/photo (AT-D29)', () => {
     expect(h.evidence.objects.size).toBe(0);
   });
 
+  it('a permit for another org than the token is 503 unavailable: nothing stored, no slot (SR-9)', async () => {
+    const h = await createHarness({
+      photoPermit: async () => ({
+        orgId: '77777777-7777-4777-8777-777777777777',
+        sessionId: SESSION,
+        locked: false,
+      }),
+    });
+    const token = await h.login();
+    const res = await upload(h, token, jpeg(640, 480));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'unavailable' });
+    expect(h.evidence.objects.size).toBe(0);
+    expect(h.otp.kvs.get(INVITATION)?.get('photo:uploads')).toBeUndefined();
+  });
+
   it('the key uses the ids from api, never ids from the request', async () => {
     const h = await createHarness();
     const token = await h.login();

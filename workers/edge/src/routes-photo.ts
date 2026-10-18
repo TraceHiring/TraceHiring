@@ -60,6 +60,8 @@ export const mountPhotoRoute = (app: Hono<EdgeEnv>, deps: RouteDeps): void => {
 
       const permit = await rpc(c, deps, 'photoPermit', { lobbyToken });
       if (permit.locked) return fail('closed');
+      // The key's org must be the token's org; a mismatch is an api fault, so nothing is stored (SR-9).
+      if (permit.orgId !== claims.org_id) return fail('unavailable');
       const evidence = c.env.EVIDENCE;
       if (evidence === undefined) return fail('unavailable');
       const otp = otpFor(c, claims.invitation_id);
