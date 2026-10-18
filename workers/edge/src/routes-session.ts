@@ -1,7 +1,8 @@
 // Session routes (specs/d1-demo-slice.md §4.1 step 7-8, §4.2, §4.4; L-12, L-17, RT-11, RT-12).
 //
 // `session/start` (lobby token): the nonce and the 6/min limit in InviteOtpDO, then api `sessionGrant` (api re-checks
-// the step order and mints the session token), the start photo head()-checked in R2, then `SessionDO.start` (the DO
+// the step order and mints the session token), InviteOtpDO `closePhotos` (no photo upload after this, SEC-1), the
+// start photo head()-checked in R2, then `SessionDO.start` (the DO
 // stamps `started_at` from its own clock), then api `sessionStarted` with claim-derived ids and the DO's `startedAt`
 // (api sets `started` and the set-once `started_at`). A failed DO start changes nothing in Postgres; a retry re-grants
 // and the DO answers its stored `startedAt`. Only when all of that succeeded is the lobby nonce cleared and the session
@@ -120,6 +121,12 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
       ) {
         return fail('unavailable');
       }
+      // Close the photo step for good before the photo is read (C1a SEC-1): no upload can take a slot after this, so
+      // the photo checked below is the session's. Only after a granted start (a refused grant must not lock uploads),
+      // and on the skip path too. Set-once, so a retried start closes again harmlessly. If the close fails the start
+      // fails closed (503, no SessionDO start) and the lobby token stays alive for a retry.
+      const otp = otpFor(c, claims.invitation_id);
+      await otpCall(() => otp.closePhotos());
       const photo =
         'sha256' in body.photo
           ? await checkedPhoto(c, claims.org_id, grant.sessionId, body.photo.sha256)
@@ -158,7 +165,6 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
         sessionId: grant.sessionId,
         startedAt: started.startedAt,
       });
-      const otp = otpFor(c, claims.invitation_id);
       await otpCall(() => otp.clearLobbyNonce());
       if (started.kind === 'submitted') {
         return sendJson(c, SessionStartRes, { state: 'submitted', receipt: started.receipt });

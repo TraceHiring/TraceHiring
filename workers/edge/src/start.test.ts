@@ -18,9 +18,40 @@ import {
   installPackage,
   type SessionRouteHarness,
 } from './session.test-helpers.js';
-import { INVITATION } from './token.test-helpers.js';
+import { sha256HexBytes } from './encoding.js';
+import { testJpeg } from './edge.test-helpers.js';
+import { INVITATION, ORG, SESSION } from './token.test-helpers.js';
 
 const startBody = { rulesAcknowledged: true, photo: { skippedReason: 'declined' } };
+
+const PHOTO_KEY = `media/${ORG}/${SESSION}/start_photo.jpg`;
+
+/** Uploads a start photo through PUT /v1/lobby/photo; returns its sha256. */
+const uploadPhoto = async (
+  h: SessionRouteHarness,
+  lobby: string,
+  bytes: Uint8Array = testJpeg(640, 480),
+): Promise<string> => {
+  const sha256 = await sha256HexBytes(bytes);
+  const res = await h.request('PUT', '/v1/lobby/photo', {
+    token: lobby,
+    body: bytes,
+    headers: { 'content-type': 'image/jpeg', 'x-photo-sha256': sha256 },
+  });
+  if (res.status !== 200) throw new Error(`photo upload ${res.status}`);
+  return sha256;
+};
+
+/** The invitation's InviteOtpDO logic (it exists once the candidate logged in). */
+const otpCore = (h: SessionRouteHarness) => {
+  const core = h.otp.cores.get(INVITATION);
+  if (core === undefined) throw new Error('no otp object');
+  return core;
+};
+
+/** The photo the SessionDO stored in its meta, or undefined when no session exists. */
+const storedPhoto = (h: SessionRouteHarness) =>
+  h.session.sessions.get(INVITATION)?.kv.get<{ photo: unknown }>('meta')?.photo;
 
 const tryStart = async (h: SessionRouteHarness, lobby: string, body: unknown = startBody) =>
   h.request('POST', '/v1/session/start', { token: lobby, json: body });
@@ -293,5 +324,120 @@ describe('GET /v1/session/items/:pos', () => {
     const { token } = await h.startSession();
     const res = await h.request('GET', `/v1/session/items/${pos}`, { token });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('session/start closes the photo step before it reads the photo (C1a SEC-1)', () => {
+  const photoBody = (sha256: string) => ({ rulesAcknowledged: true, photo: { sha256 } });
+  const count = (calls: string[], name: string) => calls.filter((c) => c === name).length;
+
+  it('closePhotos runs after the grant and before the photo head(); the session holds the photo', async () => {
+    const h = await sessionHarness();
+    const lobby = await h.login();
+    const sha256 = await uploadPhoto(h, lobby);
+    const order: string[] = [];
+    const core = otpCore(h);
+    const close = core.closePhotos.bind(core);
+    core.closePhotos = () => {
+      order.push(called(h, 'sessionGrant') === 1 ? 'closePhotos' : 'closePhotos before the grant');
+      close();
+    };
+    const bucket = h.evidence.bucket;
+    const head = bucket.head.bind(bucket);
+    bucket.head = async (key: string) => {
+      order.push('head');
+      return head(key);
+    };
+
+    const res = await tryStart(h, lobby, photoBody(sha256));
+    expect(res.status).toBe(200);
+    expect(order[0]).toBe('closePhotos');
+    expect(order[1]).toBe('head');
+    expect(count(order, 'closePhotos')).toBe(1);
+    expect(storedPhoto(h)).toEqual({
+      key: PHOTO_KEY,
+      sha256,
+      bytes: testJpeg(640, 480).length,
+    });
+  });
+
+  it('a refused grant does not close the photo step; a start without a photo closes it', async () => {
+    const h = await sessionHarness();
+    const api = h.env.API as unknown as Record<string, (i: unknown) => Promise<unknown>>;
+    const grant = api.sessionGrant;
+    if (grant === undefined) throw new Error('no grant');
+    api.sessionGrant = async () => {
+      throw new Error('step_required');
+    };
+    const lobby = await h.login();
+    expect((await tryStart(h, lobby)).status).toBe(403);
+    expect(h.otp.kvs.get(INVITATION)?.get('photo:closed')).toBeUndefined();
+
+    api.sessionGrant = grant;
+    h.clock.ms += 10_000;
+    expect((await tryStart(h, lobby)).status).toBe(200);
+    expect(h.otp.kvs.get(INVITATION)?.get('photo:closed')).toBe(true);
+  });
+
+  it('after start an upload is 410 closed and nothing is written to R2', async () => {
+    const h = await sessionHarness();
+    const lobby = await h.login();
+    const sha256 = await uploadPhoto(h, lobby);
+    expect((await tryStart(h, lobby, photoBody(sha256))).status).toBe(200);
+    const puts = count(h.evidence.calls, 'put');
+    const stored = h.evidence.objects.get(PHOTO_KEY)?.body;
+
+    // An upload past lobby auth (a fresh login) and photoPermit (the harness permit is never locked): only the
+    // object's closed photo step stops it.
+    h.clock.ms += 31_000;
+    const lobby2 = await h.login();
+    const other = testJpeg(800, 600);
+    const res = await h.request('PUT', '/v1/lobby/photo', {
+      token: lobby2,
+      body: other,
+      headers: { 'content-type': 'image/jpeg', 'x-photo-sha256': await sha256HexBytes(other) },
+    });
+    expect(res.status).toBe(410);
+    expect(await res.json()).toEqual({ error: 'closed' });
+    expect(count(h.evidence.calls, 'put')).toBe(puts);
+    expect(h.evidence.objects.get(PHOTO_KEY)?.body).toEqual(stored);
+  });
+
+  it('a closePhotos failure is 503 unavailable: no photo read, no SessionDO, nothing started', async () => {
+    const h = await sessionHarness();
+    const lobby = await h.login();
+    const sha256 = await uploadPhoto(h, lobby);
+    otpCore(h).closePhotos = () => {
+      throw new Error('object reset');
+    };
+    const heads = count(h.evidence.calls, 'head');
+
+    const res = await tryStart(h, lobby, photoBody(sha256));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'unavailable' });
+    expect(count(h.evidence.calls, 'head')).toBe(heads);
+    expect(h.session.names).toEqual([]);
+    expect(called(h, 'sessionStarted')).toBe(0);
+    // The lobby nonce is cleared only after a start, so the candidate can retry.
+    expect((await h.request('GET', '/v1/lobby/notice', { token: lobby })).status).toBe(200);
+  });
+
+  it('a retried start after a close works (closePhotos is set-once and idempotent)', async () => {
+    const h = await sessionHarness();
+    const lobby = await h.login();
+    const sha256 = await uploadPhoto(h, lobby);
+    h.packages.state.failGets = 1;
+    expect((await tryStart(h, lobby, photoBody(sha256))).status).toBe(503);
+    expect(h.otp.kvs.get(INVITATION)?.get('photo:closed')).toBe(true);
+
+    h.clock.ms += 10_000;
+    const retry = await tryStart(h, lobby, photoBody(sha256));
+    expect(retry.status).toBe(200);
+    expect(h.otp.kvs.get(INVITATION)?.get('photo:closed')).toBe(true);
+    expect(storedPhoto(h)).toEqual({
+      key: PHOTO_KEY,
+      sha256,
+      bytes: testJpeg(640, 480).length,
+    });
   });
 });
