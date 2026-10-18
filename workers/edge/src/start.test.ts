@@ -4,7 +4,11 @@
 // and `session.package_invalid` is logged with `sessionId` and `pkg` only; a failed start changes nothing in Postgres
 // (no sessionStarted), keeps the lobby token alive and a retry succeeds; dead links never reach the object; a started
 // session runs to its deadline whatever the link's state; a finished session answers its receipt.
-import { SessionStartRes, SessionView } from '@trace/shared/contracts/candidate';
+import {
+  SessionMirrorMessage,
+  SessionStartRes,
+  SessionView,
+} from '@trace/shared/contracts/candidate';
 import { describe, expect, it } from 'vitest';
 import {
   coreHarness,
@@ -24,7 +28,10 @@ import { INVITATION, ORG, SESSION } from './token.test-helpers.js';
 
 const startBody = { rulesAcknowledged: true, photo: { skippedReason: 'declined' } };
 
+/** The canonical key the session, the mirror and the database use; only session start writes it. */
 const PHOTO_KEY = `media/${ORG}/${SESSION}/start_photo.jpg`;
+/** The working key the lobby upload route writes (retakes overwrite it). */
+const UPLOAD_KEY = `media/${ORG}/${SESSION}/start_photo.upload.jpg`;
 
 /** Uploads a start photo through PUT /v1/lobby/photo; returns its sha256. */
 const uploadPhoto = async (
@@ -265,7 +272,7 @@ describe('session/start (AT-D35)', () => {
     expect(await res.json()).toEqual({ state: 'submitted', receipt });
   });
 
-  it('a declared start photo must exist under its key with the same sha256', async () => {
+  it('a declared start photo must exist under its working key with the same sha256', async () => {
     const h = await sessionHarness();
     const sha256 = 'd'.repeat(64);
     const lobby = await h.login();
@@ -273,7 +280,8 @@ describe('session/start (AT-D35)', () => {
     expect(missing.status).toBe(403);
     expect(await missing.json()).toEqual({ error: 'step_required' });
 
-    const key = `media/22222222-2222-4222-8222-222222222222/44444444-4444-4444-8444-444444444444/start_photo.jpg`;
+    // The lobby uploads to the working key now (SEC-1 residual); start pins it to start_photo.jpg itself.
+    const key = `media/22222222-2222-4222-8222-222222222222/44444444-4444-4444-8444-444444444444/start_photo.upload.jpg`;
     await h.evidence.bucket.put(key, new Uint8Array(10), {
       customMetadata: { sha256: 'e'.repeat(64) },
     });
@@ -381,7 +389,7 @@ describe('session/start closes the photo step before it reads the photo (C1a SEC
   const photoBody = (sha256: string) => ({ rulesAcknowledged: true, photo: { sha256 } });
   const count = (calls: string[], name: string) => calls.filter((c) => c === name).length;
 
-  it('closePhotos runs after the grant and before the photo head(); the session holds the photo', async () => {
+  it('closePhotos runs after the grant and before the photo is read; the session holds the photo', async () => {
     const h = await sessionHarness();
     const lobby = await h.login();
     const sha256 = await uploadPhoto(h, lobby);
@@ -394,15 +402,20 @@ describe('session/start closes the photo step before it reads the photo (C1a SEC
     };
     const bucket = h.evidence.bucket;
     const head = bucket.head.bind(bucket);
+    const get = bucket.get.bind(bucket);
     bucket.head = async (key: string) => {
-      order.push('head');
+      order.push('read');
       return head(key);
+    };
+    bucket.get = async (key: string) => {
+      order.push('read');
+      return get(key);
     };
 
     const res = await tryStart(h, lobby, photoBody(sha256));
     expect(res.status).toBe(200);
     expect(order[0]).toBe('closePhotos');
-    expect(order[1]).toBe('head');
+    expect(order[1]).toBe('read');
     expect(count(order, 'closePhotos')).toBe(1);
     expect(storedPhoto(h)).toEqual({
       key: PHOTO_KEY,
@@ -460,12 +473,12 @@ describe('session/start closes the photo step before it reads the photo (C1a SEC
     otpCore(h).closePhotos = () => {
       throw new Error('object reset');
     };
-    const heads = count(h.evidence.calls, 'head');
+    const reads = count(h.evidence.calls, 'head') + count(h.evidence.calls, 'get');
 
     const res = await tryStart(h, lobby, photoBody(sha256));
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: 'unavailable' });
-    expect(count(h.evidence.calls, 'head')).toBe(heads);
+    expect(count(h.evidence.calls, 'head') + count(h.evidence.calls, 'get')).toBe(reads);
     expect(h.session.names).toEqual([]);
     expect(called(h, 'sessionStarted')).toBe(0);
     // The lobby nonce is cleared only after a start, so the candidate can retry.
@@ -489,5 +502,146 @@ describe('session/start closes the photo step before it reads the photo (C1a SEC
       sha256,
       bytes: testJpeg(640, 480).length,
     });
+  });
+});
+
+describe('session start pins the photo from the working key (SEC-1 residual)', () => {
+  const photoBody = (sha256: string) => ({ rulesAcknowledged: true, photo: { sha256 } });
+  const photoOps = (h: SessionRouteHarness) => h.ops.filter((o) => o.includes('/start_photo'));
+  const canonicalBytes = (h: SessionRouteHarness): Uint8Array => {
+    const stored = h.evidence.objects.get(PHOTO_KEY);
+    if (stored === undefined) throw new Error('no canonical photo');
+    return stored.body;
+  };
+  const started = async (res: Response) => {
+    expect(res.status).toBe(200);
+    return (await res.json()) as { sessionToken: string; view: SessionView };
+  };
+
+  it('an upload still in flight at start cannot change the photo: canonical = DO = mirror = S1', async () => {
+    const h = await sessionHarness();
+    const lobby = await h.login();
+    const p1 = testJpeg(640, 480);
+    const s1 = await uploadPhoto(h, lobby, p1);
+    // A second upload took its slot before the close and is still inside its R2 put.
+    const slot = otpCore(h).takePhotoSlot();
+    if (!slot.ok) throw new Error('no slot');
+    await started(await tryStart(h, lobby, photoBody(s1)));
+    // ... and lands on the working key after start pinned the photo.
+    const p2 = testJpeg(800, 600);
+    const s2 = await sha256HexBytes(p2);
+    await h.evidence.bucket.put(UPLOAD_KEY, p2, {
+      httpMetadata: { contentType: 'image/jpeg' },
+      customMetadata: { sha256: s2, blurred: '1', n: String(slot.n) },
+    });
+
+    expect(canonicalBytes(h)).toEqual(p1);
+    expect(await sha256HexBytes(canonicalBytes(h))).toBe(s1);
+    expect(h.evidence.objects.get(PHOTO_KEY)?.customMetadata).toEqual({ sha256: s1, blurred: '1' });
+    expect(storedPhoto(h)).toEqual({ key: PHOTO_KEY, sha256: s1, bytes: p1.length });
+    // The photo route wrote only the working key; start wrote the canonical key once and removed the working copy.
+    expect(photoOps(h)).toEqual([
+      `put:${UPLOAD_KEY}`,
+      `put:${PHOTO_KEY}`,
+      `delete:${UPLOAD_KEY}`,
+      `put:${UPLOAD_KEY}`,
+    ]);
+
+    // A resume that declares the late photo S2 changes neither the canonical object nor the session's photo.
+    h.clock.ms += 31_000;
+    const resumed = await started(await tryStart(h, await h.login(), photoBody(s2)));
+    expect(canonicalBytes(h)).toEqual(p1);
+    expect(storedPhoto(h)).toEqual({ key: PHOTO_KEY, sha256: s1, bytes: p1.length });
+    expect(photoOps(h).filter((o) => o === `put:${PHOTO_KEY}`)).toHaveLength(1);
+
+    h.clock.ms += 1000;
+    const submitted = await h.request('POST', '/v1/session/submit', {
+      token: resumed.sessionToken,
+      json: { streamId: resumed.view.streamId, finalSeq: 0 },
+    });
+    expect(submitted.status).toBe(200);
+    expect(SessionMirrorMessage.parse(h.queue.sent[0]).photo).toEqual({
+      key: PHOTO_KEY,
+      sha256: s1,
+      bytes: p1.length,
+      mime: 'image/jpeg',
+      blurredOnDevice: true,
+    });
+  });
+
+  it('a resume declaring the pinned photo works after the working copy was removed', async () => {
+    const h = await sessionHarness();
+    const lobby = await h.login();
+    const p1 = testJpeg(640, 480);
+    const s1 = await uploadPhoto(h, lobby, p1);
+    await started(await tryStart(h, lobby, photoBody(s1)));
+    expect(h.evidence.objects.has(UPLOAD_KEY)).toBe(false);
+
+    h.clock.ms += 31_000;
+    await started(await tryStart(h, await h.login(), photoBody(s1)));
+    expect(canonicalBytes(h)).toEqual(p1);
+    expect(photoOps(h).filter((o) => o === `put:${PHOTO_KEY}`)).toHaveLength(1);
+  });
+
+  it.each([
+    ['bytes that do not hash to the declared sha256', 'bytes'],
+    ['metadata that does not carry the declared sha256', 'metadata'],
+    ['more than 512 000 bytes', 'size'],
+  ])('a working object with %s is 400 and the SessionDO is never called', async (_label, kind) => {
+    const h = await sessionHarness();
+    const lobby = await h.login();
+    const p1 = testJpeg(640, 480);
+    const p2 = testJpeg(800, 600);
+    const big = testJpeg(640, 480, 512_000);
+    const s1 = await sha256HexBytes(p1);
+    const stored = { bytes: p2, meta: s1, declared: s1 };
+    if (kind === 'metadata') Object.assign(stored, { bytes: p1, meta: await sha256HexBytes(p2) });
+    if (kind === 'size') {
+      const sBig = await sha256HexBytes(big);
+      Object.assign(stored, { bytes: big, meta: sBig, declared: sBig });
+    }
+    await h.evidence.bucket.put(UPLOAD_KEY, stored.bytes, {
+      customMetadata: { sha256: stored.meta, blurred: '1', n: '1' },
+    });
+
+    const res = await tryStart(h, lobby, photoBody(stored.declared));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'bad_request' });
+    expect(h.session.names).toEqual([]);
+    expect(called(h, 'sessionStarted')).toBe(0);
+    expect(h.evidence.objects.has(PHOTO_KEY)).toBe(false);
+  });
+
+  it('a failed canonical put is 503 with no token; the retry writes S1 with the same startedAt', async () => {
+    const h = await sessionHarness();
+    const lobby = await h.login();
+    const p1 = testJpeg(640, 480);
+    const s1 = await uploadPhoto(h, lobby, p1);
+    const firstStart = new Date(h.clock.ms).toISOString();
+    h.evidence.state.failPuts = 1;
+
+    const failed = await tryStart(h, lobby, photoBody(s1));
+    expect(failed.status).toBe(503);
+    expect(await failed.json()).toEqual({ error: 'unavailable' });
+    expect(called(h, 'sessionStarted')).toBe(0);
+    expect(h.evidence.objects.has(PHOTO_KEY)).toBe(false);
+    expect(h.evidence.objects.has(UPLOAD_KEY)).toBe(true);
+
+    h.clock.ms += 10_000;
+    await started(await tryStart(h, lobby, photoBody(s1)));
+    expect(canonicalBytes(h)).toEqual(p1);
+    expect(storedPhoto(h)).toEqual({ key: PHOTO_KEY, sha256: s1, bytes: p1.length });
+    expect(h.api.startedAt).toBe(firstStart);
+  });
+
+  it('the lobby photo route never names the canonical key (static)', () => {
+    const sources = import.meta.glob(['./routes-photo.ts'], {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    });
+    const source = Object.values(sources)[0] ?? '';
+    expect(source).toContain('startPhotoUploadKey(');
+    expect(source).not.toMatch(/start_photo\.jpg|\bstartPhotoKey\b/);
   });
 });

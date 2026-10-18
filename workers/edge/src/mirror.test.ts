@@ -6,7 +6,7 @@
 // `startedAt`. The "both transports through the same pipeline fixtures" assertion lives in workers/jobs (L-23).
 import { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
 import { describe, expect, it } from 'vitest';
-import { sha256Hex } from './encoding.js';
+import { sha256Hex, sha256HexBytes } from './encoding.js';
 import { objectText } from './edge.test-helpers.js';
 import { evidenceKeys, MIRROR_GIVE_UP_MS, MIRROR_LEASE_MS } from './session-core.js';
 import { receiptRefOf } from './session-evidence.js';
@@ -129,11 +129,15 @@ describe('exactly one mirror message (AT-D27)', () => {
     ]);
   });
 
-  it('carries the head()-checked start photo reference', async () => {
+  it('carries the verified start photo reference (the canonical key session start pinned)', async () => {
     const h = await sessionHarness();
-    const sha256 = 'c'.repeat(64);
+    const bytes = new Uint8Array(300);
+    const sha256 = await sha256HexBytes(bytes);
     const key = `media/${ORG}/${SESSION}/start_photo.jpg`;
-    await h.evidence.bucket.put(key, new Uint8Array(300), { customMetadata: { sha256 } });
+    // The lobby writes the working key; session start verifies it and pins it to the canonical key (SEC-1).
+    await h.evidence.bucket.put(`media/${ORG}/${SESSION}/start_photo.upload.jpg`, bytes, {
+      customMetadata: { sha256 },
+    });
     const { token, view } = await h.startSession({ sha256 });
     await h.request('POST', '/v1/session/submit', {
       token,
