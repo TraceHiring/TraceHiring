@@ -5,16 +5,13 @@ import { createApp } from './app.js';
 
 const app = createApp();
 
-// Wave 0 stubs (specs/d1-demo-slice.md §4.2): wrangler needs these classes exported to build the
-// `migrations` and `durable_objects` blocks. The candidate-runtime stream replaces both with the
-// real SessionDO (§4.4) and InviteOtpDO (§4.2); until then any use throws.
-export class SessionDO extends DurableObject<Env> {
-  override fetch(): Promise<Response> {
-    throw new Error('not implemented');
-  }
-}
+// InviteOtpDO (specs/d1-demo-slice.md §4.2) is the real object; wrangler needs both classes exported to build the
+// `migrations` and `durable_objects` blocks.
+export { InviteOtpDO } from './otp-do.js';
 
-export class InviteOtpDO extends DurableObject<Env> {
+// Wave 0 stub: the candidate-runtime stream (C1b) replaces it with the real SessionDO (§4.4); until then any use
+// throws.
+export class SessionDO extends DurableObject<Env> {
   override fetch(): Promise<Response> {
     throw new Error('not implemented');
   }
