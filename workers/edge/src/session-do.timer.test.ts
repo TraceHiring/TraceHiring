@@ -91,6 +91,41 @@ describe('the deadline alarm and the grace boundary (AT-D26, RT-5)', () => {
     expect(meta(h).state).toBe('auto_submitted');
   });
 
+  it('prompts are served up to the deadline only; the grace is for saves in flight (SEC-C1b-4)', async () => {
+    const h = await coreHarness();
+    const { view } = await startCore(h);
+    const deadline = Date.parse(view.deadlineAt);
+
+    h.clock.ms = deadline;
+    expect(await h.core.item(AUTH, WRITTEN)).toMatchObject({
+      ok: true,
+      item: { position: WRITTEN },
+    });
+    h.clock.ms = deadline + 1;
+    expect(await h.core.item(AUTH, WRITTEN)).toEqual({ ok: false, error: 'closed' });
+    // An item never served before is not served during the grace either.
+    expect(await h.core.item(AUTH, 1)).toEqual({ ok: false, error: 'closed' });
+    // Events are still accepted until deadline + 60 s.
+    h.clock.ms = deadline + GRACE_MS;
+    expect(
+      await h.core.events(AUTH, {
+        streamId: view.streamId,
+        events: [text(1, WRITTEN, 0, 0, 'late save')],
+      }),
+    ).toMatchObject({ ok: true, ackSeq: 1 });
+    expect(meta(h).state).toBe('in_progress');
+  });
+
+  it('over HTTP an item read after the deadline is 410 closed', async () => {
+    const h = await sessionHarness();
+    const { token, view } = await h.startSession();
+    h.clock.ms = Date.parse(view.deadlineAt) + 1;
+    const res = await h.request('GET', `/v1/session/items/${WRITTEN}`, { token });
+
+    expect(res.status).toBe(410);
+    expect(await res.json()).toEqual({ error: 'closed' });
+  });
+
   it('an alarm before deadline + 60 s changes nothing', async () => {
     const h = await coreHarness();
     const { view } = await startCore(h);

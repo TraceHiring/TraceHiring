@@ -577,7 +577,10 @@ export class SessionCore implements SessionApi {
     return result;
   }
 
-  /** Serves one prompt; the first serve stamps `served_at` (server time). */
+  /**
+   * Serves one prompt; the first serve stamps `served_at` (server time). Only until the deadline: the 60 s grace is
+   * for saves already in flight, not for new reads (SEC-C1b-4), so after the deadline it answers `closed`.
+   */
   async item(auth: SessionAuth, position: number): Promise<ItemResult> {
     const presented = await sha256Hex(auth.nonce);
     const result = this.#tx((): ItemResult => {
@@ -586,7 +589,7 @@ export class SessionCore implements SessionApi {
       const who = this.#authorise(stored, presented, auth.orgId);
       if (typeof who !== 'string' || stored === undefined) return who as Refusal;
       const meta = this.#lazyFinalise(stored, now);
-      if (finished(meta)) return refuse('closed');
+      if (finished(meta) || now > meta.deadlineAt) return refuse('closed');
       const limited = this.#limit('items', now);
       if (limited !== null) return limited;
       const item = this.#items(this.#pkg()).get(position);
