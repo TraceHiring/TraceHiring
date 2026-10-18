@@ -11,14 +11,17 @@ import {
   ENV,
   fakeDeps,
   keysDeep,
+  MEMBERSHIP,
   merge,
   ORG,
   ORG_B,
   reportId,
   TEST,
   TEST_2,
+  uuidOf,
   type Tables,
 } from './reports.test-helpers.js';
+import { MAX_LIST_REPORTS } from './results.js';
 import { createReportsRoutes } from './routes.js';
 
 const FORBIDDEN_KEY = /overall|combined|total|trust|honesty|composite/i;
@@ -171,5 +174,58 @@ describe('GET …/review/reports', () => {
       expect(res.status).toBe(404);
       expect(body).toStrictEqual({ error: { code: 'not_found' } });
     }
+  });
+});
+
+// Score-first triage needs the whole list (rule 6): a list past the read cap is never served cut (spec review R3
+// reports, finding 4b). Exactly MAX_LIST_REPORTS rows are served; one more fails closed with 503 `unavailable`.
+describe('list read caps', () => {
+  const many = (from: number, count: number, test = TEST): Tables[] =>
+    Array.from({ length: count }, (_, i) =>
+      candidateRows({
+        n: from + i,
+        score: (from + i) % 101,
+        test,
+        // One second apart (the default `08:<n>:00` is only valid up to n = 59).
+        submittedAt: new Date(Date.UTC(2026, 9, 17, 8) + (from + i) * 1000).toISOString(),
+      }),
+    );
+  const assignedBoth = (t: Tables): Tables => {
+    t.assignments = [
+      ...(t.assignments ?? []),
+      {
+        id: uuidOf('9', 2),
+        org_id: ORG,
+        membership_id: MEMBERSHIP,
+        test_id: TEST_2,
+        as_role: 'reviewer',
+      },
+    ];
+    return t;
+  };
+
+  it('the results list serves exactly MAX_LIST_REPORTS rows and fails closed past it', async () => {
+    const full = await get(merge(baseTables(), ...many(1, MAX_LIST_REPORTS)), resultsUrl());
+    expect(full.res.status).toBe(200);
+    expect(ResultsListResponse.parse(full.body).rows).toHaveLength(MAX_LIST_REPORTS);
+    const over = await get(merge(baseTables(), ...many(1, MAX_LIST_REPORTS + 1)), resultsUrl());
+    expect(over.res.status).toBe(503);
+    expect(over.body).toStrictEqual({ error: { code: 'unavailable' } });
+  });
+
+  it('the review queue counts every assigned test before the cap, and fails closed past it', async () => {
+    const half = MAX_LIST_REPORTS / 2;
+    const full = await get(
+      assignedBoth(merge(baseTables(), ...many(1, half), ...many(half + 1, half, TEST_2))),
+      queueUrl(),
+    );
+    expect(full.res.status).toBe(200);
+    expect(ReviewQueueResponse.parse(full.body).reports).toHaveLength(MAX_LIST_REPORTS);
+    const over = await get(
+      assignedBoth(merge(baseTables(), ...many(1, half), ...many(half + 1, half + 1, TEST_2))),
+      queueUrl(),
+    );
+    expect(over.res.status).toBe(503);
+    expect(over.body).toStrictEqual({ error: { code: 'unavailable' } });
   });
 });

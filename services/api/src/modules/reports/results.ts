@@ -28,6 +28,14 @@ import {
 /** The most reports one list returns (D1 is demo scale; pagination is M2). */
 export const MAX_LIST_REPORTS = 500;
 
+/**
+ * A list is never served cut (spec review R3 reports, finding 4b): sorted by score, a cut list could hide a top
+ * score (rule 6, score-first triage). The reads ask for one row past the cap; more than the cap fails closed.
+ */
+const failClosedPastCap = (reports: readonly ReportRef[]): void => {
+  if (reports.length > MAX_LIST_REPORTS) orgFail('unavailable');
+};
+
 /** Quality-only rows for the given reports; a report whose session or label the caller cannot see is left out. */
 const resultRows = async (
   read: OrgReader,
@@ -118,8 +126,9 @@ export const loadResults = async (
     select: REPORT_REF_COLUMNS,
     test_id: eq(testId),
     order: 'created_at.desc',
-    limit: String(MAX_LIST_REPORTS),
+    limit: String(MAX_LIST_REPORTS + 1),
   });
+  failClosedPastCap(reports);
   const rows = (await resultRows(read, reports)).sort(byScoreDesc).map(strip);
   return { cutoff: pinned.quality_cutoff, rows };
 };
@@ -150,13 +159,13 @@ export const loadReviewQueue = async (
   if (testIds.length === 0) return { reports: [] };
   const tests = await read.rowsIn(TestName, 'tests', 'id', testIds, { select: 'id,name' });
   const nameOf = new Map(tests.map((t) => [t.id, t.name]));
-  const reports = (
-    await read.rowsIn(ReportRef, 'reports', 'test_id', [...nameOf.keys()], {
-      select: REPORT_REF_COLUMNS,
-      order: 'created_at.desc',
-      limit: String(MAX_LIST_REPORTS),
-    })
-  ).slice(0, MAX_LIST_REPORTS);
+  // Each IN chunk reads one past the cap, so the total across every assigned test is checked before any sort.
+  const reports = await read.rowsIn(ReportRef, 'reports', 'test_id', [...nameOf.keys()], {
+    select: REPORT_REF_COLUMNS,
+    order: 'created_at.desc',
+    limit: String(MAX_LIST_REPORTS + 1),
+  });
+  failClosedPastCap(reports);
   const rows = (await resultRows(read, reports)).sort(byTimeDesc);
   return {
     reports: rows.flatMap((row) => {
