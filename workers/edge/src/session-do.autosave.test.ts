@@ -6,6 +6,7 @@
 // the incremental state over random splice sequences. The logic runs on SessionCore over a Map-backed KV (the test pool
 // has no SESSION binding); the routes run through the real app.
 import { EvidenceEventLine, SessionMirrorMessage } from '@trace/shared/contracts/candidate';
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { objectText } from './edge.test-helpers.js';
 import { evidenceKeys } from './session-core.js';
@@ -341,17 +342,9 @@ describe('an invalid edit rejects the whole batch (AT-D29 maxChars, RT-13)', () 
 
 // ---- AT-D25: rebuild equals the incremental state ---------------------------------------------------------------
 
-/** mulberry32: a small seeded PRNG, so every failing case is reproducible from its seed. */
-const prng = (seed: number) => {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-};
+/** fast-check runs a fixed seed and run count, so CI is deterministic and a failure replays from its seed and path. */
+const AT_D25_SEED = 20_261_018;
+const AT_D25_RUNS = 150;
 
 const ALPHABET = ['a', 'b', 'c', ' ', '\n', 'é', '😀', 'Z'];
 
@@ -370,71 +363,87 @@ const spliceOf = (prev: string, next: string) => {
   return { p, d: prev.length - p - s, i: next.slice(p, next.length - s) };
 };
 
-/** A random next value: insert, delete or replace a random run, at most `max` UTF-16 units. */
-const mutate = (rand: () => number, prev: string, max: number): string => {
-  for (;;) {
-    const at = Math.floor(rand() * (prev.length + 1));
-    const del = Math.floor(rand() * Math.min(4, prev.length - at + 1));
-    let ins = '';
-    const n = Math.floor(rand() * 4);
-    for (let k = 0; k < n; k += 1) ins += ALPHABET[Math.floor(rand() * ALPHABET.length)];
-    const next = prev.slice(0, at) + ins + prev.slice(at + del);
-    if (next.length <= max) return next;
-  }
+/** One textarea edit: insert, delete or replace a run on one written item (positions are folded into range). */
+interface Edit {
+  item: number;
+  at: number;
+  del: number;
+  ins: string;
+}
+const editArb: fc.Arbitrary<Edit> = fc.record({
+  item: fc.constantFrom(WRITTEN, SHORT),
+  at: fc.nat(),
+  del: fc.nat(3),
+  ins: fc.array(fc.constantFrom(...ALPHABET), { maxLength: 3 }).map((chars) => chars.join('')),
+});
+
+/**
+ * One batch: sometimes a reload (attach) first (about 1 in 10), 1 to 5 edits, and sometimes a resend of the last
+ * two events already sent on the stream (about 3 in 10, RT-1).
+ */
+const stepArb = fc.record({
+  attach: fc.nat(9).map((n) => n === 0),
+  edits: fc.array(editArb, { minLength: 1, maxLength: 5 }),
+  resend: fc.nat(9).map((n) => n < 3),
+});
+
+/** The independent model: the next textarea value after an edit, at most `max` UTF-16 units. */
+const applyEdit = (prev: string, edit: Edit, max: number): string => {
+  const at = edit.at % (prev.length + 1);
+  const del = Math.min(edit.del, prev.length - at);
+  const next = prev.slice(0, at) + edit.ins + prev.slice(at + del);
+  // Over the cap: the same edit without its insert (never longer than `prev`, which is within the cap).
+  return next.length <= max ? next : prev.slice(0, at) + prev.slice(at + del);
 };
 
 describe('final answer = replay of every edit in gseq order (AT-D25)', () => {
   it('equals the incremental state and the client value over random splice sequences, reloads and resends', async () => {
-    for (let seed = 1; seed <= 150; seed += 1) {
-      const rand = prng(seed);
-      const h = await coreHarness();
-      const { view } = await startCore(h);
-      let streamId = view.streamId;
-      const model = new Map<number, string>([
-        [WRITTEN, ''],
-        [SHORT, ''],
-      ]);
-      let seq = 0;
-      let sent: ClientEvent[] = [];
-      const steps = 5 + Math.floor(rand() * 25);
-      for (let step = 0; step < steps; step += 1) {
-        if (rand() < 0.1) {
-          h.clock.ms += 11_000; // attach is limited to 6 per minute
-          const attached = await h.core.attach(AUTH);
-          if (!attached.ok) throw new Error(`seed ${seed}: attach refused`);
-          streamId = attached.view.streamId;
-          seq = 0;
-          sent = [];
+    await fc.assert(
+      fc.asyncProperty(fc.array(stepArb, { minLength: 5, maxLength: 29 }), async (steps) => {
+        const h = await coreHarness();
+        const { view } = await startCore(h);
+        let streamId = view.streamId;
+        const model = new Map<number, string>([
+          [WRITTEN, ''],
+          [SHORT, ''],
+        ]);
+        let seq = 0;
+        let sent: ClientEvent[] = [];
+        for (const step of steps) {
+          if (step.attach) {
+            h.clock.ms += 11_000; // attach is limited to 6 per minute
+            const attached = await h.core.attach(AUTH);
+            if (!attached.ok) throw new Error('attach refused');
+            streamId = attached.view.streamId;
+            seq = 0;
+            sent = [];
+          }
+          const batch: ClientEvent[] = [];
+          for (const edit of step.edits) {
+            const prev = model.get(edit.item) ?? '';
+            const next = applyEdit(prev, edit, edit.item === SHORT ? SHORT_MAX : 200);
+            const { p, d, i } = spliceOf(prev, next);
+            seq += 1;
+            batch.push(text(seq, edit.item, p, d, i));
+            model.set(edit.item, next);
+          }
+          const resend = step.resend ? sent.slice(-2) : [];
+          const out = await send(h, streamId, [...resend, ...batch]);
+          if (!out.ok) throw new Error(`batch refused ${JSON.stringify(out)}`);
+          sent = [...sent, ...batch];
         }
-        const batch: ClientEvent[] = [];
-        const n = 1 + Math.floor(rand() * 5);
-        for (let k = 0; k < n; k += 1) {
-          const item = rand() < 0.5 ? WRITTEN : SHORT;
-          const prev = model.get(item) ?? '';
-          const next = mutate(rand, prev, item === SHORT ? SHORT_MAX : 200);
-          const { p, d, i } = spliceOf(prev, next);
-          seq += 1;
-          batch.push(text(seq, item, p, d, i));
-          model.set(item, next);
+        await submitCore(h, streamId, seq);
+        const message = SessionMirrorMessage.parse(h.queue.sent[0]);
+        expect(message.replay).toBe('ok');
+        for (const item of [WRITTEN, SHORT]) {
+          expect({ item, text: finalText(h, item) ?? '' }).toEqual({
+            item,
+            text: model.get(item) ?? '',
+          });
         }
-        // Sometimes the client resends an unacknowledged tail it already sent (RT-1).
-        const resend = rand() < 0.3 ? sent.slice(-2) : [];
-        const out = await send(h, streamId, [...resend, ...batch]);
-        if (!out.ok) throw new Error(`seed ${seed}: batch refused ${JSON.stringify(out)}`);
-        sent = [...sent, ...batch];
-      }
-      await submitCore(h, streamId, seq);
-      const message = SessionMirrorMessage.parse(h.queue.sent[0]);
-      expect({ seed, replay: message.replay }).toEqual({ seed, replay: 'ok' });
-      for (const item of [WRITTEN, SHORT]) {
-        const expected = model.get(item) ?? '';
-        expect({ seed, item, text: finalText(h, item) ?? '' }).toEqual({
-          seed,
-          item,
-          text: expected,
-        });
-      }
-    }
+      }),
+      { seed: AT_D25_SEED, numRuns: AT_D25_RUNS },
+    );
   });
 
   it('a drifted incremental state is caught: replay mismatch, and the replay is the final answer', async () => {
