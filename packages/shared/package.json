@@ -14,7 +14,8 @@
     "./contracts/d1": "./src/contracts-d1.ts",
     "./canonical-json": "./src/canonical-json.ts",
     "./signal-catalog": "./src/signal-catalog.ts",
-    "./canonical-notice": "./src/canonical-notice.ts"
+    "./canonical-notice": "./src/canonical-notice.ts",
+    "./jobs": "./src/jobs.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
