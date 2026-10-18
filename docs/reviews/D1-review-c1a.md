@@ -31,4 +31,32 @@ Writer decisions 1-10 and open question OQ1 (rule 9: refuse `blocked_age`/`expir
 
 ## Fix record
 
-(filled in as fixes land)
+Fix writer, 2026-10-18, on `d1/c1a-edge-lobby` from `78923ac`. One commit per finding, test first. All test files are in
+`workers/edge/src/`. Each commit ran `vitest run`, `tsc --noEmit`, `eslint --max-warnings=0 src`, `prettier --check src`
+(in `workers/edge`) and `node scripts/check-boundaries.mjs`, all green (260 tests at the last fix).
+
+| ID | Commit | Test (file › name) |
+| --- | --- | --- |
+| SR-8 | `9b395fe` | `otp-do.test.ts` › "a new challenge invalidates the old code" (injected `random`, unconditional) |
+| SR-4 | `b13939e` | `photo.test.ts` › "a retake overwrites the same key; the fourth upload is 429 without Retry-After and nothing changes" |
+| SR-5 | `0b3c3f9` | `token.test.ts` › "PUT /v1/lobby/photo: a stale lobby nonce …", "… a cleared lobby nonce …", "… expired, session-typed, none-alg and missing tokens are 401" (no api call, no `photoPermit`, no R2 object) |
+| SEC-5 | `1cd79ad` | `photo.test.ts` › "jpeg checks (rule 8 …)" table (APP1 Exif, APP2, APP15, COM, bytes after EOI, no final `FF D9`); route table › "an APP1 "Exif\0\0" segment is 415 bad_media", "a COM segment …", "trailing bytes after EOI is 415 bad_media" |
+| SEC-1 (a, b) | `e31a405` | `photo.test.ts` › "PUT /v1/lobby/photo after session start (SEC-1)": "every byte check runs before photoPermit …", "after closePhotos an upload is 410 closed …", "a slow upload that started before session start cannot land after it (closed mid-body)" (truly interleaved: a deferred body stream, past lobby auth, closed mid-body → 410, no R2 object, no slot); `otp-do.test.ts` › "closePhotos is set-once …" |
+| SEC-4 = SR-1 | `c8b8120` | `photo.test.ts` › "a failed R2 put is 503 and gives its slot back (SEC-4)"; `otp-do.test.ts` › "releasePhotoSlot gives back only the slot it names, once, never below zero (SEC-4)" |
+| SR-9 | `24cff5b` | `photo.test.ts` › "a permit for another org than the token is 503 unavailable: nothing stored, no slot (SR-9)" |
+| SEC-3 | `ddf6461` | `otp-do.test.ts` › "failures count per invitation across codes: 4 wrong, +30 s, a new code, 1 wrong locks (SEC-3)", "a correct code resets the failure count (SEC-3)", "the end of a lock starts a fresh count of 5 (SEC-3)" |
+| SR-7 | `405fb17` | `otp-do.test.ts` › "otp.locked is logged once, by the attempt that locks; a 6th attempt logs nothing (SR-7)"; `log-hygiene.test.ts` › OTP lock case unchanged and green |
+| SR-2 | `edaf34a` | `otp-do.test.ts` › "releaseIssue gives back the send and drops the challenge, only while it is current (SR-2)", "a send that fails unavailable gives the send back …", "a send refused with another code keeps the send used (SR-2)" |
+
+Tests changed because they pinned old behaviour: `otp-do.test.ts` "the attempt count is per challenge: 4 wrong, a new
+code, 4 wrong does not lock" (replaced, SEC-3); "three photo slots per session" (refusal now `{ ok: false, error:
+'rate_limited' }`, SEC-1); "allows 5 attempts per challenge, then locks for 15 minutes" (`lockedNow: true` on the 5th,
+SR-7). `log-hygiene.test.ts` (lead file) "lobby routes: api failures log the method only …": its photo body was not a
+JPEG and is now refused before `photoPermit` (SEC-1a), so it sends a valid JPEG with the planted values in its scan
+data and still drives the `photoPermit` failure.
+
+**C1b interface (SEC-1, carried):** `closePhotos(): void | Promise<void>` on `OtpApi` (`workers/edge/src/otp-do.ts`),
+implemented by `InviteOtpDO.closePhotos()` over `OtpCore.closePhotos()` (`otp-core.ts`). Session start calls it on
+`otpFor(c, claims.invitation_id)` before its `head()` of the start photo. Residual: an upload whose slot was taken
+before the close may still be inside its single `EVIDENCE.put` when `head()` runs; the C1b review should decide whether
+that window needs more (for example, C1b re-checks `sha256` after the DO ack).
