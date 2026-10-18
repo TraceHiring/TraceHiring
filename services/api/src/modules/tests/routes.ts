@@ -36,6 +36,7 @@ import { parseBody, readJson } from './http.js';
 import { requireRole, type Role } from './membership.js';
 import {
   RestError,
+  eq,
   handleOrg,
   orgFail,
   orgJson,
@@ -181,16 +182,31 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
       );
       if (test === undefined) return orgFail('not_found');
       // The L-8 trigger creates the draft's ruleset row and pins the org's notice; no api code touches integrity.*.
-      await ctx.rest.insert(
-        'test_versions',
-        {
-          org_id: orgId,
-          test_id: test.id,
-          total_time_seconds: (req.durationMinutes ?? DEFAULT_DURATION_MINUTES) * 60,
-          quality_cutoff: DEFAULT_CUTOFF,
-        },
-        { select: 'id' },
-      );
+      try {
+        await ctx.rest.insert(
+          'test_versions',
+          {
+            org_id: orgId,
+            test_id: test.id,
+            total_time_seconds: (req.durationMinutes ?? DEFAULT_DURATION_MINUTES) * 60,
+            quality_cutoff: DEFAULT_CUTOFF,
+          },
+          { select: 'id' },
+        );
+      } catch (err) {
+        // DB review r3 m-4: the two inserts are not one transaction. A test without a draft could never be edited
+        // (GET and PUT need a version), so archive it before answering the failure (best effort).
+        try {
+          await ctx.rest.update(
+            'tests',
+            { id: eq(test.id), org_id: eq(orgId), archived_at: 'is.null', select: 'id' },
+            { archived_at: new Date().toISOString() },
+          );
+        } catch {
+          // The failure answer stands; the list hides a test without a version anyway.
+        }
+        throw err;
+      }
       return answer(TestDetailResponse, await detailOf(ctx, orgId, test.id), 201);
     }),
   );

@@ -72,6 +72,22 @@ describe('POST /v1/orgs/:orgId/tests', () => {
   });
 });
 
+describe('POST /v1/orgs/:orgId/tests: the two writes (DB review r3 m-4)', () => {
+  it('a failed draft insert archives the new test row, so no orphan without a version stays visible', async () => {
+    const db = authoringDb();
+    const { call } = testsApp(db);
+    db.failNext('insert', 'test_versions', new RestError(503, 'PGRST000'));
+    const res = await create(call);
+    expect(res.status).toBe(503);
+    expect(await res.text()).toBe('{"error":{"code":"unavailable"}}');
+    const rows = rowsOf(db, 'tests');
+    expect(rows).toHaveLength(1);
+    expect(typeof rows[0]?.archived_at).toBe('string');
+    const update = db.calls.find((c) => c.method === 'update' && c.table === 'tests');
+    expect(update?.query).toMatchObject({ org_id: `eq.${ORG}`, archived_at: 'is.null' });
+  });
+});
+
 describe('GET /v1/orgs/:orgId/tests and /tests/:testId', () => {
   it('lists the tests of the path org with their newest version and invitation count', async () => {
     const db = authoringDb();
