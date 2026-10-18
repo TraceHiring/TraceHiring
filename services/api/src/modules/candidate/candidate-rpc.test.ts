@@ -251,6 +251,19 @@ describe('lobbyMint', () => {
       'link_expired',
     );
     expect(ctx.fake.invitations.get(old.id)?.status).toBe('expired');
+    // The OTP send path commits `expired` too (the fake is transactional like postgres.js; DB review r3 m-1).
+    const old2 = ctx.fake.addInvitation({ expiresAt: '2026-10-01T00:00:00.000Z' });
+    expect(
+      await code(
+        ctx.svc.messagingSend({
+          invitationId: old2.id,
+          orgId: ORG,
+          code: '123456',
+          idempotencyKey: 'k1',
+        }),
+      ),
+    ).toBe('link_expired');
+    expect(ctx.fake.invitations.get(old2.id)?.status).toBe('expired');
     const minor = ctx.fake.addInvitation({ status: 'blocked_age', adultConfirmedByInviter: false });
     expect(
       await code(ctx.svc.lobbyMint({ invitationId: minor.id, orgId: ORG, nonce: NONCE })),

@@ -28,7 +28,7 @@ import type {
 } from '@trace/shared/contracts/candidate';
 import type { OutboxWriter } from '../outbox/outbox-writer.js';
 import { randomBase64Url, sha256Hex } from './encoding.js';
-import { fail } from './errors.js';
+import { fail, FailAfterCommit } from './errors.js';
 import type { CandidateStore, InvitationRow, InvitationStatus, OrgStore } from './store.js';
 import {
   LOBBY_TTL_SECONDS,
@@ -75,14 +75,31 @@ export const createCandidateService = (deps: CandidateDeps) => {
   /**
    * Refuses a dead link for a new login, grant or lobby step (spec §4.1 `expired` row): a past `expires_at` before
    * the session started is `link_expired`, and is written as `expired` only while no session id exists (L-32). A
-   * started or submitted invitation is never cut short (resume and receipt).
+   * started or submitted invitation is never cut short (resume and receipt). The refusal is a FailAfterCommit, so
+   * the `expired` write commits (DB review r3 m-1); a plain throw would roll it back with the transaction.
    */
   const refuseDeadLink = async (s: OrgStore, inv: InvitationRow): Promise<void> => {
     refuseTerminal(inv);
     if (!isStarted(inv.status) && pastExpiry(inv)) {
       if (inv.sessionId === null) await s.markExpired(inv.id);
-      fail('link_expired');
+      throw new FailAfterCommit('link_expired');
     }
+  };
+
+  /**
+   * One trace_api transaction for `orgId`. A FailAfterCommit thrown inside ends the transaction normally (the writes
+   * before it commit) and is raised as its constant code after COMMIT; every other throw still rolls back.
+   */
+  const inOrg = async <T>(orgId: string, fn: (s: OrgStore) => Promise<T>): Promise<T> => {
+    const out = await deps.store.withOrg(orgId, async (s) => {
+      try {
+        return { ok: true as const, value: await fn(s) };
+      } catch (err) {
+        if (err instanceof FailAfterCommit) return { ok: false as const, code: err.code };
+        throw err;
+      }
+    });
+    return out.ok ? out.value : fail(out.code);
   };
 
   /** Re-verifies the lobby token and loads the invitation it names, inside one trace_api transaction. */
@@ -100,7 +117,7 @@ export const createCandidateService = (deps: CandidateDeps) => {
         err instanceof Error && err.message === 'token_expired' ? 'token_expired' : 'token_invalid',
       ),
     );
-    return deps.store.withOrg(claims.org_id, async (s) => {
+    return inOrg(claims.org_id, async (s) => {
       const inv = await s.invitation(claims.invitation_id);
       if (inv === null || inv.candidateId !== claims.candidate_id || inv.orgId !== claims.org_id) {
         return fail('token_invalid');
@@ -142,7 +159,7 @@ export const createCandidateService = (deps: CandidateDeps) => {
       if (found === null) return fail('invalid_link');
       let state = found.status;
       let durationMinutes: number | undefined;
-      await deps.store.withOrg(found.orgId, async (s) => {
+      await inOrg(found.orgId, async (s) => {
         if (
           LIVE_BEFORE_START.includes(found.status) &&
           found.sessionId === null &&
@@ -172,7 +189,7 @@ export const createCandidateService = (deps: CandidateDeps) => {
     },
 
     async messagingSend(input: MessagingSendRpcIn): Promise<MessagingSendRpcOut> {
-      await deps.store.withOrg(input.orgId, async (s) => {
+      await inOrg(input.orgId, async (s) => {
         const inv = await s.invitation(input.invitationId);
         if (inv === null) return fail('invalid_link');
         await refuseDeadLink(s, inv);
@@ -190,7 +207,7 @@ export const createCandidateService = (deps: CandidateDeps) => {
     },
 
     async lobbyMint(input: LobbyMintRpcIn): Promise<LobbyMintRpcOut> {
-      return deps.store.withOrg(input.orgId, async (s) => {
+      return inOrg(input.orgId, async (s) => {
         const inv = await s.invitation(input.invitationId);
         if (inv === null) return fail('invalid_link');
         await refuseDeadLink(s, inv);
@@ -337,7 +354,7 @@ export const createCandidateService = (deps: CandidateDeps) => {
     },
 
     async sessionStarted(input: SessionStartedRpcIn): Promise<SessionStartedRpcOut> {
-      return deps.store.withOrg(input.orgId, async (s) => {
+      return inOrg(input.orgId, async (s) => {
         const inv = await s.invitation(input.invitationId);
         if (inv === null) return fail('invalid_link');
         if (inv.sessionId !== input.sessionId) return fail('bad_request');

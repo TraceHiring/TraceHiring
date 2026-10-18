@@ -15,3 +15,15 @@ export class CandidateRpcError extends Error {
 export const fail = (code: CandidateErrorCode): never => {
   throw new CandidateRpcError(code);
 };
+
+/**
+ * A refusal whose transaction must still commit the writes made before it (the lazy `expired`, DB review r3 m-1).
+ * The service's `inOrg` returns it out of the transaction and raises it after COMMIT; anywhere else it is an
+ * ordinary CandidateRpcError.
+ */
+export class FailAfterCommit extends CandidateRpcError {
+  constructor(code: CandidateErrorCode) {
+    super(code);
+    this.name = 'FailAfterCommit';
+  }
+}

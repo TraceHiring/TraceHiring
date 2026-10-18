@@ -148,7 +148,19 @@ export const fakeStore = () => {
     },
     async withOrg(orgId, fn) {
       orgsSeen.push(orgId);
-      return fn(orgStore(orgId));
+      // Transactional like postgres.js `sql.begin`: a throw rolls back every row change made inside (DB review r3
+      // m-1). The `writes` log keeps the attempts.
+      const savedInvitations = [...invitations].map(([k, v]) => [k, structuredClone(v)] as const);
+      const savedConsents = [...consents].map(([k, v]) => [k, structuredClone(v)] as const);
+      try {
+        return await fn(orgStore(orgId));
+      } catch (err) {
+        invitations.clear();
+        for (const [k, v] of savedInvitations) invitations.set(k, v);
+        consents.clear();
+        for (const [k, v] of savedConsents) consents.set(k, v);
+        throw err;
+      }
     },
   };
 
