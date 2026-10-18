@@ -1,8 +1,13 @@
 // Test harness for the candidate routes: the real app over a fake `API` (CandidateRpc, records every call), a fake
 // `OTP` namespace whose objects are the real OtpCore on a Map-backed KV, a Map-backed R2 bucket for `EVIDENCE`, a
-// movable clock and a captured log sink. Keys are made at run time; ids and labels are synthetic.
+// movable clock and a captured log sink; for the session routes a fake `SESSION` namespace (the real SessionCore on a
+// Map-backed KV and a recorded alarm slot), a Map-backed packages bucket and a fake mirror queue. Keys are made at run
+// time; ids and labels are synthetic.
+import type { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
+import { createLogger } from '@trace/shared/log';
 import { createApp } from './app.js';
-import { OtpCore, type SyncKvLike } from './otp-core.js';
+import { OtpCore } from './otp-core.js';
+import { SessionCore, type SessionKv } from './session-core.js';
 import type { CandidateMethod } from './rpc.js';
 import {
   CANDIDATE,
@@ -22,7 +27,7 @@ export const NOTICE_SHA = 'a'.repeat(64);
 /** The raw link token of the test invitation (43 base64url chars), built at run time. */
 export const LINK = (): string => `${'L'.repeat(21)}${'k'.repeat(22)}`;
 
-export class MapKv implements SyncKvLike {
+export class MapKv implements SessionKv {
   readonly map = new Map<string, unknown>();
   get<T = unknown>(key: string): T | undefined {
     const value = this.map.get(key);
@@ -34,7 +39,28 @@ export class MapKv implements SyncKvLike {
   delete(key: string): boolean {
     return this.map.delete(key);
   }
+  /** Entries whose key starts with `prefix`, in key order (as the SQLite-backed KV lists them). */
+  list<T = unknown>(options: { prefix: string }): Iterable<[string, T]> {
+    return [...this.map.keys()]
+      .filter((key) => key.startsWith(options.prefix))
+      .sort()
+      .map((key): [string, T] => [key, structuredClone(this.map.get(key)) as T]);
+  }
 }
+
+/** `transactionSync` on the fake KV: the closure runs alone; a throw restores every key it wrote. */
+export const mapTransaction =
+  (kv: MapKv) =>
+  <T>(fn: () => T): T => {
+    const before = new Map(kv.map);
+    try {
+      return fn();
+    } catch (err) {
+      kv.map.clear();
+      for (const [key, value] of before) kv.map.set(key, value);
+      throw err;
+    }
+  };
 
 export interface Clock {
   ms: number;
@@ -67,30 +93,163 @@ export interface StoredObject {
   customMetadata?: Record<string, string>;
 }
 
-/** A Map-backed R2 bucket with the calls the edge makes. */
-export const fakeBucket = () => {
+/**
+ * A Map-backed R2 bucket with the calls the edge makes. `ops` records every put (`put:<key>`) in order; `failPuts`
+ * makes the next puts throw; `calls` records every method name used (the packages bucket is read only).
+ */
+export const fakeBucket = (ops: string[] = []) => {
   const objects = new Map<string, StoredObject>();
+  const calls: string[] = [];
+  const state = { failPuts: 0, failGets: 0 };
   const bucket = {
     async put(
       key: string,
-      value: ArrayBuffer | Uint8Array,
+      value: ArrayBuffer | Uint8Array | string,
       options: {
         httpMetadata?: { contentType?: string };
         customMetadata?: Record<string, string>;
       } = {},
     ) {
-      const body = new Uint8Array(value instanceof Uint8Array ? value : new Uint8Array(value));
+      calls.push('put');
+      if (state.failPuts > 0) {
+        state.failPuts -= 1;
+        throw new Error('r2 unavailable');
+      }
+      const body =
+        typeof value === 'string'
+          ? new TextEncoder().encode(value)
+          : new Uint8Array(value instanceof Uint8Array ? value : new Uint8Array(value));
       objects.set(key, { body, ...options });
+      ops.push(`put:${key}`);
       return { key, size: body.length };
     },
     async head(key: string) {
+      calls.push('head');
       const o = objects.get(key);
       return o === undefined
         ? null
         : { key, size: o.body.length, customMetadata: o.customMetadata };
     },
+    async get(key: string) {
+      calls.push('get');
+      if (state.failGets > 0) {
+        state.failGets -= 1;
+        throw new Error('r2 unavailable');
+      }
+      const o = objects.get(key);
+      if (o === undefined) return null;
+      const copy = new Uint8Array(o.body);
+      return { key, size: copy.length, arrayBuffer: async () => copy.buffer };
+    },
   };
-  return { bucket, objects };
+  return { bucket, objects, calls, state };
+};
+
+/** The text of a stored object. */
+export const objectText = (bucket: ReturnType<typeof fakeBucket>, key: string): string => {
+  const o = bucket.objects.get(key);
+  if (o === undefined) throw new Error(`no object ${key}`);
+  return new TextDecoder().decode(o.body);
+};
+
+/** A fake mirror queue: records every accepted message; `fail` makes the next sends throw. */
+export const fakeQueue = (ops: string[] = []) => {
+  const sent: SessionMirrorMessage[] = [];
+  const state = { fail: 0 };
+  const queue = {
+    async send(message: SessionMirrorMessage) {
+      if (state.fail > 0) {
+        state.fail -= 1;
+        ops.push('send:fail');
+        throw new Error('queue unavailable');
+      }
+      sent.push(structuredClone(message));
+      ops.push('send');
+    },
+  };
+  return { queue, sent, state };
+};
+
+/** A deterministic v4-shaped uuid for stream ids. */
+export const counterIds = () => {
+  let n = 0;
+  return () => {
+    n += 1;
+    return `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  };
+};
+
+export interface SessionParts {
+  clock: Clock;
+  evidence: ReturnType<typeof fakeBucket>;
+  packages: ReturnType<typeof fakeBucket>;
+  queue: ReturnType<typeof fakeQueue>;
+  sink: (line: string) => void;
+}
+
+export interface FakeSession {
+  core: SessionCore;
+  kv: MapKv;
+  alarm: { at: number | null };
+}
+
+/** One SessionCore on a Map-backed KV with the shared clock, buckets and queue. */
+export const fakeSession = (parts: SessionParts): FakeSession => {
+  const kv = new MapKv();
+  const alarm = { at: null as number | null };
+  const core = new SessionCore({
+    kv,
+    transaction: mapTransaction(kv),
+    alarm: {
+      set: (atMs) => {
+        alarm.at = atMs;
+      },
+      clear: () => {
+        alarm.at = null;
+      },
+    },
+    packages: {
+      get: async (key) => {
+        const found = await parts.packages.bucket.get(key);
+        if (found === null) return null;
+        return {
+          size: found.size,
+          bytes: async () => new Uint8Array(await found.arrayBuffer()),
+        };
+      },
+    },
+    evidence: {
+      put: async (key, body, contentType) => {
+        await parts.evidence.bucket.put(key, body, { httpMetadata: { contentType } });
+      },
+    },
+    mirror: { send: (message) => parts.queue.queue.send(message) },
+    log: createLogger({ service: 'edge', version: 'dev', sink: parts.sink }),
+    now: () => parts.clock.ms,
+    newId: counterIds(),
+  });
+  return { core, kv, alarm };
+};
+
+/** A fake SESSION namespace: one fake session per name. `names` records every id asked for. */
+export const fakeSessionNamespace = (parts: SessionParts) => {
+  const sessions = new Map<string, FakeSession>();
+  const names: string[] = [];
+  const ns = {
+    idFromName(name: string) {
+      names.push(name);
+      return { name, toString: () => name };
+    },
+    get(id: { name: string }) {
+      let session = sessions.get(id.name);
+      if (session === undefined) {
+        session = fakeSession(parts);
+        sessions.set(id.name, session);
+      }
+      return session.core;
+    },
+  };
+  return { ns, sessions, names };
 };
 
 export type ApiCall = { method: CandidateMethod; input: Record<string, unknown> };
@@ -106,6 +265,11 @@ export interface Harness {
   lines: string[];
   otp: ReturnType<typeof fakeOtpNamespace>;
   evidence: ReturnType<typeof fakeBucket>;
+  packages: ReturnType<typeof fakeBucket>;
+  queue: ReturnType<typeof fakeQueue>;
+  session: ReturnType<typeof fakeSessionNamespace>;
+  /** Evidence puts and queue sends, in order. */
+  ops: string[];
   /** The codes api was asked to send, in order. */
   codes: () => string[];
   request: (
@@ -125,7 +289,17 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
   const calls: ApiCall[] = [];
   const lines: string[] = [];
   const otp = fakeOtpNamespace(clock);
-  const evidence = fakeBucket();
+  const ops: string[] = [];
+  const evidence = fakeBucket(ops);
+  const packages = fakeBucket();
+  const queue = fakeQueue(ops);
+  const session = fakeSessionNamespace({
+    clock,
+    evidence,
+    packages,
+    queue,
+    sink: (line) => lines.push(line),
+  });
   const nowSec = () => Math.floor(clock.ms / 1000);
 
   const defaults: Record<CandidateMethod, (input: Record<string, unknown>) => Promise<unknown>> = {
@@ -186,6 +360,9 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
     API: api,
     OTP: otp.ns,
     EVIDENCE: evidence.bucket,
+    SESSION: session.ns,
+    PACKAGES: packages.bucket,
+    MIRROR_QUEUE: queue.queue,
   } as unknown as Env;
 
   const app = createApp({ now: () => new Date(clock.ms), sink: (line) => lines.push(line) });
@@ -219,5 +396,20 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
     return ((await verified.json()) as { lobbyToken: string }).lobbyToken;
   };
 
-  return { key, clock, env, calls, lines, otp, evidence, codes, request, login };
+  return {
+    key,
+    clock,
+    env,
+    calls,
+    lines,
+    otp,
+    evidence,
+    packages,
+    queue,
+    session,
+    ops,
+    codes,
+    request,
+    login,
+  };
 };
