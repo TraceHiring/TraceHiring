@@ -77,13 +77,22 @@ describe('OtpCore issue (resend limits)', () => {
   });
 
   it('a new challenge invalidates the old code', async () => {
-    const { core, clock } = setup();
+    // Injected randomness: the two codes are 111111 and 222222, so the assertion never depends on chance.
+    const clock = { ms: T0 };
+    const words = [111_111, 222_222];
+    const core = new OtpCore(new MapKv(), {
+      now: () => clock.ms,
+      random: (bytes) => {
+        if (bytes.length === 4) new DataView(bytes.buffer).setUint32(0, words.shift() ?? 0);
+        else crypto.getRandomValues(bytes);
+        return bytes;
+      },
+    });
     const first = issued(await core.issue());
     clock.ms += 31_000;
     const second = issued(await core.issue());
-    if (first.code !== second.code) {
-      expect(await core.verify(first.code)).toEqual({ ok: false, error: 'otp_wrong' });
-    }
+    expect([first.code, second.code]).toEqual(['111111', '222222']);
+    expect(await core.verify(first.code)).toEqual({ ok: false, error: 'otp_wrong' });
     expect((await core.verify(second.code)).ok).toBe(true);
   });
 
