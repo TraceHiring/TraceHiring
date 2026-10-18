@@ -87,7 +87,8 @@ export const mountInviteRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void => 
       const otp = otpFor(c, found.invitationId);
       const verified = await otpCall(() => otp.verify(code));
       if (!verified.ok) {
-        if (verified.error === 'otp_locked' && 'retryAfterSeconds' in verified) {
+        // Logged once, by the attempt that creates the lock; refusals during the lock log nothing (SR-7).
+        if ('lockedNow' in verified && verified.lockedNow) {
           loggerFor(c, deps).warn('otp.locked', { invitationId: found.invitationId });
         }
         return refuse(verified);

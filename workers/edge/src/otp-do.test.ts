@@ -130,9 +130,14 @@ describe('OtpCore verify (attempts, lock, expiry)', () => {
       ok: false,
       error: 'otp_locked',
       retryAfterSeconds: 900,
+      lockedNow: true,
     });
-    // Locked: even the right code and a new request are refused.
-    expect(await core.verify(r.code)).toMatchObject({ ok: false, error: 'otp_locked' });
+    // Locked: even the right code and a new request are refused, and only the attempt that locked says lockedNow.
+    expect(await core.verify(r.code)).toEqual({
+      ok: false,
+      error: 'otp_locked',
+      retryAfterSeconds: 900,
+    });
     clock.ms += 60_000;
     expect(await core.issue()).toEqual({ ok: false, error: 'otp_locked', retryAfterSeconds: 840 });
     // After the lock a new code works; the old challenge is gone.
@@ -432,6 +437,22 @@ describe('invite and OTP routes', () => {
     expect(locked.headers.get('retry-after')).toBe('900');
     expect(await locked.json()).toEqual({ error: 'otp_locked' });
     expect(h.calls.some((c) => c.method === 'lobbyMint')).toBe(false);
+  });
+
+  it('otp.locked is logged once, by the attempt that locks; a 6th attempt logs nothing (SR-7)', async () => {
+    const h = await createHarness();
+    await h.request('POST', '/v1/otp/request', { json: { token: LINK() } });
+    const bad = wrong(h.codes()[0] ?? '000000');
+    const verify = () =>
+      h.request('POST', '/v1/otp/verify', { json: { token: LINK(), code: bad } });
+    for (let i = 1; i < 5; i += 1) await verify();
+    expect(h.lines).toEqual([]);
+    expect((await verify()).status).toBe(429);
+    expect(h.lines.map((l) => (JSON.parse(l) as { event: string }).event)).toEqual(['otp.locked']);
+    const sixth = await verify();
+    expect(sixth.status).toBe(429);
+    expect(await sixth.json()).toEqual({ error: 'otp_locked' });
+    expect(h.lines).toHaveLength(1);
   });
 
   it('a malformed code or an unknown key is 400 before anything is called', async () => {

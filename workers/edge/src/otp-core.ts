@@ -76,7 +76,11 @@ export type IssueResult =
       expiresInSeconds: number;
     }
   | Refusal;
-export type VerifyResult = { ok: true; nonce: string } | Refusal;
+/** `lockedNow` is set only on the wrong attempt that creates the lock (the route logs `otp.locked` once, SR-7). */
+export type VerifyResult =
+  | { ok: true; nonce: string }
+  | Refusal
+  | { ok: false; error: 'otp_locked'; retryAfterSeconds: number; lockedNow: true };
 export type GateResult = { ok: true } | Refusal;
 /** A photo upload slot, or why not: the 3 uploads are used (`rate_limited`) or the session started (`closed`). */
 export type PhotoSlot = { ok: true; n: number } | { ok: false; error: 'rate_limited' | 'closed' };
@@ -201,7 +205,7 @@ export class OtpCore {
       this.#kv.delete(K.challenge);
       this.#kv.delete(K.failures); // the end of this lock starts a fresh count
       this.#kv.put(K.lockUntil, now + LOCK_MS);
-      return { ok: false, error: 'otp_locked', retryAfterSeconds: LOCK_MS / 1000 };
+      return { ok: false, error: 'otp_locked', retryAfterSeconds: LOCK_MS / 1000, lockedNow: true };
     }
     this.#kv.put(K.failures, failures);
     return { ok: false, error: 'otp_wrong' };
