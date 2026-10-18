@@ -72,7 +72,7 @@ describe('PUT /v1/lobby/photo (AT-D29)', () => {
     expect(stored?.body).toEqual(bytes);
   });
 
-  it('a retake overwrites the same key; the fourth upload is 429 and nothing changes', async () => {
+  it('a retake overwrites the same key; the fourth upload is 429 without Retry-After and nothing changes', async () => {
     const h = await createHarness();
     const token = await h.login();
     for (let n = 1; n <= 3; n += 1) {
@@ -83,6 +83,8 @@ describe('PUT /v1/lobby/photo (AT-D29)', () => {
     }
     const fourth = await upload(h, token, jpeg(640, 480, 99));
     expect(fourth.status).toBe(429);
+    // The cap is permanent for the session, so there is no wait to announce (lead, SR-4).
+    expect(fourth.headers.get('retry-after')).toBeNull();
     expect(await fourth.json()).toEqual({ error: 'rate_limited' });
     expect([...h.evidence.objects.values()][0]?.customMetadata?.n).toBe('3');
   });
