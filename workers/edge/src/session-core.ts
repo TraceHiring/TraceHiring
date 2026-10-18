@@ -219,7 +219,7 @@ const K = {
   meta: 'meta',
   pkg: 'pkg',
   served: 'served',
-  final: 'final',
+  final: (position: number) => `fin:${position}`,
   mirror: 'mirror',
   stream: (id: string) => `stream:${id}`,
   event: (gseq: number) => `ev:${String(gseq).padStart(10, '0')}`,
@@ -305,7 +305,12 @@ export class SessionCore implements SessionApi {
   }
 
   #finalAnswers(): Map<number, AnswerState> {
-    return new Map(this.#kv.get<[number, AnswerState][]>(K.final) ?? []);
+    const out = new Map<number, AnswerState>();
+    for (const item of this.#pkg().items) {
+      const answer = this.#kv.get<AnswerState>(K.final(item.position));
+      if (answer !== undefined) out.set(item.position, answer);
+    }
+    return out;
   }
 
   /** Counts one request in a fixed window; a refusal carries the wait. */
@@ -762,7 +767,7 @@ export class SessionCore implements SessionApi {
       gaps: coverage.gaps,
       mirror: { state: 'pending', attempts: 0, nextAt: now, leaseUntil: null },
     };
-    this.#kv.put(K.final, [...finalAnswers.entries()]);
+    for (const [position, answer] of finalAnswers) this.#kv.put(K.final(position), answer);
     this.#kv.put(K.meta, next);
     return next;
   }
