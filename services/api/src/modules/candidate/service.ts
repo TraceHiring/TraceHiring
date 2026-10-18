@@ -214,8 +214,15 @@ export const createCandidateService = (deps: CandidateDeps) => {
         // First verify moves created/sent to otp_verified; later logins (resume) leave the state alone (§4.1).
         let current = inv;
         if (inv.status === 'created' || inv.status === 'sent') {
-          await s.moveStatus(inv.id, ['created', 'sent'], 'otp_verified');
-          current = { ...inv, status: 'otp_verified' };
+          if (await s.moveStatus(inv.id, ['created', 'sent'], 'otp_verified')) {
+            current = { ...inv, status: 'otp_verified' };
+          } else {
+            // The conditional UPDATE moved nothing: the row changed since the read (an org revoke won the race,
+            // DB review r3 n-2). Re-read and refuse on its stored state; no token is minted from the stale one.
+            const again = (await s.invitation(inv.id)) ?? fail('invalid_link');
+            refuseTerminal(again);
+            current = again;
+          }
         }
         const iat = nowSec();
         const exp = iat + LOBBY_TTL_SECONDS;

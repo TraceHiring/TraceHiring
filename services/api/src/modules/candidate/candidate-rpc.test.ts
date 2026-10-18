@@ -244,6 +244,34 @@ describe('lobbyMint', () => {
     expect(claims.exp - claims.iat).toBe(1800);
   });
 
+  it('a revoke that wins the race against the first login mints no lobby token (DB review r3 n-2)', async () => {
+    const ctx = await setup();
+    const inv = ctx.fake.addInvitation();
+    // The org revokes between the service's read and its created/sent -> otp_verified move.
+    const racing: CandidateDeps['store'] = {
+      ...ctx.fake.store,
+      withOrg: (orgId, fn) =>
+        ctx.fake.store.withOrg(orgId, (s) =>
+          fn({
+            ...s,
+            invitation: async (id) => {
+              const row = await s.invitation(id);
+              const live = ctx.fake.invitations.get(id);
+              if (live !== undefined && live.status === 'sent') live.status = 'revoked';
+              return row;
+            },
+          }),
+        ),
+    };
+    const svc = createCandidateService({ ...ctx.deps, store: racing });
+    expect(await code(svc.lobbyMint({ invitationId: inv.id, orgId: ORG, nonce: NONCE }))).toBe(
+      'link_revoked',
+    );
+    // (The simulated revoke ran inside this fake transaction, so the refusal rolls it back here; a real revoke is the
+    // org's own committed transaction.) Nothing moved the invitation to otp_verified.
+    expect(ctx.fake.invitations.get(inv.id)?.status).not.toBe('otp_verified');
+  });
+
   it('refuses a past expiry before start and a blocked invitation', async () => {
     const ctx = await setup();
     const old = ctx.fake.addInvitation({ expiresAt: '2026-10-01T00:00:00.000Z' });
