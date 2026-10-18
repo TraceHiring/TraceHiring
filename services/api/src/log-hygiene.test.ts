@@ -147,6 +147,7 @@ const USER = '0f000000-0000-4000-8000-000000000001';
 const recruiterCaller: OrgCaller = { userId: USER, aal: 'aal1', amr: ['otp'], jwt: SECRETS.jwt };
 const recruiterDeps = (): OrgDeps => {
   const db = fakeDb({
+    orgs: [{ id: ORG, org_id: ORG, status: 'active' }],
     memberships: [
       { id: MEMBER, org_id: ORG, user_id: USER, roles: ['recruiter'], status: 'active' },
     ],

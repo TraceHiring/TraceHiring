@@ -6,7 +6,7 @@
 import { OutboxListResponse } from '@trace/shared/contracts/d1';
 import { Hono } from 'hono';
 import { requireRole } from '../tests/membership.js';
-import { handleOrg, orgFail, orgJson, pathId, type OrgDeps } from '../tests/org-context.js';
+import { eq, handleOrg, orgFail, orgJson, pathId, type OrgDeps } from '../tests/org-context.js';
 import {
   createDemoOutbox,
   demoOutboxEnabled,
@@ -36,6 +36,11 @@ export const createOutboxRoutes = (deps: OutboxRouteDeps): Hono<{ Bindings: Env 
       const orgId = pathId(c.req.param('orgId'));
       const ctx = await deps.org.context(c.req.raw, c.env);
       await requireRole(ctx.rest, ctx.caller, orgId, ['org_owner', 'admin', 'recruiter']);
+      // DB review r3 m-2: the own-membership read above works in any org state, and nothing under RLS follows
+      // (the DO is read directly), so the org row must be visible to the caller: `orgs_select_member` ->
+      // `my_org_ids()` hides a suspended org.
+      const visible = await ctx.rest.select('orgs', { select: 'id', org_id: eq(orgId) });
+      if (visible.length !== 1) return orgFail('not_found');
       const reader = deps.reader(c.env) ?? orgFail('unavailable');
       let entries: unknown;
       try {

@@ -15,12 +15,23 @@ const USER = '00000000-0000-4000-8000-000000000005';
 const STAGING = { TRACE_ENV: 'staging', DEMO_OUTBOX: '1' };
 
 const setup = (
-  opts: { roles?: string[]; org?: string; caller?: Partial<OrgCaller>; reader?: boolean } = {},
+  opts: {
+    roles?: string[];
+    org?: string;
+    caller?: Partial<OrgCaller>;
+    reader?: boolean;
+    /** false: RLS hides the org row (a suspended org, my_org_ids). */
+    orgVisible?: boolean;
+  } = {},
 ) => {
   const ns = fakeOutboxNamespace();
   const outbox = createDemoOutbox(STAGING, ns);
   if (outbox === null) throw new Error('outbox');
   const db = fakeDb({
+    orgs:
+      opts.orgVisible === false
+        ? []
+        : [{ id: opts.org ?? ORG, org_id: opts.org ?? ORG, status: 'active' }],
     memberships: [
       {
         id: 'd1000000-0000-4000-8000-000000000005',
@@ -67,6 +78,15 @@ const message = (n: number, kind: 'invite' | 'otp') => ({
 });
 
 describe('GET /v1/orgs/:orgId/demo-outbox', () => {
+  it('a suspended org (its row hidden by RLS) is 404 and the outbox is never read (DB review r3 m-2)', async () => {
+    const s = setup({ orgVisible: false });
+    await s.outbox.write(ORG, message(1, 'otp'));
+    const res = await s.get(STAGING);
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe('{"error":{"code":"not_found"}}');
+    expect(s.listed).toEqual([]);
+  });
+
   it('is 404 on production, without TRACE_ENV, with it empty or unknown, or with the switch off, before auth', async () => {
     const s = setup();
     for (const env of [
