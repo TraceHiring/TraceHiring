@@ -12,6 +12,7 @@ import type { RouteDeps } from './route-support.js';
 import { mountInviteRoutes } from './routes-invite.js';
 import { mountLobbyRoutes } from './routes-lobby.js';
 import { mountPhotoRoute } from './routes-photo.js';
+import { mountSessionRoutes } from './routes-session.js';
 
 const SERVICE = 'edge';
 
@@ -47,6 +48,7 @@ export const createApp = (deps: AppDeps = {}): Hono<{ Bindings: Env }> => {
   mountInviteRoutes(app, routeDeps);
   mountLobbyRoutes(app, routeDeps);
   mountPhotoRoute(app, routeDeps);
+  mountSessionRoutes(app, routeDeps);
 
   return app;
 };

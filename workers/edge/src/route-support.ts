@@ -8,6 +8,7 @@ import { fail, bearer, type EdgeContext } from './http.js';
 import type { OtpApi } from './otp-do.js';
 import type { LobbyBucket, Refusal } from './otp-core.js';
 import { candidateRpc, RpcFailure, type CandidateMethod, type RpcIn, type RpcOut } from './rpc.js';
+import type { SessionApi } from './session-core.js';
 import { verifyCandidateToken } from './token.js';
 
 export interface RouteDeps {
@@ -17,15 +18,28 @@ export interface RouteDeps {
 
 export const nowSec = (deps: RouteDeps): number => Math.floor(deps.now().getTime() / 1000);
 
-export const loggerFor = (c: EdgeContext, deps: RouteDeps): Logger => {
+/** The redacting logger of the edge (routes and Durable Objects): literal events, ids and counts only. */
+export const edgeLogger = (
+  versionVar: string | undefined,
+  sink?: (line: string) => void,
+): Logger => {
   let version = 'dev';
   try {
-    version = resolveVersion(c.env.VERSION);
+    version = resolveVersion(versionVar);
   } catch {
     // keep 'dev'
   }
-  const sink = deps.sink;
   return createLogger({ service: 'edge', version, ...(sink === undefined ? {} : { sink }) });
+};
+
+export const loggerFor = (c: EdgeContext, deps: RouteDeps): Logger =>
+  edgeLogger(c.env.VERSION, deps.sink);
+
+/** The SessionDO of one invitation; the id comes from verified claims only. A missing binding fails closed. */
+export const sessionFor = (c: EdgeContext, invitationId: string): SessionApi => {
+  const ns = c.env.SESSION;
+  if (ns === undefined) return fail('unavailable');
+  return ns.get(ns.idFromName(invitationId)) as unknown as SessionApi;
 };
 
 /** Calls api; a failure becomes its constant code (an `unavailable` is logged with the method name only). */

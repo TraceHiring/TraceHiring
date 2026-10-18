@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { sha256HexBytes } from './encoding.js';
 import { createHarness, testJpeg as jpeg, type Harness } from './edge.test-helpers.js';
 import { hasJpegMagic, jpegDimensions } from './jpeg.js';
-import { startPhotoKey } from './routes-photo.js';
+import { startPhotoUploadKey } from './routes-session.js';
 import { INVITATION, ORG, SESSION } from './token.test-helpers.js';
 
 const upload = async (
@@ -85,7 +85,7 @@ describe('jpeg checks (rule 8: only the processed JPEG, SEC-5)', () => {
 });
 
 describe('PUT /v1/lobby/photo (AT-D29)', () => {
-  it('stores the JPEG under the deterministic key with sha256, blurred and n', async () => {
+  it('stores the JPEG under the deterministic working key with sha256, blurred and n', async () => {
     const h = await createHarness();
     const token = await h.login();
     const bytes = jpeg(640, 480);
@@ -94,8 +94,9 @@ describe('PUT /v1/lobby/photo (AT-D29)', () => {
     expect(res.status).toBe(200);
     const sha256 = await sha256HexBytes(bytes);
     expect(await res.json()).toEqual({ sha256, bytes: bytes.length });
-    const key = `media/${ORG}/${SESSION}/start_photo.jpg`;
-    expect(startPhotoKey(ORG, SESSION)).toBe(key);
+    // The working key, never the canonical start_photo.jpg: session start pins that one (SEC-1 residual).
+    const key = `media/${ORG}/${SESSION}/start_photo.upload.jpg`;
+    expect(startPhotoUploadKey(ORG, SESSION)).toBe(key);
     expect([...h.evidence.objects.keys()]).toEqual([key]);
     const stored = h.evidence.objects.get(key);
     expect(stored?.httpMetadata).toEqual({ contentType: 'image/jpeg' });
@@ -238,7 +239,7 @@ describe('PUT /v1/lobby/photo (AT-D29)', () => {
       },
     });
     expect(res.status).toBe(200);
-    expect([...h.evidence.objects.keys()]).toEqual([startPhotoKey(ORG, SESSION)]);
+    expect([...h.evidence.objects.keys()]).toEqual([startPhotoUploadKey(ORG, SESSION)]);
   });
 
   it('no token is 401 and nothing is called or stored', async () => {

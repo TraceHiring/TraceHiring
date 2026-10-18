@@ -2,8 +2,11 @@
 // photo step. Edge, in this order: lobby token, nonce and limit; raw `image/jpeg` only, at most 512 000 bytes, magic
 // `FF D8 FF`, a clean header (jpeg.ts), 160-1280 px per side, `X-Photo-Sha256` equal to the body's SHA-256; then api
 // `photoPermit` (needs the consent row; `locked` once the session started); then one of at most 3 uploads per session
-// (counted in InviteOtpDO, the number also stored as `n`; `closed` once session start called `closePhotos`). The key is
-// deterministic, so a retake overwrites. R2 write only, no Postgres write. The bytes are never logged.
+// (counted in InviteOtpDO, the number also stored as `n`; `closed` once session start called `closePhotos`). It writes
+// only the deterministic working key (`start_photo.upload.jpg`, a retake overwrites it), never the canonical photo:
+// session start verifies the working copy and pins it to the canonical key itself (SEC-1), so an upload that is still
+// inside its R2 put at start can never change the session's photo. R2 write only, no Postgres write. The bytes are
+// never logged.
 import { PhotoRes } from '@trace/shared/contracts/candidate';
 import type { Hono } from 'hono';
 import { sha256HexBytes } from './encoding.js';
@@ -18,13 +21,10 @@ import {
 } from './http.js';
 import { hasJpegMagic, jpegDimensions } from './jpeg.js';
 import { lobbyAuth, otpCall, otpFor, rpc, type RouteDeps } from './route-support.js';
+import { startPhotoUploadKey } from './routes-session.js';
 
 export const PHOTO_MIN_SIDE = 160;
 export const PHOTO_MAX_SIDE = 1280;
-
-/** The deterministic R2 key of a session's start photo (§4.5). Both ids come from api, never from the request. */
-export const startPhotoKey = (orgId: string, sessionId: string): string =>
-  `media/${orgId}/${sessionId}/start_photo.jpg`;
 
 const isJpegType = (c: EdgeContext): boolean =>
   /^image\/jpeg$/i.test((c.req.header('content-type') ?? '').trim());
@@ -69,7 +69,7 @@ export const mountPhotoRoute = (app: Hono<EdgeEnv>, deps: RouteDeps): void => {
       // A used-up cap is permanent for the session, so the 429 carries no Retry-After (SR-4).
       if (!slot.ok) return fail(slot.error);
       try {
-        await evidence.put(startPhotoKey(permit.orgId, permit.sessionId), bytes, {
+        await evidence.put(startPhotoUploadKey(permit.orgId, permit.sessionId), bytes, {
           httpMetadata: { contentType: 'image/jpeg' },
           customMetadata: { sha256, blurred: '1', n: String(slot.n) },
         });
