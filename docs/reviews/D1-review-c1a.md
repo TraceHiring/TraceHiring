@@ -60,3 +60,21 @@ implemented by `InviteOtpDO.closePhotos()` over `OtpCore.closePhotos()` (`otp-co
 `otpFor(c, claims.invitation_id)` before its `head()` of the start photo. Residual: an upload whose slot was taken
 before the close may still be inside its single `EVIDENCE.put` when `head()` runs; the C1b review should decide whether
 that window needs more (for example, C1b re-checks `sha256` after the DO ack).
+
+## Confirming re-review of the fixes (Sonnet, 2026-10-18): CONFIRMED WITH NOTES
+Scope `git diff 78923ac 596e7d7 -- workers/edge`. Every "fix now" row is fixed as dispositioned; each regression test
+would fail on revert (reasoned from the code); no new defect; the tests changed for old behaviour were made stricter, not
+weaker. Notes and lead dispositions:
+1. Spec §4.2 otp/verify row still said "per challenge" → fixed in the spec (revision 4d wording).
+2. SEC-5 is header walking only: bytes inside or after the first scan are not examined, so a modified client can still
+   append data. Accepted for D1 (512 KB cap, size check); a decode-and-re-encode check is a candidate for M4 (capture).
+3. SEC-4 releases the slot on any `put` exception, even one thrown after R2 committed: worst case one extra overwrite of
+   the same key. Accepted.
+4. SR-2: a released resend also drops the previous live challenge; retry works at once. Accepted.
+5. `noSlotUsed` keys are proven right by the mid-body test. No change.
+
+**SEC-1 residual (carried to the C1b review, Chat B):** after `closePhotos()` and `head()`, session start should `get`
+the object, check its bytes against `customMetadata.sha256`, and pin it (copy to an immutable key such as
+`.../start_photo.pinned.jpg`, or record etag + sha and re-`head()` once; on mismatch retry once, else treat as absent).
+Heavier option: `confirmPhotoSlot(n)` after the put, with `closePhotos()` returning the in-flight slots (start answers a
+retryable 409 until zero).

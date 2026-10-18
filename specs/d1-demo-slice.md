@@ -382,7 +382,7 @@ Each lobby route re-checks its predecessor in api (age before consent, consent b
 | --- | --- | --- | --- |
 | `POST /v1/invite/resolve` | none (link token in body) | `InviteResolveReq{token}` → `InviteResolveRes{state, title?, durationMinutes?}` | none beyond the 256-bit token |
 | `POST /v1/otp/request` | none (link token) | `OtpRequestReq{token}` → `OtpRequestRes{resendAfterSeconds, expiresInSeconds, channel:'email'}` | in `InviteOtpDO`: resend after 30 s, 3 per 10 min |
-| `POST /v1/otp/verify` | none (link token) | `OtpVerifyReq{token, code}` → `OtpVerifyRes{lobbyToken, expiresAt, next}` (`next` = `age`/`consent`/`photo`/`start`) | 5 attempts per challenge, then 15 min lock |
+| `POST /v1/otp/verify` | none (link token) | `OtpVerifyReq{token, code}` → `OtpVerifyRes{lobbyToken, expiresAt, next}` (`next` = `age`/`consent`/`photo`/`start`) | 5 failed attempts per invitation across codes (RT-6, revision 4d), then 15 min lock |
 | `POST /v1/lobby/age` | `lobby` | `AgeDeclareReq{adult:boolean}` → `{ok:true}` | 10/min per invitation |
 | `GET /v1/lobby/notice` | `lobby` | → `NoticeRes{noticeVersionId, language:'en', bodyText, renderedSha256}` | 10/min |
 | `POST /v1/lobby/consent` | `lobby` | `ConsentReq{noticeVersionId, renderedSha256, accepted:true}` → `{ok:true}` | 10/min |
