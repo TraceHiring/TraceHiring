@@ -42,6 +42,7 @@ When blocked on a gate: add it to docs/progress/FOUNDER-QUEUE.md (what, why, exa
 - Secrets never go in git. .env.local stays git-ignored.
 
 ## 6. Session protocol
+- **Max plan (founder, 2026-10-18; wins over the usage lines below):** one chat = one big task, from the roadmap in `docs/progress/SESSION-PLAN.md`. A chat stops when its task is done (merged, verified, tagged), or context passes ~50%, or the 5-hour window passes 90% (no new agent after 80%); then the wrap-up and the next chat's prompt. Up to 3 writers and 3 read-only reviewers at once inside a chat.
 - Start: read CLAUDE.md, this file and docs/progress/HANDOFF.md. Verify git state (branch, clean tree, last cp tag) and toolchain (node 22, pnpm, docker, gitleaks), then run `pnpm verify:fast` if it exists. The repo wins over the handoff. If the tree is dirty from a crashed session, make a rescue branch, then either commit as wip or roll back to the last checkpoint. Never silently discard work.
 - If the toolchain is missing on a new machine, list the install commands and add them to FOUNDER-QUEUE.md.
 - During: use subagents for broad reading. Stop when context reaches ~60%, the usage guard reports 95% or more (work until 95%, then start the wrap-up; founder, 2026-10-12; at 90% start no new agent, task or stream), or the phase is done.
