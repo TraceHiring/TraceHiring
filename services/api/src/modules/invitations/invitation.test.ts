@@ -5,6 +5,7 @@
 import { CreateInvitationResponse, InvitationListResponse } from '@trace/shared/contracts/d1';
 import { describe, expect, it } from 'vitest';
 import { sha256Hex } from '../candidate/encoding.js';
+import { MAX_LIST_ROWS } from '../tests/org-context.js';
 import {
   NOW,
   ORG,
@@ -255,6 +256,24 @@ describe('GET …/invitations and revoke', () => {
     ]);
     for (const i of list)
       expect(Object.keys(i).sort()).toEqual(['createdAt', 'expiresAt', 'id', 'label', 'status']);
+  });
+
+  it('serves exactly MAX_LIST_ROWS invitations and fails closed past it (DB review r3 m-3)', async () => {
+    const { db, call } = invitationsApp('rec');
+    await call('POST', path(), invite());
+    const rows = db.tables.invitations ?? [];
+    const first = rows[0];
+    if (first === undefined) throw new Error('fixture: no invitation');
+    const hex = (n: number) => n.toString(16).padStart(12, '0');
+    for (let n = 2; n <= MAX_LIST_ROWS; n += 1)
+      rows.push({ ...first, id: `c9000000-0000-4000-8000-${hex(n)}` });
+    const full = await call('GET', path());
+    expect(full.status).toBe(200);
+    expect(InvitationListResponse.parse(await full.json()).invitations).toHaveLength(MAX_LIST_ROWS);
+    rows.push({ ...first, id: `c9000000-0000-4000-8000-${hex(MAX_LIST_ROWS + 1)}` });
+    const over = await call('GET', path());
+    expect(over.status).toBe(503);
+    expect(await over.text()).toBe('{"error":{"code":"unavailable"}}');
   });
 
   it('revokes a sent invitation as the caller; blocked, started or revoked ones are 409', async () => {

@@ -35,7 +35,11 @@ import {
 import { parseBody, readJson } from './http.js';
 import { requireRole, type Role } from './membership.js';
 import {
+  LIST_LIMIT,
+  PGRST_MAX_ROWS,
   RestError,
+  capped,
+  chunks,
   eq,
   handleOrg,
   orgFail,
@@ -114,25 +118,33 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
     handleOrg(async () => {
       const orgId = pathId(c.req.param('orgId'));
       const ctx = await deps.org.context(c.req.raw, c.env);
-      const tests = parseRows(
-        TestRowSchema,
-        await ctx.rest.select('tests', {
-          select: TEST_COLS,
-          org_id: `eq.${orgId}`,
-          order: 'created_at.desc',
-        }),
+      // DB review r3 m-3: never a silently cut list. The tests read one past the cap; the versions are read per
+      // chunk of test ids, and a chunk that reaches PostgREST's max_rows fails closed too.
+      const tests = capped(
+        parseRows(
+          TestRowSchema,
+          await ctx.rest.select('tests', {
+            select: TEST_COLS,
+            org_id: `eq.${orgId}`,
+            order: 'created_at.desc',
+            limit: LIST_LIMIT,
+          }),
+        ),
       );
-      const versions =
-        tests.length === 0
-          ? []
-          : parseRows(
-              VersionRowSchema,
-              await ctx.rest.select('test_versions', {
-                select: VERSION_COLS,
-                org_id: `eq.${orgId}`,
-                test_id: `in.(${tests.map((t) => t.id).join(',')})`,
-              }),
-            );
+      const versions: z.infer<typeof VersionRowSchema>[] = [];
+      for (const ids of chunks(tests.map((t) => t.id))) {
+        const part = parseRows(
+          VersionRowSchema,
+          await ctx.rest.select('test_versions', {
+            select: VERSION_COLS,
+            org_id: `eq.${orgId}`,
+            test_id: `in.(${ids.join(',')})`,
+            limit: String(PGRST_MAX_ROWS),
+          }),
+        );
+        if (part.length >= PGRST_MAX_ROWS) return orgFail('unavailable');
+        versions.push(...part);
+      }
       const rows = tests.flatMap((t) => {
         const latest = versions
           .filter((v) => v.test_id === t.id)

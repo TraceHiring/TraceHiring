@@ -18,6 +18,9 @@ import { findTest, parseRows } from '../tests/authoring.js';
 import { parseBody, readJson } from '../tests/http.js';
 import { requireRole, type CallerMembership } from '../tests/membership.js';
 import {
+  LIST_LIMIT,
+  capped,
+  chunks,
   eq,
   handleOrg,
   orgFail,
@@ -73,27 +76,33 @@ const requireManager = async (ctx: OrgContext, orgId: string, testId: string): P
 };
 
 const listOf = async (ctx: OrgContext, orgId: string, testId: string): Promise<AssignmentList> => {
-  const rows = parseRows(
-    AssignmentRow,
-    await ctx.rest.select('assignments', {
-      select: 'id,membership_id,as_role,created_at',
-      org_id: eq(orgId),
-      test_id: eq(testId),
-      order: 'created_at.asc,id.asc',
-    }),
+  // One past the cap, failing closed instead of a list PostgREST's max_rows cut silently (DB review r3 m-3); the
+  // member names are read per chunk of ids.
+  const rows = capped(
+    parseRows(
+      AssignmentRow,
+      await ctx.rest.select('assignments', {
+        select: 'id,membership_id,as_role,created_at',
+        org_id: eq(orgId),
+        test_id: eq(testId),
+        order: 'created_at.asc,id.asc',
+        limit: LIST_LIMIT,
+      }),
+    ),
   );
-  const ids = [...new Set(rows.map((r) => r.membership_id))];
-  const members =
-    ids.length === 0
-      ? []
-      : parseRows(
-          MemberRow,
-          await ctx.rest.select('memberships', {
-            select: 'id,display_name',
-            org_id: eq(orgId),
-            id: `in.(${ids.join(',')})`,
-          }),
-        );
+  const members: z.infer<typeof MemberRow>[] = [];
+  for (const ids of chunks(rows.map((r) => r.membership_id))) {
+    members.push(
+      ...parseRows(
+        MemberRow,
+        await ctx.rest.select('memberships', {
+          select: 'id,display_name',
+          org_id: eq(orgId),
+          id: `in.(${ids.join(',')})`,
+        }),
+      ),
+    );
+  }
   const name = new Map(members.map((m) => [m.id, m.display_name]));
   return {
     assignments: rows.map((r) => ({

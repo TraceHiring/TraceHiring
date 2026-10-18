@@ -417,6 +417,28 @@ export const pathId = (value: string | undefined): string => {
 export const eq = (value: string | number | boolean): string => `eq.${String(value)}`;
 
 /**
+ * The most rows one org list returns (D1 is demo scale; pagination is M2). PostgREST's `max_rows` would cut a longer
+ * list silently (DB review r3 m-3), so a list read asks for `LIST_LIMIT` (one past the cap) and `capped` fails
+ * closed with 503 `unavailable` instead of serving a cut list.
+ */
+export const MAX_LIST_ROWS = 500;
+export const LIST_LIMIT = String(MAX_LIST_ROWS + 1);
+export const capped = <T>(rows: T[]): T[] =>
+  rows.length > MAX_LIST_ROWS ? orgFail('unavailable') : rows;
+
+/** PostgREST `max_rows` (`supabase/config.toml` [api]): a read that returns this many rows may have been cut. */
+export const PGRST_MAX_ROWS = 1000;
+
+/** Ids per `in.(…)` filter, so a long id list never makes one oversized URL (as reports/read.ts). */
+export const IN_CHUNK = 50;
+export const chunks = (ids: readonly string[]): string[][] => {
+  const unique = [...new Set(ids)];
+  const out: string[][] = [];
+  for (let i = 0; i < unique.length; i += IN_CHUNK) out.push(unique.slice(i, i + IN_CHUNK));
+  return out;
+};
+
+/**
  * The structural row source the two card modules take (they import no neutral module, rule 1 / L-19). It
  * authenticates the request and selects as the caller; any failure becomes a constant org error code.
  */

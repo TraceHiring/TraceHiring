@@ -4,7 +4,7 @@
 // constant codes. Runs on the fake PostgREST of tests.test-helpers.ts.
 import { TestDetailResponse, TestListResponse } from '@trace/shared/contracts/d1';
 import { describe, expect, it } from 'vitest';
-import { RestError, orgFail } from './org-context.js';
+import { MAX_LIST_ROWS, RestError, orgFail } from './org-context.js';
 import { createTestsRoutes } from './routes.js';
 import { ORG, ORG_B, WS, authoringDb, draftBody, rowsOf, testsApp } from './tests.test-helpers.js';
 
@@ -85,6 +85,44 @@ describe('POST /v1/orgs/:orgId/tests: the two writes (DB review r3 m-4)', () => 
     expect(typeof rows[0]?.archived_at).toBe('string');
     const update = db.calls.find((c) => c.method === 'update' && c.table === 'tests');
     expect(update?.query).toMatchObject({ org_id: `eq.${ORG}`, archived_at: 'is.null' });
+  });
+});
+
+describe('GET /v1/orgs/:orgId/tests: read caps (DB review r3 m-3)', () => {
+  const withTests = async (count: number) => {
+    const db = authoringDb();
+    const { call } = testsApp(db);
+    await create(call);
+    const test = rowsOf(db, 'tests')[0];
+    const version = rowsOf(db, 'test_versions')[0];
+    if (test === undefined || version === undefined) throw new Error('fixture');
+    const hex = (n: number) => n.toString(16).padStart(12, '0');
+    for (let n = 2; n <= count; n += 1) {
+      const id = `e9000000-0000-4000-8000-${hex(n)}`;
+      rowsOf(db, 'tests').push({ ...test, id });
+      rowsOf(db, 'test_versions').push({
+        ...version,
+        id: `f9000000-0000-4000-8000-${hex(n)}`,
+        test_id: id,
+      });
+    }
+    return { db, call };
+  };
+
+  it('lists exactly MAX_LIST_ROWS tests (versions read in chunks of ids) and fails closed past it', async () => {
+    const full = await withTests(MAX_LIST_ROWS);
+    const before = full.db.calls.length;
+    const res = await full.call('GET', `/v1/orgs/${ORG}/tests`);
+    expect(res.status).toBe(200);
+    expect(TestListResponse.parse(await res.json()).tests).toHaveLength(MAX_LIST_ROWS);
+    const versionReads = full.db.calls
+      .slice(before)
+      .filter((c) => c.method === 'select' && c.table === 'test_versions');
+    expect(versionReads).toHaveLength(MAX_LIST_ROWS / 50);
+    const over = await withTests(MAX_LIST_ROWS + 1);
+    const r = await over.call('GET', `/v1/orgs/${ORG}/tests`);
+    expect(r.status).toBe(503);
+    expect(await r.text()).toBe('{"error":{"code":"unavailable"}}');
   });
 });
 

@@ -23,6 +23,8 @@ import { findTest, parseRows } from '../tests/authoring.js';
 import { parseBody, readJson } from '../tests/http.js';
 import { requireRole } from '../tests/membership.js';
 import {
+  LIST_LIMIT,
+  capped,
   eq,
   handleOrg,
   orgFail,
@@ -99,14 +101,18 @@ export const inviteBody = (inviteUrl: string): string =>
   `You are invited to take an online assessment on Trace. Open this personal link to begin: ${inviteUrl} . Do not share it.`;
 
 const listOf = async (ctx: OrgContext, orgId: string, testId: string) => ({
-  invitations: parseRows(
-    ListRow,
-    await ctx.rest.select('invitations', {
-      select: LIST_COLS,
-      org_id: eq(orgId),
-      test_id: eq(testId),
-      order: 'created_at.asc,id.asc',
-    }),
+  // One past the cap, failing closed instead of a list PostgREST's max_rows cut silently (DB review r3 m-3).
+  invitations: capped(
+    parseRows(
+      ListRow,
+      await ctx.rest.select('invitations', {
+        select: LIST_COLS,
+        org_id: eq(orgId),
+        test_id: eq(testId),
+        order: 'created_at.asc,id.asc',
+        limit: LIST_LIMIT,
+      }),
+    ),
   ).map((r) => ({
     id: r.id,
     label: r.candidate_label,
