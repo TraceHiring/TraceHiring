@@ -4,8 +4,9 @@
 //    and every log call names a literal event from LOG_EVENTS with fields from LOG_FIELDS only, so a new log line is a
 //    reviewed change to this file;
 //  - dynamic: synthetic PII, link tokens, codes and tokens are planted in the request (body, query string, headers,
-//    Bearer) and in the failures (the thrown error's message from api and from the OTP object), every logging path is
-//    driven (rpc unavailable, otp lock, the shared 500 path), and none of the planted values appears in a line.
+//    Bearer) and in the failures (the thrown error's message from api, the OTP object and the mirror queue, and the
+//    test package's bytes), every logging path is driven (rpc unavailable, otp lock, an invalid package at session
+//    start, a mirror that fails for 24 h, the shared 500 path), and none of the planted values appears in a line.
 // Synthetic values are built at run time (no literal PII-shaped fixture sits in the repo).
 import { describe, expect, it } from 'vitest';
 import { sha256HexBytes, utf8 } from './encoding.js';
@@ -17,6 +18,15 @@ import {
   type Harness,
 } from './edge.test-helpers.js';
 import type { CandidateMethod } from './rpc.js';
+import {
+  installPackage,
+  makePackage,
+  PACKAGE_KEY,
+  postEvents,
+  sessionHarness,
+  WRITTEN,
+} from './session.test-helpers.js';
+import { INVITATION } from './token.test-helpers.js';
 
 declare global {
   interface ImportMeta {
@@ -28,9 +38,14 @@ declare global {
 }
 
 /** Every event a production log call may use (first argument of `debug|info|warn|error`). */
-const LOG_EVENTS = ['candidate_rpc.unavailable', 'otp.locked'];
-/** Every field a production log call may pass: ids and names only. */
-const LOG_FIELDS = ['method', 'invitationId'];
+const LOG_EVENTS = [
+  'candidate_rpc.unavailable',
+  'otp.locked',
+  'session.package_invalid',
+  'session.mirror_failed',
+];
+/** Every field a production log call may pass: ids, cause constants and counts only. */
+const LOG_FIELDS = ['method', 'invitationId', 'sessionId', 'pkg', 'n'];
 /** The shared error path of @trace/workers-http (its message is dropped by serialize-error). */
 const SHARED_EVENTS = ['request.failed'];
 
@@ -259,5 +274,84 @@ describe('edge log lines carry no payload, token or code (AT-D32, edge half)', (
     expect(events(h.lines)).toEqual(['request.failed', 'request.failed']);
     expect(SHARED_EVENTS).toContain(events(h.lines)[0]);
     expectClean(h.lines, [...tokenParts(token), ...loginCodes]);
+  });
+
+  it.each(['hash', 'schema'] as const)(
+    'an invalid package (%s) logs one session.package_invalid with the cause constant, never the key or content',
+    async (cause) => {
+      const h = await sessionHarness();
+      // The package bytes carry planted values; `schema` adds a key the strict schema refuses.
+      const planted = makePackage({
+        title: `${SECRETS.label} ${SECRETS.email}`,
+        items: makePackage().items.map((item) => ({ ...item, prompt: SECRETS.answer })),
+      });
+      const sha = await installPackage(
+        h.packages,
+        cause === 'schema' ? { ...planted, answerKey: { 1: SECRETS.mobile } } : planted,
+      );
+      if (cause === 'schema') {
+        // Keep the grant's hash equal to the stored bytes, so only the schema check fails.
+        const api = h.env.API as unknown as Record<string, (i: unknown) => Promise<unknown>>;
+        const grant = api.sessionGrant;
+        if (grant === undefined) throw new Error('no grant');
+        api.sessionGrant = async (input) => ({
+          ...((await grant(input)) as object),
+          packageSha256: sha,
+        });
+      }
+      const token = await h.login();
+      const loginCodes = h.codes();
+      const res = await h.request('POST', '/v1/session/start' + query(), {
+        token,
+        json: { rulesAcknowledged: true, photo: { skippedReason: 'declined' } },
+        headers: noisyHeaders(),
+      });
+
+      expect(res.status).toBe(503);
+      expect(events(h.lines)).toEqual(['session.package_invalid']);
+      const line = JSON.parse(h.lines[0] ?? '{}') as {
+        level: string;
+        data: Record<string, unknown>;
+      };
+      expect(line.level).toBe('error');
+      expect(Object.keys(line.data).sort()).toEqual(['pkg', 'sessionId']);
+      expect(line.data.pkg).toBe(cause);
+      expectClean(h.lines, [...tokenParts(token), ...loginCodes, PACKAGE_KEY, sha, planted.title]);
+      expect(h.lines.join('\n')).not.toContain('packages/');
+    },
+  );
+
+  it('a mirror that fails for 24 h logs session.mirror_failed with sessionId and n only', async () => {
+    const h = await sessionHarness();
+    const { token, view } = await h.startSession();
+    const answer = `${SECRETS.answer} ${SECRETS.email} ${SECRETS.mobile} ${SECRETS.label}`;
+    const typed = await postEvents(h, token, view.streamId, [
+      { seq: 1, t: 100, kind: 'answer.text', item: WRITTEN, p: 0, d: 0, i: answer },
+    ]);
+    expect(typed.status).toBe(200);
+    // Every send fails with an error whose message is full of planted values.
+    h.queue.queue.send = () => Promise.reject(boom());
+    h.clock.ms += 1000;
+    const submitted = await h.request('POST', '/v1/session/submit' + query(), {
+      token,
+      json: { streamId: view.streamId, finalSeq: 1 },
+      headers: noisyHeaders(),
+    });
+    expect(submitted.status).toBe(200);
+    const session = h.session.sessions.get(INVITATION);
+    if (session === undefined) throw new Error('no session');
+    let guard = 0;
+    while (session.alarm.at !== null && guard < 1000) {
+      h.clock.ms = session.alarm.at;
+      await session.core.alarm();
+      guard += 1;
+    }
+
+    expect(events(h.lines)).toEqual(['session.mirror_failed']);
+    const line = JSON.parse(h.lines[0] ?? '{}') as { level: string; data: Record<string, unknown> };
+    expect(line.level).toBe('error');
+    expect(Object.keys(line.data).sort()).toEqual(['n', 'sessionId']);
+    expect(typeof line.data.n).toBe('number');
+    expectClean(h.lines, [...tokenParts(token), answer]);
   });
 });

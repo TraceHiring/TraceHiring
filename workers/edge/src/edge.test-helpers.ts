@@ -115,7 +115,8 @@ export interface StoredObject {
 }
 
 /**
- * A Map-backed R2 bucket with the calls the edge makes. `ops` records every put (`put:<key>`) in order; `failPuts`
+ * A Map-backed R2 bucket with the calls the edge makes. `ops` records every put (`put:<key>`) and delete
+ * (`delete:<key>`) in order; `failPuts`
  * makes the next puts throw; `calls` records every method name used (the packages bucket is read only).
  */
 export const fakeBucket = (ops: string[] = []) => {
@@ -160,7 +161,18 @@ export const fakeBucket = (ops: string[] = []) => {
       const o = objects.get(key);
       if (o === undefined) return null;
       const copy = new Uint8Array(o.body);
-      return { key, size: copy.length, arrayBuffer: async () => copy.buffer };
+      return {
+        key,
+        size: copy.length,
+        httpMetadata: o.httpMetadata,
+        customMetadata: o.customMetadata,
+        arrayBuffer: async () => copy.buffer,
+      };
+    },
+    async delete(key: string) {
+      calls.push('delete');
+      objects.delete(key);
+      ops.push(`delete:${key}`);
     },
   };
   return { bucket, objects, calls, state };

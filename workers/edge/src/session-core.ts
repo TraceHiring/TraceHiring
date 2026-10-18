@@ -147,8 +147,8 @@ export type Refusal = {
 export type View = z.input<typeof SessionView>;
 
 export type StartResult =
-  | { ok: true; kind: 'live'; startedAt: string; view: View }
-  | { ok: true; kind: 'submitted'; startedAt: string; receipt: Receipt }
+  | { ok: true; kind: 'live'; startedAt: string; photoSha256: string | null; view: View }
+  | { ok: true; kind: 'submitted'; startedAt: string; photoSha256: string | null; receipt: Receipt }
   | Refusal;
 export type AttachResult = { ok: true; view: View } | Refusal;
 export type ItemResult = { ok: true; item: z.input<typeof ServedItem> } | Refusal;
@@ -333,7 +333,8 @@ export class SessionCore implements SessionApi {
   /**
    * Checks a session token's nonce hash and org against the stored session. `live`: the current token of a running
    * session. `final`: the token that was current at submit (it may read the receipt, nothing else). A different
-   * nonce is an older grant (`superseded`); no session, or another org, is `token_invalid`.
+   * nonce is an older grant (`superseded`, before and after submit, SR-5/RT-3); no session, another org, or no
+   * nonce at all is `token_invalid`.
    */
   #authorise(meta: Meta | undefined, presented: string, orgId: string): Refusal | 'live' | 'final' {
     if (meta === undefined || meta.orgId !== orgId) return refuse('token_invalid');
@@ -341,7 +342,9 @@ export class SessionCore implements SessionApi {
     if (meta.finalNonceHash !== null && constantTimeEqual(presented, meta.finalNonceHash)) {
       return 'final';
     }
-    return refuse(meta.nonceHash === null ? 'token_invalid' : 'superseded');
+    return refuse(
+      meta.nonceHash === null && meta.finalNonceHash === null ? 'token_invalid' : 'superseded',
+    );
   }
 
   /** Past `deadline + 60 s` a running session is finalised on the spot (the alarm may run late). */
@@ -365,7 +368,9 @@ export class SessionCore implements SessionApi {
   #view(meta: Meta, now: number): View {
     const pkg = this.#pkg();
     const served = this.#served();
-    const answers = finished(meta) ? this.#finalAnswers() : this.#answers(pkg);
+    // A finished session shows its receipt and no answer text (SEC-C1b-5): the final answers stay in the object and in
+    // final.json, never in a response after submit.
+    const answers = finished(meta) ? new Map<number, AnswerState>() : this.#answers(pkg);
     const viewAnswers: View['answers'] = [];
     for (const position of [...answers.keys()].sort((a, b) => a - b)) {
       const answer = answers.get(position);
@@ -445,7 +450,9 @@ export class SessionCore implements SessionApi {
   /**
    * Creates the session on the first call (`started_at` from the object's clock, the deadline alarm set) or resumes
    * it (same `started_at`, the nonce rotated, a new stream that supersedes the older). Refuses without
-   * `adultConfirmed` (rule 9, L-13). A finished session answers its receipt.
+   * `adultConfirmed` (rule 9, L-13). A finished session answers its receipt. The photo is set once, at creation (a
+   * resume ignores `input.photo`); every answer carries its stored hash, so the route pins the canonical photo only
+   * when it holds exactly those bytes (SEC-1).
    */
   async start(input: StartInput): Promise<StartResult> {
     if (input.adultConfirmed !== true) return refuse('not_eligible');
@@ -474,6 +481,7 @@ export class SessionCore implements SessionApi {
             ok: true,
             kind: 'submitted',
             startedAt: iso(meta.startedAt),
+            photoSha256: meta.photo?.sha256 ?? null,
             receipt: this.#receipt(meta),
           };
         }
@@ -483,6 +491,7 @@ export class SessionCore implements SessionApi {
           ok: true,
           kind: 'live',
           startedAt: iso(resumed.startedAt),
+          photoSha256: resumed.photo?.sha256 ?? null,
           view: this.#view(resumed, now),
         };
       }
@@ -527,6 +536,7 @@ export class SessionCore implements SessionApi {
         ok: true,
         kind: 'live',
         startedAt: iso(created.startedAt),
+        photoSha256: created.photo?.sha256 ?? null,
         view: this.#view(created, now),
       };
     });
