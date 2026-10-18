@@ -45,5 +45,8 @@ prompt for the next chat. This file is the roadmap; HANDOFF.md says which chat i
 
 ## Usage on Max (measured, update as we learn)
 - Chat A start: 0% of the 5-hour window; two Opus reviews + one Opus writer in parallel ≈ 5% in the first ~30 minutes.
+- Chat B (C1b): 2 Opus reviews + 3 Opus writers in parallel + 1 Sonnet re-review, two full verifies: 14% → ~28% of the
+  5-hour window, 2% → ~4% weekly, context ~30%, about 1 h 45 min. Parallel fix writers on disjoint regions of the same
+  file merged cleanly with `--no-ff`.
 - Weekly limits matter more on Max than the 5-hour window: check `get_usage` after each agent result and record the
   weekly figure in the LOG row.
