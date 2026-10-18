@@ -24,7 +24,53 @@ const upload = async (
     },
   });
 
-describe('jpeg checks', () => {
+/** Offsets in testJpeg: after SOI, after the APP0 segment, after the SOF frame (before SOS). */
+const AFTER_SOI = 2;
+const AFTER_APP0 = 20;
+const AFTER_SOF = 39;
+const insert = (bytes: Uint8Array, at: number, extra: number[]): Uint8Array =>
+  new Uint8Array([...bytes.slice(0, at), ...extra, ...bytes.slice(at)]);
+/** A marker segment: FF, the marker, a big-endian length (payload + 2), the payload. */
+const segment = (marker: number, payload: number[]): number[] => [
+  0xff,
+  marker,
+  ((payload.length + 2) >> 8) & 0xff,
+  (payload.length + 2) & 0xff,
+  ...payload,
+];
+const ascii = (s: string): number[] => [...s].map((ch) => ch.charCodeAt(0));
+/** An APP1 EXIF segment with a few synthetic TIFF header bytes. */
+const exif = segment(0xe1, [...ascii('Exif'), 0, 0, 0x4d, 0x4d, 0x00, 0x2a, 0, 0, 0, 8]);
+
+describe('jpeg checks (rule 8: only the processed JPEG, SEC-5)', () => {
+  it('the test JPEG lands at the offsets the tests insert at', () => {
+    const j = jpeg(640, 480);
+    expect([j[AFTER_SOI], j[AFTER_SOI + 1]]).toEqual([0xff, 0xe0]);
+    expect([j[AFTER_APP0], j[AFTER_APP0 + 1]]).toEqual([0xff, 0xc0]);
+    expect([j[AFTER_SOF], j[AFTER_SOF + 1]]).toEqual([0xff, 0xda]);
+  });
+
+  it.each([
+    ['APP1 Exif after SOI', insert(jpeg(640, 480), AFTER_SOI, exif)],
+    ['APP1 Exif after APP0', insert(jpeg(640, 480), AFTER_APP0, exif)],
+    ['APP1 Exif after the frame', insert(jpeg(640, 480), AFTER_SOF, exif)],
+    ['APP2 (ICC)', insert(jpeg(640, 480), AFTER_APP0, segment(0xe2, ascii('ICC_PROFILE')))],
+    ['APP15', insert(jpeg(640, 480), AFTER_APP0, segment(0xef, [1, 2, 3]))],
+    ['a COM segment', insert(jpeg(640, 480), AFTER_APP0, segment(0xfe, ascii('note')))],
+    ['bytes after EOI', new Uint8Array([...jpeg(640, 480), 0x00, 0x01, 0x02])],
+    ['a body not ending FF D9', jpeg(640, 480).slice(0, -1)],
+  ])('%s is not a clean JPEG', (_label, bytes) => {
+    expect(jpegDimensions(bytes)).toBeNull();
+  });
+
+  it('a second APP0 segment and DQT/DHT segments before the scan are allowed', () => {
+    const dqt = segment(0xdb, [0, ...Array.from({ length: 64 }, () => 1)]);
+    const app0 = segment(0xe0, [...ascii('JFIF'), 0, 1, 1, 0, 0, 1, 0, 1, 0, 0]);
+    expect(
+      jpegDimensions(insert(insert(jpeg(640, 480), AFTER_APP0, dqt), AFTER_APP0, app0)),
+    ).toEqual({ width: 640, height: 480 });
+  });
+
   it('reads the frame size from SOF0 and progressive SOF2', () => {
     expect(jpegDimensions(jpeg(640, 480))).toEqual({ width: 640, height: 480 });
     expect(jpegDimensions(jpeg(320, 240, 8, 0xc2))).toEqual({ width: 320, height: 240 });
@@ -81,6 +127,9 @@ describe('PUT /v1/lobby/photo (AT-D29)', () => {
     ['159 px high', jpeg(640, 159)],
     ['1281 px wide', jpeg(1281, 720)],
     ['1281 px high', jpeg(720, 1281)],
+    ['an APP1 "Exif\\0\\0" segment', insert(jpeg(640, 480), AFTER_APP0, exif)],
+    ['a COM segment', insert(jpeg(640, 480), AFTER_APP0, segment(0xfe, ascii('note')))],
+    ['trailing bytes after EOI', new Uint8Array([...jpeg(640, 480), 0x41, 0x42])],
   ])('%s is 415 bad_media', async (_label, bytes) => {
     const h = await createHarness();
     const token = await h.login();
