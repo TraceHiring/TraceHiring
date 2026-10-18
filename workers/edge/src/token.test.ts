@@ -3,6 +3,7 @@
 // 401. A missing, empty, malformed or private key var fails closed (503), never a pass. Keys are generated at run time.
 import { beforeAll, describe, expect, it } from 'vitest';
 import { base64UrlEncode, utf8 } from './encoding.js';
+import { createHarness } from './edge.test-helpers.js';
 import { EdgeError } from './http.js';
 import {
   CANDIDATE,
@@ -211,5 +212,97 @@ describe('the public key var fails closed', () => {
     await expect(
       parsePublicJwks(JSON.stringify([{ ...key.publicJwk, d: key.publicJwk.x }])),
     ).rejects.toThrow('verify_keys_invalid');
+  });
+});
+
+describe('lobby routes refuse a bad token before api is called (AT-D23, route level)', () => {
+  const ROUTES: [string, string, unknown][] = [
+    ['POST', '/v1/lobby/age', { adult: true }],
+    ['GET', '/v1/lobby/notice', undefined],
+    [
+      'POST',
+      '/v1/lobby/consent',
+      { noticeVersionId: ORG, renderedSha256: 'a'.repeat(64), accepted: true },
+    ],
+  ];
+
+  it.each(ROUTES)(
+    '%s %s: a stale lobby nonce (a newer login) is 401 superseded',
+    async (method, path, json) => {
+      const h = await createHarness();
+      const first = await h.login();
+      h.clock.ms += 31_000;
+      const second = await h.login();
+      const before = h.calls.length;
+
+      const stale = await h.request(method, path, {
+        token: first,
+        ...(json === undefined ? {} : { json }),
+      });
+      expect(stale.status).toBe(401);
+      expect(await stale.json()).toEqual({ error: 'superseded' });
+      expect(h.calls.length).toBe(before);
+
+      const fresh = await h.request(method, path, {
+        token: second,
+        ...(json === undefined ? {} : { json }),
+      });
+      expect(fresh.status).toBe(200);
+    },
+  );
+
+  it.each(ROUTES)(
+    '%s %s: a cleared lobby nonce (session granted) is 401 token_invalid',
+    async (method, path, json) => {
+      const h = await createHarness();
+      const token = await h.login();
+      h.otp.cores.get(INVITATION)?.clearLobbyNonce();
+      const res = await h.request(method, path, { token, ...(json === undefined ? {} : { json }) });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'token_invalid' });
+    },
+  );
+
+  it.each(ROUTES)(
+    '%s %s: expired, session-typed, none-alg and missing tokens are 401',
+    async (method, path, json) => {
+      const h = await createHarness();
+      const token = await h.login();
+      const nowSec = Math.floor(h.clock.ms / 1000);
+      const nonceOf = (t: string) =>
+        (
+          JSON.parse(atob(t.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/'))) as {
+            nonce: string;
+          }
+        ).nonce;
+      const session = await signToken(
+        h.key,
+        lobbyClaims(nowSec, { typ: 'session', nonce: nonceOf(token) }),
+      );
+      const none = `${base64UrlEncode(utf8(JSON.stringify({ alg: 'none', typ: 'JWT', kid: KID })))}.${token.split('.')[1]}.`;
+      const before = h.calls.length;
+      const body = json === undefined ? {} : { json };
+
+      expect((await h.request(method, path, { token: session, ...body })).status).toBe(401);
+      expect((await h.request(method, path, { token: none, ...body })).status).toBe(401);
+      expect((await h.request(method, path, body)).status).toBe(401);
+      h.clock.ms += 1800 * 1000;
+      const expired = await h.request(method, path, { token, ...body });
+      expect(expired.status).toBe(401);
+      expect(await expired.json()).toEqual({ error: 'token_expired' });
+      expect(h.calls.length).toBe(before);
+    },
+  );
+
+  it('a lobby route with no key configured fails closed with 503, never a pass', async () => {
+    const h = await createHarness();
+    const token = await h.login();
+    const { createApp } = await import('./app.js');
+    const res = await createApp({ now: () => new Date(h.clock.ms) }).request(
+      'https://edge.test/v1/lobby/notice',
+      { headers: { authorization: `Bearer ${token}` } },
+      { ...h.env, CANDIDATE_TOKEN_PUBLIC_JWK: '' } as Env,
+    );
+    expect(res.status).toBe(503);
   });
 });
