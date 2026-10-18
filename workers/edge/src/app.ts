@@ -8,6 +8,8 @@ import { healthBody } from '@trace/shared/health';
 import { createHttpApp, NO_STORE } from '@trace/workers-http';
 import type { Hono } from 'hono';
 import { candidateCors, noStore } from './http.js';
+import type { RouteDeps } from './route-support.js';
+import { mountInviteRoutes } from './routes-invite.js';
 
 const SERVICE = 'edge';
 
@@ -34,6 +36,13 @@ export const createApp = (deps: AppDeps = {}): Hono<{ Bindings: Env }> => {
 
   // Every candidate answer is never cached and is CORS-limited to the candidate app (§4.2).
   app.use('/v1/*', noStore, candidateCors());
+  const routeDeps: RouteDeps = {
+    now,
+    get sink() {
+      return deps.sink;
+    },
+  };
+  mountInviteRoutes(app, routeDeps);
 
   return app;
 };
