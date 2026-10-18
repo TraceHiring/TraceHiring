@@ -173,6 +173,19 @@ export class OtpCore {
     };
   }
 
+  /**
+   * Undoes an issue whose code could not be sent (messaging `unavailable`, SR-2): drops the challenge and gives back its
+   * entry in the resend window, but only while it is still the current challenge; otherwise nothing changes.
+   */
+  releaseIssue(challengeId: string): void {
+    const challenge = this.#kv.get<Challenge>(K.challenge);
+    if (challenge === undefined || challenge.id !== challengeId) return;
+    this.#kv.delete(K.challenge);
+    const issues = this.#kv.get<number[]>(K.issues) ?? [];
+    const at = issues.indexOf(challenge.issuedAt);
+    if (at !== -1) this.#kv.put(K.issues, [...issues.slice(0, at), ...issues.slice(at + 1)]);
+  }
+
   /** Checks a code against the current challenge. A success rotates the lobby nonce and returns the raw nonce. */
   async verify(code: string): Promise<VerifyResult> {
     if (typeof code !== 'string' || !/^[0-9]{6}$/.test(code))

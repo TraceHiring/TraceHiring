@@ -18,6 +18,7 @@ import {
   capBody,
   fail,
   handle,
+  isEdgeError,
   LOBBY_BODY_LIMIT,
   readJson,
   sendJson,
@@ -64,12 +65,25 @@ export const mountInviteRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void => 
       const otp = otpFor(c, found.invitationId);
       const issued = await otpCall(() => otp.issue());
       if (!issued.ok) return refuse(issued);
-      await rpc(c, deps, 'messagingSend', {
-        invitationId: found.invitationId,
-        orgId: found.orgId,
-        code: issued.code,
-        idempotencyKey: issued.challengeId,
-      });
+      try {
+        await rpc(c, deps, 'messagingSend', {
+          invitationId: found.invitationId,
+          orgId: found.orgId,
+          code: issued.code,
+          idempotencyKey: issued.challengeId,
+        });
+      } catch (err) {
+        // The code was not sent: give the send back so the candidate is not locked out of the resend budget (SR-2).
+        // Only on `unavailable`; any other code keeps the send used. A failed release still answers the send's error.
+        if (isEdgeError(err) && err.code === 'unavailable') {
+          try {
+            await otp.releaseIssue(issued.challengeId);
+          } catch {
+            // keep the send's answer
+          }
+        }
+        throw err;
+      }
       return sendJson(c, OtpRequestRes, {
         resendAfterSeconds: issued.resendAfterSeconds,
         expiresInSeconds: issued.expiresInSeconds,

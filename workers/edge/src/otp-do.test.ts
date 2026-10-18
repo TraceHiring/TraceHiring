@@ -108,6 +108,25 @@ describe('OtpCore issue (resend limits)', () => {
     // 0xffffffff is above the unbiased limit and is drawn again; 7 gives "000007".
     expect(issued(await core.issue()).code).toBe('000007');
   });
+
+  it('releaseIssue gives back the send and drops the challenge, only while it is current (SR-2)', async () => {
+    const { core, clock } = setup();
+    const a = issued(await core.issue());
+    core.releaseIssue('not-a-challenge-id'); // unknown id: no-op
+    expect(await core.issue()).toMatchObject({ ok: false, error: 'resend_too_soon' });
+    core.releaseIssue(a.challengeId);
+    // The send is given back (no 30 s wait, the window is not used) and the released code no longer works.
+    expect(await core.verify(a.code)).toEqual({ ok: false, error: 'otp_wrong' });
+    const b = issued(await core.issue());
+    clock.ms += 31_000;
+    const c = issued(await core.issue());
+    core.releaseIssue(b.challengeId); // no longer current: nothing changes
+    clock.ms += 31_000;
+    issued(await core.issue());
+    clock.ms += 31_000;
+    expect(await core.issue()).toMatchObject({ ok: false, error: 'rate_limited' });
+    expect(c.challengeId).not.toBe(b.challengeId);
+  });
 });
 
 describe('OtpCore verify (attempts, lock, expiry)', () => {
@@ -404,6 +423,47 @@ describe('invite and OTP routes', () => {
     const res = await h.request('POST', '/v1/otp/request', { json: { token: LINK() } });
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: 'unavailable' });
+  });
+
+  it('a send that fails unavailable gives the send back: fails twice, the third request sends a code (SR-2)', async () => {
+    let failures = 2;
+    const h = await createHarness({
+      messagingSend: async () => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error('unavailable');
+        }
+        return { ok: true };
+      },
+    });
+    const request = () => h.request('POST', '/v1/otp/request', { json: { token: LINK() } });
+    expect((await request()).status).toBe(503);
+    expect((await request()).status).toBe(503);
+    const third = await request();
+    expect(third.status).toBe(200);
+    const sent = h.codes();
+    expect(sent).toHaveLength(3);
+    // The released challenges are gone; the code that was sent works.
+    const verify = (code: string) =>
+      h.request('POST', '/v1/otp/verify', { json: { token: LINK(), code } });
+    const lastCode = sent[2] ?? '';
+    for (const code of sent.slice(0, 2).filter((c) => c !== lastCode)) {
+      expect((await verify(code)).status).toBe(401);
+    }
+    expect((await verify(lastCode)).status).toBe(200);
+  });
+
+  it('a send refused with another code keeps the send used (SR-2)', async () => {
+    const h = await createHarness({
+      messagingSend: async () => {
+        throw new Error('bad_request');
+      },
+    });
+    const first = await h.request('POST', '/v1/otp/request', { json: { token: LINK() } });
+    expect(first.status).toBe(400);
+    const second = await h.request('POST', '/v1/otp/request', { json: { token: LINK() } });
+    expect(second.status).toBe(429);
+    expect(await second.json()).toEqual({ error: 'resend_too_soon' });
   });
 
   it('verify with the right code mints a lobby token on the nonce whose hash the object holds', async () => {

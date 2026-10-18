@@ -15,6 +15,8 @@ import {
 /** What the edge routes call on the object (the RPC stub and the test fake both have this shape). */
 export interface OtpApi {
   issue(): Promise<IssueResult>;
+  /** Undoes the current issue when its code could not be sent (SR-2). */
+  releaseIssue(challengeId: string): void | Promise<void>;
   verify(code: string): Promise<VerifyResult>;
   lobbyGate(nonce: string, bucket: LobbyBucket): Promise<GateResult>;
   clearLobbyNonce(): void | Promise<void>;
@@ -39,6 +41,10 @@ export class InviteOtpDO extends DurableObject<Env> implements OtpApi {
 
   issue(): Promise<IssueResult> {
     return this.#core.issue();
+  }
+
+  releaseIssue(challengeId: string): void {
+    this.#core.releaseIssue(challengeId);
   }
 
   verify(code: string): Promise<VerifyResult> {
