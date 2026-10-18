@@ -333,7 +333,8 @@ export class SessionCore implements SessionApi {
   /**
    * Checks a session token's nonce hash and org against the stored session. `live`: the current token of a running
    * session. `final`: the token that was current at submit (it may read the receipt, nothing else). A different
-   * nonce is an older grant (`superseded`); no session, or another org, is `token_invalid`.
+   * nonce is an older grant (`superseded`, before and after submit, SR-5/RT-3); no session, another org, or no
+   * nonce at all is `token_invalid`.
    */
   #authorise(meta: Meta | undefined, presented: string, orgId: string): Refusal | 'live' | 'final' {
     if (meta === undefined || meta.orgId !== orgId) return refuse('token_invalid');
@@ -341,7 +342,9 @@ export class SessionCore implements SessionApi {
     if (meta.finalNonceHash !== null && constantTimeEqual(presented, meta.finalNonceHash)) {
       return 'final';
     }
-    return refuse(meta.nonceHash === null ? 'token_invalid' : 'superseded');
+    return refuse(
+      meta.nonceHash === null && meta.finalNonceHash === null ? 'token_invalid' : 'superseded',
+    );
   }
 
   /** Past `deadline + 60 s` a running session is finalised on the spot (the alarm may run late). */
@@ -365,7 +368,9 @@ export class SessionCore implements SessionApi {
   #view(meta: Meta, now: number): View {
     const pkg = this.#pkg();
     const served = this.#served();
-    const answers = finished(meta) ? this.#finalAnswers() : this.#answers(pkg);
+    // A finished session shows its receipt and no answer text (SEC-C1b-5): the final answers stay in the object and in
+    // final.json, never in a response after submit.
+    const answers = finished(meta) ? new Map<number, AnswerState>() : this.#answers(pkg);
     const viewAnswers: View['answers'] = [];
     for (const position of [...answers.keys()].sort((a, b) => a - b)) {
       const answer = answers.get(position);

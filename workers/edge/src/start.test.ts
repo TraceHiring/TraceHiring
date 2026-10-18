@@ -327,6 +327,56 @@ describe('GET /v1/session/items/:pos', () => {
   });
 });
 
+describe('session tokens after submit (SR-5, RT-3; SEC-C1b-5)', () => {
+  const submit = (h: SessionRouteHarness, token: string, streamId: string, finalSeq: number) =>
+    h.request('POST', '/v1/session/submit', { token, json: { streamId, finalSeq } });
+
+  it('an older token that a resume replaced is 401 superseded after submit too', async () => {
+    const h = await sessionHarness();
+    const first = await h.startSession();
+    h.clock.ms += 31_000;
+    const second = await h.startSession();
+    const before = await h.request('POST', '/v1/session/attach', { token: first.token });
+    expect(await before.json()).toEqual({ error: 'superseded' });
+
+    h.clock.ms += 1000;
+    expect((await submit(h, second.token, second.view.streamId, 0)).status).toBe(200);
+    const after = await h.request('POST', '/v1/session/attach', { token: first.token });
+    expect(after.status).toBe(401);
+    expect(await after.json()).toEqual({ error: 'superseded' });
+    // The token that was current at submit still reads its receipt.
+    expect((await h.request('POST', '/v1/session/attach', { token: second.token })).status).toBe(
+      200,
+    );
+  });
+
+  it('attach after submit shows the receipt and no answer text', async () => {
+    const h = await sessionHarness();
+    const { token, view } = await h.startSession();
+    const answer = 'synthetic answer text kept in the object';
+    const edits = [
+      { seq: 1, t: 100, kind: 'answer.text', item: WRITTEN, p: 0, d: 0, i: answer },
+      { seq: 2, t: 200, kind: 'answer.choice', item: 1, option: 'a' },
+    ] as Parameters<typeof postEvents>[3];
+    expect((await postEvents(h, token, view.streamId, edits)).status).toBe(200);
+    const live = await h.request('POST', '/v1/session/attach', { token });
+    const liveView = ((await live.json()) as { view: { answers: unknown[]; streamId: string } })
+      .view;
+    expect(liveView.answers).toHaveLength(2);
+
+    h.clock.ms += 1000;
+    const receipt = await (await submit(h, token, liveView.streamId, 0)).json();
+
+    const res = await h.request('POST', '/v1/session/attach', { token });
+    expect(res.status).toBe(200);
+    const raw = await res.text();
+    expect(raw).not.toContain(answer);
+    const shown = (JSON.parse(raw) as { view: { answers: unknown[]; receipt: unknown } }).view;
+    expect(shown.answers).toEqual([]);
+    expect(shown.receipt).toEqual(receipt);
+  });
+});
+
 describe('session/start closes the photo step before it reads the photo (C1a SEC-1)', () => {
   const photoBody = (sha256: string) => ({ rulesAcknowledged: true, photo: { sha256 } });
   const count = (calls: string[], name: string) => calls.filter((c) => c === name).length;
