@@ -250,6 +250,47 @@ describe('delivery retries (AT-D27)', () => {
     expect(typeof data.sessionId).toBe('string');
   });
 
+  it('a delivery killed mid-attempt keeps counting; past 24 h the alarm marks failed once and stops (SEC-C1b-3)', async () => {
+    const h = await coreHarness();
+    // A process that dies inside the attempt: the evidence write never returns, so the bookkeeping after the attempt
+    // never runs and the lease stays in storage.
+    h.evidence.bucket.put = () => new Promise<never>(() => undefined);
+    const settled = (p: Promise<unknown>) =>
+      Promise.race([p.then(() => true), new Promise((r) => setTimeout(() => r(false), 50))]);
+    const lease = (): { state: string; attempts: number; leaseUntil: number | null } | undefined =>
+      h.kv.get<{ mirror: { state: string; attempts: number; leaseUntil: number | null } }>('meta')
+        ?.mirror;
+    const { view } = await startCore(h);
+    h.clock.ms += 1000;
+    const submittedAt = h.clock.ms;
+    expect(await settled(h.core.submit(AUTH, { streamId: view.streamId, finalSeq: 0 }))).toBe(
+      false,
+    );
+    expect(lease()).toMatchObject({ state: 'pending', attempts: 1 });
+    expect(lease()?.leaseUntil).toBe(submittedAt + MIRROR_LEASE_MS);
+    expect(h.alarm.at).toBe(submittedAt + MIRROR_LEASE_MS);
+
+    // The lease runs out and the alarm retries; that attempt dies too, and it is counted when the lease is taken.
+    h.clock.ms = submittedAt + MIRROR_LEASE_MS;
+    expect(await settled(h.core.alarm())).toBe(false);
+    expect(lease()).toMatchObject({ state: 'pending', attempts: 2 });
+
+    // Past 24 h from submit the next alarm gives up in the lease transaction: failed, logged once, nothing sent,
+    // no further alarm.
+    h.clock.ms = submittedAt + MIRROR_GIVE_UP_MS;
+    expect(await settled(h.core.alarm())).toBe(true);
+    expect(lease()).toMatchObject({ state: 'failed', leaseUntil: null });
+    expect(h.alarm.at).toBeNull();
+    expect(await settled(h.core.alarm())).toBe(true);
+    expect(h.queue.sent).toEqual([]);
+    const logged = h.lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ level: 'error', event: 'session.mirror_failed' });
+    const data = logged[0]?.data as Record<string, unknown>;
+    expect(Object.keys(data).sort()).toEqual(['n', 'sessionId']);
+    expect(data.n).toBe(lease()?.attempts);
+  });
+
   it('a submit while a delivery is in flight does not send a second time (lease)', async () => {
     const h = await coreHarness();
     let release: () => void = () => undefined;

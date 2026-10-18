@@ -26,7 +26,7 @@ import {
 } from '@trace/shared/contracts/candidate';
 import type { Logger } from '@trace/shared/log';
 import type { z } from 'zod';
-import { constantTimeEqual, sha256Hex, sha256HexBytes } from './encoding.js';
+import { constantTimeEqual, sha256Hex, sha256HexBytes, utf8 } from './encoding.js';
 import type { SyncKvLike } from './otp-core.js';
 import {
   applyAnswer,
@@ -54,6 +54,22 @@ export const MIRROR_RETRY_EVERY_MS = 5 * 60_000;
 export const MIRROR_GIVE_UP_MS = 24 * 60 * 60_000;
 /** How long one delivery attempt holds the mirror before another path may try again (object reset mid-send). */
 export const MIRROR_LEASE_MS = 30_000;
+
+/**
+ * Per-session storage caps (SEC-C1b-2), counted in the object's storage so they survive a restart: at most 50 000
+ * stored events and 20 MB of stored event bytes (UTF-8 of each stored event's JSON). A batch that would pass either is
+ * refused whole with 413 `too_large`. They keep the finalise pass and `events.ndjson` inside the object's memory.
+ */
+export const MAX_STORED_EVENTS = 50_000;
+export const MAX_STORED_EVENT_BYTES = 20 * 1024 * 1024;
+/**
+ * Heartbeat thinning (SEC-C1b-2): a token bucket of `HEARTBEAT_BURST` stored heartbeats, refilled at one per 5 s of the
+ * object's time. A heartbeat without a token is acknowledged (the stream's `seq` advances, dedupe holds) but not stored
+ * and takes no `gseq`. The honest cadence (one per 10 s) never empties the bucket, so it is never thinned; a flood
+ * stores at most one heartbeat per 5 s after the burst, which keeps every 10 s coverage window covered.
+ */
+export const HEARTBEAT_STORE_EVERY_MS = 5_000;
+export const HEARTBEAT_BURST = 12;
 
 /** Per-session request limits in fixed windows (§4.2): events 5 batches/s; attach and submit 6/min; items 60/min. */
 export const SESSION_LIMITS = {
@@ -203,6 +219,10 @@ interface Meta {
     nextAt: number | null;
     leaseUntil: number | null;
   };
+  /** Stored events and their bytes (SEC-C1b-2); absent until the first stored event. */
+  stored?: { events: number; bytes: number };
+  /** The heartbeat bucket (SEC-C1b-2): tokens left at `at`; absent means a full bucket. */
+  heartbeats?: { tokens: number; at: number };
 }
 
 interface StreamRow {
@@ -244,6 +264,9 @@ export const evidenceKeys = (orgId: string, sessionId: string) => ({
   events: `sessions/${orgId}/${sessionId}/events.ndjson`,
   mirror: `sessions/${orgId}/${sessionId}/mirror.json`,
 });
+
+/** The stored size of one event: the UTF-8 bytes of its JSON (SEC-C1b-2). */
+const storedBytes = (event: StoredEvent): number => utf8(JSON.stringify(event)).byteLength;
 
 export const mirrorBackoffMs = (failures: number): number =>
   MIRROR_BACKOFF_MS[failures - 1] ?? MIRROR_RETRY_EVERY_MS;
@@ -564,7 +587,10 @@ export class SessionCore implements SessionApi {
     return result;
   }
 
-  /** Serves one prompt; the first serve stamps `served_at` (server time). */
+  /**
+   * Serves one prompt; the first serve stamps `served_at` (server time). Only until the deadline: the 60 s grace is
+   * for saves already in flight, not for new reads (SEC-C1b-4), so after the deadline it answers `closed`.
+   */
   async item(auth: SessionAuth, position: number): Promise<ItemResult> {
     const presented = await sha256Hex(auth.nonce);
     const result = this.#tx((): ItemResult => {
@@ -573,7 +599,7 @@ export class SessionCore implements SessionApi {
       const who = this.#authorise(stored, presented, auth.orgId);
       if (typeof who !== 'string' || stored === undefined) return who as Refusal;
       const meta = this.#lazyFinalise(stored, now);
-      if (finished(meta)) return refuse('closed');
+      if (finished(meta) || now > meta.deadlineAt) return refuse('closed');
       const limited = this.#limit('items', now);
       if (limited !== null) return limited;
       const item = this.#items(this.#pkg()).get(position);
@@ -655,6 +681,12 @@ export class SessionCore implements SessionApi {
     let gseq = meta.gseqHw;
     let lenMismatch = meta.lenMismatch;
     let gap = false;
+    const bucket = meta.heartbeats ?? { tokens: HEARTBEAT_BURST, at: now };
+    let tokens = Math.min(
+      HEARTBEAT_BURST,
+      bucket.tokens + Math.max(0, now - bucket.at) / HEARTBEAT_STORE_EVERY_MS,
+    );
+    let addedBytes = 0;
     for (const event of batch.events) {
       if (event.seq <= hw) continue;
       if (event.seq !== hw + 1) {
@@ -662,6 +694,14 @@ export class SessionCore implements SessionApi {
         break;
       }
       const { seq, t, ...body } = event;
+      if (body.kind === 'heartbeat') {
+        if (tokens < 1) {
+          // Acknowledged, not stored (SEC-C1b-2).
+          hw = seq;
+          continue;
+        }
+        tokens -= 1;
+      }
       const next = gseq + 1;
       if (isAnswer(body)) {
         const item = items.get(body.item);
@@ -675,24 +715,38 @@ export class SessionCore implements SessionApi {
       } else if (body.kind === 'signal' && body.item !== null && !items.has(body.item)) {
         throw new BatchRejected();
       }
-      accepted.push({
+      const stored: StoredEvent = {
         gseq: next,
         streamId: batch.streamId,
         seq,
         t,
         tServer: now,
         body: body as EventBody,
-      });
+      };
+      addedBytes += storedBytes(stored);
+      accepted.push(stored);
       gseq = next;
       hw = seq;
+    }
+    const counted = meta.stored ?? { events: 0, bytes: 0 };
+    const total = { events: counted.events + accepted.length, bytes: counted.bytes + addedBytes };
+    if (total.events > MAX_STORED_EVENTS || total.bytes > MAX_STORED_EVENT_BYTES) {
+      // Refused whole: nothing of the batch is kept and the high-water mark does not move (SEC-C1b-2).
+      return refuse('too_large');
     }
     for (const event of accepted) this.#kv.put(K.event(event.gseq), event);
     for (const [position, state] of answers) {
       if (state !== undefined) this.#kv.put(K.answer(position), state);
     }
-    if (accepted.length > 0) {
+    if (hw !== stream.hw) {
       this.#kv.put<StreamRow>(K.stream(batch.streamId), { ...stream, hw });
-      this.#kv.put<Meta>(K.meta, { ...meta, gseqHw: gseq, lenMismatch });
+      this.#kv.put<Meta>(K.meta, {
+        ...meta,
+        gseqHw: gseq,
+        lenMismatch,
+        stored: total,
+        heartbeats: { tokens, at: now },
+      });
     }
     if (gap) return refuse('out_of_order', { ackSeq: hw });
     return {
@@ -847,22 +901,46 @@ export class SessionCore implements SessionApi {
    * send (so any stage can rebuild its input, L-18). Success marks `acked`. A failure counts an attempt and schedules
    * the next (5 s, 15 s, 60 s, then every 5 min); 24 h after submit the state becomes `failed` and
    * `session.mirror_failed` is logged. A lease stops two paths (submit and alarm) from sending at once.
+   *
+   * The attempt is counted and the 24 h limit checked when the lease is taken (SEC-C1b-3): an object that dies inside
+   * an attempt leaves its lease behind and never runs the bookkeeping after it, so the retry after the lease must
+   * still count, and still give up.
    */
   async #deliver(): Promise<void> {
-    const taken = this.#tx((): Meta | null => {
+    const taken = this.#tx((): Meta | { gaveUp: number; sessionId: string } | null => {
       const meta = this.#meta();
       const now = this.#now();
       if (meta === undefined || meta.mirror.state !== 'pending') return null;
       if (meta.mirror.leaseUntil !== null && meta.mirror.leaseUntil > now) return null;
       if (meta.mirror.nextAt !== null && meta.mirror.nextAt > now) return null;
+      if (now - (meta.submittedAt ?? now) >= MIRROR_GIVE_UP_MS) {
+        const attempts = meta.mirror.attempts;
+        this.#kv.put<Meta>(K.meta, {
+          ...meta,
+          mirror: { state: 'failed', attempts, nextAt: null, leaseUntil: null },
+        });
+        return { gaveUp: attempts, sessionId: meta.sessionId };
+      }
       const leased: Meta = {
         ...meta,
-        mirror: { ...meta.mirror, leaseUntil: now + MIRROR_LEASE_MS },
+        mirror: {
+          ...meta.mirror,
+          attempts: meta.mirror.attempts + 1,
+          leaseUntil: now + MIRROR_LEASE_MS,
+        },
       };
       this.#kv.put(K.meta, leased);
       return leased;
     });
     if (taken === null) return;
+    const failedNow = 'gaveUp' in taken ? taken.gaveUp : await this.#attempt(taken);
+    if (failedNow !== null) {
+      this.#log.error('session.mirror_failed', { sessionId: taken.sessionId, n: failedNow });
+    }
+  }
+
+  /** One leased attempt and its bookkeeping; returns the attempt count when the mirror just became `failed`. */
+  async #attempt(taken: Meta): Promise<number | null> {
     await this.#schedule();
     let delivered = false;
     try {
@@ -876,11 +954,12 @@ export class SessionCore implements SessionApi {
     } catch {
       delivered = false;
     }
-    const failedNow = this.#tx((): number | null => {
+    return this.#tx((): number | null => {
       const meta = this.#meta();
       if (meta === undefined) return null;
       const now = this.#now();
-      const attempts = meta.mirror.attempts + 1;
+      // Counted when the lease was taken.
+      const attempts = meta.mirror.attempts;
       if (delivered) {
         this.#kv.put<Meta>(K.meta, {
           ...meta,
@@ -903,9 +982,6 @@ export class SessionCore implements SessionApi {
       });
       return giveUp ? attempts : null;
     });
-    if (failedNow !== null) {
-      this.#log.error('session.mirror_failed', { sessionId: taken.sessionId, n: failedNow });
-    }
   }
 
   /** The one alarm slot: the deadline alarm while running, else the next mirror retry (or lease end). */
