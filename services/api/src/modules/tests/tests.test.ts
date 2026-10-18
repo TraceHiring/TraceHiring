@@ -242,6 +242,34 @@ describe('PUT /v1/orgs/:orgId/tests/:testId', () => {
     expect(res.status).toBe(404);
     expect(db.calls.filter((c) => c.method !== 'select')).toEqual([]);
   });
+
+  it('only an owner, admin or recruiter may create or edit: a reviewer is 404, an aal1 admin 403 (spec review r3a #4)', async () => {
+    const cases: { roles: string[]; status: number; code: string }[] = [
+      { roles: ['reviewer'], status: 404, code: 'not_found' },
+      { roles: ['hiring_manager'], status: 404, code: 'not_found' },
+      { roles: ['admin'], status: 403, code: 'aal2_required' },
+    ];
+    for (const { roles, status, code } of cases) {
+      const db = authoringDb();
+      const { call } = testsApp(db);
+      const created = TestDetailResponse.parse(await (await create(call)).json());
+      const member = rowsOf(db, 'memberships')[0];
+      if (member === undefined) throw new Error('fixture: no membership row');
+      member.roles = roles;
+      const before = db.calls.length;
+      for (const res of [
+        await call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, draftBody()),
+        await create(call),
+      ]) {
+        expect(res.status, roles.join()).toBe(status);
+        expect(await res.text()).toBe(`{"error":{"code":"${code}"}}`);
+      }
+      expect(db.calls.slice(before).map((c) => `${c.method} ${c.table}`)).toEqual([
+        'select memberships',
+        'select memberships',
+      ]);
+    }
+  });
 });
 
 describe('the tests router: caller and contract failures', () => {

@@ -45,7 +45,7 @@ import {
 } from './org-context.js';
 import { buildPackage, encodePackage, packageKey } from './package.js';
 
-/** The roles that may publish (spec §6.2); the guard trigger and RLS still decide the UPDATE itself. */
+/** The roles that may create, edit and publish (spec §6.2); the guard triggers and RLS still decide each write. */
 const PUBLISHERS: readonly Role[] = ['org_owner', 'admin', 'recruiter'];
 
 /** The R2 package bucket as the publish step uses it (`PACKAGES`, trace-packages-<env>). */
@@ -157,6 +157,7 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
     handleOrg(async () => {
       const orgId = pathId(c.req.param('orgId'));
       const ctx = await deps.org.context(c.req.raw, c.env);
+      await requireRole(ctx.rest, ctx.caller, orgId, PUBLISHERS);
       const req = parseBody(CreateTestRequest, await readJson(c.req.raw));
       let workspaceId = req.workspaceId;
       if (workspaceId === undefined) {
@@ -208,6 +209,8 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
       const orgId = pathId(c.req.param('orgId'));
       const testId = pathId(c.req.param('testId'));
       const ctx = await deps.org.context(c.req.raw, c.env);
+      // Spec review r3a #4: an assigned reviewer reads the draft under RLS, so the authoring roles are checked first.
+      await requireRole(ctx.rest, ctx.caller, orgId, PUBLISHERS);
       const body = await readJson(c.req.raw);
       if (typeof body !== 'object' || body === null || Array.isArray(body))
         return orgFail('bad_request');
