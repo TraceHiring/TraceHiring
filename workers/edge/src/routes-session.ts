@@ -238,7 +238,9 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
         startedAt: started.startedAt,
       });
       await otpCall(() => otp.clearLobbyNonce());
-      if (verifiedBytes !== null) await dropWorkingPhoto(c, claims.org_id, grant.sessionId);
+      // The working copy is never the session's photo once start succeeded: pinned, superseded by the stored photo, or
+      // uploaded and then declined on the skip path (rule 8: no face photo kept after declining; re-review note 1).
+      await dropWorkingPhoto(c, claims.org_id, grant.sessionId);
       if (started.kind === 'submitted') {
         return sendJson(c, SessionStartRes, { state: 'submitted', receipt: started.receipt });
       }

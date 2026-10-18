@@ -569,6 +569,20 @@ describe('session start pins the photo from the working key (SEC-1 residual)', (
     });
   });
 
+  it('a start that skips the photo removes an uploaded working copy (rule 8: no face photo kept after declining)', async () => {
+    const h = await sessionHarness();
+    const lobby = await h.login();
+    await uploadPhoto(h, lobby, testJpeg(640, 480));
+    expect(h.evidence.objects.has(UPLOAD_KEY)).toBe(true);
+
+    await started(await tryStart(h, lobby, startBody));
+
+    expect(h.evidence.objects.has(UPLOAD_KEY)).toBe(false);
+    expect(h.evidence.objects.has(PHOTO_KEY)).toBe(false);
+    expect(storedPhoto(h)).toBeNull();
+    expect(photoOps(h)).toEqual([`put:${UPLOAD_KEY}`, `delete:${UPLOAD_KEY}`]);
+  });
+
   it('a resume declaring the pinned photo works after the working copy was removed', async () => {
     const h = await sessionHarness();
     const lobby = await h.login();
