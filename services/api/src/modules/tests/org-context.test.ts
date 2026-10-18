@@ -1,8 +1,9 @@
 // R3-1 (security review m4): the viewer id, aal and amr come only from a Supabase access token the api verified
 // (signature against the JWKS, iss, aud, exp, role). Keys are generated at run time; the JWKS is served by a fake fetch.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { base64UrlEncode, utf8 } from '../candidate/encoding.js';
 import {
+  createOrgDeps,
   createRest,
   createSupabaseVerifier,
   restErrorCode,
@@ -205,5 +206,40 @@ describe('fetch is never called as a method (workerd: "Illegal invocation")', ()
     await holder.f('https://api.test/x');
     expect(seen).toHaveLength(1);
     expect(seen[0] === undefined || seen[0] === globalThis).toBe(true);
+  });
+});
+
+// Spec review r3 reports #1 and r3a #5b: the production default, with no injected fetcher, calls the global fetch
+// unbound. The stub refuses a foreign `this` the way workerd's fetch does ("Illegal invocation").
+describe('createOrgDeps() default fetch', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reaches JWKS and PostgREST through the global fetch, never as a method call', async () => {
+    const issuer = await makeIssuer();
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', function (this: unknown, input: string | URL | Request) {
+      if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation');
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      urls.push(url.split('?')[0] ?? url);
+      if (url.endsWith('/auth/v1/.well-known/jwks.json'))
+        return Promise.resolve(Response.json(issuer.jwks));
+      return Promise.resolve(Response.json([]));
+    });
+    const nowSec = Math.floor(Date.now() / 1000);
+    const jwt = await issuer.sign(goodClaims({ iat: nowSec, exp: nowSec + 600 }));
+    const deps = createOrgDeps();
+    const env = {
+      SUPABASE_URL: SUPA,
+      SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+    } as unknown as Env;
+    const ctx = await deps.context(
+      new Request('https://api.test/v1/orgs/x', { headers: { authorization: `Bearer ${jwt}` } }),
+      env,
+    );
+    expect(ctx.caller.userId).toBe(USER);
+    expect(await ctx.rest.select('tests', { select: 'id' })).toEqual([]);
+    expect(urls).toEqual([`${SUPA}/auth/v1/.well-known/jwks.json`, `${SUPA}/rest/v1/tests`]);
   });
 });
