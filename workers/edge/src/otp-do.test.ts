@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { constantTimeEqual, sha256Hex } from './encoding.js';
 import { createHarness, LINK, MapKv } from './edge.test-helpers.js';
 import {
-  ATTEMPTS_PER_CHALLENGE,
   CODE_TTL_MS,
+  FAILURES_BEFORE_LOCK,
   LOCK_MS,
   OtpCore,
   RESEND_AFTER_MS,
@@ -123,7 +123,7 @@ describe('OtpCore verify (attempts, lock, expiry)', () => {
   it('allows 5 attempts per challenge, then locks for 15 minutes', async () => {
     const { core, clock } = setup();
     const r = issued(await core.issue());
-    for (let i = 1; i < ATTEMPTS_PER_CHALLENGE; i += 1) {
+    for (let i = 1; i < FAILURES_BEFORE_LOCK; i += 1) {
       expect(await core.verify(wrong(r.code))).toEqual({ ok: false, error: 'otp_wrong' });
     }
     expect(await core.verify(wrong(r.code))).toEqual({
@@ -142,13 +142,42 @@ describe('OtpCore verify (attempts, lock, expiry)', () => {
     expect((await core.verify(next.code)).ok).toBe(true);
   });
 
-  it('the attempt count is per challenge: 4 wrong, a new code, 4 wrong does not lock', async () => {
+  it('failures count per invitation across codes: 4 wrong, +30 s, a new code, 1 wrong locks (SEC-3)', async () => {
+    const { core, clock } = setup();
+    const a = issued(await core.issue());
+    for (let i = 0; i < 4; i += 1) {
+      expect(await core.verify(wrong(a.code))).toEqual({ ok: false, error: 'otp_wrong' });
+    }
+    clock.ms += 30_000;
+    const b = issued(await core.issue());
+    expect(await core.verify(wrong(b.code))).toMatchObject({
+      ok: false,
+      error: 'otp_locked',
+      retryAfterSeconds: 900,
+    });
+    expect(await core.verify(b.code)).toMatchObject({ ok: false, error: 'otp_locked' });
+  });
+
+  it('a correct code resets the failure count (SEC-3)', async () => {
     const { core, clock } = setup();
     const a = issued(await core.issue());
     for (let i = 0; i < 4; i += 1) await core.verify(wrong(a.code));
+    expect((await core.verify(a.code)).ok).toBe(true);
     clock.ms += 31_000;
     const b = issued(await core.issue());
     for (let i = 0; i < 4; i += 1) {
+      expect(await core.verify(wrong(b.code))).toEqual({ ok: false, error: 'otp_wrong' });
+    }
+    expect(await core.verify(wrong(b.code))).toMatchObject({ ok: false, error: 'otp_locked' });
+  });
+
+  it('the end of a lock starts a fresh count of 5 (SEC-3)', async () => {
+    const { core, clock } = setup();
+    const a = issued(await core.issue());
+    for (let i = 0; i < FAILURES_BEFORE_LOCK; i += 1) await core.verify(wrong(a.code));
+    clock.ms += LOCK_MS + 1;
+    const b = issued(await core.issue());
+    for (let i = 1; i < FAILURES_BEFORE_LOCK; i += 1) {
       expect(await core.verify(wrong(b.code))).toEqual({ ok: false, error: 'otp_wrong' });
     }
     expect((await core.verify(b.code)).ok).toBe(true);

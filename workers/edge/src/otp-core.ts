@@ -1,7 +1,8 @@
 // The InviteOtpDO logic (specs/d1-demo-slice.md §4.2, §4.3, §4.8 RT-6). One object per invitation
 // (`idFromName(invitation_id)`, never an IP, Q47). It issues a 6-digit code valid 10 minutes, stored salted-hashed;
-// a new challenge replaces the old; resend after 30 s and at most 3 codes per 10 minutes; 5 attempts per challenge,
-// then a 15-minute lock; the compare is constant-time. A successful verify consumes the challenge and stores the hash
+// a new challenge replaces the old; resend after 30 s and at most 3 codes per 10 minutes; the 5th wrong code since the
+// last success or the end of the last lock, whichever code it was for, locks for 15 minutes (counted per invitation, so
+// a new code does not reset it, SEC-3); the compare is constant-time. A successful verify consumes the challenge and stores the hash
 // of a fresh lobby nonce, so a new login kills the previous lobby token. Lobby requests check that hash and count
 // against a per-route limit here too. Storage is the object's synchronous SQLite-backed KV; every decision is made in
 // one synchronous block after the async hashing, so concurrent calls cannot interleave a read and a write.
@@ -11,7 +12,8 @@ export const CODE_TTL_MS = 10 * 60 * 1000;
 export const RESEND_AFTER_MS = 30 * 1000;
 export const ISSUE_WINDOW_MS = 10 * 60 * 1000;
 export const ISSUES_PER_WINDOW = 3;
-export const ATTEMPTS_PER_CHALLENGE = 5;
+/** Wrong codes per invitation (across codes) before the lock; a right code or the end of a lock resets the count. */
+export const FAILURES_BEFORE_LOCK = 5;
 export const LOCK_MS = 15 * 60 * 1000;
 export const PHOTO_UPLOADS_PER_SESSION = 3;
 export const RATE_WINDOW_MS = 60 * 1000;
@@ -39,7 +41,6 @@ interface Challenge {
   hash: string;
   issuedAt: number;
   expiresAt: number;
-  attempts: number;
 }
 
 interface RateWindow {
@@ -51,6 +52,7 @@ const K = {
   challenge: 'otp:challenge',
   issues: 'otp:issues',
   lockUntil: 'otp:lock_until',
+  failures: 'otp:failures',
   lobbyNonce: 'lobby:nonce_hash',
   photoUploads: 'photo:uploads',
   photosClosed: 'photo:closed',
@@ -155,7 +157,6 @@ export class OtpCore {
       hash,
       issuedAt: now,
       expiresAt: now + CODE_TTL_MS,
-      attempts: 0,
     };
     this.#kv.put(K.challenge, challenge);
     this.#kv.put(K.issues, [...issues, now]);
@@ -188,18 +189,21 @@ export class OtpCore {
       this.#kv.delete(K.challenge);
       return { ok: false, error: 'otp_wrong' };
     }
-    const attempts = challenge.attempts + 1;
     if (constantTimeEqual(candidate, challenge.hash)) {
       this.#kv.delete(K.challenge);
+      this.#kv.delete(K.failures);
       this.#kv.put(K.lobbyNonce, nonceHash);
       return { ok: true, nonce };
     }
-    if (attempts >= ATTEMPTS_PER_CHALLENGE) {
+    // Wrong code: counted per invitation, across codes (SEC-3).
+    const failures = (this.#kv.get<number>(K.failures) ?? 0) + 1;
+    if (failures >= FAILURES_BEFORE_LOCK) {
       this.#kv.delete(K.challenge);
+      this.#kv.delete(K.failures); // the end of this lock starts a fresh count
       this.#kv.put(K.lockUntil, now + LOCK_MS);
       return { ok: false, error: 'otp_locked', retryAfterSeconds: LOCK_MS / 1000 };
     }
-    this.#kv.put(K.challenge, { ...challenge, attempts });
+    this.#kv.put(K.failures, failures);
     return { ok: false, error: 'otp_wrong' };
   }
 
