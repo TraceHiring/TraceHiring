@@ -50,6 +50,21 @@ the mirror stage `head`s the canonical key and writes `media_objects` only when 
 
 Combined tip after placing: edge 22 files / 384 tests, api 33 / 379, all green; tsc, eslint, prettier, check-boundaries green.
 
+## Confirming re-review of the fixes (Sonnet, 2026-10-19): CONFIRMED WITH NOTES
+Scope `git diff 99829b8 67d9d1f -- workers/edge services/api pnpm-lock.yaml`, read from code and test text (no run).
+Every "fix now" row is fixed as dispositioned, each regression test would fail on revert, no new Critical/High/Medium
+defect; tests changed for old behaviour were moved to the working key, not loosened. Notes and lead dispositions:
+1. Low: the skip path left an uploaded working copy (the face photo) in R2 after the candidate declined. **Fixed**
+   `7041b14` (test first: `start.test.ts` › "a start that skips the photo removes an uploaded working copy …"); the
+   working copy is now removed on every successful start.
+2. Low: after a cap refusal, `submit` with `finalSeq > hw` is 409, so edits after the cap are lost and only the
+   auto-submit ends the session. Needs a flooding client (heartbeats are thinned). **Accepted, recorded in spec 4e.**
+3. Note: no test of attach after auto-submit; the same `finished(meta)` gate covers it. **Accepted.**
+4. Note: the 20 MB cap is tested on fakes only. **Carried to Chat C** (R2 jobs): measure finalise memory in workerd at
+   the cap against the 128 MB limit.
+
+Full `pnpm verify` exit 0 on `67d9d1f` (before note 1's fix; re-run on the merge into `d1/integration`).
+
 ## Writer decisions 1-14 (lead)
 1 **stands** with SEC-C1b-5 (read-only slot, receipt only; spec §4.3 amended). 2 **stands** (replay needs the candidate's
 own lobby token; RT-11). 3, 4 agree. 5 **stands** (`Math.min(grant.startedAt, now)` never extends time; §4.4 amended).
