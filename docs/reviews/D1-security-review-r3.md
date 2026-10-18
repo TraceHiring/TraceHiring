@@ -34,3 +34,9 @@ TRACE_ENV or production → 404 before auth; vendors re-check on every send). Ro
 
 Not checked (other scopes): the SQL bodies of the grant/resolve functions and guard triggers (database-reviewer); the
 edge side of the candidate flow (C1); real PostgREST/JWKS/DO/R2 (`e2e-local`); `pnpm audit --prod`.
+
+## Resolution (lead, 2026-10-18, on d1/r3-merge)
+
+- **#1 Medium: fixed** in `05dec63` (apiDbSsl; api-db-tls.test.ts, 16 cases, red first).
+- **#2 Low: fixed** in `0cc6f1c` (requireRole org_owner/admin/recruiter before the bucket lookup and every read; a reviewer, a removed membership and an aal1 admin leave `bucket.puts` empty; red first). The "better" option (write only the package rebuilt from the frozen rows) is not taken: the R2 write must precede the guarded UPDATE so a published version always has its package; a stale put by an authorised publisher is still caught by the post-UPDATE re-check (rewrite or retire) and the SessionDO hash check.
+- N1 (org CORS) is due with R5; N2 accepted for D1; N3 open (check before turning on invocation logs).

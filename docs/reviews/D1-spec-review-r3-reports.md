@@ -31,3 +31,15 @@ integrity row below the cutoff, requires `review_state = reviewed` in the query 
 `not_used_below_cutoff` carry only `state`; 404 for malformed, other-org and hidden ids with constant bodies; `org_id`
 on every select; strict parsing of rows and answers; the review queue checks aal2 before any DB call; no log calls and
 no service key in the three modules.
+
+## Resolution (lead, 2026-10-18, on d1/r3-merge)
+
+| # | State |
+| --- | --- |
+| 1 | Fixed: `7734f06` (createOrgDeps never calls fetch as a method) and the mount in `cbfe5ac`. |
+| 2 | Fixed: `route-inventory.test.ts` (AT-D13) in `cbfe5ac`. |
+| 3 | Fixed: spec revision 4b (`5709fad`) amends the §6.2 sentence. |
+| 4a | Fixed: `6b97647` (integrity card fails closed past the timeline cap). |
+| 4b | Fixed: `cd2618f` (results list and review queue read one past the cap and answer 503 `unavailable`; tests first). |
+| 5 | Fixed: `88be6b8` (log hygiene over all 18 org routes, invitations, the outbox and /media/:jti; mutation-checked). |
+| 6 | Noted; the later fixes are tests first. |
