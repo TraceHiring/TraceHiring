@@ -19,6 +19,8 @@ export interface OtpApi {
   lobbyGate(nonce: string, bucket: LobbyBucket): Promise<GateResult>;
   clearLobbyNonce(): void | Promise<void>;
   takePhotoSlot(): PhotoSlot | Promise<PhotoSlot>;
+  /** Gives back the slot of an upload whose R2 put failed (SEC-4). */
+  releasePhotoSlot(n: number): void | Promise<void>;
   /** Set-once: no photo slot after this (session start calls it before reading the photo, SEC-1). */
   closePhotos(): void | Promise<void>;
 }
@@ -53,6 +55,10 @@ export class InviteOtpDO extends DurableObject<Env> implements OtpApi {
 
   takePhotoSlot(): PhotoSlot {
     return this.#core.takePhotoSlot();
+  }
+
+  releasePhotoSlot(n: number): void {
+    this.#core.releasePhotoSlot(n);
   }
 
   closePhotos(): void {

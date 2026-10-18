@@ -252,6 +252,23 @@ describe('OtpCore lobby nonce and limits', () => {
     expect(core.takePhotoSlot()).toEqual({ ok: false, error: 'rate_limited' });
   });
 
+  it('releasePhotoSlot gives back only the slot it names, once, never below zero (SEC-4)', () => {
+    const { core } = setup();
+    core.releasePhotoSlot(1); // nothing taken: no-op
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 1 });
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 2 });
+    core.releasePhotoSlot(2);
+    core.releasePhotoSlot(2); // a second release of the same slot changes nothing
+    core.releasePhotoSlot(3); // a slot not taken: no-op
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 2 });
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 3 });
+    expect(core.takePhotoSlot()).toEqual({ ok: false, error: 'rate_limited' });
+    // Releasing an older slot while a later one is held frees exactly that one.
+    core.releasePhotoSlot(1);
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 1 });
+    expect(core.takePhotoSlot()).toEqual({ ok: false, error: 'rate_limited' });
+  });
+
   it('closePhotos is set-once: every later slot is refused closed, the cap reason no longer matters', () => {
     const { core, kv } = setup();
     expect(core.takePhotoSlot()).toEqual({ ok: true, n: 1 });

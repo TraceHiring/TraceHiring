@@ -247,12 +247,32 @@ export class OtpCore {
     this.#kv.put(K.photosClosed, true);
   }
 
-  /** Takes one of the 3 photo uploads of this invitation's session; `n` is its number (1..3). */
+  #photoSlots(): number[] {
+    const slots = this.#kv.get<unknown>(K.photoUploads);
+    return Array.isArray(slots) ? slots.filter((n): n is number => typeof n === 'number') : [];
+  }
+
+  /**
+   * Takes one of the 3 photo uploads of this invitation's session; `n` is its number (1..3), the lowest one free.
+   * The slots in use are stored as their numbers, so a release gives back exactly the slot it names.
+   */
   takePhotoSlot(): PhotoSlot {
     if (this.#kv.get<boolean>(K.photosClosed) === true) return { ok: false, error: 'closed' };
-    const used = this.#kv.get<number>(K.photoUploads) ?? 0;
-    if (used >= PHOTO_UPLOADS_PER_SESSION) return { ok: false, error: 'rate_limited' };
-    this.#kv.put(K.photoUploads, used + 1);
-    return { ok: true, n: used + 1 };
+    const used = this.#photoSlots();
+    if (used.length >= PHOTO_UPLOADS_PER_SESSION) return { ok: false, error: 'rate_limited' };
+    let n = 1;
+    while (used.includes(n)) n += 1;
+    this.#kv.put(K.photoUploads, [...used, n]);
+    return { ok: true, n };
+  }
+
+  /** Gives back slot `n` after its upload failed to store (SEC-4). A slot not in use is a no-op. */
+  releasePhotoSlot(n: number): void {
+    const used = this.#photoSlots();
+    if (!used.includes(n)) return;
+    this.#kv.put(
+      K.photoUploads,
+      used.filter((slot) => slot !== n),
+    );
   }
 }

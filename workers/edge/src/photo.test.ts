@@ -237,6 +237,28 @@ describe('PUT /v1/lobby/photo (AT-D29)', () => {
     expect(h.evidence.objects.size).toBe(0);
   });
 
+  it('a failed R2 put is 503 and gives its slot back (SEC-4)', async () => {
+    const h = await createHarness();
+    const token = await h.login();
+    const put = h.evidence.bucket.put.bind(h.evidence.bucket);
+    let failures = 2;
+    h.evidence.bucket.put = async (...args: Parameters<typeof put>) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error('r2 down');
+      }
+      return put(...args);
+    };
+    expect((await upload(h, token, jpeg(640, 480))).status).toBe(503);
+    expect((await upload(h, token, jpeg(640, 480))).status).toBe(503);
+    expect(h.evidence.objects.size).toBe(0);
+    for (let n = 1; n <= 3; n += 1) {
+      expect((await upload(h, token, jpeg(640, 480, 64 + n))).status).toBe(200);
+      expect([...h.evidence.objects.values()][0]?.customMetadata?.n).toBe(String(n));
+    }
+    expect((await upload(h, token, jpeg(640, 480))).status).toBe(429);
+  });
+
   it('a missing EVIDENCE binding is 503 and uses no slot', async () => {
     const h = await createHarness();
     const token = await h.login();

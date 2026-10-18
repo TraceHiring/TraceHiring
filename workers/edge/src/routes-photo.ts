@@ -72,6 +72,12 @@ export const mountPhotoRoute = (app: Hono<EdgeEnv>, deps: RouteDeps): void => {
           customMetadata: { sha256, blurred: '1', n: String(slot.n) },
         });
       } catch {
+        // Nothing was stored, so the upload gives its slot back (SEC-4). If that call fails too, the answer is the same.
+        try {
+          await otp.releasePhotoSlot(slot.n);
+        } catch {
+          // keep `unavailable`
+        }
         return fail('unavailable');
       }
       return sendJson(c, PhotoRes, { sha256, bytes: bytes.length });
