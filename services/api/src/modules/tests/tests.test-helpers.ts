@@ -11,6 +11,7 @@ export const ORG = 'a1000000-0000-4000-8000-000000000001';
 export const ORG_B = 'a1000000-0000-4000-8000-000000000003';
 export const WS = 'b1000000-0000-4000-8000-000000000001';
 export const USER = '00000000-0000-4000-8000-000000000005';
+export const MEMBERSHIP = 'd1000000-0000-4000-8000-000000000005';
 export const RULESET = 'c1000000-0000-4000-8000-000000000001';
 export const NOTICE = 'c2000000-0000-4000-8000-000000000001';
 const T0 = '2026-10-17T08:00:00.000+00:00';
@@ -31,6 +32,10 @@ export const authoringDb = () => {
   };
   const db = fakeDb(
     {
+      // The caller is a recruiter of ORG (publish narrows to org_owner, admin and recruiter before any R2 write).
+      memberships: [
+        { id: MEMBERSHIP, org_id: ORG, user_id: USER, status: 'active', roles: ['recruiter'] },
+      ],
       workspaces: [
         { id: WS, org_id: ORG, is_default: true },
         { id: 'b1000000-0000-4000-8000-000000000004', org_id: ORG_B, is_default: true },
@@ -146,9 +151,10 @@ export const callerOf = (patch: Partial<OrgCaller> = {}): OrgCaller => ({
 export const testsApp = (
   db: FakeDb & { rest: OrgContext['rest'] },
   bucket: PackageBucket | null = fakeBucket(),
+  caller: OrgCaller = callerOf(),
 ) => {
   const app = createTestsRoutes({
-    org: { context: async () => ({ caller: callerOf(), rest: db.rest }) },
+    org: { context: async () => ({ caller, rest: db.rest }) },
     packages: () => bucket,
   });
   const call = (method: string, path: string, body?: unknown) =>

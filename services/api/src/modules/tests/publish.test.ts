@@ -199,6 +199,32 @@ describe('POST …/tests/:testId/publish', () => {
     expect(r.status).toBe(503);
   });
 
+  it('checks the caller role before any R2 write: reviewer or no membership is 404, aal1 admin is 403 (security r3 #2)', async () => {
+    const cases: { roles: string[] | null; status: number; code: string }[] = [
+      { roles: ['reviewer'], status: 404, code: 'not_found' },
+      { roles: null, status: 404, code: 'not_found' },
+      { roles: ['admin'], status: 403, code: 'aal2_required' },
+    ];
+    for (const { roles, status, code } of cases) {
+      const s = await setup();
+      const member = rowsOf(s.db, 'memberships')[0];
+      if (member === undefined) throw new Error('fixture: no membership row');
+      if (roles === null) member.status = 'removed';
+      else member.roles = roles;
+      const before = s.db.calls.length;
+      const res = await s.publish();
+      expect(res.status).toBe(status);
+      expect(await errorCode(res)).toBe(code);
+      expect(s.bucket.puts).toEqual([]);
+      expect(s.bucket.objects.size).toBe(0);
+      expect(rowsOf(s.db, 'test_versions').find((v) => v.id === s.versionId)?.status).toBe('draft');
+      // The role check is the first read: nothing about the test or its draft is read or written after it fails.
+      expect(s.db.calls.slice(before).map((c) => `${c.method} ${c.table}`)).toEqual([
+        'select memberships',
+      ]);
+    }
+  });
+
   it('a test the caller cannot see is 404; a malformed body is 400', async () => {
     const s = await setup();
     const res = await s.call(

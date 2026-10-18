@@ -4,7 +4,8 @@
 // reads assigned tests only), the guard triggers own the draft-only rule and the state machine, and no service key
 // exists. Anything the caller cannot see is a 404; errors are constant codes.
 //
-// Publish: the key-free TestPackage is built from the draft's rows, written to R2 `packages/{id}.json`, then the
+// Publish: the caller must hold org_owner, admin or recruiter before anything touches R2 (security review r3 #2);
+// then the key-free TestPackage is built from the draft's rows, written to R2 `packages/{id}.json`, then the
 // guarded UPDATE sets `published` with the api-supplied `content_sha256`; the package is rebuilt from the frozen rows
 // and compared. A mismatch retires the version and answers 500 (fail closed; the SessionDO verifies the hash too).
 import {
@@ -32,6 +33,7 @@ import {
   toDetail,
 } from './authoring.js';
 import { parseBody, readJson } from './http.js';
+import { requireRole, type Role } from './membership.js';
 import {
   RestError,
   handleOrg,
@@ -42,6 +44,9 @@ import {
   type OrgDeps,
 } from './org-context.js';
 import { buildPackage, encodePackage, packageKey } from './package.js';
+
+/** The roles that may publish (spec §6.2); the guard trigger and RLS still decide the UPDATE itself. */
+const PUBLISHERS: readonly Role[] = ['org_owner', 'admin', 'recruiter'];
 
 /** The R2 package bucket as the publish step uses it (`PACKAGES`, trace-packages-<env>). */
 export interface PackageBucket {
@@ -230,6 +235,9 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
       const testId = pathId(c.req.param('testId'));
       const ctx = await deps.org.context(c.req.raw, c.env);
       const req = parseBody(PublishTestRequest, await readJson(c.req.raw));
+      // Security review r3 #2: an assigned reviewer can read the draft (RLS SELECT), so the role check comes before
+      // any R2 write; only the guarded UPDATE below decides the publish itself.
+      await requireRole(ctx.rest, ctx.caller, orgId, PUBLISHERS);
       const bucket = deps.packages(c.env) ?? orgFail('unavailable');
       const test = (await findTest(ctx.rest, orgId, testId)) ?? orgFail('not_found');
       // L-9: the id must be this test's open draft.
