@@ -15,10 +15,16 @@ import {
 /** What the edge routes call on the object (the RPC stub and the test fake both have this shape). */
 export interface OtpApi {
   issue(): Promise<IssueResult>;
+  /** Undoes the current issue when its code could not be sent (SR-2). */
+  releaseIssue(challengeId: string): void | Promise<void>;
   verify(code: string): Promise<VerifyResult>;
   lobbyGate(nonce: string, bucket: LobbyBucket): Promise<GateResult>;
   clearLobbyNonce(): void | Promise<void>;
   takePhotoSlot(): PhotoSlot | Promise<PhotoSlot>;
+  /** Gives back the slot of an upload whose R2 put failed (SEC-4). */
+  releasePhotoSlot(n: number): void | Promise<void>;
+  /** Set-once: no photo slot after this (session start calls it before reading the photo, SEC-1). */
+  closePhotos(): void | Promise<void>;
 }
 
 export class InviteOtpDO extends DurableObject<Env> implements OtpApi {
@@ -37,6 +43,10 @@ export class InviteOtpDO extends DurableObject<Env> implements OtpApi {
     return this.#core.issue();
   }
 
+  releaseIssue(challengeId: string): void {
+    this.#core.releaseIssue(challengeId);
+  }
+
   verify(code: string): Promise<VerifyResult> {
     return this.#core.verify(code);
   }
@@ -51,5 +61,13 @@ export class InviteOtpDO extends DurableObject<Env> implements OtpApi {
 
   takePhotoSlot(): PhotoSlot {
     return this.#core.takePhotoSlot();
+  }
+
+  releasePhotoSlot(n: number): void {
+    this.#core.releasePhotoSlot(n);
+  }
+
+  closePhotos(): void {
+    this.#core.closePhotos();
   }
 }

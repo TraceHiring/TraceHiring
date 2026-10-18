@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { constantTimeEqual, sha256Hex } from './encoding.js';
 import { createHarness, LINK, MapKv } from './edge.test-helpers.js';
 import {
-  ATTEMPTS_PER_CHALLENGE,
   CODE_TTL_MS,
+  FAILURES_BEFORE_LOCK,
   LOCK_MS,
   OtpCore,
   RESEND_AFTER_MS,
@@ -77,13 +77,22 @@ describe('OtpCore issue (resend limits)', () => {
   });
 
   it('a new challenge invalidates the old code', async () => {
-    const { core, clock } = setup();
+    // Injected randomness: the two codes are 111111 and 222222, so the assertion never depends on chance.
+    const clock = { ms: T0 };
+    const words = [111_111, 222_222];
+    const core = new OtpCore(new MapKv(), {
+      now: () => clock.ms,
+      random: (bytes) => {
+        if (bytes.length === 4) new DataView(bytes.buffer).setUint32(0, words.shift() ?? 0);
+        else crypto.getRandomValues(bytes);
+        return bytes;
+      },
+    });
     const first = issued(await core.issue());
     clock.ms += 31_000;
     const second = issued(await core.issue());
-    if (first.code !== second.code) {
-      expect(await core.verify(first.code)).toEqual({ ok: false, error: 'otp_wrong' });
-    }
+    expect([first.code, second.code]).toEqual(['111111', '222222']);
+    expect(await core.verify(first.code)).toEqual({ ok: false, error: 'otp_wrong' });
     expect((await core.verify(second.code)).ok).toBe(true);
   });
 
@@ -98,6 +107,25 @@ describe('OtpCore issue (resend limits)', () => {
     });
     // 0xffffffff is above the unbiased limit and is drawn again; 7 gives "000007".
     expect(issued(await core.issue()).code).toBe('000007');
+  });
+
+  it('releaseIssue gives back the send and drops the challenge, only while it is current (SR-2)', async () => {
+    const { core, clock } = setup();
+    const a = issued(await core.issue());
+    core.releaseIssue('not-a-challenge-id'); // unknown id: no-op
+    expect(await core.issue()).toMatchObject({ ok: false, error: 'resend_too_soon' });
+    core.releaseIssue(a.challengeId);
+    // The send is given back (no 30 s wait, the window is not used) and the released code no longer works.
+    expect(await core.verify(a.code)).toEqual({ ok: false, error: 'otp_wrong' });
+    const b = issued(await core.issue());
+    clock.ms += 31_000;
+    const c = issued(await core.issue());
+    core.releaseIssue(b.challengeId); // no longer current: nothing changes
+    clock.ms += 31_000;
+    issued(await core.issue());
+    clock.ms += 31_000;
+    expect(await core.issue()).toMatchObject({ ok: false, error: 'rate_limited' });
+    expect(c.challengeId).not.toBe(b.challengeId);
   });
 });
 
@@ -114,16 +142,21 @@ describe('OtpCore verify (attempts, lock, expiry)', () => {
   it('allows 5 attempts per challenge, then locks for 15 minutes', async () => {
     const { core, clock } = setup();
     const r = issued(await core.issue());
-    for (let i = 1; i < ATTEMPTS_PER_CHALLENGE; i += 1) {
+    for (let i = 1; i < FAILURES_BEFORE_LOCK; i += 1) {
       expect(await core.verify(wrong(r.code))).toEqual({ ok: false, error: 'otp_wrong' });
     }
     expect(await core.verify(wrong(r.code))).toEqual({
       ok: false,
       error: 'otp_locked',
       retryAfterSeconds: 900,
+      lockedNow: true,
     });
-    // Locked: even the right code and a new request are refused.
-    expect(await core.verify(r.code)).toMatchObject({ ok: false, error: 'otp_locked' });
+    // Locked: even the right code and a new request are refused, and only the attempt that locked says lockedNow.
+    expect(await core.verify(r.code)).toEqual({
+      ok: false,
+      error: 'otp_locked',
+      retryAfterSeconds: 900,
+    });
     clock.ms += 60_000;
     expect(await core.issue()).toEqual({ ok: false, error: 'otp_locked', retryAfterSeconds: 840 });
     // After the lock a new code works; the old challenge is gone.
@@ -133,13 +166,42 @@ describe('OtpCore verify (attempts, lock, expiry)', () => {
     expect((await core.verify(next.code)).ok).toBe(true);
   });
 
-  it('the attempt count is per challenge: 4 wrong, a new code, 4 wrong does not lock', async () => {
+  it('failures count per invitation across codes: 4 wrong, +30 s, a new code, 1 wrong locks (SEC-3)', async () => {
+    const { core, clock } = setup();
+    const a = issued(await core.issue());
+    for (let i = 0; i < 4; i += 1) {
+      expect(await core.verify(wrong(a.code))).toEqual({ ok: false, error: 'otp_wrong' });
+    }
+    clock.ms += 30_000;
+    const b = issued(await core.issue());
+    expect(await core.verify(wrong(b.code))).toMatchObject({
+      ok: false,
+      error: 'otp_locked',
+      retryAfterSeconds: 900,
+    });
+    expect(await core.verify(b.code)).toMatchObject({ ok: false, error: 'otp_locked' });
+  });
+
+  it('a correct code resets the failure count (SEC-3)', async () => {
     const { core, clock } = setup();
     const a = issued(await core.issue());
     for (let i = 0; i < 4; i += 1) await core.verify(wrong(a.code));
+    expect((await core.verify(a.code)).ok).toBe(true);
     clock.ms += 31_000;
     const b = issued(await core.issue());
     for (let i = 0; i < 4; i += 1) {
+      expect(await core.verify(wrong(b.code))).toEqual({ ok: false, error: 'otp_wrong' });
+    }
+    expect(await core.verify(wrong(b.code))).toMatchObject({ ok: false, error: 'otp_locked' });
+  });
+
+  it('the end of a lock starts a fresh count of 5 (SEC-3)', async () => {
+    const { core, clock } = setup();
+    const a = issued(await core.issue());
+    for (let i = 0; i < FAILURES_BEFORE_LOCK; i += 1) await core.verify(wrong(a.code));
+    clock.ms += LOCK_MS + 1;
+    const b = issued(await core.issue());
+    for (let i = 1; i < FAILURES_BEFORE_LOCK; i += 1) {
       expect(await core.verify(wrong(b.code))).toEqual({ ok: false, error: 'otp_wrong' });
     }
     expect((await core.verify(b.code)).ok).toBe(true);
@@ -240,7 +302,40 @@ describe('OtpCore lobby nonce and limits', () => {
     expect(core.takePhotoSlot()).toEqual({ ok: true, n: 1 });
     expect(core.takePhotoSlot()).toEqual({ ok: true, n: 2 });
     expect(core.takePhotoSlot()).toEqual({ ok: true, n: 3 });
-    expect(core.takePhotoSlot()).toEqual({ ok: false });
+    expect(core.takePhotoSlot()).toEqual({ ok: false, error: 'rate_limited' });
+  });
+
+  it('releasePhotoSlot gives back only the slot it names, once, never below zero (SEC-4)', () => {
+    const { core } = setup();
+    core.releasePhotoSlot(1); // nothing taken: no-op
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 1 });
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 2 });
+    core.releasePhotoSlot(2);
+    core.releasePhotoSlot(2); // a second release of the same slot changes nothing
+    core.releasePhotoSlot(3); // a slot not taken: no-op
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 2 });
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 3 });
+    expect(core.takePhotoSlot()).toEqual({ ok: false, error: 'rate_limited' });
+    // Releasing an older slot while a later one is held frees exactly that one.
+    core.releasePhotoSlot(1);
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 1 });
+    expect(core.takePhotoSlot()).toEqual({ ok: false, error: 'rate_limited' });
+  });
+
+  it('closePhotos is set-once: every later slot is refused closed, the cap reason no longer matters', () => {
+    const { core, kv } = setup();
+    expect(core.takePhotoSlot()).toEqual({ ok: true, n: 1 });
+    core.closePhotos();
+    expect(core.takePhotoSlot()).toEqual({ ok: false, error: 'closed' });
+    core.closePhotos();
+    expect(core.takePhotoSlot()).toEqual({ ok: false, error: 'closed' });
+    // Closed with no slot used at all: still closed, and the refusal writes nothing.
+    const fresh = setup();
+    fresh.core.closePhotos();
+    const before = JSON.stringify([...fresh.kv.map.entries()]);
+    expect(fresh.core.takePhotoSlot()).toEqual({ ok: false, error: 'closed' });
+    expect(JSON.stringify([...fresh.kv.map.entries()])).toBe(before);
+    expect(kv.map.size).toBeGreaterThan(0);
   });
 });
 
@@ -330,6 +425,47 @@ describe('invite and OTP routes', () => {
     expect(await res.json()).toEqual({ error: 'unavailable' });
   });
 
+  it('a send that fails unavailable gives the send back: fails twice, the third request sends a code (SR-2)', async () => {
+    let failures = 2;
+    const h = await createHarness({
+      messagingSend: async () => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error('unavailable');
+        }
+        return { ok: true };
+      },
+    });
+    const request = () => h.request('POST', '/v1/otp/request', { json: { token: LINK() } });
+    expect((await request()).status).toBe(503);
+    expect((await request()).status).toBe(503);
+    const third = await request();
+    expect(third.status).toBe(200);
+    const sent = h.codes();
+    expect(sent).toHaveLength(3);
+    // The released challenges are gone; the code that was sent works.
+    const verify = (code: string) =>
+      h.request('POST', '/v1/otp/verify', { json: { token: LINK(), code } });
+    const lastCode = sent[2] ?? '';
+    for (const code of sent.slice(0, 2).filter((c) => c !== lastCode)) {
+      expect((await verify(code)).status).toBe(401);
+    }
+    expect((await verify(lastCode)).status).toBe(200);
+  });
+
+  it('a send refused with another code keeps the send used (SR-2)', async () => {
+    const h = await createHarness({
+      messagingSend: async () => {
+        throw new Error('bad_request');
+      },
+    });
+    const first = await h.request('POST', '/v1/otp/request', { json: { token: LINK() } });
+    expect(first.status).toBe(400);
+    const second = await h.request('POST', '/v1/otp/request', { json: { token: LINK() } });
+    expect(second.status).toBe(429);
+    expect(await second.json()).toEqual({ error: 'resend_too_soon' });
+  });
+
   it('verify with the right code mints a lobby token on the nonce whose hash the object holds', async () => {
     const h = await createHarness();
     await h.request('POST', '/v1/otp/request', { json: { token: LINK() } });
@@ -361,6 +497,22 @@ describe('invite and OTP routes', () => {
     expect(locked.headers.get('retry-after')).toBe('900');
     expect(await locked.json()).toEqual({ error: 'otp_locked' });
     expect(h.calls.some((c) => c.method === 'lobbyMint')).toBe(false);
+  });
+
+  it('otp.locked is logged once, by the attempt that locks; a 6th attempt logs nothing (SR-7)', async () => {
+    const h = await createHarness();
+    await h.request('POST', '/v1/otp/request', { json: { token: LINK() } });
+    const bad = wrong(h.codes()[0] ?? '000000');
+    const verify = () =>
+      h.request('POST', '/v1/otp/verify', { json: { token: LINK(), code: bad } });
+    for (let i = 1; i < 5; i += 1) await verify();
+    expect(h.lines).toEqual([]);
+    expect((await verify()).status).toBe(429);
+    expect(h.lines.map((l) => (JSON.parse(l) as { event: string }).event)).toEqual(['otp.locked']);
+    const sixth = await verify();
+    expect(sixth.status).toBe(429);
+    expect(await sixth.json()).toEqual({ error: 'otp_locked' });
+    expect(h.lines).toHaveLength(1);
   });
 
   it('a malformed code or an unknown key is 400 before anything is called', async () => {
