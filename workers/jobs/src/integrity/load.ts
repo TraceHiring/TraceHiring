@@ -11,6 +11,9 @@ import type { EvidenceReader } from '@trace/shared/jobs';
 /** The per-session cap of stored event payload (SEC-C1b-2); a larger file is refused unread. */
 export const MAX_EVENTS_BYTES = 20 * 1024 * 1024;
 
+/** The SessionDO stores at most this many events per session (SEC-C1b-2), so events.ndjson has at most as many lines. */
+export const MAX_EVENT_LINES = 50_000;
+
 /** One accepted signal: what integrity.signals stores and the band engine reads. */
 export interface LoadedSignal {
   seq: number;
@@ -44,24 +47,34 @@ const offsetFrom = (startedAtMs: number, iso: string): number => {
   return Math.max(0, at - startedAtMs);
 };
 
-/** Parses the NDJSON body line by line (no split array); heartbeats are dropped as they are read. Sorted by gseq. */
+/**
+ * Parses the NDJSON body line by line straight from its bytes: each line is decoded on its own, so the whole file is
+ * never held as one string next to its buffer (memory, C1b note 4). Heartbeats are dropped as they are read.
+ * Sorted by gseq. A string input (tests) is encoded first.
+ */
 export const parseEventLines = (
-  text: string,
+  input: Uint8Array | string,
   message: Pick<SessionMirrorMessage, 'startedAt' | 'lastEventSeq'>,
 ): LoadedSignal[] => {
   const startedAtMs = Date.parse(message.startedAt);
   const out: LoadedSignal[] = [];
   const seen = new Set<number>();
+  const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : input;
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false });
   let from = 0;
-  while (from < text.length) {
-    let end = text.indexOf('\n', from);
-    if (end < 0) end = text.length;
-    const raw = text.slice(from, end);
+  let lines = 0;
+  while (from < bytes.length) {
+    let end = bytes.indexOf(0x0a, from);
+    if (end < 0) end = bytes.length;
+    const start = from;
     from = end + 1;
-    if (raw.length === 0) continue;
+    if (end === start) continue;
+    lines += 1;
+    if (lines > MAX_EVENT_LINES) return fail('integrity_events_too_large');
     let json: unknown;
     try {
-      json = JSON.parse(raw);
+      // a malformed UTF-8 sequence throws here too (fatal decoder)
+      json = JSON.parse(decoder.decode(bytes.subarray(start, end)));
     } catch {
       return fail('integrity_bad_events');
     }
@@ -159,13 +172,7 @@ export const loadSignals = async (
   if ((await sha256HexBytes(bytes)) !== message.evidence.eventsSha256) {
     return fail('integrity_events_hash_mismatch');
   }
-  let text: string;
-  try {
-    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes);
-  } catch {
-    return fail('integrity_bad_events');
-  }
-  return [...parseEventLines(text, message), ...gapSignals(message)];
+  return [...parseEventLines(new Uint8Array(bytes), message), ...gapSignals(message)];
 };
 
 /**

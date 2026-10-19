@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { SQL } from './store.js';
 import {
   MAX_EVENTS_BYTES,
+  MAX_EVENT_LINES,
   gapSignals,
   isPhotoMissing,
   loadSignals,
@@ -95,6 +96,13 @@ describe('events.ndjson loader', () => {
     ];
     for (const body of bad)
       expect(() => parseEventLines(body, m)).toThrow(/^integrity_bad_events$/);
+  });
+
+  it('refuses more lines than the SessionDO can store (50 000)', () => {
+    const lines = Array.from({ length: MAX_EVENT_LINES + 1 }, (_, i) => heartbeat(i + 1, i * 10));
+    const m = { startedAt: '2026-10-15T09:00:00.000Z', lastEventSeq: MAX_EVENT_LINES + 1 };
+    expect(() => parseEventLines(ndjson(lines), m)).toThrow(/^integrity_events_too_large$/);
+    expect(parseEventLines(ndjson(lines.slice(0, MAX_EVENT_LINES)), m)).toEqual([]);
   });
 
   it('numbers connectivity gaps after lastEventSeq', () => {

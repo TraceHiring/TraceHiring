@@ -69,6 +69,9 @@ export const SQL = {
     "values ($1::uuid, 'integrity_band', $2, $3, $4::timestamptz + interval '90 days') on conflict do nothing",
 } as const;
 
+/** Signal rows per INSERT statement. */
+export const SIGNALS_PER_STATEMENT = 5000;
+
 export interface Ids {
   orgId: string;
   sessionId: string;
@@ -123,15 +126,17 @@ export const insertSignals = async (
   ids: Ids,
   signals: readonly LoadedSignal[],
 ): Promise<void> => {
-  if (signals.length === 0) return;
-  const rows = signals.map((s) => ({
-    seq: s.seq,
-    kind: s.kind,
-    offset_ms: s.offsetMs,
-    item_position: s.itemPosition,
-    details: s.details,
-  }));
-  await tx.query(SQL.insertSignals, [ids.orgId, ids.sessionId, JSON.stringify(rows)]);
+  // In chunks, so no statement parameter grows with the file (memory, C1b note 4).
+  for (let i = 0; i < signals.length; i += SIGNALS_PER_STATEMENT) {
+    const rows = signals.slice(i, i + SIGNALS_PER_STATEMENT).map((s) => ({
+      seq: s.seq,
+      kind: s.kind,
+      offset_ms: s.offsetMs,
+      item_position: s.itemPosition,
+      details: s.details,
+    }));
+    await tx.query(SQL.insertSignals, [ids.orgId, ids.sessionId, JSON.stringify(rows)]);
+  }
 };
 
 export interface ResultInsert {
