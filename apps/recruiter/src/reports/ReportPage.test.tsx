@@ -147,6 +147,57 @@ describe('ReportPage (AT-D3)', () => {
     brokenQuality.controller.stop();
   });
 
+  it('one card pending or unavailable leaves the other card exactly as in the all-ready page', async () => {
+    const baseline = setup(allReady);
+    baseline.controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const baseHtml = render(baseline.controller);
+    const baseQuality = region(baseHtml, 'quality-card');
+    const baseIntegrity = region(baseHtml, 'integrity-card');
+    baseline.controller.stop();
+    expect(baseQuality.text).toContain('78');
+    expect(baseIntegrity.text).toContain('Review suggested');
+
+    // Quality pending: the integrity card text equals the baseline.
+    const qualityPending = setup({ ...allReady, quality: () => json({ state: 'pending' }) });
+    qualityPending.controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const a = render(qualityPending.controller);
+    expect(region(a, 'quality-card').text).toContain('Scoring...');
+    expect(region(a, 'integrity-card')).toEqual(baseIntegrity);
+    qualityPending.controller.stop();
+
+    // Integrity pending: the quality card text equals the baseline.
+    const integrityPending = setup({ ...allReady, integrity: () => json({ state: 'pending' }) });
+    integrityPending.controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const b = render(integrityPending.controller);
+    expect(region(b, 'integrity-card').text).toContain('Pending');
+    expect(region(b, 'quality-card')).toEqual(baseQuality);
+    integrityPending.controller.stop();
+
+    // Quality unavailable: the integrity card equals the baseline.
+    const qualityDown = setup({ ...allReady, quality: () => json({ error: { code: 'x' } }, 500) });
+    qualityDown.controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const c = render(qualityDown.controller);
+    expect(region(c, 'quality-card').text).toContain('Not available right now');
+    expect(region(c, 'integrity-card')).toEqual(baseIntegrity);
+    qualityDown.controller.stop();
+
+    // Integrity unavailable: the quality card equals the baseline.
+    const integrityDown = setup({
+      ...allReady,
+      integrity: () => json({ error: { code: 'x' } }, 500),
+    });
+    integrityDown.controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const d = render(integrityDown.controller);
+    expect(region(d, 'integrity-card').text).toContain('Not available right now');
+    expect(region(d, 'quality-card')).toEqual(baseQuality);
+    integrityDown.controller.stop();
+  });
+
   it("a pending card never shows another card's value", async () => {
     const { controller } = setup({
       ...allReady,
