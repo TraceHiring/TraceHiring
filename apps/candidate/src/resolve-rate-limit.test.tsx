@@ -90,6 +90,23 @@ describe('invite/resolve answers 429 rate_limited', () => {
     expect(retryButton(container).disabled).toBe(false);
   });
 
+  it('a Retry-After above 60 s waits 60 s (a proxy cannot lock the button for long)', async () => {
+    mockFetch({
+      'POST /v1/invite/resolve': () =>
+        json(429, { error: 'rate_limited' }, { 'retry-after': '86400' }),
+    });
+    app = await mount(<App boot={BOOT} />);
+    await advance(0);
+
+    const { container } = app;
+    expect(container.textContent).toContain(COPY.rules.wait(60));
+    expect(retryButton(container).disabled).toBe(true);
+    await advance(59_999);
+    expect(retryButton(container).disabled).toBe(true);
+    await advance(1);
+    expect(retryButton(container).disabled).toBe(false);
+  });
+
   it.each([
     ['503 unavailable (network copy, as before)', 503, 'unavailable', COPY.error.network],
     ['401 token_invalid (generic copy, as before)', 401, 'token_invalid', COPY.error.generic],
