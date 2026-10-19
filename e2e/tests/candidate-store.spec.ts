@@ -24,6 +24,7 @@ import {
 } from '../support/candidate.js';
 import { psql, readDb } from '../support/db.js';
 import { env, expectRefusal, jsonOf, keysOf, poll } from '../support/http.js';
+import { headerMarkers, isMetadataMarker, stripJpegMetadata } from '../support/jpeg.js';
 import { linkTokenIn, linkTokenOfUrl, outboxReader } from '../support/outbox.js';
 
 test.skip(process.env['E2E_LOCAL'] !== '1', 'set E2E_LOCAL=1 (scripts/e2e-local.mjs) to run');
@@ -388,12 +389,20 @@ test.describe('candidate store on the real database (spec review r3a #1)', () =>
 
     let photoSha = '';
     await test.step(
-      'start photo: a real canvas JPEG (JFIF APP0 only) is accepted',
+      'start photo: a real canvas JPEG, metadata segments stripped as the app does, is accepted',
       async () => {
         await page.goto('about:blank');
-        const jpeg = await canvasJpeg(page);
-        // SOI then APP0 (JFIF): the header the edge accepts (no EXIF, no COM).
+        const raw = await canvasJpeg(page);
+        // The browser's own output: SOI then APP0 (JFIF); Chromium adds APP2 (ICC) after it.
+        expect([...raw.subarray(0, 4)]).toEqual([0xff, 0xd8, 0xff, 0xe0]);
+        // Spec rev 4i: the client drops every APP1-APP15 and COM segment before hashing and
+        // uploading; the edge stays strict.
+        const jpeg = stripJpegMetadata(raw);
         expect([...jpeg.subarray(0, 4)]).toEqual([0xff, 0xd8, 0xff, 0xe0]);
+        const markers = headerMarkers(jpeg);
+        expect(markers.filter(isMetadataMarker)).toEqual([]);
+        expect(markers).toContain(0xe0);
+        expect([...jpeg.subarray(-2)]).toEqual([0xff, 0xd9]);
         const res = await jsonOf<{ sha256: string; bytes: number }>(
           await edge.photo(lobby, jpeg),
           200,

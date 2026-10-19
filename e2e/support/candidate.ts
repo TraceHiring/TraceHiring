@@ -90,8 +90,9 @@ export const requestOtp = async (edge: Edge, token: string, timeoutMs = 75_000) 
 
 /**
  * A real start photo: a 320x240 canvas drawn and encoded by Chromium with `toBlob('image/jpeg', 0.85)`, as the
- * candidate app does (spec §4.5). Chromium writes a JFIF APP0 header only, which the edge's header check accepts
- * (no EXIF, no COM). Synthetic pixels: a gradient and an oval, no camera.
+ * candidate app does (spec §4.5). The raw bytes carry APP0 (JFIF) and an APP2 ICC profile, which the edge refuses;
+ * strip them with stripJpegMetadata (support/jpeg.ts, spec rev 4i) before hashing and uploading. Synthetic pixels:
+ * a gradient and an oval, no camera.
  */
 export const canvasJpeg = async (page: Page): Promise<Buffer> => {
   const base64 = await page.evaluate(async () => {
