@@ -74,6 +74,39 @@ describe('CardPoller', () => {
     expect(poller.getSnapshot().state).toEqual({ kind: 'value', value: { state: 'ready' } });
   });
 
+  it('a terminal failure code ends the polling for good and is reported as such', async () => {
+    const fetchCard = vi.fn(() =>
+      Promise.resolve<ApiResult<Card>>({ ok: false, code: 'not_found' }),
+    );
+    const poller = new CardPoller<Card>({
+      fetchCard,
+      isFinal,
+      isTerminal: (code) => code === 'not_found',
+    });
+    poller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(poller.getSnapshot().state).toEqual({ kind: 'terminal', code: 'not_found' });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetchCard).toHaveBeenCalledTimes(1);
+    expect(poller.getSnapshot().slow).toBe(false);
+  });
+
+  it('a failure code that is not terminal keeps retrying', async () => {
+    const fetchCard = vi.fn(() =>
+      Promise.resolve<ApiResult<Card>>({ ok: false, code: 'unavailable' }),
+    );
+    const poller = new CardPoller<Card>({
+      fetchCard,
+      isFinal,
+      isTerminal: (code) => code === 'not_found',
+    });
+    poller.start();
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(fetchCard).toHaveBeenCalledTimes(4);
+    expect(poller.getSnapshot().state).toEqual({ kind: 'unavailable' });
+    poller.stop();
+  });
+
   it('a previous value stays on screen while a later poll fails', async () => {
     const results: ApiResult<Card>[] = [ok({ state: 'pending' }), { ok: false, code: 'network' }];
     const fetchCard = vi.fn(() => Promise.resolve(results.shift() ?? ok({ state: 'pending' })));

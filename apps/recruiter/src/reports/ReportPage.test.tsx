@@ -4,6 +4,7 @@
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiClient } from '../api/client';
+import { errorText } from '../common/messages';
 import { ReportPage } from './ReportPage';
 import { ReportController } from './report-controller';
 import {
@@ -185,6 +186,67 @@ describe('ReportPage (AT-D3)', () => {
     const text = plain(render(controller));
     expect(text).toContain('No start photo');
     expect(text).not.toContain('View start photo');
+    controller.stop();
+  });
+});
+
+describe('ReportPage terminal errors', () => {
+  it.each(['not_found', 'aal2_required', 'unauthorized'] as const)(
+    'a %s answer for the header shows the fixed text and stops all three pollers',
+    async (code) => {
+      const status = code === 'not_found' ? 404 : code === 'unauthorized' ? 401 : 403;
+      const { controller, urls } = setup({
+        meta: () => json({ error: { code } }, status),
+        quality: () => json({ state: 'pending' }),
+        integrity: () => json({ state: 'pending' }),
+      });
+      controller.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(urls).toHaveLength(3);
+      const html = render(controller);
+      expect(plain(html)).toContain(errorText(code));
+      expect(plain(html)).not.toContain('Loading...');
+      expect(html).not.toContain('data-region="quality-card"');
+      expect(html).not.toContain('data-region="integrity-card"');
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(urls).toHaveLength(3);
+      controller.stop();
+    },
+  );
+
+  it('a transient header failure keeps retrying and the cards keep polling', async () => {
+    let metaCalls = 0;
+    const { controller, urls } = setup({
+      meta: () => {
+        metaCalls += 1;
+        return metaCalls < 3 ? json({ error: { code: 'unavailable' } }, 503) : json(META);
+      },
+      quality: () => json({ state: 'pending' }),
+      integrity: () => json({ state: 'pending' }),
+    });
+    controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(plain(render(controller))).toContain('Loading...');
+    await vi.advanceTimersByTimeAsync(6000);
+    const html = render(controller);
+    expect(plain(html)).toContain('Candidate 3');
+    expect(html).toContain('data-region="quality-card"');
+    expect(urls.filter((u) => u.endsWith(REPORT_ID))).toHaveLength(3);
+    expect(urls.filter((u) => u.endsWith('/quality')).length).toBeGreaterThan(2);
+    controller.stop();
+  });
+
+  it('a card never shows a failed state for readiness', async () => {
+    const { controller } = setup({
+      meta: () => json(META),
+      quality: () => json({ error: { code: 'not_found' } }, 404),
+      integrity: () => json(INTEGRITY_READY),
+    });
+    controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const html = render(controller);
+    expect(region(html, 'quality-card').text).toContain('Not available right now');
+    expect(plain(html)).not.toMatch(/failed/i);
     controller.stop();
   });
 });

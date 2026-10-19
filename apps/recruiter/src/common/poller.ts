@@ -10,7 +10,11 @@ export const SLOW_AFTER_MS = 90_000;
 export const SLOW_MS = 15_000;
 
 export type PollState<T> =
-  { kind: 'loading' } | { kind: 'value'; value: T } | { kind: 'unavailable' };
+  | { kind: 'loading' }
+  | { kind: 'value'; value: T }
+  | { kind: 'unavailable' }
+  /** The answer is a failure that a retry cannot change (not found, sign-in needed); the polling has stopped. */
+  | { kind: 'terminal'; code: string };
 
 export interface PollSnapshot<T> {
   readonly state: PollState<T>;
@@ -24,6 +28,8 @@ export interface PollerOptions<T> {
   isFinal(value: T): boolean;
   /** Overrides the 90 s point after which polling slows down (the demo outbox never slows). */
   slowAfterMs?: number;
+  /** True for a failure code that a retry cannot change; the poller then stops for good. Default: none. */
+  isTerminal?(code: string): boolean;
 }
 
 export class CardPoller<T> {
@@ -90,6 +96,10 @@ export class CardPoller<T> {
         this.running = false;
         return;
       }
+    } else if (this.options.isTerminal?.(result.code) === true) {
+      this.running = false;
+      this.set({ state: { kind: 'terminal', code: result.code }, slow: false });
+      return;
     } else {
       // Keep the last good value on screen; otherwise the card is "unavailable" (never a failed band or score).
       const previous = this.snapshot.state;

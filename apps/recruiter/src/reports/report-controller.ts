@@ -6,6 +6,10 @@ import type { ApiClient } from '../api/client';
 import { CardPoller } from '../common/poller';
 import { StartPhotoController, type PhotoDeps } from './start-photo';
 
+/** Failure codes of the header call that a retry cannot change. */
+const TERMINAL_CODES: ReadonlySet<string> = new Set(['not_found', 'aal2_required', 'unauthorized']);
+const isTerminalCode = (code: string): boolean => TERMINAL_CODES.has(code);
+
 export class ReportController {
   readonly meta: CardPoller<ReportMetaResponse>;
   readonly quality: CardPoller<QualityCard>;
@@ -18,6 +22,15 @@ export class ReportController {
         api.call({ method: 'GET', path: `/reports/${reportId}`, schema: ReportMetaResponse }),
       // The header never changes once it is read: one successful answer is final.
       isFinal: () => true,
+      // These cannot be fixed by waiting (the report is not there, or the sign-in must be redone).
+      isTerminal: isTerminalCode,
+    });
+    // A terminal header ends the whole page: the cards stop polling too (a card itself never fails).
+    this.meta.subscribe(() => {
+      if (this.meta.getSnapshot().state.kind === 'terminal') {
+        this.quality.stop();
+        this.integrity.stop();
+      }
     });
     this.quality = new CardPoller<QualityCard>({
       fetchCard: () =>

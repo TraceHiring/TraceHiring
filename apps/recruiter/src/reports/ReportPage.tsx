@@ -5,6 +5,7 @@ import { useEffect, useMemo } from 'react';
 import { useParams } from 'react-router';
 import { useApi } from '../api/runtime';
 import { formatTime } from '../common/format';
+import { errorText } from '../common/messages';
 import { usePoller, type CardPoller } from '../common/poller';
 import { IntegrityCardPanel, QualityCardPanel } from './Cards';
 import { EvidenceTimeline } from './EvidenceTimeline';
@@ -19,7 +20,22 @@ export const INFO_LINE =
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function ReportHeaderView({ meta }: { meta: ReportMetaResponse | null }) {
+export function ReportHeaderView({
+  meta,
+  errorCode = null,
+}: {
+  meta: ReportMetaResponse | null;
+  /** A terminal failure of the header call: the fixed text for it replaces "Loading...". */
+  errorCode?: string | null;
+}) {
+  if (errorCode !== null) {
+    return (
+      <header className={styles.header}>
+        <h2>Report</h2>
+        <p role="alert">{errorText(errorCode)}</p>
+      </header>
+    );
+  }
   if (meta === null) {
     return (
       <header className={styles.header}>
@@ -55,7 +71,12 @@ export function ReportHeaderView({ meta }: { meta: ReportMetaResponse | null }) 
 
 function ReportHeader({ poller }: { poller: CardPoller<ReportMetaResponse> }) {
   const { state } = usePoller(poller);
-  return <ReportHeaderView meta={state.kind === 'value' ? state.value : null} />;
+  return (
+    <ReportHeaderView
+      meta={state.kind === 'value' ? state.value : null}
+      errorCode={state.kind === 'terminal' ? state.code : null}
+    />
+  );
 }
 
 export function SignalsByFamilyTable({ card }: { card: ReadyIntegrity }) {
@@ -139,15 +160,21 @@ export function ReportPage({ controller }: { controller: ReportController }) {
       controller.stop();
     };
   }, [controller]);
+  // A terminal header answer (not found, sign-in needed) ends the page: the cards have stopped and are not drawn.
+  const ended = usePoller(controller.meta).state.kind === 'terminal';
   return (
     <div className={styles.page}>
       <ReportHeader poller={controller.meta} />
       <p className={styles.info}>{INFO_LINE}</p>
-      <div className={styles.cards}>
-        <QualityCardPanel poller={controller.quality} />
-        <IntegrityCardPanel poller={controller.integrity} />
-      </div>
-      <IntegrityEvidence controller={controller} />
+      {!ended && (
+        <>
+          <div className={styles.cards}>
+            <QualityCardPanel poller={controller.quality} />
+            <IntegrityCardPanel poller={controller.integrity} />
+          </div>
+          <IntegrityEvidence controller={controller} />
+        </>
+      )}
     </div>
   );
 }
