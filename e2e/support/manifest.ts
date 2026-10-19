@@ -1,6 +1,6 @@
 // The D1 slice manifest (specs/d1-demo-slice.md §7.2 "Recorded measurements", AT-D2, AT-D17):
 // `e2e/test-results/d1-manifest.json` with the commit SHA, the run id, the project, per-step milliseconds, the whole
-// duration and `time_to_ready_ms` per candidate. Nothing secret goes in: no email, password, token, link, code or id
+// duration, `time_to_ready_ms` per candidate and the CI run id. Nothing secret goes in: no email, password, token, link, code or id
 // of a person, only step names and numbers.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -21,8 +21,17 @@ export interface Manifest {
   startedAt: string;
   durationMs: number | null;
   steps: StepTiming[];
-  timeToReadyMs: Record<string, number>;
+  /** AT-D17, named as in spec §7.2: ms from each candidate's own submit until both of its cards were ready. */
+  time_to_ready_ms: Record<string, number>;
+  /** The GitHub Actions run id (GITHUB_RUN_ID) when the run is a CI job, else null. */
+  ciRunId: string | null;
 }
+
+/** GITHUB_RUN_ID when it is a run id (digits), else null. */
+const ciRunId = (): string | null => {
+  const value = process.env['GITHUB_RUN_ID'];
+  return value !== undefined && /^[0-9]{1,20}$/.test(value) ? value : null;
+};
 
 /** `E2E_SHA`, else `git rev-parse HEAD` of this checkout, else `unknown`. */
 export const commitSha = (): string => {
@@ -46,7 +55,8 @@ export const newManifest = (project: string, runId: string, record: boolean): Ma
   startedAt: new Date().toISOString(),
   durationMs: null,
   steps: [],
-  timeToReadyMs: {},
+  time_to_ready_ms: {},
+  ciRunId: ciRunId(),
 });
 
 /** Writes the manifest next to the other run facts (the project's output folder). */

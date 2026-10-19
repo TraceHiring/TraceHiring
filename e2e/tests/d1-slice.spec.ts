@@ -952,7 +952,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
           c.reportId = r.value.reportId;
           c.score = r.value.score;
           c.integrity = r.value.integrity;
-          must(run.manifest, 'the manifest').timeToReadyMs[key] = r.value.ms;
+          must(run.manifest, 'the manifest').time_to_ready_ms[key] = r.value.ms;
           if (r.value.ms > READY_LIMIT_MS) failed.push(`${key}: time_to_ready_ms above 90 s`);
         });
         if (failed.length > 0) throw new Error(failed.join('\n'));
