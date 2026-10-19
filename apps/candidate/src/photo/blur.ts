@@ -33,15 +33,26 @@ export const insideOval = (oval: Oval, x: number, y: number): boolean => {
   return dx * dx + dy * dy <= 1;
 };
 
-/** Down-scale factor and blur radius (in small-image pixels): about a 40 px blur on a 640 px frame. */
-const FACTOR = 8;
-const RADIUS = 2;
-const PASSES = 2;
+/** How strong the blur is: block size of the down-scale, box radius and passes (in small-image pixels). */
+export interface BlurStrength {
+  factor: number;
+  radius: number;
+  passes: number;
+}
+
+/** The shipped strength: about a 40 px blur on a 640 px frame. Tests may pass a weaker one to prove the metric. */
+export const BLUR_STRENGTH: Readonly<BlurStrength> = { factor: 8, radius: 2, passes: 2 };
 
 const isSize = (n: number): boolean => Number.isInteger(n) && n > 0 && n <= 8192;
 
 /** One separable box-blur pass over a float RGB image (edges clamped). */
-const boxBlur = (src: Float32Array, w: number, h: number): Float32Array<ArrayBuffer> => {
+const boxBlur = (
+  src: Float32Array,
+  w: number,
+  h: number,
+  radius: number,
+): Float32Array<ArrayBuffer> => {
+  const RADIUS = radius;
   const tmp = new Float32Array(src.length);
   const out = new Float32Array(src.length);
   const span = 2 * RADIUS + 1;
@@ -72,10 +83,18 @@ const boxBlur = (src: Float32Array, w: number, h: number): Float32Array<ArrayBuf
  * Returns a new frame of the same size: inside the oval the source bytes exactly, outside a heavy blur (opaque).
  * Throws when `data` does not hold `width * height` RGBA pixels. The input is never changed.
  */
-export const blurOutsideOval = (frame: Frame, oval: Oval): Frame => {
+export const blurOutsideOval = (
+  frame: Frame,
+  oval: Oval,
+  strength: BlurStrength = BLUR_STRENGTH,
+): Frame => {
   const { data, width, height } = frame;
   if (!isSize(width) || !isSize(height) || data.length !== width * height * 4) {
     throw new RangeError('frame size does not match its pixel data');
+  }
+  const { factor: FACTOR, radius, passes } = strength;
+  if (!isSize(FACTOR) || !Number.isInteger(radius) || radius < 0 || !Number.isInteger(passes)) {
+    throw new RangeError('bad blur strength');
   }
   // Block averages (a partial block at the right or bottom edge averages what it has).
   const sw = Math.ceil(width / FACTOR);
@@ -95,7 +114,7 @@ export const blurOutsideOval = (frame: Frame, oval: Oval): Frame => {
   }
   for (let b = 0; b < sw * sh; b += 1)
     for (let c = 0; c < 3; c += 1) small[b * 3 + c] = (small[b * 3 + c] ?? 0) / (counts[b] ?? 1);
-  for (let pass = 0; pass < PASSES; pass += 1) small = boxBlur(small, sw, sh);
+  for (let pass = 0; pass < passes; pass += 1) small = boxBlur(small, sw, sh, radius);
 
   const out = new Uint8ClampedArray(data);
   const sample = (sx: number, sy: number, c: number): number => small[(sy * sw + sx) * 3 + c] ?? 0;

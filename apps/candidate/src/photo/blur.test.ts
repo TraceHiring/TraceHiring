@@ -6,7 +6,14 @@
 // the whole source frame. A pixel next to the oval edge is compared with its outside neighbours only, because the
 // inside must stay exactly the source (the edge is a hard step by design).
 import { describe, expect, it } from 'vitest';
-import { blurOutsideOval, insideOval, ovalOf, type Frame } from './blur';
+import {
+  BLUR_STRENGTH,
+  blurOutsideOval,
+  insideOval,
+  ovalOf,
+  type BlurStrength,
+  type Frame,
+} from './blur';
 
 const W = 640;
 const H = 480;
@@ -134,6 +141,47 @@ describe('blurOutsideOval (AT-D9)', () => {
       expect(blurred).toBe(W * H - inside);
     });
   }
+
+  // SR-10: blur strength is a privacy control. On coarse checkerboards (16 and 32 px cells, the scale of facial
+  // features in a 640 px frame) the neighbour metric above is weak, so this one measures what is left of the pattern:
+  // the standard deviation of the output outside the oval over the source's (127.5). The shipped blur leaves about
+  // 1.5% at 16 px and 10.5% at 32 px (measured); the bounds are 5% and 15%. Each weaker blur below fails one of them
+  // (measured: 4/1/1 leaves 52% and 77%, 8/1/1 11% and 55%, 8/2/1 25% at 32 px).
+  const residual = (cell: number, strength?: BlurStrength): number => {
+    const source = checkerboard(W, H, cell);
+    const oval = ovalOf(W, H);
+    const out = blurOutsideOval(source, oval, strength);
+    let n = 0;
+    let sum = 0;
+    let sq = 0;
+    for (let y = 0; y < H; y += 1)
+      for (let x = 0; x < W; x += 1) {
+        if (insideOval(oval, x, y)) continue;
+        const v = at(out, x, y, 0);
+        n += 1;
+        sum += v;
+        sq += v * v;
+      }
+    const mean = sum / n;
+    return Math.sqrt(sq / n - mean * mean) / 127.5;
+  };
+
+  it('SR-10: removes most of a 16 px and a 32 px checkerboard outside the oval', () => {
+    expect(residual(16)).toBeLessThan(0.05);
+    expect(residual(32)).toBeLessThan(0.15);
+  });
+
+  it('SR-10: the strength metric fails every weaker blur', () => {
+    const passes = (s?: BlurStrength) => residual(16, s) < 0.05 && residual(32, s) < 0.15;
+    expect(passes()).toBe(true);
+    for (const weak of [
+      { factor: 4, radius: 1, passes: 1 },
+      { factor: 8, radius: 1, passes: 1 },
+      { factor: 8, radius: 2, passes: 1 },
+    ])
+      expect(passes(weak), JSON.stringify(weak)).toBe(false);
+    expect(BLUR_STRENGTH).toEqual({ factor: 8, radius: 2, passes: 2 });
+  });
 
   it('does not change its input', () => {
     const source = checkerboard(64, 48, 1);
