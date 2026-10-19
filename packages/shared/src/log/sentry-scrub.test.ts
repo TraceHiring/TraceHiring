@@ -371,3 +371,69 @@ describe('stripQuery', () => {
     expect(stripQuery(input)).toBe(output);
   });
 });
+
+// d1 §6.2 R3-6 (security review of R4, finding 1): no `/media/` path or jti reaches Sentry. A fetch breadcrumb
+// of the start-photo link carries the full URL; the query is stripped, but the path holds the jti (the audit
+// row's link_id). Such breadcrumbs are dropped, and an event's request.url on a media path is omitted.
+describe('media links never reach Sentry (d1 R3-6)', () => {
+  const JTI = '7d3f9a21-5c4e-4b8a-9e10-2f6b8c4d1a73';
+  const MEDIA_URLS = [
+    `https://trace-api-staging.example.workers.dev/media/${JTI}?exp=1760000000&sig=c2lnbmF0dXJl`,
+    `https://trace-api-staging.example.workers.dev/media/${JTI}`,
+    `/media/${JTI}?exp=1&sig=x`,
+    `HTTPS://API.EXAMPLE.TEST/MEDIA/${JTI}`,
+    `https://api.example.test/%6Dedia/${JTI}`,
+    'https://api.example.test/media',
+  ];
+
+  it.each(MEDIA_URLS)('drops a fetch breadcrumb to %s', (url) => {
+    for (const key of ['url', 'from', 'to']) {
+      expect(
+        scrubSentryBreadcrumb({
+          type: 'http',
+          category: 'fetch',
+          data: { [key]: url, method: 'GET', status_code: 200 },
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it('keeps other fetch breadcrumbs (query stripped)', () => {
+    expect(
+      scrubSentryBreadcrumb({
+        type: 'http',
+        category: 'fetch',
+        data: { url: 'https://api.example.test/v1/orgs/x/reports?y=1', method: 'GET' },
+      }),
+    ).toEqual({
+      type: 'http',
+      category: 'fetch',
+      data: { url: 'https://api.example.test/v1/orgs/x/reports', method: 'GET' },
+    });
+    for (const url of [
+      'https://api.example.test/multimedia/x',
+      'https://api.example.test/v1/medias',
+    ]) {
+      expect(scrubSentryBreadcrumb({ category: 'fetch', data: { url } })).not.toBeNull();
+    }
+  });
+
+  it('an event drops media breadcrumbs and omits a media request.url', () => {
+    const out = scrubSentryEvent({
+      event_id: 'a'.repeat(32),
+      request: { url: MEDIA_URLS[0], method: 'GET' },
+      breadcrumbs: [
+        { category: 'fetch', data: { url: MEDIA_URLS[0], method: 'GET', status_code: 200 } },
+        { category: 'navigation', data: { from: '/reports/x', to: '/tests' } },
+      ],
+    });
+    const text = JSON.stringify(out);
+    expect(text).not.toMatch(/media/i);
+    expect(text).not.toContain(JTI);
+    expect(out).toMatchObject({
+      request: { method: 'GET' },
+      breadcrumbs: [{ category: 'navigation', data: { from: '/reports/x', to: '/tests' } }],
+    });
+    expect((out as { request: Record<string, unknown> }).request).not.toHaveProperty('url');
+  });
+});
