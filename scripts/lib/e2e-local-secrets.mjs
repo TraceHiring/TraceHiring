@@ -15,6 +15,8 @@ export const LOGIN_ROLES = Object.freeze([
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 /** Hex only, so a password can sit inside the SQL text (DDL takes no bind parameter, as the jobs db-test harness). */
 const PASSWORD = /^[0-9a-f]{32,128}$/;
+/** A login-role password as both operator steps generate it: 32-128 lower-case hex characters (shared with ops). */
+export const isLoginPassword = (pw) => typeof pw === 'string' && PASSWORD.test(pw);
 const KID = /^d1-\d{4}-(?:0[1-9]|1[0-2])$/;
 const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
 
@@ -27,7 +29,7 @@ export function loginRolesSql(passwords) {
   const lines = ['begin;'];
   for (const { login, role } of LOGIN_ROLES) {
     const pw = passwords?.[login];
-    if (typeof pw !== 'string' || !PASSWORD.test(pw)) {
+    if (!isLoginPassword(pw)) {
       throw new Error(
         `e2e-local: the generated password for ${login} is not 32-128 hex characters`,
       );
