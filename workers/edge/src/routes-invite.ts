@@ -3,7 +3,8 @@
 // api `messagingSend`, which resolves the address itself (the edge never sees one). `otp/verify` checks the code in
 // the object, which rotates the lobby nonce, then api `lobbyMint` puts that nonce in the lobby token. The invitation
 // id and org come from api's link-token lookup, never from the request. An inviter's under-18 answer stops the flow
-// before any OTP exists (rule 9, RT-8).
+// before any OTP exists (rule 9, RT-8). Each route checks the coarse link limit (OPEN-13, link-limit.ts) after the
+// strict parse and before its first api call.
 import {
   InviteResolveReq,
   InviteResolveRes,
@@ -25,6 +26,7 @@ import {
   type EdgeContext,
   type EdgeEnv,
 } from './http.js';
+import { createLinkLimit } from './link-limit.js';
 import { loggerFor, otpCall, otpFor, refuse, rpc, type RouteDeps } from './route-support.js';
 
 /** States in which no code may be sent or verified: the link is dead or the candidate is not eligible. */
@@ -41,11 +43,14 @@ const resolveLink = async (c: EdgeContext, deps: RouteDeps, token: string) => {
 };
 
 export const mountInviteRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void => {
+  const linkLimit = createLinkLimit(deps);
+
   app.post(
     '/v1/invite/resolve',
     capBody(LOBBY_BODY_LIMIT),
     handle(async (c) => {
       const { token } = await readJson(c, InviteResolveReq);
+      await linkLimit(c, 'resolve');
       const found = await rpc(c, deps, 'inviteResolve', { token });
       // Only the state and display data go back: no id, org or candidate key (rule 5).
       return sendJson(c, InviteResolveRes, {
@@ -61,6 +66,7 @@ export const mountInviteRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void => 
     capBody(LOBBY_BODY_LIMIT),
     handle(async (c) => {
       const { token } = await readJson(c, OtpRequestReq);
+      await linkLimit(c, 'otp_request');
       const found = await resolveLink(c, deps, token);
       const otp = otpFor(c, found.invitationId);
       const issued = await otpCall(() => otp.issue());
@@ -97,6 +103,7 @@ export const mountInviteRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void => 
     capBody(LOBBY_BODY_LIMIT),
     handle(async (c) => {
       const { token, code } = await readJson(c, OtpVerifyReq);
+      await linkLimit(c, 'otp_verify');
       const found = await resolveLink(c, deps, token);
       const otp = otpFor(c, found.invitationId);
       const verified = await otpCall(() => otp.verify(code));

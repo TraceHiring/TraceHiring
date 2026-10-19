@@ -1,8 +1,9 @@
 // Test harness for the candidate routes: the real app over a fake `API` (CandidateRpc, records every call), a fake
 // `OTP` namespace whose objects are the real OtpCore on a Map-backed KV, a Map-backed R2 bucket for `EVIDENCE`, a
 // movable clock and a captured log sink; for the session routes a fake `SESSION` namespace (the real SessionCore on a
-// Map-backed KV and a recorded alarm slot), a Map-backed packages bucket and a fake mirror queue. Keys are made at run
-// time; ids and labels are synthetic.
+// Map-backed KV and a recorded alarm slot), a Map-backed packages bucket and a fake mirror queue; and a fake
+// `LINK_LIMITER` (the Workers Rate Limiting binding, OPEN-13) that allows by default and records every call. Keys are
+// made at run time; ids and labels are synthetic.
 import type { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
 import { createLogger } from '@trace/shared/log';
 import { createApp } from './app.js';
@@ -285,6 +286,45 @@ export const fakeSessionNamespace = (parts: SessionParts) => {
   return { ns, sessions, names };
 };
 
+/** How the fake rate limiter answers its next calls. */
+export type LimiterMode = 'allow' | 'deny' | 'throw' | 'reject' | 'malformed';
+
+export interface LimiterCall {
+  /** The exact options object the edge passed to `limit`. */
+  options: unknown;
+  /** How many CandidateRpc calls had been made when `limit` ran (so a test can check the order). */
+  apiCallsBefore: number;
+}
+
+/**
+ * A fake `RateLimit` binding: records every call, then answers by `state.mode` (`allow` → `{ success: true }`, `deny`
+ * → `{ success: false }`, `throw` throws synchronously, `reject` rejects, `malformed` answers a non-boolean).
+ */
+export const fakeLimiter = (apiCalls: () => number) => {
+  const calls: LimiterCall[] = [];
+  const state: { mode: LimiterMode } = { mode: 'allow' };
+  const limiter = {
+    limit(options: unknown): Promise<unknown> {
+      calls.push({ options: structuredClone(options), apiCallsBefore: apiCalls() });
+      switch (state.mode) {
+        case 'allow':
+          return Promise.resolve({ success: true });
+        case 'deny':
+          return Promise.resolve({ success: false });
+        case 'throw':
+          throw new Error('limiter unavailable');
+        case 'reject':
+          return Promise.reject(new Error('limiter unavailable'));
+        case 'malformed':
+          return Promise.resolve({ success: 'yes' });
+      }
+    },
+  };
+  /** The keys passed so far, in order. */
+  const keys = () => calls.map((c) => (c.options as { key?: unknown }).key);
+  return { limiter, calls, state, keys };
+};
+
 export type ApiCall = { method: CandidateMethod; input: Record<string, unknown> };
 type ApiImpl = Partial<
   Record<CandidateMethod, (input: Record<string, unknown>) => Promise<unknown>>
@@ -301,6 +341,7 @@ export interface Harness {
   packages: ReturnType<typeof fakeBucket>;
   queue: ReturnType<typeof fakeQueue>;
   session: ReturnType<typeof fakeSessionNamespace>;
+  limiter: ReturnType<typeof fakeLimiter>;
   /** Evidence puts and queue sends, in order. */
   ops: string[];
   /** The codes api was asked to send, in order. */
@@ -334,6 +375,7 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
     sink: (line) => lines.push(line),
   });
   const nowSec = () => Math.floor(clock.ms / 1000);
+  const limiter = fakeLimiter(() => calls.length);
 
   const defaults: Record<CandidateMethod, (input: Record<string, unknown>) => Promise<unknown>> = {
     inviteResolve: async () => ({
@@ -396,6 +438,7 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
     SESSION: session.ns,
     PACKAGES: packages.bucket,
     MIRROR_QUEUE: queue.queue,
+    LINK_LIMITER: limiter.limiter,
   } as unknown as Env;
 
   const app = createApp({ now: () => new Date(clock.ms), sink: (line) => lines.push(line) });
@@ -440,6 +483,7 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
     packages,
     queue,
     session,
+    limiter,
     ops,
     codes,
     request,

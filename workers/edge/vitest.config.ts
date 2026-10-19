@@ -8,7 +8,9 @@ import { defineConfig } from 'vitest/config';
 //   InviteOtpDO classes (C1a SR-6, C1b need 2). The bindings live only here, in miniflare options: no wrangler file
 //   and no env block holds them, so nothing deployable or generated (`wrangler types`, worker-configuration.d.ts)
 //   changes, and wrangler can never deploy this pool. Buckets and the queue are miniflare's local, in-memory ones;
-//   no secret, no TRACE_ENV and no service binding (the DOs never call API).
+//   no secret, no TRACE_ENV and no service binding (the DOs never call API). LINK_LIMITER (OPEN-13) is miniflare's local
+//   rate limiter at a small test limit (3 per 10 s), for link-limit.real.test.ts; unlike the others it is also bound in
+//   the deployed dev and staging blocks (300 per 10 s), never at the top level.
 // no-error-reporter.test.ts runs in both pools and asserts each pool's exact binding set (security review F1).
 const wrangler = { configPath: './wrangler.jsonc' };
 const REAL_DO_TESTS = 'src/**/*.real.test.ts';
@@ -39,6 +41,9 @@ export default defineConfig({
               },
               r2Buckets: { PACKAGES: 'test-packages', EVIDENCE: 'test-evidence' },
               queueProducers: { MIRROR_QUEUE: { queueName: 'test-session-mirror' } },
+              ratelimits: {
+                LINK_LIMITER: { namespace_id: '9101', simple: { limit: 3, period: 10 } },
+              },
             },
           }),
         ],

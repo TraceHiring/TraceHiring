@@ -43,9 +43,11 @@ const LOG_EVENTS = [
   'otp.locked',
   'session.package_invalid',
   'session.mirror_failed',
+  'edge.rate_limited',
+  'edge.rate_limiter_error',
 ];
-/** Every field a production log call may pass: ids, cause constants and counts only. */
-const LOG_FIELDS = ['method', 'invitationId', 'sessionId', 'pkg', 'n'];
+/** Every field a production log call may pass: ids, cause constants, route labels and counts only. */
+const LOG_FIELDS = ['method', 'invitationId', 'sessionId', 'pkg', 'n', 'route'];
 /** The shared error path of @trace/workers-http (its message is dropped by serialize-error). */
 const SHARED_EVENTS = ['request.failed'];
 
@@ -86,6 +88,8 @@ const SECRETS = {
   answer: `answer text ${letters(12, 15)}`,
 };
 
+/** Synthetic client addresses (documentation ranges, RFC 5737 / RFC 3849): never a signal, never logged (rule 7). */
+const ADDRESSES = ['203.0.113.77', '198.51.100.42', '2001:db8::5e'];
 const query = () => `?t=${SECRETS.link}&e=${encodeURIComponent(SECRETS.email)}&s=${SECRETS.jwt}`;
 const noisyHeaders = () => ({ 'x-contact': SECRETS.email, 'x-mobile': SECRETS.mobile });
 const boom = () => new Error(`failed for ${Object.values(SECRETS).join(' ')}`);
@@ -160,6 +164,40 @@ describe('edge log lines carry no payload, token or code (AT-D32, edge half)', (
     expect(events(h.lines)).toEqual(Array(3).fill('candidate_rpc.unavailable'));
     expectClean(h.lines);
   });
+
+  it.each(['deny', 'reject'] as const)(
+    'link-route limiter (%s) logs the route label only, never the link, an address or a header',
+    async (mode) => {
+      const h = await createHarness();
+      h.limiter.state.mode = mode;
+      const headers = {
+        ...noisyHeaders(),
+        'cf-connecting-ip': ADDRESSES[0] ?? '',
+        'x-forwarded-for': ADDRESSES.slice(1).join(', '),
+        'user-agent': `agent ${SECRETS.label}`,
+      };
+      const json = [
+        { token: SECRETS.link },
+        { token: SECRETS.link },
+        { token: SECRETS.link, code: SECRETS.wrongCode },
+      ];
+      const paths = ['/v1/invite/resolve', '/v1/otp/request', '/v1/otp/verify'];
+      for (const [i, path] of paths.entries()) {
+        const res = await h.request('POST', path + query(), { json: json[i], headers });
+        expect(res.status).toBe(mode === 'deny' ? 429 : 503);
+      }
+      const event = mode === 'deny' ? 'edge.rate_limited' : 'edge.rate_limiter_error';
+      expect(events(h.lines)).toEqual([event, event, event]);
+      for (const line of h.lines) {
+        const data = (JSON.parse(line) as { data: Record<string, unknown> }).data;
+        expect(Object.keys(data)).toEqual(['route']);
+        expect(['resolve', 'otp_request', 'otp_verify']).toContain(data.route);
+      }
+      expectClean(h.lines, [...ADDRESSES, 'cf-connecting-ip', 'x-forwarded-for', 'user-agent']);
+      // Nothing about the request reached the limiter's key either.
+      expect(h.limiter.keys()).toEqual(['link:resolve', 'link:otp_request', 'link:otp_verify']);
+    },
+  );
 
   it('a failed send logs the method only, never the issued code', async () => {
     const h = await createHarness(failing(['messagingSend']));

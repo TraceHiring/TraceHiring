@@ -45,6 +45,7 @@ export type EnvHoldsOnlyD1Bindings = Assert<
     | 'EVIDENCE'
     | 'MIRROR_QUEUE'
     | 'API'
+    | 'LINK_LIMITER'
   >
 >;
 /** The app factory accepts a clock and a log sink, and no reporter. */
@@ -72,11 +73,21 @@ const edgeSources: Record<string, string> = Object.fromEntries(
 
 /**
  * The exact binding set of each test pool (vitest.config.ts; never deployed). `edge` is the top level of wrangler.jsonc;
- * `edge-do` adds the local miniflare bindings the real SessionDO and InviteOtpDO need, and nothing else.
+ * `edge-do` adds the local miniflare bindings the real SessionDO and InviteOtpDO need, plus the local LINK_LIMITER rate
+ * limiter (OPEN-13), and nothing else.
  */
 const POOL_BINDINGS: Record<'top' | 'do', string[]> = {
   top: ['VERSION'],
-  do: ['EVIDENCE', 'MIRROR_QUEUE', 'MIRROR_TRANSPORT', 'OTP', 'PACKAGES', 'SESSION', 'VERSION'],
+  do: [
+    'EVIDENCE',
+    'LINK_LIMITER',
+    'MIRROR_QUEUE',
+    'MIRROR_TRANSPORT',
+    'OTP',
+    'PACKAGES',
+    'SESSION',
+    'VERSION',
+  ],
 };
 
 describe('edge Worker has no secrets and no error reporter', () => {

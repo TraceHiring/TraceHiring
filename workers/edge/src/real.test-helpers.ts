@@ -4,7 +4,7 @@
 // a file, so no two tests share an object.
 import { env } from 'cloudflare:workers';
 
-type Bound = Required<Pick<Env, 'SESSION' | 'OTP' | 'EVIDENCE' | 'MIRROR_QUEUE'>>;
+type Bound = Required<Pick<Env, 'SESSION' | 'OTP' | 'EVIDENCE' | 'MIRROR_QUEUE' | 'LINK_LIMITER'>>;
 
 /** The named binding of the `edge-do` pool; throws when it is missing. */
 export const bound = <K extends keyof Bound>(name: K): Bound[K] => {
