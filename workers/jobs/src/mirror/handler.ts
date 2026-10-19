@@ -11,7 +11,7 @@
 // The job writes the rows itself rather than through private.mirror_session because the carried C1b binding needs
 // a photo the head check refused to be dropped while the message still names it, and mirror_session refuses a
 // message with neither a photo nor a skip reason (see docs/reviews/D1-r2-writer-report.md).
-import type { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
+import { isStorableText, type SessionMirrorMessage } from '@trace/shared/contracts/candidate';
 import { jobKey, type EvidenceReader, type SqlTx } from '@trace/shared/jobs';
 import { readFinalAnswers, sha256Hex, verifiedPhoto } from './evidence.js';
 import {
@@ -63,6 +63,9 @@ const runMirrorUnsafe = async (message: SessionMirrorMessage, deps: MirrorDeps):
     const itemVersionId = itemAt.get(a.position);
     if (itemVersionId === undefined) return fail('mirror_final_invalid');
     if (a.kind === 'text') {
+      // Security review #2 (defence in depth; the contract refuses it too): text Postgres cannot store would fail
+      // every redelivery with a database error, so it is a malformed file here, before any write.
+      if (!isStorableText(a.text)) return fail('mirror_final_invalid');
       if ((await sha256Hex(a.text)) !== a.sha256) return fail('mirror_final_invalid');
       answers.push({
         itemVersionId,

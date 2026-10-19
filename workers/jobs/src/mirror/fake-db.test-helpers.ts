@@ -139,6 +139,18 @@ export const mirrorHandlers: Record<string, Handler> = {
       })),
   [SQL.insertResponses]: (db, [org, s, submittedAt, rows]) => {
     for (const x of JSON.parse(String(rows)) as Row[]) {
+      // As Postgres: the jsonb cast refuses \u0000 (22P05) and a lone surrogate escape (22P02), quoting the input.
+      const text = typeof x['final_text'] === 'string' ? x['final_text'] : '';
+      if (text.includes('\u0000')) {
+        throw Object.assign(new Error('unsupported Unicode escape sequence: ' + text), {
+          code: '22P05',
+        });
+      }
+      if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text)) {
+        throw Object.assign(new Error('invalid input syntax for type json: ' + text), {
+          code: '22P02',
+        });
+      }
       insertUnique(
         db,
         'responses',

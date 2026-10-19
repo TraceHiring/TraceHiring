@@ -167,6 +167,29 @@ describe('mirror stage', () => {
       );
     });
 
+    // Security review #2: text Postgres cannot store (NUL, a lone surrogate) is a constant mirror_final_invalid,
+    // never a 22P05/22P02 from the database, and nothing is written.
+    it.each([
+      ['a NUL', 'before\u0000after'],
+      ['a lone high surrogate', 'before\uD800after'],
+      ['a lone low surrogate', 'before\uDC00after'],
+    ])('a text answer with %s is mirror_final_invalid, nothing written', async (_name, text) => {
+      const w = await sessionWorld();
+      const body = JSON.stringify({
+        v: 1,
+        sessionId: W.session,
+        answers: [{ position: 3, kind: 'text', text, sha256: await sha256Hex(text), finalSeq: 6 }],
+      });
+      w.evidence.put(w.message.evidence.finalKey, body);
+      const err = (await run(w, {
+        ...w.message,
+        evidence: { ...w.message.evidence, finalSha256: await sha256Hex(body) },
+      }).catch((e: unknown) => e)) as Error & { code?: string };
+      expect(err.message).toBe('mirror_final_invalid');
+      expect(err.code).toBeUndefined();
+      for (const t of written) expect(table(w.db, t)).toHaveLength(0);
+    });
+
     it('a cleared MCQ choice stores no response', async () => {
       const w = await sessionWorld();
       const body = JSON.stringify({
