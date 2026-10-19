@@ -35,4 +35,18 @@ Writer requests: 1 wiring and 5 (ack-and-alert, optional; **carried**, retries t
 fails the check counts as missing): **accepted** (fail closed; by P10 it can only move Clear to Insufficient evidence).
 
 ## Fix round
-(filled in after the fix writer and the confirming re-review)
+Opus fix writer on `d1/r2-fixes` (`2ad15be` + merge `fff6e36` of `a52f6e4`, tip `9817ce5`; report
+`docs/reviews/D1-r2-fix-report.md`; jobs 15 files / 234 unit tests, 4 files / 37 db tests): DB-1 `a2698ca`, DB-2 `3b7fb62`,
+DB-3 `0b7c3ea`, DB-4/DB-5 `10e91e5`, DB-8 `b4dc3f6`, SEC-4 `d02476d`, SEC-2 job `a24f57c` and edge `b3b6e1f`, F1 + F2
+`d6773b4`, F4 `aac7ad7`, F5 `a173eb8`. **Sonnet confirming re-review: CONFIRMED WITH NOTES** (all eleven fixed with
+regression tests; no rule breach). Notes and lead dispositions:
+1. Medium: the AT-D25 model derived UTF-16 splices that can split a pair, which the contract refuses, and never
+   parsed with the contract. **Fixed (lead)** test first: the alphabet gains a second emoji sharing the high
+   surrogate (red: `unstorable_text`), every event is parsed with `ClientEvent`, `spliceOf` is code-point aligned;
+   spec rev 4h (binding for C2).
+2. Low: R2 reads happen under the invitation lock. **Accepted** (only a concurrent mirror of the same invitation waits).
+3. Low: the 42501 retry predicate matches the guard text. **Accepted**: the real-guard db test now runs in `test:rls`.
+4. Low: the fake lock is a no-op; the lock order is proven only by the db test. **Accepted** (same reason).
+5. Note: `db-test/**` was in no tsconfig. **Fixed (lead)** `6d504da` (tsconfig.node include).
+
+Merged `--no-ff` into `d1/integration` as `3c51438`; lead wiring `6d504da` (`queue/wiring.ts`, `index.ts`, `test:rls` step).

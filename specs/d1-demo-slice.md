@@ -1,5 +1,6 @@
 # Spec — D1 · Demo slice (thin end-to-end, staging, synthetic data only)
 
+- **Revision 4h (2026-10-19, lead, BUILD Wave 2a).** R2 confirming re-review note 1: the `answer.text` splice (§4.4 table) is aligned to code points (a prefix or suffix boundary inside a surrogate pair moves out of it), because the contract refuses a lone surrogate in `i`; AT-D25 now generates two emoji that share a high surrogate and parses every event with `ClientEvent`. Binding for stream C2 (the candidate app derives the splice this way).
 - **Revision 4g (2026-10-19, lead, BUILD Wave 2a).** Decisions from the R2 spec, security and database reviews (docs/reviews/D1-review-r2.md), accepted by the lead (none changes rules 1–9):
   - §5.1 mirror, §3.4, §10-DB: the mirror stage writes its rows itself as `trace_worker` and does **not** call `private.mirror_session` (it must drop a start photo that fails the C1b head check while the message still names it). It keeps every guard of that function: invitation `FOR UPDATE` before the key check, the `session_mirror` key, dead invitation, session id, consent, both adult answers, exactly one of photo and skip reason; the key check comes before any R2 read. `media_objects` is written only when the canonical `start_photo.jpg` exists with the mirrored sha256 and size; otherwise the photo counts as missing. Revoking `mirror_session` from `trace_worker` and the `mirror_seq` duplicate check are M3a.
   - §4.6/§5.1 candidate text: the contract refuses U+0000 and lone surrogates in answer edits, `final.json` and the session view (`isStorableText`); the edge refuses an edit whose rebuilt text is unstorable.
@@ -458,7 +459,7 @@ Compact JWS, header `{alg:'ES256', typ:'JWT', kid}`; claims exactly ADR-030 §7:
 
 | `kind` | Payload | Meaning |
 | --- | --- | --- |
-| `answer.text` | `{item, p, d, i}` | splice on the item's text: keep `p` UTF-16 units, delete `d`, insert `i` (≤ 10 000), derived from the common prefix/suffix of consecutive textarea values. `maxChars` is enforced on the rebuilt length |
+| `answer.text` | `{item, p, d, i}` | splice on the item's text: keep `p` UTF-16 units, delete `d`, insert `i` (≤ 10 000), derived from the common prefix/suffix of consecutive textarea values, with both boundaries moved out of any surrogate pair so `i` and the rebuilt text are storable (rev 4h; an unstorable `i` or rebuilt text is 400). `maxChars` is enforced on the rebuilt length |
 | `answer.choice` | `{item, option\|null}` | selected MCQ option, `null` clears |
 | `signal` | a §4.6 shape | client-reported browser fact |
 | `heartbeat` | `{}` | liveness, every 10 s |

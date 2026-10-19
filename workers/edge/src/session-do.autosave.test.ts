@@ -27,7 +27,7 @@ import {
   type CoreHarness,
 } from './session.test-helpers.js';
 import { ORG, SESSION } from './token.test-helpers.js';
-import type { ClientEvent } from '@trace/shared/contracts/candidate';
+import { ClientEvent } from '@trace/shared/contracts/candidate';
 
 const KEYS = evidenceKeys(ORG, SESSION);
 
@@ -355,12 +355,24 @@ describe('an invalid edit rejects the whole batch (AT-D29 maxChars, RT-13)', () 
 const AT_D25_SEED = 20_261_018;
 const AT_D25_RUNS = 150;
 
-const ALPHABET = ['a', 'b', 'c', ' ', '\n', 'é', '😀', 'Z'];
+// Two emoji that share a high surrogate, so a UTF-16 prefix/suffix can end inside a pair (R2 re-review 1).
+const ALPHABET = ['a', 'b', 'c', ' ', '\n', 'é', '😀', '😁', 'Z'];
 
-/** The splice a client derives from two consecutive textarea values (common prefix and suffix, §4.4). */
+/** True when UTF-16 offset `k` of `s` falls between the two halves of a surrogate pair. */
+const insidePair = (s: string, k: number): boolean =>
+  k > 0 &&
+  k < s.length &&
+  /[\uD800-\uDBFF]/.test(s.charAt(k - 1)) &&
+  /[\uDC00-\uDFFF]/.test(s.charAt(k));
+
+/**
+ * The splice a client derives from two consecutive textarea values (common prefix and suffix, §4.4), aligned to code
+ * points: a prefix or suffix boundary inside a surrogate pair moves out of it, so `i` is always storable (spec 4h).
+ */
 const spliceOf = (prev: string, next: string) => {
   let p = 0;
   while (p < prev.length && p < next.length && prev[p] === next[p]) p += 1;
+  if (insidePair(prev, p) || insidePair(next, p)) p -= 1;
   let s = 0;
   while (
     s < prev.length - p &&
@@ -369,6 +381,7 @@ const spliceOf = (prev: string, next: string) => {
   ) {
     s += 1;
   }
+  if (s > 0 && (insidePair(prev, prev.length - s) || insidePair(next, next.length - s))) s -= 1;
   return { p, d: prev.length - p - s, i: next.slice(p, next.length - s) };
 };
 
@@ -395,13 +408,6 @@ const stepArb = fc.record({
   edits: fc.array(editArb, { minLength: 1, maxLength: 5 }),
   resend: fc.nat(9).map((n) => n < 3),
 });
-
-/** True when UTF-16 offset `k` of `s` falls between the two halves of a surrogate pair. */
-const insidePair = (s: string, k: number): boolean =>
-  k > 0 &&
-  k < s.length &&
-  /[\uD800-\uDBFF]/.test(s.charAt(k - 1)) &&
-  /[\uDC00-\uDFFF]/.test(s.charAt(k));
 
 /**
  * The independent model: the next textarea value after an edit, at most `max` UTF-16 units. A textarea edits whole
@@ -446,7 +452,8 @@ describe('final answer = replay of every edit in gseq order (AT-D25)', () => {
             const next = applyEdit(prev, edit, edit.item === SHORT ? SHORT_MAX : 200);
             const { p, d, i } = spliceOf(prev, next);
             seq += 1;
-            batch.push(text(seq, edit.item, p, d, i));
+            // R2 re-review 1: every generated event must pass the wire contract the HTTP layer enforces.
+            batch.push(ClientEvent.parse(text(seq, edit.item, p, d, i)));
             model.set(edit.item, next);
           }
           const resend = step.resend ? sent.slice(-2) : [];
