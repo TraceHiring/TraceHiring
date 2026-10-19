@@ -98,6 +98,7 @@ export const COPY = {
     preview: 'Your photo. Everything outside the oval is blurred.',
     live: 'Camera preview. Everything outside the oval is blurred.',
     shotTaken: 'Photo taken. The camera is off.',
+    preparing: 'Preparing your photo…',
     uploading: 'Saving your photo…',
     deniedTitle: 'The camera is not allowed',
     denied:

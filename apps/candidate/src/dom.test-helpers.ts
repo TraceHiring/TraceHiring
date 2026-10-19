@@ -136,15 +136,20 @@ export interface FakeTrack {
   stop: ReturnType<typeof vi.fn>;
 }
 
-/** navigator.mediaDevices with a recording getUserMedia; `deny` makes it reject with that DOMException name. */
-export const fakeCamera = (deny?: string) => {
+/**
+ * navigator.mediaDevices with a recording getUserMedia; `deny` makes it reject with that DOMException name. With
+ * `hold`, each call waits until `release(k)` resolves the k-th one (to make two requests overlap).
+ */
+export const fakeCamera = (deny?: string, { hold = false }: { hold?: boolean } = {}) => {
   const tracks: FakeTrack[] = [];
   const calls: { constraints: MediaStreamConstraints; order: number }[] = [];
+  const held: (() => void)[] = [];
   const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
     calls.push({ constraints, order: nextOrder() });
     if (deny !== undefined) throw Object.assign(new Error(deny), { name: deny });
     const track: FakeTrack = { kind: 'video', stop: vi.fn() };
     tracks.push(track);
+    if (hold) await new Promise<void>((resolve) => held.push(resolve));
     return {
       getTracks: () => [track],
       getAudioTracks: () => [],
@@ -155,7 +160,7 @@ export const fakeCamera = (deny?: string) => {
     configurable: true,
     value: { getUserMedia },
   });
-  return { getUserMedia, tracks, calls };
+  return { getUserMedia, tracks, calls, release: (k: number) => held[k]?.() };
 };
 
 /** A JPEG shaped like Chromium's canvas output: SOI, APP0, APP2 (ICC), DQT, SOF0 320x240, SOS, data, EOI. */
@@ -166,8 +171,18 @@ export const CANVAS_JPEG = new Uint8Array([
   0xd9,
 ]);
 
+/** What the fake `toBlob` answers: the canvas JPEG at once, held until released, or these bytes. */
+export const blobControl: { hold: boolean; bytes: Uint8Array; pending: (() => void)[] } = {
+  hold: false,
+  bytes: new Uint8Array(0),
+  pending: [],
+};
+
 /** Canvas 2D context, toBlob, video size and play, and a frame loop that never runs on its own. */
 export const fakeCanvasAndVideo = () => {
+  blobControl.hold = false;
+  blobControl.bytes = CANVAS_JPEG;
+  blobControl.pending = [];
   const ctx = {
     drawImage: vi.fn(),
     getImageData: (_x: number, _y: number, w: number, h: number) => ({
@@ -190,7 +205,10 @@ export const fakeCanvasAndVideo = () => {
   Object.defineProperty(HTMLCanvasElement.prototype, 'toBlob', {
     configurable: true,
     value(callback: (blob: Blob | null) => void) {
-      callback(new Blob([CANVAS_JPEG], { type: 'image/jpeg' }));
+      const answer = () =>
+        callback(new Blob([blobControl.bytes as BlobPart], { type: 'image/jpeg' }));
+      if (blobControl.hold) blobControl.pending.push(answer);
+      else answer();
     },
   });
   Object.defineProperty(HTMLMediaElement.prototype, 'play', {

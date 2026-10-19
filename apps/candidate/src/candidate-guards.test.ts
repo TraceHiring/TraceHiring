@@ -12,7 +12,7 @@
 //   (3) the camera is never asked for before the consent call answered success, exactly once on the photo step, and
 //       never on the rules or test steps; (4) every track stops as soon as the shot is taken and on unmount; plus
 //   the camera-denied skip path and the under-18 path (no consent, no camera).
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import indexHtml from '../index.html?raw';
 import pkg from '../package.json';
@@ -20,6 +20,7 @@ import { App } from './App';
 import type { Boot } from './boot';
 import { COPY } from './copy';
 import {
+  blobControl,
   buttonByText,
   CANVAS_JPEG,
   click,
@@ -546,6 +547,80 @@ describe(
       expect(camera.tracks[0]?.stop).toHaveBeenCalled();
       await waitFor(() => h1Text(container) === COPY.rules.title, 'rules');
       expect(edge.calls.some((c) => c.method === 'PUT')).toBe(false);
+    });
+
+    it('SEC-1: two overlapping camera starts leave no stream running (every track of both is stopped)', async () => {
+      const camera = fakeCamera(undefined, { hold: true });
+      edgeRoutes();
+      app = await mount(createElement(App, { boot: BOOT }));
+      const { container } = app;
+      await toConsent(container);
+      await click(await waitForButton(container, COPY.consent.agree));
+      const turnOn = await waitForButton(container, COPY.photo.start);
+      // Two clicks before React re-renders the button as disabled.
+      await act(async () => {
+        turnOn.click();
+        turnOn.click();
+      });
+      await waitFor(() => camera.getUserMedia.mock.calls.length === 2, 'two camera requests');
+      await act(async () => {
+        camera.release(0);
+        camera.release(1);
+      });
+      await click(await waitForButton(container, COPY.photo.take));
+      await waitForButton(container, COPY.photo.use);
+      expect(camera.tracks).toHaveLength(2);
+      for (const track of camera.tracks) expect(track.stop).toHaveBeenCalled();
+    });
+
+    it('keeps "Use this photo" and "Retake" disabled, saying so, until the photo is ready', async () => {
+      fakeCamera();
+      const edge = edgeRoutes();
+      blobControl.hold = true;
+      app = await mount(createElement(App, { boot: BOOT }));
+      const { container } = app;
+      await toConsent(container);
+      await click(await waitForButton(container, COPY.consent.agree));
+      await click(await waitForButton(container, COPY.photo.start));
+      await click(await waitForButton(container, COPY.photo.take));
+      const use = await waitFor(() => buttonByText(container, COPY.photo.use), 'use button');
+      const retake = buttonByText(container, COPY.photo.retake);
+      expect(use.disabled).toBe(true);
+      expect(retake?.disabled).toBe(true);
+      expect(container.querySelector('[role="status"]')?.textContent).toBe(COPY.photo.preparing);
+      await click(use);
+      expect(edge.calls.some((c) => c.method === 'PUT')).toBe(false);
+      await act(async () => {
+        for (const answer of blobControl.pending) answer();
+      });
+      await waitFor(
+        () => !(buttonByText(container, COPY.photo.use)?.disabled ?? true),
+        'photo ready',
+      );
+      expect(buttonByText(container, COPY.photo.retake)?.disabled).toBe(false);
+      await click(buttonByText(container, COPY.photo.use) as HTMLButtonElement);
+      await waitFor(() => h1Text(container) === COPY.rules.title, 'rules');
+    });
+
+    it('a photo that cannot be made into a clean JPEG shows the error and offers Retake', async () => {
+      const camera = fakeCamera();
+      edgeRoutes();
+      blobControl.bytes = new Uint8Array([1, 2, 3, 4]);
+      app = await mount(createElement(App, { boot: BOOT }));
+      const { container } = app;
+      await toConsent(container);
+      await click(await waitForButton(container, COPY.consent.agree));
+      await click(await waitForButton(container, COPY.photo.start));
+      await click(await waitForButton(container, COPY.photo.take));
+      await waitFor(() => container.querySelector('[role="alert"]'), 'error summary');
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(COPY.photo.unusable);
+      expect(buttonByText(container, COPY.photo.use)?.disabled ?? true).toBe(true);
+      blobControl.bytes = CANVAS_JPEG;
+      await click(await waitForButton(container, COPY.photo.retake));
+      await click(await waitForButton(container, COPY.photo.take));
+      await waitForButton(container, COPY.photo.use);
+      expect(camera.getUserMedia).toHaveBeenCalledTimes(2);
+      for (const track of camera.tracks) expect(track.stop).toHaveBeenCalled();
     });
 
     it('camera denied: a plain-language screen, then "Continue without a photo" starts with camera_denied', async () => {

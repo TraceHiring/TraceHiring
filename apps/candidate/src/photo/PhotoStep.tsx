@@ -56,8 +56,12 @@ export function PhotoStep({ api, lobbyToken, onDone, onStepError }: Props) {
   const rawRef = useRef<HTMLCanvasElement | null>(null);
   const jpegRef = useRef<Uint8Array | null>(null);
   const aliveRef = useRef(true);
+  const generationRef = useRef(0);
+  const [jpegState, setJpeg] = useState<'none' | 'pending' | 'ready' | 'failed'>('none');
 
+  /** Stops the camera; any camera request still in flight is now stale and is stopped when it arrives (SEC-1). */
   const stopCamera = () => {
+    generationRef.current += 1;
     stopStream(streamRef.current);
     streamRef.current = null;
     const video = videoRef.current;
@@ -126,10 +130,16 @@ export function PhotoStep({ api, lobbyToken, onDone, onStepError }: Props) {
   }, [phase]);
 
   const startCamera = async () => {
+    // SEC-1: one camera at a time. A held stream stops first, and a request that a newer one (or leaving the camera)
+    // overtook is stopped when it arrives, never stored.
+    stopCamera();
+    const generation = generationRef.current;
+    jpegRef.current = null;
+    setJpeg('none');
     setError(null);
     setPhase('starting');
     const res = await openCamera();
-    if (!aliveRef.current) {
+    if (!aliveRef.current || generation !== generationRef.current) {
       if (res.ok) stopStream(res.stream);
       return;
     }
@@ -156,46 +166,54 @@ export function PhotoStep({ api, lobbyToken, onDone, onStepError }: Props) {
     } catch {
       // a muted inline video may still start on its own; the frame size falls back to 640x480
     }
-    if (!aliveRef.current) {
-      stopCamera();
+    if (!aliveRef.current || generation !== generationRef.current) {
+      if (streamRef.current === res.stream) stopCamera();
+      else stopStream(res.stream);
       return;
     }
     setPhase('live');
+  };
+
+  /** The shot could not become a clean JPEG: say so and offer Retake. */
+  const shotFailed = () => {
+    jpegRef.current = null;
+    setJpeg('failed');
+    setError(COPY.photo.unusable);
   };
 
   const take = async () => {
     const drawn = renderFrame();
     // The shot is taken: the camera goes off at once.
     stopCamera();
+    const generation = generationRef.current;
     const canvas = canvasRef.current;
-    if (!drawn || canvas === null) {
-      setError(COPY.photo.unusable);
-      setPhase('intro');
-      return;
-    }
+    jpegRef.current = null;
     setPhase('shot');
+    if (!drawn || canvas === null) return shotFailed();
+    // "Use this photo" and "Retake" stay disabled until the stripped JPEG is ready.
+    setJpeg('pending');
     const blob = await toJpeg(canvas);
-    if (!aliveRef.current) return;
-    if (blob === null) {
-      setError(COPY.photo.unusable);
-      setPhase('intro');
-      return;
+    if (!aliveRef.current || generation !== generationRef.current) return;
+    if (blob === null) return shotFailed();
+    let encoded: Uint8Array;
+    try {
+      encoded = new Uint8Array(await blob.arrayBuffer());
+    } catch {
+      return shotFailed();
     }
-    const encoded = new Uint8Array(await blob.arrayBuffer());
-    if (!aliveRef.current) return;
+    if (!aliveRef.current || generation !== generationRef.current) return;
     try {
       // APP0-only (rev 4i): the browser's ICC profile, Exif or comment segments never leave the device.
       jpegRef.current = stripJpegMetadata(encoded);
+      setJpeg('ready');
     } catch {
-      jpegRef.current = null;
-      setError(COPY.photo.unusable);
-      setPhase('intro');
+      shotFailed();
     }
   };
 
   const use = async () => {
     const jpeg = jpegRef.current;
-    if (jpeg === null) return;
+    if (jpeg === null || jpegState !== 'ready') return;
     setError(null);
     setPhase('uploading');
     const sha256 = await sha256Hex(jpeg);
@@ -228,14 +246,17 @@ export function PhotoStep({ api, lobbyToken, onDone, onStepError }: Props) {
   const skipReason: PhotoSkippedReason =
     phase === 'denied' ? 'camera_denied' : phase === 'none' ? 'no_camera' : 'declined';
   const showCanvas = phase === 'live' || phase === 'shot' || phase === 'uploading';
+  const preparing = phase === 'shot' && jpegState === 'pending';
   const status =
     phase === 'starting'
       ? COPY.photo.starting
       : phase === 'uploading'
         ? COPY.photo.uploading
-        : phase === 'shot'
-          ? COPY.photo.shotTaken
-          : '';
+        : preparing
+          ? COPY.photo.preparing
+          : phase === 'shot' && jpegState === 'ready'
+            ? COPY.photo.shotTaken
+            : '';
 
   return (
     <section>
@@ -302,7 +323,7 @@ export function PhotoStep({ api, lobbyToken, onDone, onStepError }: Props) {
               type="button"
               className={ui.button}
               onClick={() => void use()}
-              disabled={phase === 'uploading'}
+              disabled={phase === 'uploading' || jpegState !== 'ready'}
             >
               {COPY.photo.use}
             </button>
@@ -310,7 +331,7 @@ export function PhotoStep({ api, lobbyToken, onDone, onStepError }: Props) {
               type="button"
               className={ui.secondary}
               onClick={retake}
-              disabled={phase === 'uploading'}
+              disabled={phase === 'uploading' || preparing}
             >
               {COPY.photo.retake}
             </button>
