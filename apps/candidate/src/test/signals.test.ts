@@ -119,6 +119,21 @@ describe('paste (capture phase, prevented)', () => {
 });
 
 describe('drop (capture phase, prevented)', () => {
+  it('SR-11: prevents dragover in capture phase, so a dropped file cannot navigate away (no signal)', () => {
+    const el = document.createElement('div');
+    document.body.append(el);
+    el.addEventListener('dragover', (e) => e.stopPropagation());
+    const e = new Event('dragover', { bubbles: true, cancelable: true });
+    el.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(true);
+    expect(emitted).toEqual([]);
+    signals.dispose();
+    const after = new Event('dragover', { bubbles: true, cancelable: true });
+    el.dispatchEvent(after);
+    expect(after.defaultPrevented).toBe(false);
+    install();
+  });
+
   it('records text, files and other drops by kind and length, never a name or the text', () => {
     const el = textarea();
     expect(drop(el, ['text/plain'], SECRET).defaultPrevented).toBe(true);

@@ -145,7 +145,13 @@ export const installSignals = (deps: SignalDeps): Signals => {
     if (!submitting) emit({ sig: 'fullscreen_exit', item: currentItem() });
   };
 
+  /** SR-11: a drag over the page is never a drop target the browser handles itself (a file would open in place). */
+  const onDragOver = (event: Event) => {
+    event.preventDefault();
+  };
+
   const listeners: [string, (event: Event) => void][] = [
+    ['dragover', onDragOver],
     ['copy', onCopy],
     ['cut', onCopy],
     ['paste', onPaste],
