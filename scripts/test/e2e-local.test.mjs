@@ -73,6 +73,8 @@ function harness({
   sqlAnswer = () => ({ ok: true, out: '' }),
   operatorCode = () => 0,
   parentEnv = {},
+  writeFileFails = () => false,
+  removeDirFails = false,
 } = {}) {
   const root = makeTempDir('trace-e2e-root-');
   writeFiles(root, {
@@ -196,9 +198,13 @@ function harness({
     removeDir: (dir) => {
       h.removed.push(dir);
       h.events.push('remove state');
+      if (removeDirFails) throw new Error(`EBUSY: resource busy or locked, rmdir '${dir}'`);
     },
     writeFile: (file, text) => {
-      h.written[path.relative(root, file).split(path.sep).join('/')] = text;
+      const rel = path.relative(root, file).split(path.sep).join('/');
+      if (writeFileFails(rel)) throw new Error(`ENOSPC: no space left, write '${rel}'`);
+      h.written[rel] = text;
+      h.events.push(`write ${rel}`);
     },
     env: { GITHUB_SHA: 'a'.repeat(40), ...parentEnv },
   };
@@ -377,8 +383,11 @@ describe('main', () => {
     expect(e.filter((x) => x.startsWith('operator ')).at(-1)).toBe('operator addMember');
     expect(e.lastIndexOf('operator addMember')).toBeLessThan(at('start api'));
     // Teardown: every process stops, then the login roles go, then the state folder (and its files).
-    expect(e.lastIndexOf('stop recruiter')).toBeLessThan(at('sql drop'));
-    expect(at('sql drop')).toBeLessThan(at('remove state'));
+    // SEC-E3: the state folder (with the env files) goes first, right after the stop, then the
+    // roles, then the process logs.
+    expect(e.lastIndexOf('stop recruiter')).toBeLessThan(at('remove state'));
+    expect(at('remove state')).toBeLessThan(at('sql drop'));
+    expect(at('sql drop')).toBeLessThan(e.findIndex((x) => x.startsWith(`write ${LOG_DIR}`)));
     expect(h.sql.at(-1).sql).toBe(dropLoginRolesSql());
     expect(h.sql.every((q) => q.url === h.deps.stackEnv().DB_URL)).toBe(true);
   });
@@ -744,6 +753,28 @@ describe('main', () => {
     expect(h.exitAt.code).toBe(130);
     expect(h.exitAt.killed.sort()).toEqual(['api', 'candidate', 'edge+jobs', 'recruiter']);
     expect(h.exitAt.removed).toEqual([STATE]);
+  });
+
+  // Security review SEC-E3: a failing log write cannot leave the env files behind.
+  it('removes the state folder and drops the roles even when writing a process log throws', async () => {
+    const h = harness({ writeFileFails: (rel) => rel.startsWith(LOG_DIR) });
+    // A lost log is a warning; the run's own result stands.
+    expect(await main(h.deps)).toBe(0);
+    expect(h.removed).toEqual([STATE]);
+    expect(h.sql.at(-1).sql).toBe(dropLoginRolesSql());
+    expect(h.lines.join('\n')).toMatch(/warning: could not write the api process log/);
+    // The manifest is still written.
+    expect(h.written[MANIFEST]).toBeDefined();
+  });
+
+  it('warns without the folder path when the state folder cannot be removed, and still cleans up', async () => {
+    const h = harness({ removeDirFails: true });
+    expect(await main(h.deps)).toBe(0);
+    const text = h.lines.join('\n');
+    expect(text).toMatch(/warning: could not remove the temporary state folder/);
+    expect(text).not.toContain(STATE);
+    expect(h.sql.at(-1).sql).toBe(dropLoginRolesSql());
+    expect(Object.keys(h.written).filter((k) => k.startsWith(LOG_DIR))).toHaveLength(4);
   });
 
   // Security review SEC-E2: a Ctrl+C after the roles were set drops them too (best effort, sync).

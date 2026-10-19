@@ -362,6 +362,10 @@ export function buildEnv() {
 
 class StepFailure extends Error {}
 
+/** A file-system error code, safe to print; a message (which can hold a path) is never used. */
+const codeOf = (e) =>
+  typeof e?.code === 'string' && /^[A-Z0-9_]{2,20}$/.test(e.code) ? e.code : 'error';
+
 /**
  * Security review SEC-E1: the operator scripts prefer TRACE_OPERATOR_DB_URL (the staging operator
  * variable) over the local stack (scripts/ops/lib.mjs resolveDbUrl). A non-local value in the
@@ -656,13 +660,24 @@ export async function main(options) {
       return problems;
     } finally {
       await Promise.all(handles.map((h) => h.stop()));
-      for (const h of handles) {
-        const file = path.join(root, ...LOG_DIR.split('/'), `${h.name.replace(/\W/g, '-')}.log`);
-        deps.writeFile(file, redact(h.output()));
+      // Security review SEC-E3: the state folder (with the generated env files) goes first, in its
+      // own try, so nothing after it can leave those files behind. The warning has no path.
+      try {
+        deps.removeDir(stateDir);
+      } catch (e) {
+        deps.warn(
+          `${TOOL}: warning: could not remove the temporary state folder (${codeOf(e)}); delete the trace-e2e-* folder in the OS temp directory by hand`,
+        );
       }
+      live.stateDir = null;
       // The Workers are stopped, so nothing uses the logins any more; a later run recreates them.
       if (rolesTouched) {
-        const dropped = deps.runSql({ url: stack.dbUrl, sql: dropLoginRolesSql(), vars: {} });
+        let dropped;
+        try {
+          dropped = deps.runSql({ url: stack.dbUrl, sql: dropLoginRolesSql(), vars: {} });
+        } catch {
+          dropped = { ok: false, sqlstate: null };
+        }
         if (!dropped.ok) {
           const why = dropped.sqlstate ? `SQLSTATE ${dropped.sqlstate}` : 'no SQLSTATE';
           deps.warn(
@@ -671,8 +686,14 @@ export async function main(options) {
         }
         live.rolesDbUrl = null;
       }
-      deps.removeDir(stateDir);
-      live.stateDir = null;
+      for (const h of handles) {
+        const file = path.join(root, ...LOG_DIR.split('/'), `${h.name.replace(/\W/g, '-')}.log`);
+        try {
+          deps.writeFile(file, redact(h.output()));
+        } catch (e) {
+          deps.warn(`${TOOL}: warning: could not write the ${h.name} process log (${codeOf(e)})`);
+        }
+      }
     }
   });
   for (const s of SIGNALS) deps.proc.off(s, onSignal);
