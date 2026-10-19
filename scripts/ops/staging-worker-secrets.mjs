@@ -488,6 +488,14 @@ export async function main({ argv, deps = realScriptDeps() }) {
         'a login role has an unexpected membership or attribute (each may hold only its one trace_* role, inherit false, set true); fix it by hand. The transaction rolled back; nothing was changed',
       );
     }
+    if (db.sqlstate === null) {
+      // No SQLSTATE: the connection dropped, psql was killed or timed out. The commit may or may not have run.
+      const all = PLAN.flatMap((w) => w.secrets.map((s) => s.name));
+      return fail(
+        1,
+        `the database call ended without a SQL error (connection lost, psql exit or timeout), so the outcome is unknown: the login passwords may have changed, and then all five secrets are stale: ${all.join(', ')}. Re-run with --yes (it sets new passwords and every secret again)`,
+      );
+    }
     return fail(1, `${describeFailure(db)}; the transaction rolled back, nothing was changed`);
   }
   say(`${TAG}: database: ${LOGIN_ROLES.length} login roles have new passwords and their one grant`);

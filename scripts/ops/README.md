@@ -183,7 +183,8 @@ whose project is not this one.
    (`login noinherit`) or sets its new password; grants its one `trace_*` role `with inherit false, set true`;
    then stops if any login holds another membership or a powerful attribute. It never drops or revokes
    anything. Postgres receives each password only as a SCRAM-SHA-256 verifier, so the plain password is never
-   in a server log. Any error rolls the whole transaction back.
+   in a server log. A SQL error rolls the whole transaction back. If the connection drops or `psql` times out
+   instead, the script cannot know whether the commit ran, says so, and asks for a re-run with `--yes`.
 5. Puts the five secrets with `pnpm exec wrangler secret put <NAME> --env staging`, each value on standard
    input, in `services/api` then `workers/jobs`.
 
@@ -216,4 +217,5 @@ first staging deploy" before anything changes. It never hangs on a prompt.
 | `a trace_* role is missing` | the migrations are not on staging yet; run the staging deploy |
 | `unexpected membership or attribute` | someone changed a login role by hand; look at it in the SQL editor, fix it, retry |
 | `the database call failed (SQLSTATE ...)` | nothing changed; check the URL and the password |
+| `ended without a SQL error ... the outcome is unknown` | the connection dropped or `psql` timed out, so the passwords may have changed and all five secrets may be stale; re-run with `--yes` |
 | `setting <NAME> ... failed` | the listed secrets are stale; fix the cause and re-run with `--yes` |

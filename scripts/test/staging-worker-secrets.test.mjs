@@ -729,6 +729,37 @@ describe('main', () => {
     expect(text).not.toContain(OP_PW);
   });
 
+  it.each([
+    [
+      'psql exits 2 with no SQLSTATE (connection lost)',
+      { status: 2, stdout: '', stderr: `server closed the connection unexpectedly ${OP_PW}` },
+    ],
+    [
+      'psql is killed by the spawn timeout',
+      {
+        status: null,
+        signal: 'SIGTERM',
+        error: Object.assign(new Error('spawnSync psql ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+        stdout: '',
+        stderr: '',
+      },
+    ],
+  ])(
+    'when %s the outcome is unknown: no "rolled back", all five secrets may be stale',
+    async (_n, psql) => {
+      const h = harness({ psql });
+      expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(1);
+      expect(h.puts()).toHaveLength(0);
+      const text = h.err.join('');
+      expect(text).not.toMatch(/rolled back|nothing was changed/i);
+      expect(text).toMatch(/unknown/i);
+      expect(text).toMatch(/passwords may have changed/i);
+      for (const w of PLAN) for (const s of w.secrets) expect(text).toContain(s.name);
+      expect(text).toMatch(/re-run with --yes/i);
+      expect(h.printed()).not.toContain(OP_PW);
+    },
+  );
+
   it('a failed secret put stops, names what is stale and asks for a re-run (exit 1)', async () => {
     const h = harness({
       put: (line) =>
