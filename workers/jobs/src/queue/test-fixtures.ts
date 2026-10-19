@@ -42,7 +42,7 @@ export const validMessage = (patch: Partial<SessionMirrorMessage> = {}): Session
     eventsSha256: HEX,
   },
   replay: 'ok',
-  signalCatalogVersion: 'd1-signals-1',
+  signalCatalogVersion: 'd1-signals-v1', // SIGNAL_CATALOG_VERSION (R2 lead request 4)
   coverage: { activeMs: 600000, coveredMs: 590000 },
   gaps: [],
   photo: null,
