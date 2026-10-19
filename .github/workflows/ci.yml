@@ -1,8 +1,8 @@
 # Trace CI (spec specs/m0-foundations.md §7.1). One workflow, so there is no `workflow_run`
-# trigger to abuse. The last job, deploy-staging (§7.2), runs only on a push to main, or on a manual
+# trigger to abuse. deploy-staging (§7.2) runs only on a push to main, or on a manual
 # workflow_dispatch from a d1/** or milestone/** branch (staging proof before main moves; d1 §7.1,
 # build-notes §0), in this repository, after the four required jobs pass; pull requests never reach
-# it or its secrets.
+# it or its secrets. The last job, e2e-staging (d1 §7.1), follows it on such a dispatch only.
 name: ci
 
 on:
@@ -339,3 +339,74 @@ jobs:
           STAGING_SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
           STAGING_SMOKE_TOTP_SECRET: ${{ secrets.STAGING_SMOKE_TOTP_SECRET }}
         run: node scripts/smoke-staging-auth.mjs
+
+  # Not a required check. d1 §7.1, AT-D1 (stream R5): the slice spec (e2e/tests/d1-slice.spec.ts,
+  # project staging) against the staging stack deploy-staging has just deployed and smoked. Only on a
+  # manual dispatch from a d1/** or milestone/** branch of this repository with run_e2e (never a push
+  # or a pull request). The preflight gets the public contract only and checks that every Worker and
+  # app serves this commit; the Playwright step is the only one holding the six E2E credentials (the
+  # H9 recruiter and the D1 reviewer smoke users). The artifact is e2e/test-results (the manifest,
+  # videos, screenshots; synthetic data only) without any trace.zip, kept 7 days, also on failure.
+  # scripts/check-workflows.mjs pins the whole job (E2E_STAGING_*).
+  e2e-staging:
+    needs: deploy-staging
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/')) && github.repository == 'TraceHiring/TraceHiring'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up toolchain and install
+        uses: ./.github/actions/setup
+      - name: Cache the Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: pnpm --filter @trace/e2e exec playwright install --with-deps chromium
+      # Fails fast, printing names only, on a missing or malformed contract value, or when an api or
+      # edge /health or an app /version.json is not this commit.
+      - name: Preflight
+        timeout-minutes: 3
+        env:
+          E2E_CANDIDATE_URL: https://trace-candidate-staging.pages.dev
+          E2E_RECRUITER_URL: https://trace-recruiter-staging.pages.dev
+          E2E_API_URL: https://trace-api-staging.abhayraj.workers.dev
+          E2E_EDGE_URL: https://trace-edge-staging.abhayraj.workers.dev
+          E2E_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          E2E_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          E2E_SHA: ${{ github.sha }}
+        run: pnpm e2e:staging:preflight
+      - name: Slice spec against staging
+        timeout-minutes: 18
+        env:
+          E2E_STAGING: '1'
+          E2E_CANDIDATE_URL: https://trace-candidate-staging.pages.dev
+          E2E_RECRUITER_URL: https://trace-recruiter-staging.pages.dev
+          E2E_API_URL: https://trace-api-staging.abhayraj.workers.dev
+          E2E_EDGE_URL: https://trace-edge-staging.abhayraj.workers.dev
+          E2E_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          E2E_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          E2E_SHA: ${{ github.sha }}
+          E2E_RECRUITER_EMAIL: ${{ secrets.STAGING_SMOKE_EMAIL }}
+          E2E_RECRUITER_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
+          E2E_RECRUITER_TOTP_SECRET: ${{ secrets.STAGING_SMOKE_TOTP_SECRET }}
+          E2E_REVIEWER_EMAIL: ${{ secrets.STAGING_REVIEWER_EMAIL }}
+          E2E_REVIEWER_PASSWORD: ${{ secrets.STAGING_REVIEWER_PASSWORD }}
+          E2E_REVIEWER_TOTP_SECRET: ${{ secrets.STAGING_REVIEWER_TOTP_SECRET }}
+        run: pnpm --filter @trace/e2e exec playwright test tests/d1-slice.spec.ts --project staging
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-staging-results
+          path: |
+            e2e/test-results
+            !e2e/test-results/**/trace.zip
+          retention-days: 7

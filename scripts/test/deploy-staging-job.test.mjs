@@ -164,9 +164,35 @@ describe('deploy-staging: the whole workflow', () => {
     expect(runChecks(REPO)).toEqual([]);
   });
 
-  it('is the last job, after the four required jobs, which stay as they are, and e2e-local', () => {
-    // e2e-local (d1 §7.1, DC-D9) is not required and deploy-staging does not need it.
-    expect(Object.keys(CI.jobs)).toEqual([...REQUIRED_JOBS, 'e2e-local', 'deploy-staging']);
+  it('comes after the four required jobs, which stay as they are, and e2e-local; only e2e-staging follows it', () => {
+    // e2e-local (d1 §7.1, DC-D9) is not required and deploy-staging does not need it. e2e-staging
+    // (d1 §7.1, AT-D1) needs deploy-staging and nothing else, and deploy-staging never waits for it.
+    expect(Object.keys(CI.jobs)).toEqual([
+      ...REQUIRED_JOBS,
+      'e2e-local',
+      'deploy-staging',
+      'e2e-staging',
+    ]);
+    expect(CI.jobs['e2e-staging'].needs).toBe('deploy-staging');
+    for (const [id, job] of Object.entries(CI.jobs)) {
+      if (id === 'e2e-staging') continue;
+      expect(JSON.stringify(job.needs ?? []), id).not.toContain('e2e-staging');
+    }
+  });
+
+  it('shares the staging environment only with e2e-staging, which runs on a d1/** or milestone/** dispatch only', () => {
+    const withEnv = Object.entries(CI.jobs)
+      .filter(([, j]) => j.environment !== undefined)
+      .map(([id]) => id);
+    expect(withEnv).toEqual(['deploy-staging', 'e2e-staging']);
+    // The dispatch half of the deploy condition, plus run_e2e: a push to main deploys but runs no E2E.
+    const e2eIf = norm(CI.jobs['e2e-staging'].if);
+    expect(e2eIf).toContain("github.event_name == 'workflow_dispatch' && inputs.run_e2e");
+    expect(e2eIf).toContain(
+      "(startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/'))",
+    );
+    expect(e2eIf).toContain("github.repository == 'TraceHiring/TraceHiring'");
+    expect(e2eIf).not.toMatch(/push|pull_request|refs\/heads\/main/);
   });
 
   it('never references AWS_* anywhere in the file', () => {

