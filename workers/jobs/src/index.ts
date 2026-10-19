@@ -2,21 +2,20 @@
 // (queue) and the sweep cron (scheduled); lead-wired (spec d1 §11).
 // Errors from all three go to Sentry through the shared adapter, and only when SENTRY_DSN_WORKERS
 // holds a DSN (spec m0-foundations §9.2; d1 AT-D22).
-// Until stream R2 lands, the three stages and the sweep's database part are the "not implemented"
-// placeholders: a queued message goes to retry and then the DLQ (never an ack), and the sweep fails
-// visibly instead of doing nothing. R2 replaces `stages` and `pendingStages` below.
+// The stages (stream R2) are built per invocation from its env (queue/wiring.ts): each runs in its own
+// transaction as its own worker role; a missing secret or binding fails closed, so the message is retried and
+// then dead-lettered, never acked without its results. The sweep runs private.sweep_pending as trace_worker.
 import { createApp } from './app.js';
 import { sentryReporter, withErrorReporting } from './error-reporting.js';
-import { notImplementedStages } from './queue/consumer.js';
 import { createQueueHandlers } from './queue/handlers.js';
-import { notImplementedPendingStages } from './queue/sweep.js';
+import { pendingStagesFor, stagesFor } from './queue/wiring.js';
 
 const app = createApp({ reporter: sentryReporter });
 
 const { queue, scheduled } = createQueueHandlers({
   reporter: sentryReporter,
-  stages: notImplementedStages,
-  pendingStages: notImplementedPendingStages,
+  stages: (env) => stagesFor(env),
+  pendingStages: (limit, env) => pendingStagesFor(limit, env),
 });
 
 export default withErrorReporting({

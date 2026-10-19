@@ -209,7 +209,7 @@ describe('queue and scheduled wiring', () => {
     expect(typeof worker.scheduled).toBe('function');
   });
 
-  it('retries every message of a batch and acks none with the placeholder stages', async () => {
+  it('without the stage database secrets every message is retried (fail closed), none is acked', async () => {
     const lines: string[] = [];
     vi.spyOn(console, 'log').mockImplementation((line: unknown) => {
       lines.push(String(line));
