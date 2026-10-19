@@ -532,6 +532,26 @@ describe('main', () => {
     }
   });
 
+  it('keeps wrangler from writing a debug log to disk (no WRANGLER_LOG, logs off, sanitised)', async () => {
+    const h = harness({
+      env: {
+        TRACE_OPERATOR_DB_URL: poolerUrl(),
+        SUPABASE_STAGING_PROJECT_REF: REF,
+        WRANGLER_LOG: 'debug',
+        WRANGLER_WRITE_LOGS: 'true',
+        WRANGLER_LOG_SANITIZE: 'false',
+      },
+    });
+    expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(0);
+    const runs = [...h.lists(), ...h.puts()];
+    expect(runs).toHaveLength(7);
+    for (const r of runs) {
+      expect(r.opts.env.WRANGLER_LOG).toBeUndefined();
+      expect(r.opts.env.WRANGLER_WRITE_LOGS).toBe('false');
+      expect(r.opts.env.WRANGLER_LOG_SANITIZE).toBe('true');
+    }
+  });
+
   it('the database receives the password the Worker URL carries (as its SCRAM verifier only)', async () => {
     const h = harness();
     await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps });

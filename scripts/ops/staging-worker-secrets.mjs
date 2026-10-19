@@ -359,11 +359,17 @@ export function secretValues(target, values) {
 function wrangler(deps, dir, args, input) {
   const cwd = join(deps.repoRoot ?? REPO_ROOT, dir);
   const full = ['exec', 'wrangler', ...args];
+  // wrangler 4.149 writes its debug log (with request bodies, so a `secret put` value) to ~/.wrangler/logs
+  // unless told not to (cli.js shouldLogToDisk ~69710, WRANGLER_LOG ~69757, WRANGLER_LOG_SANITIZE ~25300).
+  const env = childEnvOf(deps.env);
+  delete env.WRANGLER_LOG;
+  env.WRANGLER_WRITE_LOGS = 'false';
+  env.WRANGLER_LOG_SANITIZE = 'true';
   const opts = {
     cwd,
     input: input ?? '',
     encoding: 'utf8',
-    env: childEnvOf(deps.env),
+    env,
     timeout: 120_000,
     maxBuffer: 4 * 1024 * 1024,
     windowsHide: true,
