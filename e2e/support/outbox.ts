@@ -30,6 +30,14 @@ export interface OutboxReader {
   list(): Promise<OutboxEntry[]>;
   /** Waits for an OTP entry for `label` whose id is not in `seen`, and returns its code. */
   nextOtp(label: string, seen: ReadonlySet<string>): Promise<{ id: string; code: string }>;
+  /** The ids of every entry now: a baseline to tell this run's new entries apart (the outbox is org-wide). */
+  ids(): Promise<Set<string>>;
+  /**
+   * Strict: waits for the OTP entry for `label` created after `baseline`, and fails if there is more than one. The
+   * outbox is org-wide and labels are per test, so a label alone can name another test's candidate; taking the
+   * baseline just before asking for the code leaves exactly one new entry for this candidate.
+   */
+  newOtp(label: string, baseline: ReadonlySet<string>): Promise<{ id: string; code: string }>;
 }
 
 export const outboxReader = (
@@ -56,6 +64,21 @@ export const outboxReader = (
         if (entry === undefined) return undefined;
         const code = otpCodeIn(entry.bodyText);
         if (code === null) throw new Error('the OTP entry holds no 6-digit code');
+        return { id: entry.id, code };
+      }),
+    ids: async () => new Set((await list()).map((e) => e.id)),
+    newOtp: (label, baseline) =>
+      poll('a new OTP in the demo outbox', { timeoutMs: 15_000, everyMs: 500 }, async () => {
+        const fresh = (await list()).filter(
+          (e) => e.kind === 'otp' && e.candidateLabel === label && !baseline.has(e.id),
+        );
+        if (fresh.length === 0) return undefined;
+        if (fresh.length > 1) throw new Error('more than one new OTP entry for this candidate');
+        const entry = fresh[0];
+        const code = entry === undefined ? null : otpCodeIn(entry.bodyText);
+        if (entry === undefined || code === null) {
+          throw new Error('the OTP entry holds no 6-digit code');
+        }
         return { id: entry.id, code };
       }),
   };
