@@ -22,9 +22,14 @@ const storage = (): Storage | null => {
   }
 };
 
+/**
+ * Stores the token, the stream id and the view without its answers (SEC-2): answer text never sits in
+ * sessionStorage, mid-test or after submit. A reload reads the answers back from the edge through `attach`.
+ */
 export const saveSession = (session: StoredSession): void => {
   try {
-    storage()?.setItem(SESSION_KEY, JSON.stringify(session));
+    const view: SessionView = { ...session.view, answers: [] };
+    storage()?.setItem(SESSION_KEY, JSON.stringify({ ...session, view }));
   } catch {
     // storage full or refused: the reload path is lost, nothing else
   }

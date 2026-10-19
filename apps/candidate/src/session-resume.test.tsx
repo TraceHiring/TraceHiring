@@ -151,6 +151,41 @@ describe('AT-D36 reload', () => {
     expect(batch.events[0]?.['seq']).toBe(1);
   }, 20_000);
 
+  it('SEC-2: sessionStorage never holds answer text, mid-test or after submit', async () => {
+    const now = Date.now();
+    storeSession(now);
+    const attached = viewAt(now, {
+      startedAgoMs: 12 * 60_000,
+      durationMs: DURATION_MS,
+      streamId: STREAM_ID_2,
+      answers: [
+        { position: 1, choice: 'b' },
+        { position: 2, text: 'private answer words' },
+      ],
+    });
+    mockFetch({
+      'POST /v1/session/attach': () => json(200, { view: attached }),
+      'GET /v1/session/items/:pos': (req) =>
+        json(200, req.path.endsWith('/1') ? MCQ_ITEM : WRITTEN_ITEM),
+      'POST /v1/session/submit': () => json(200, RECEIPT),
+    });
+    app = await mount(<App boot={bootFromStorage()} />);
+    const { container } = app;
+    await waitFor(() => h1Text(container) === attached.title, 'test screen');
+    const midTest = sessionStorage.getItem(SESSION_KEY) ?? '';
+    expect(midTest).toContain(STREAM_ID_2);
+    expect(midTest).not.toContain('private answer words');
+    expect(midTest).not.toMatch(/"text"/);
+    expect(midTest).not.toMatch(/"choice"/);
+
+    await click(buttonByText(container, COPY.test.submit) as HTMLButtonElement);
+    await click(buttonByText(container, COPY.test.confirm) as HTMLButtonElement);
+    await waitFor(() => h1Text(container) === COPY.submitted.title, 'receipt');
+    const after = sessionStorage.getItem(SESSION_KEY) ?? '';
+    expect(after).not.toContain('private answer words');
+    expect(after).not.toMatch(/"text"/);
+  });
+
   it('a reload after submit shows the receipt only', async () => {
     const now = Date.now();
     storeSession(now);
