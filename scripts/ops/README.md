@@ -8,7 +8,7 @@ refusal (nothing was changed).
 | --- | --- | --- |
 | `create-org.mjs` | Creates an org through `private.create_org`; prints the org id | `specs/m0b-tenancy.md` §4.4 |
 | `add-member.mjs` | Adds a member through `private.add_member`; prints the membership id | `specs/m0b-tenancy.md` §4.4 |
-| `enrol-smoke-user.mjs` | Creates (local) or enrols (staging) the smoke user | `specs/m0b-tenancy.md` §4.4 |
+| `enrol-smoke-user.mjs` | Creates (local) or enrols (staging) a smoke user: the recruiter (default) or, with `--roles reviewer`, the D1 reviewer | `specs/m0b-tenancy.md` §4.4, `specs/d1-demo-slice.md` §11 |
 | `candidate-token-key.mjs` | Generates the ES256 key pair that signs candidate tokens | `specs/d1-demo-slice.md` §4.3, ADR-030 |
 | `staging-worker-secrets.mjs` | Creates the four staging database login roles and sets the staging Worker secrets that hold them | `specs/d1-demo-slice.md` §3, §7.1, ADR-031 |
 
@@ -34,8 +34,8 @@ dispatch runs without them, because nothing on staging is ready for them yet.
 3. The api secret `CANDIDATE_TOKEN_PRIVATE_JWK` (`wrangler secret put`, from `services/api`), then delete the
    private file: see the key pair section below.
 4. The login roles and the other api and jobs secrets: `staging-worker-secrets.mjs --yes` (section below).
-5. The staging smoke users (recruiter and reviewer, `enrol-smoke-user.mjs`) and their GitHub secrets, as listed
-   in `docs/progress/FOUNDER-QUEUE.md`.
+5. The staging smoke users (recruiter and reviewer, `enrol-smoke-user.mjs`) and their GitHub secrets: see
+   "Staging smoke users" below.
 6. Dispatch again with e2e (`run_e2e` defaults to `true`):
 
    ```
@@ -43,6 +43,65 @@ dispatch runs without them, because nothing on staging is ready for them yet.
    ```
 
    Its "Check Worker secrets" step confirms that both Workers hold only allowed secret names.
+
+## Staging smoke users (`enrol-smoke-user.mjs`)
+
+Two synthetic users sign in to staging from CI, each with a password and TOTP. Both live in the `smoke-staging`
+org, which the credential-less owner `smoke-owner+staging@example.com` owns. Each has exactly one role.
+
+| User | Role | Made by | GitHub `staging` secrets | Used by |
+| --- | --- | --- | --- | --- |
+| `smoke+staging@example.com` | `recruiter` | H9 (M0b), no `--roles` | `STAGING_SMOKE_EMAIL`, `STAGING_SMOKE_PASSWORD`, `STAGING_SMOKE_TOTP_SECRET` | the deploy's org sign-in smoke, and the `e2e-staging` recruiter |
+| `smoke-reviewer+staging@example.com` | `reviewer` | `--roles reviewer` (D1) | `STAGING_REVIEWER_EMAIL`, `STAGING_REVIEWER_PASSWORD`, `STAGING_REVIEWER_TOTP_SECRET` | the `e2e-staging` reviewer only |
+
+`--roles reviewer` needs the recruiter run first: it adds the user to the existing `smoke-staging` org and never
+creates one. It looks the org up before it changes anything, so without that org it stops and changes nothing.
+Run it once per user. It prints only the TOTP secret, once; if a later step fails, the secret is still on screen
+(a re-run would enrol a second TOTP factor; remove the first one in the dashboard before re-running).
+
+### The reviewer, step by step
+
+1. Supabase dashboard, project `trace-staging`, Authentication, Add user: email
+   `smoke-reviewer+staging@example.com`, a generated password (keep it for step 2 and step 4).
+2. From the repository root, bash or Git Bash. `read -rs` keeps each value off the screen and out of your shell
+   history; the database URL is the same staging `postgres` URL as for H9.
+
+   ```
+   read -rs TRACE_OPERATOR_DB_URL && export TRACE_OPERATOR_DB_URL
+   read -rs SMOKE_PASSWORD && export SMOKE_PASSWORD
+   export SUPABASE_STAGING_URL="$(gh variable get SUPABASE_STAGING_URL --env staging)"
+   export SUPABASE_STAGING_PUBLISHABLE_KEY="$(gh variable get SUPABASE_STAGING_PUBLISHABLE_KEY --env staging)"
+   node scripts/ops/enrol-smoke-user.mjs --env staging --email smoke-reviewer+staging@example.com \
+     --owner-email smoke-owner+staging@example.com --roles reviewer
+   unset TRACE_OPERATOR_DB_URL SMOKE_PASSWORD
+   ```
+
+   PowerShell:
+
+   ```
+   $s = Read-Host -AsSecureString 'staging DB URL'
+   $env:TRACE_OPERATOR_DB_URL = [System.Net.NetworkCredential]::new('', $s).Password
+   $p = Read-Host -AsSecureString 'reviewer password'
+   $env:SMOKE_PASSWORD = [System.Net.NetworkCredential]::new('', $p).Password
+   $env:SUPABASE_STAGING_URL = gh variable get SUPABASE_STAGING_URL --env staging
+   $env:SUPABASE_STAGING_PUBLISHABLE_KEY = gh variable get SUPABASE_STAGING_PUBLISHABLE_KEY --env staging
+   node scripts/ops/enrol-smoke-user.mjs --env staging --email smoke-reviewer+staging@example.com --owner-email smoke-owner+staging@example.com --roles reviewer
+   Remove-Item Env:TRACE_OPERATOR_DB_URL, Env:SMOKE_PASSWORD; Remove-Variable s, p
+   ```
+
+3. Copy the one line it printed (the TOTP secret). Exit `0` means the user is a `reviewer` of `smoke-staging`.
+4. Store the three secrets in the `staging` environment. `gh` asks for each value without echoing it; paste the
+   password from step 1 and the secret from step 3.
+
+   ```
+   gh secret set STAGING_REVIEWER_EMAIL --env staging --body smoke-reviewer+staging@example.com
+   gh secret set STAGING_REVIEWER_PASSWORD --env staging
+   gh secret set STAGING_REVIEWER_TOTP_SECRET --env staging
+   ```
+
+CI hands these three only to the Playwright step of the `e2e-staging` job (as `E2E_REVIEWER_EMAIL`,
+`E2E_REVIEWER_PASSWORD`, `E2E_REVIEWER_TOTP_SECRET`); `scripts/check-workflows.mjs` fails any other step, and any
+`deploy-staging` step, that holds one.
 
 ## Candidate-token key pair (`candidate-token-key.mjs`)
 
