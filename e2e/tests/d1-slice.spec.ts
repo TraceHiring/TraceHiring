@@ -756,7 +756,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
             shiftClock: true,
             extra: {
               // AT-D11(b), the part that needs A's session still running: B's stream id is unknown to A's object.
-              name: "B's stream id sent with A's session token is refused 400 by A's own object",
+              name: "B's stream id with A's token is refused 400; B's ids in a URL are discarded, not refused",
               body: async () => {
                 const a = must(cand('A').start, "A's session");
                 await waitUntil(
@@ -780,14 +780,16 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
                   'bad_request',
                   "A's token with B's stream id",
                 );
-                // B's ids in the URL are ignored: A's own item is served.
+                // SR-R5-4: this proves only that the identity keys in a URL are discarded (an item is served, no
+                // 400); A and B take the same test, so the item cannot tell whose session served it. Step 10's
+                // attach (sessionId and receipt) proves the identity.
                 const served = await jsonOf<{ position: number; kind: string }>(
                   await edge.sessionGet(
                     `/v1/session/items/1?invitationId=${cand('B').invitation.invitationId}&sessionId=${b.view.sessionId}`,
                     a.sessionToken,
                   ),
                   200,
-                  "A's item with B's ids in the URL",
+                  "an item with B's ids in the URL",
                 );
                 expect(served).toMatchObject({ position: 1, kind: 'mcq' });
               },
