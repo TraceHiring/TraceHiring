@@ -703,6 +703,8 @@ describe('checkWorkflow', () => {
           'VITE_API_ORIGIN',
           // d1 §6.1, AT-D18: the demo-outbox flag, on the staging build only
           'VITE_DEMO_OUTBOX',
+          // d1 §4.7: the candidate app's edge origin (the staging edge, as its CSP names it)
+          'VITE_EDGE_ORIGIN',
           // security review S8: the same origin, read by the check-deploy-vars step
           'API_STAGING_ORIGIN',
           // d1 §7.1 (review F4): the candidate-token public values, passed to the api and edge
@@ -1212,15 +1214,30 @@ describe('checkWorkflow', () => {
   });
 
   describe('VITE_SUPABASE_* only on the deploy build step (m0b §2.7)', () => {
-    it('lists exactly the five build variables and their sources (m0b §2.7, d1 AT-D22, d1 §7.1 recruiter CSP, d1 AT-D18)', () => {
+    it('lists exactly the six build variables and their sources (m0b §2.7, d1 AT-D22, d1 §7.1 recruiter CSP, d1 AT-D18, d1 §4.7)', () => {
       expect(BUILD_ONLY_ENV).toEqual({
         VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
         VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
         VITE_SENTRY_DSN: '${{ vars.VITE_SENTRY_DSN }}',
         VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
         VITE_DEMO_OUTBOX: '1',
+        VITE_EDGE_ORIGIN: 'https://trace-edge-staging.abhayraj.workers.dev',
       });
       for (const name of Object.keys(BUILD_ONLY_ENV)) expect(ENV_ALLOW_LIST).toContain(name);
+    });
+
+    it('the staging build step sets VITE_EDGE_ORIGIN to exactly the staging edge origin (d1 §4.7)', () => {
+      expect(checkWorkflow(doc(), 'ci.yml', ctx)).toEqual([]);
+      for (const value of [
+        'https://trace-edge-staging.other.workers.dev',
+        'http://127.0.0.1:8787',
+        '${{ vars.EDGE_STAGING_ORIGIN }}',
+        '${{ secrets.EDGE_STAGING_ORIGIN }}',
+      ]) {
+        const bad = doc();
+        bad.jobs['deploy-staging'].steps[2].env.VITE_EDGE_ORIGIN = value;
+        expect(msgs(checkWorkflow(bad, 'ci.yml', ctx))).toMatch(/VITE_EDGE_ORIGIN must be exactly/);
+      }
     });
 
     it.each([

@@ -608,6 +608,9 @@ export const BUILD_ONLY_ENV = Object.freeze({
   // d1 §6.1, AT-D18: only the staging recruiter build includes the demo outbox (mock Messaging); every other
   // build is production-flavour and is checked by scripts/check-no-demo-outbox.mjs.
   VITE_DEMO_OUTBOX: '1',
+  // d1 §4.7: the candidate app's edge origin, the same literal its public/_headers connect-src names
+  // (H4 label `abhayraj`, docs/infra/environments.md); a public value, so no variable is needed.
+  VITE_EDGE_ORIGIN: 'https://trace-edge-staging.abhayraj.workers.dev',
 });
 
 /**
@@ -827,6 +830,8 @@ export const ENV_ALLOW_LIST = Object.freeze([
   'VITE_API_ORIGIN',
   // d1 §6.1, AT-D18: the staging recruiter build's demo-outbox flag, the deploy-staging build step only.
   'VITE_DEMO_OUTBOX',
+  // d1 §4.7: the candidate app's edge origin, the deploy-staging build step only.
+  'VITE_EDGE_ORIGIN',
   // The check-deploy-vars step reads the same public variable (security review S8).
   'API_STAGING_ORIGIN',
   // d1 AT-D22 (specs/d1-demo-slice.md §7.1, L-24): the Workers deploy step passes it to jobs and api
