@@ -228,6 +228,9 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
       const orgId = pathId(c.req.param('orgId'));
       const testId = pathId(c.req.param('testId'));
       const ctx = await deps.org.context(c.req.raw, c.env);
+      // R4 spec review #4 (spec §6.2 "idem"): the editor view carries the answer keys, and an assigned reviewer can
+      // read the draft under RLS, so the authoring roles are checked first (as for PUT).
+      await requireRole(ctx.rest, ctx.caller, orgId, PUBLISHERS);
       return answer(TestDetailResponse, await detailOf(ctx, orgId, testId));
     }),
   );
