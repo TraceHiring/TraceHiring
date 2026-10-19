@@ -3,6 +3,7 @@
 - **Revision 1 (2026-10-19, parallel docs-only SPEC chat, branch `spec/m1-m2` cut from `trace/d1/integration` @ `06a24c9`).** First draft. Questions that touch rules 1–9 or a founder answer are **not decided here**; they are in `docs/progress/SPEC-M1-M2.md` (§2) with the safe default this spec builds until the founder answers. M2 (`specs/m2-scheduling-invites.md`) is specified in the same chat and shares §11's migration order.
 - **Revision 2 (2026-10-19, same chat).** Applies both first reviews (spec-reviewer and database-reviewer, both BLOCK): binding resolutions R2-1…R2-23 in §1.6, folded into the sections below where marked.
 - **Revision 3 (2026-10-19, same chat).** Applies the confirming re-reviews of revision 2 (both BLOCK on new findings): binding rows R3-1…R3-11 in §1.7, and the stale section text both reviews listed is rewritten to match R2/R3.
+- **Revision 4 (2026-10-19, same chat).** Round-3 re-reviews: spec-reviewer and database-reviewer both **PASS WITH FINDINGS** (no Blocking/High); the remaining M1 item (E11 cap text) is fixed.
 - Status: **draft, under autopilot review** (the approval line is added at the end of §14 when the reviewers pass).
 
 ## 0. Sources and precedence
@@ -313,7 +314,7 @@ The D1 publish endpoint gains package v2 building; the D1 route-inventory test's
 | E8 | Library daily copy cap exceeded | 429 `library_cap`; audited; partial copies are all-or-nothing per call |
 | E9 | Import file with formulas, macros, external links | Formulas: cached value used, never evaluated; `.xlsm`/macros refused by extension and content type; external relationships ignored |
 | E10 | Import row with HTML or script in the stem | Stored as plain text; React renders text; no HTML anywhere |
-| E11 | Zip-bomb or huge image | Browser caps uncompressed size (50 MB total, 1 MB per image) and aborts; api re-checks each image |
+| E11 | Zip-bomb or huge image | Browser caps uncompressed size (images zip or `.docx` ≤ 100 MB uncompressed, 1 MB per image; R2-19) and aborts; api re-checks each image |
 | E12 | Same image used by many rows | Content-addressed key; uploaded once |
 | E13 | Re-sent import batch (network retry) | Idempotent on `(import_job_id, row_no)`; counts unchanged |
 | E14 | Parameterised spec cannot produce `count` distinct variants | Row/item error `variant_generation_failed`; nothing inserted for that item |
