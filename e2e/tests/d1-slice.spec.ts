@@ -101,6 +101,28 @@ const RUN = `${Date.now().toString(36)}${randomBytes(3).toString('hex')}`;
 const STEP_MS = 45_000;
 /** AT-D17: `time_to_ready_ms` is recorded; the run fails only above 90 s. */
 const READY_LIMIT_MS = 90_000;
+/**
+ * SR-W6-1: the per-test timeouts sum to at most 20 minutes (the CI step has 22, the job 25), so the afterAll hook
+ * (logouts, manifest, closing contexts, the end SHA check; its own 60 s) always gets to run. A step's own timeout
+ * is an upper bound inside its test's budget. Typical runs use a small part of each.
+ */
+const T = {
+  signIn: 150_000,
+  publish: 90_000,
+  assign: 60_000,
+  invite: 60_000,
+  candidates: 400_000,
+  ready: READY_LIMIT_MS + 10_000,
+  results: 60_000,
+  reports: 150_000,
+  reviewer: 60_000,
+  negative: 60_000,
+} as const;
+const HOOK_BEFORE_MS = 30_000;
+const HOOK_AFTER_MS = 60_000;
+if (Object.values(T).reduce((a, b) => a + b, 0) > 20 * 60_000) {
+  throw new Error('the slice test timeouts exceed 20 minutes');
+}
 const VIEWPORT = { width: 1280, height: 720 };
 const ITEMS = 4;
 const CORRECT = [MCQ_OPTIONS[0], MCQ_OPTIONS[0], MCQ_OPTIONS[0]] as const;
@@ -362,6 +384,7 @@ const expectRule7 = async (page: Page, integrity: IntegrityCard): Promise<void> 
 };
 
 test.beforeAll(async () => {
+  test.setTimeout(HOOK_BEFORE_MS);
   run.env = readSliceEnv();
   run.outputDir = test.info().project.outputDir;
   run.manifest = newManifest(test.info().project.name, RUN, RECORDING);
@@ -370,6 +393,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  test.setTimeout(HOOK_AFTER_MS);
   // SEC-W5-5: end every GoTrue session this run created (scope local: a refreshed token keeps its session id, and
   // the page's current token is preferred while it can still be read).
   if (run.env !== undefined) {
@@ -402,7 +426,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
     browser,
     request,
   }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(T.signIn);
     const env = envOf();
     const rest = restOf(request);
 
@@ -463,7 +487,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
         run.recruiter = await signIn('recruiter');
         await caption(run.recruiter.page, 'Step 1: the recruiter is signed in (password + TOTP)');
       },
-      120_000,
+      70_000,
     );
     await step(
       null,
@@ -474,14 +498,14 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
           run.reviewer.page.getByRole('link', { name: 'Review queue', exact: true }),
         ).toBeVisible();
       },
-      120_000,
+      70_000,
     );
   });
 
   test('step 2: the recruiter creates a test (default cutoff 40 on screen) and publishes it', async ({
     request,
   }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(T.publish);
     const { page, membershipId } = recruiterOf();
     const name = `E2E D1 slice ${RUN}`;
 
@@ -537,7 +561,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
   test('step 3: the reviewer sees nothing of this test; the recruiter assigns the reviewer', async ({
     request,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(T.assign);
     const reviewer = reviewerOf();
     const { page } = recruiterOf();
     const t = testOf();
@@ -582,7 +606,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
   test('step 4: five 18+ invitations and one inviter-"No" invitation (blocked, no link)', async ({
     request,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(T.invite);
     const { page } = recruiterOf();
     const t = testOf();
     // The demo outbox is org-wide and labels are per test (another test's "Candidate 1" is in it too): this run's
@@ -647,7 +671,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
     browser,
     request,
   }) => {
-    test.setTimeout(600_000);
+    test.setTimeout(T.candidates);
     const env = envOf();
     const t = testOf();
     const outbox = await outboxOf(request);
@@ -932,7 +956,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
   });
 
   test('AT-D17: both cards of A-D are ready within 90 s of the submit', async () => {
-    test.setTimeout(READY_LIMIT_MS + 60_000);
+    test.setTimeout(T.ready);
     await step(
       recruiterOf().page,
       'Waiting for the results: quality first, then integrity',
@@ -957,14 +981,14 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
         });
         if (failed.length > 0) throw new Error(failed.join('\n'));
       },
-      READY_LIMIT_MS + 30_000,
+      READY_LIMIT_MS + 5_000,
     );
   });
 
   test('step 7: the results list shows A, B, C with the same score, D below the cutoff, no band', async ({
     request,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(T.results);
     const { page } = recruiterOf();
     const t = testOf();
 
@@ -1019,7 +1043,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
   test('step 8: reports B, C and D (rules 1, 2 and 6; AT-D8, AT-D10, AT-D14)', async ({
     request,
   }) => {
-    test.setTimeout(300_000);
+    test.setTimeout(T.reports);
     const { page, roles } = recruiterOf();
     const t = testOf();
     const rest = restOf(request);
@@ -1241,7 +1265,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
   });
 
   test('step 9: the reviewer (aal2) sees the assigned reports and opens C', async () => {
-    test.setTimeout(120_000);
+    test.setTimeout(T.reviewer);
     const { page, session } = reviewerOf();
     const t = testOf();
     await step(page, 'Step 9: the reviewer reloads the review queue', async () => {
@@ -1280,7 +1304,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
   test('step 10: negative checks (AT-D11(b), network, camera) and A is Clear', async ({
     request,
   }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(T.negative);
     const env = envOf();
     const edge = edgeClient(request, env.edge);
     const candidateOrigin = new URL(env.candidateUrl).origin;
