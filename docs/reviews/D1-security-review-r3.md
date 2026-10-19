@@ -39,4 +39,4 @@ edge side of the candidate flow (C1); real PostgREST/JWKS/DO/R2 (`e2e-local`); `
 
 - **#1 Medium: fixed** in `05dec63` (apiDbSsl; api-db-tls.test.ts, 16 cases, red first).
 - **#2 Low: fixed** in `0cc6f1c` (requireRole org_owner/admin/recruiter before the bucket lookup and every read; a reviewer, a removed membership and an aal1 admin leave `bucket.puts` empty; red first). The "better" option (write only the package rebuilt from the frozen rows) is not taken: the R2 write must precede the guarded UPDATE so a published version always has its package; a stale put by an authorised publisher that lands before the winner's re-check is rewritten there; one that lands after it is repaired by the losing attempt on its 0-row path (`spec review r3a #2`, fixed with a race test), and the SessionDO hash check fails closed on anything left.
-- N1 (org CORS) is due with R5; N2 accepted for D1; N3 open (check before turning on invocation logs).
+- N1 (org CORS) is **closed** by Chat E stream W4 (`services/api/src/org-cors.ts`, spec rev 4k; docs/reviews/D1-review-chat-e.md); it was due with R5; N2 accepted for D1; N3 open (check before turning on invocation logs).

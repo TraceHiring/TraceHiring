@@ -37,6 +37,8 @@ SR-5 and SR-6 add coverage of behaviour that was already right and are meaningfu
    any flagged build; `main.tsx:19,26` pass the whole `import.meta.env`, so a flagged build's entry chunk names the
    key). Only public `VITE_*` values reach the bundle. **Carried to Chat E** (before the first staging dispatch):
    `main.tsx` passes only the fields it needs, and the check skips only when `VITE_TRACE_ENV !== 'production'`.
+   **Closed** in Chat E (stream W2, spec rev 4k), with a stricter rule: the outbox needs `VITE_TRACE_ENV` exactly
+   `dev` or `staging` (docs/reviews/D1-review-chat-e.md).
 2. Low: `unauthorized` is terminal on the report page (a session refresh needs a reload). **Accepted** (matches the
    finding's intent and the text shown).
 3. Info: `VITE_TRACE_ENV` is set by no workflow; the flag's absence is the primary guard. **Accepted** (rev 4f).
