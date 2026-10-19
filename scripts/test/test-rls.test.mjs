@@ -1085,6 +1085,27 @@ describe('CLI and helpers', () => {
     expect(r.error).toBe(null);
   });
 
+  it('spawnRun() merges an `env` option over the parent environment', async () => {
+    const name = `TRACE_SPAWN_TEST_${HEX().toUpperCase()}`;
+    const r = await spawnRun(
+      process.execPath,
+      [
+        '-e',
+        `process.stdout.write(JSON.stringify([process.env[${JSON.stringify(name)}] ?? null, typeof process.env.PATH === 'string' || typeof process.env.Path === 'string']))`,
+      ],
+      { env: { [name]: 'merged' } },
+    );
+    expect(r.status).toBe(0);
+    // The extra name arrives, and the parent's variables (PATH) are still there.
+    expect(JSON.parse(r.stdout.toString())).toEqual(['merged', true]);
+    // Without the option the child sees only the parent's environment.
+    const plain = await spawnRun(process.execPath, [
+      '-e',
+      `process.stdout.write(String(process.env[${JSON.stringify(name)}] ?? 'unset'))`,
+    ]);
+    expect(plain.stdout.toString()).toBe('unset');
+  });
+
   it('spawnRun() reports a missing program as an error instead of throwing', async () => {
     const r = await spawnRun(`trace-no-such-program-${HEX()}`, []);
     expect(r.status).toBe(null);
