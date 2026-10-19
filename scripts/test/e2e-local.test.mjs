@@ -311,18 +311,24 @@ describe('readStack and buildEnv', () => {
     expect(readStack({ ...fakeStack(), DB_URL: '' }).ok).toBe(false);
   });
 
-  it('builds with the demo outbox on, a non-production flavour and the local origins only', () => {
-    const { stack } = readStack(fakeStack());
-    expect(buildEnv(stack)).toEqual({
+  it('builds with the demo outbox on, a non-production flavour and the local edge origin only', () => {
+    expect(buildEnv()).toEqual({
       // spec rev 4f: the recruiter registers the outbox route only for VITE_DEMO_OUTBOX=1 and a
       // VITE_TRACE_ENV other than production (set explicitly, so a parent value cannot win).
       VITE_DEMO_OUTBOX: '1',
       VITE_TRACE_ENV: 'dev',
-      VITE_API_ORIGIN: 'http://127.0.0.1:8788',
+      // The candidate app reads the edge origin; it has no headers plugin.
       VITE_EDGE_ORIGIN: 'http://127.0.0.1:8787',
-      VITE_SUPABASE_URL: stack.apiUrl,
-      VITE_SUPABASE_PUBLISHABLE_KEY: stack.publishableKey,
     });
+  });
+
+  it('gives the build no local api or Supabase origin (the recruiter headers plugin refuses them)', () => {
+    // Lead, first real run of 2a257c7: packages/config/vite/headers-template.js accepts only the
+    // staging forms of VITE_SUPABASE_URL and VITE_API_ORIGIN at build time, so neither is passed.
+    const env = buildEnv();
+    for (const name of ['VITE_API_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_PUBLISHABLE_KEY']) {
+      expect(env).not.toHaveProperty(name);
+    }
   });
 });
 
@@ -373,7 +379,11 @@ describe('main', () => {
     const i = h.calls.indexOf(`pnpm ${BUILD_ARGS.join(' ')}`);
     expect(h.runOpts[i]).toEqual({
       cwd: h.root,
-      env: buildEnv(readStack(h.deps.stackEnv()).stack),
+      env: {
+        VITE_DEMO_OUTBOX: '1',
+        VITE_TRACE_ENV: 'dev',
+        VITE_EDGE_ORIGIN: 'http://127.0.0.1:8787',
+      },
     });
     // The Supabase steps run without it; this process's own environment is not changed.
     h.runOpts.forEach((opts, k) => {

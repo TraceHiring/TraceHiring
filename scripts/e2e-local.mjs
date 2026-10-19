@@ -5,8 +5,10 @@
 // 1. Docker check, the test-rls lock, `supabase start -x …` and `supabase db reset` (withLocalStack).
 // 2. Reads the local stack's URLs and publishable key (`supabase status`) and builds both apps
 //    (`pnpm --filter @trace/candidate --filter @trace/recruiter build`) with the demo outbox on
-//    (VITE_DEMO_OUTBOX=1, VITE_TRACE_ENV=dev; spec rev 4f) and the local api, edge and Supabase
-//    origins. Only that call carries them; the root `pnpm build` (check-no-demo-outbox) is not run.
+//    (VITE_DEMO_OUTBOX=1, VITE_TRACE_ENV=dev; spec rev 4f) and the local edge origin for the
+//    candidate app (VITE_EDGE_ORIGIN). No api or Supabase origin: the recruiter's headers plugin
+//    accepts only staging forms (lead, 2026-10-19). Only that call carries these; the root
+//    `pnpm build` (check-no-demo-outbox) is not run.
 // 2b. Local-only values for the real flow (spec review r3a #1), generated now, never in git, never
 //    printed: random passwords for the operator logins api_login and jobs_{mirror,quality,
 //    integrity}_login (recreated as postgres, one `inherit false, set true` grant each), a fresh
@@ -338,17 +340,16 @@ export function readStack(raw) {
 /**
  * The environment of the one app-build call (spec §7.1, rev 4f): the recruiter registers the demo
  * outbox route only with VITE_DEMO_OUTBOX=1 and a VITE_TRACE_ENV other than production (set here,
- * so a parent value cannot turn it off); the apps reach the local api, edge and Supabase. The
- * publishable key is a public value (L-10).
+ * so a parent value cannot turn it off); the candidate app reaches the local edge. No local api or
+ * Supabase origin is passed: the recruiter's headers plugin (packages/config/vite/headers-template.js)
+ * accepts only the staging forms at build time (lead, 2026-10-19; a locally working recruiter UI is
+ * an R5 prerequisite). The real-flow spec signs in through GoTrue directly.
  */
-export function buildEnv(stack) {
+export function buildEnv() {
   return {
     VITE_DEMO_OUTBOX: '1',
     VITE_TRACE_ENV: 'dev',
-    VITE_API_ORIGIN: E2E_ENV.E2E_API_URL,
     VITE_EDGE_ORIGIN: E2E_ENV.E2E_EDGE_URL,
-    VITE_SUPABASE_URL: stack.apiUrl,
-    VITE_SUPABASE_PUBLISHABLE_KEY: stack.publishableKey,
   };
 }
 
@@ -524,9 +525,9 @@ export async function main(options) {
     const read = readStack(deps.stackEnv());
     if (!read.ok) return [read.problem];
     const { stack } = read;
-    log(`${TOOL}: building the candidate and recruiter apps (demo outbox on, local origins)`);
+    log(`${TOOL}: building the candidate and recruiter apps (demo outbox on, local edge origin)`);
     const tb = now();
-    const built = await run('pnpm', BUILD_ARGS, { cwd: root, env: buildEnv(stack) });
+    const built = await run('pnpm', BUILD_ARGS, { cwd: root, env: buildEnv() });
     phases.build_ms = now() - tb;
     if (built.error || built.status !== 0) {
       return [
