@@ -38,6 +38,7 @@ Parallel docs-only chat, 2026-10-19, branch `spec/m1-m2` (cut from `trace/d1/int
 - Founder: answer Q-M1-1…4, Q-M2-1…3 when convenient (defaults are built); F-1…F-5 and F-8 before the staging parts of M1/M2.
 
 ## 5. Log
+- 2026-10-19: confirming spec-reviewer (Sonnet) on revision 4: PASS WITH FINDINGS (2 Medium, 2 Low: stale M2 section text and AT rows); all fixed (new AT-M2-27); pushed.
 - 2026-10-19: revision 4 after round-3 re-reviews (both PASS WITH FINDINGS); final database confirmation PASS; both specs approved; pushed `spec/m1-m2`.
 - 2026-10-19: revision 3 after round-2 re-reviews (both BLOCK on new findings); stale section text rewritten.
 - 2026-10-19: revision 2 of both specs after round-1 reviews (both BLOCK); new questions Q-M1-4, Q-M2-2, Q-M2-3; link-token HMAC proposal withdrawn (Q32 followed).
