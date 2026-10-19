@@ -6,10 +6,12 @@
 //          E2E_SUPABASE_PUBLISHABLE_KEY
 // Local:   E2E_LOCAL=1, E2E_RECRUITER_EMAIL, E2E_REVIEWER_EMAIL, E2E_USER_PASSWORD, E2E_ORG_ID
 //          (users not yet TOTP-enrolled: the app's own enrolment screen; E2E_DB_CONTAINER optional, extra db checks)
-// Staging: E2E_STAGING=1, E2E_RECRUITER_EMAIL, E2E_RECRUITER_PASSWORD, E2E_RECRUITER_TOTP_SECRET,
-//          E2E_REVIEWER_EMAIL, E2E_REVIEWER_PASSWORD, E2E_REVIEWER_TOTP_SECRET (users already enrolled: the
-//          challenge screen); the org id is read from the recruiter's own memberships, not from a variable.
-// Optional: E2E_SHA (manifest), E2E_RECORD=1 (record mode).
+// Staging: E2E_STAGING=1, E2E_SHA (the deployed commit, 40 hex; api /health must report it at the start and at
+//          the end), E2E_RECRUITER_EMAIL, E2E_RECRUITER_PASSWORD, E2E_RECRUITER_TOTP_SECRET, E2E_REVIEWER_EMAIL,
+//          E2E_REVIEWER_PASSWORD, E2E_REVIEWER_TOTP_SECRET (both users must already hold a verified TOTP factor,
+//          checked over GoTrue before any page opens: SEC-W6-2); the org id is read from the recruiter's own
+//          memberships, not from a variable.
+// Optional: E2E_SHA on local (manifest only), E2E_RECORD=1 (record mode).
 import { requireLocalHosts } from './http.js';
 
 export type SliceMode = 'local' | 'staging';
@@ -35,6 +37,8 @@ export interface SliceEnv {
   orgId: string | null;
   /** Local only: the database container for the optional psql checks (support/db.ts). */
   dbContainer: string | null;
+  /** Staging: the deployed commit the api must report (`/health` version). Null on local. */
+  deployedSha: string | null;
 }
 
 export const sliceMode = (): SliceMode | null =>
@@ -70,6 +74,13 @@ const origin = (name: string): string => {
   } catch {
     throw new Error(`${name} is not an http(s) URL`);
   }
+};
+
+/** A full 40-hex commit SHA (the deploy and the health contract use the full one). */
+const fullSha = (name: string): string => {
+  const value = need(name).toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(value)) throw new Error(`${name} is not a 40-hex commit SHA`);
+  return value;
 };
 
 const BASE32 = /^[A-Z2-7]{16,128}=*$/i;
@@ -144,5 +155,6 @@ export const readSliceEnv = (): SliceEnv => {
     reviewer,
     orgId: mode === 'local' ? need('E2E_ORG_ID') : null,
     dbContainer: mode === 'local' ? optional('E2E_DB_CONTAINER') : null,
+    deployedSha: mode === 'staging' ? fullSha('E2E_SHA') : null,
   };
 };

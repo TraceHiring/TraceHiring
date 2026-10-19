@@ -29,6 +29,38 @@ export interface SignIn {
   password: string;
 }
 
+/**
+ * Staging pre-check (security review SEC-W6-2): signs in with the password in this process (no browser) and tells
+ * whether the user already has a verified TOTP factor (`GET /auth/v1/user`, its `factors`). The slice runs this
+ * before any page opens, so the app never renders a fresh enrolment secret or QR code into a video. Failures carry
+ * `role` and an HTTP status only, never the email.
+ */
+export const hasVerifiedTotp = async (
+  request: APIRequestContext,
+  who: SignIn,
+  role: string,
+): Promise<boolean> => {
+  const auth = `${who.supabaseUrl.replace(/\/+$/, '')}/auth/v1`;
+  const apikey = { apikey: who.publishableKey };
+  const pw = await jsonOf<{ access_token?: string }>(
+    await request.post(`${auth}/token?grant_type=password`, {
+      headers: apikey,
+      data: { email: who.email, password: who.password },
+    }),
+    200,
+    `${role} password sign-in`,
+  );
+  if (typeof pw.access_token !== 'string') throw new Error(`${role} password sign-in: no token`);
+  const user = await jsonOf<{ factors?: { factor_type?: string; status?: string }[] | null }>(
+    await request.get(`${auth}/user`, {
+      headers: { ...apikey, Authorization: `Bearer ${pw.access_token}` },
+    }),
+    200,
+    `${role} factor list`,
+  );
+  return (user.factors ?? []).some((f) => f.factor_type === 'totp' && f.status === 'verified');
+};
+
 /** Signs in with the password, enrols a TOTP factor and verifies it; returns the aal2 access token. */
 export const signInWithTotp = async (request: APIRequestContext, who: SignIn): Promise<string> => {
   const auth = `${who.supabaseUrl.replace(/\/+$/, '')}/auth/v1`;

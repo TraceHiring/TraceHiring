@@ -28,7 +28,7 @@ import {
   type Page,
   type Response,
 } from '@playwright/test';
-import { amrOf, claimsOf } from '../support/auth.js';
+import { amrOf, claimsOf, hasVerifiedTotp } from '../support/auth.js';
 import { caption, pause, RECORDING } from '../support/caption.js';
 import { edgeClient, sha256Hex } from '../support/candidate.js';
 import {
@@ -248,11 +248,26 @@ const expectNoRejectControl = async (page: Page) => {
   expect(await page.getByRole('checkbox').count()).toBe(0);
 };
 
-test.beforeAll(() => {
+/**
+ * Staging: the api's `/health` version is the deployed SHA (E2E_SHA). Checked before the first step and again at the
+ * end, so a deploy that lands during the run fails it. Node's fetch; the error names the check, not a value.
+ */
+const expectDeployedSha = async (when: 'start' | 'end'): Promise<void> => {
+  const env = envOf();
+  if (env.deployedSha === null) return;
+  const res = await fetch(`${env.api}/health`, { cache: 'no-store' });
+  const body = (await res.json().catch(() => null)) as { version?: unknown } | null;
+  if (res.status !== 200 || body?.version !== env.deployedSha) {
+    throw new Error(`api /health at the ${when} of the run does not report E2E_SHA`);
+  }
+};
+
+test.beforeAll(async () => {
   run.env = readSliceEnv();
   run.outputDir = test.info().project.outputDir;
   run.manifest = newManifest(test.info().project.name, RUN, RECORDING);
   run.t0 = Date.now();
+  await expectDeployedSha('start');
 });
 
 test.afterAll(async () => {
@@ -266,6 +281,8 @@ test.afterAll(async () => {
     run.manifest.durationMs = Date.now() - run.t0;
     writeManifest(run.outputDir, run.manifest);
   }
+  // Last, after the cleanup: the deployment must not have changed under the run.
+  if (run.env !== undefined) await expectDeployedSha('end');
 });
 
 test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
@@ -276,6 +293,28 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
     test.setTimeout(240_000);
     const env = envOf();
     const rest = restOf(request);
+
+    // SEC-W6-2: on staging both users must already hold a verified TOTP factor, checked over GoTrue in this process
+    // before any page opens, so no enrolment secret or QR code is ever rendered (and recorded). Local users enrol
+    // through the app's own screen.
+    if (env.mode === 'staging') {
+      await step(null, 'staging users already hold a verified TOTP factor', async () => {
+        for (const role of ['recruiter', 'reviewer'] as const) {
+          const user = env[role];
+          const enrolled = await hasVerifiedTotp(
+            request,
+            {
+              supabaseUrl: env.supabaseUrl,
+              publishableKey: env.publishableKey,
+              email: user.email,
+              password: user.password,
+            },
+            role,
+          );
+          if (!enrolled) throw new Error(`the ${role} has no verified TOTP factor; enrol it first`);
+        }
+      });
+    }
 
     const signIn = async (who: 'recruiter' | 'reviewer'): Promise<Signed> => {
       const user = who === 'recruiter' ? env.recruiter : env.reviewer;
