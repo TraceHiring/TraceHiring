@@ -15,7 +15,7 @@ export type PhotoChoice = SessionStartReq['photo'];
 export type UnavailableWhy =
   'no_link' | 'invalid' | 'expired' | 'revoked' | 'submitted' | 'closed' | 'config';
 
-export type ErrorWhy = 'superseded' | 'invalid' | 'network' | 'step' | 'generic';
+export type ErrorWhy = 'superseded' | 'invalid' | 'network' | 'step' | 'generic' | 'rate_limited';
 
 export type Step =
   | { name: 'resolving' }
@@ -28,7 +28,8 @@ export type Step =
   | { name: 'rules'; photo: PhotoChoice }
   | { name: 'test'; sessionToken: string; view: SessionView; offsetMs: number }
   | { name: 'submitted'; receipt: Receipt }
-  | { name: 'error'; why: ErrorWhy; retry: boolean };
+  /** `waitSeconds`: with `rate_limited`, how long "Try again" stays disabled (the edge's Retry-After). */
+  | { name: 'error'; why: ErrorWhy; retry: boolean; waitSeconds?: number };
 
 export type StepName = Step['name'];
 
@@ -48,7 +49,7 @@ export type Action =
   | { type: 'session'; sessionToken: string; view: SessionView; offsetMs: number }
   | { type: 'receipt'; receipt: Receipt }
   | { type: 'unavailable'; why: UnavailableWhy }
-  | { type: 'error'; why: ErrorWhy; retry?: boolean };
+  | { type: 'error'; why: ErrorWhy; retry?: boolean; waitSeconds?: number };
 
 /**
  * The photo choice sent on a resume through a new login (`next: 'start'`, the session already began and this tab has
@@ -136,7 +137,15 @@ export const reducer = (state: FlowState, action: Action): FlowState => {
     case 'unavailable':
       return { lobbyToken: null, step: { name: 'unavailable', why: action.why } };
     case 'error':
-      return { ...state, step: { name: 'error', why: action.why, retry: action.retry ?? false } };
+      return {
+        ...state,
+        step: {
+          name: 'error',
+          why: action.why,
+          retry: action.retry ?? false,
+          ...(action.waitSeconds === undefined ? {} : { waitSeconds: action.waitSeconds }),
+        },
+      };
   }
 };
 

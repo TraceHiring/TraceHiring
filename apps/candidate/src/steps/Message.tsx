@@ -1,4 +1,5 @@
 // Steps that only show a message: resolving, unavailable, blocked (neutral copy, rule 9) and error.
+import { useEffect, useState } from 'react';
 import { COPY } from '../copy';
 import type { ErrorWhy, UnavailableWhy } from '../flow';
 import { StepHeading, ui } from '../ui';
@@ -41,7 +42,7 @@ export function BlockedStep() {
   );
 }
 
-const ERRORS: Record<ErrorWhy, string> = {
+const ERRORS: Record<Exclude<ErrorWhy, 'rate_limited'>, string> = {
   superseded: COPY.error.superseded,
   invalid: COPY.error.invalid,
   network: COPY.error.network,
@@ -49,16 +50,36 @@ const ERRORS: Record<ErrorWhy, string> = {
   generic: COPY.error.generic,
 };
 
-export function ErrorStep({ why, onRetry }: { why: ErrorWhy; onRetry: (() => void) | null }) {
+/**
+ * An error, with "Try again" when the step can be retried. With `waitSeconds` (a 429 from the edge), the wait copy is
+ * shown and "Try again" stays disabled until that wait has passed; nothing is retried on its own.
+ */
+export function ErrorStep({
+  why,
+  onRetry,
+  waitSeconds,
+}: {
+  why: ErrorWhy;
+  onRetry: (() => void) | null;
+  waitSeconds?: number | undefined;
+}) {
+  // Each refusal mounts a new ErrorStep (the step passes through `resolving`), so the initial state starts the wait.
+  const [waiting, setWaiting] = useState(waitSeconds !== undefined);
+  useEffect(() => {
+    if (waitSeconds === undefined) return;
+    const timer = setTimeout(() => setWaiting(false), waitSeconds * 1000);
+    return () => clearTimeout(timer);
+  }, [waitSeconds]);
+  const message = why === 'rate_limited' ? COPY.rules.wait(waitSeconds) : ERRORS[why];
   return (
     <section>
       <StepHeading>{COPY.error.title}</StepHeading>
       <div role="alert">
-        <p className={ui.text}>{ERRORS[why]}</p>
+        <p className={ui.text}>{message}</p>
       </div>
       {onRetry === null ? null : (
         <div className={ui.actions}>
-          <button type="button" className={ui.button} onClick={onRetry}>
+          <button type="button" className={ui.button} onClick={onRetry} disabled={waiting}>
             {COPY.error.retry}
           </button>
         </div>
