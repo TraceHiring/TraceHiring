@@ -8,7 +8,8 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-19 00:30 IST, Chat B (newest; wins over the lines below):** **C1b is merged** into `d1/integration` (`8a4873a` = **`cp/d1-07`**): SessionDO + session routes, AT-D7, D11 edge, D24-D27 edge, D29 maxChars, D35 edge, D37; spec review PASS WITH FIXES, security review PASS WITH NOTES (3 Medium fixed), Sonnet re-review CONFIRMED WITH NOTES; spec revision 4e; real-DO test pools for edge and api. Full `pnpm verify` green. Next: **Chat C** (HANDOFF "Next chat": R2 jobs ∥ R4 recruiter app).
+- **Update 2026-10-19 11:30 IST, Chat C (newest; wins over the lines below):** **R2 jobs and R4 recruiter app are merged** into `d1/integration` (`ab62681` = **`cp/d1-08`**): R4 `9cebeb3`, R2 `3c51438`, lead wiring `6d504da` (stages per env, sweep, db-tests in `test:rls`); five Opus reviews and two Sonnet re-reviews, every fix-now finding fixed test first; spec revisions 4f-4h. Full `pnpm verify` and CI on PR #4 green. Next: **Chat D** (HANDOFF "Next chat": C2 candidate app + `e2e-local` real flow).
+- **Update 2026-10-19 00:30 IST, Chat B:** **C1b is merged** into `d1/integration` (`8a4873a` = **`cp/d1-07`**): SessionDO + session routes, AT-D7, D11 edge, D24-D27 edge, D29 maxChars, D35 edge, D37; spec review PASS WITH FIXES, security review PASS WITH NOTES (3 Medium fixed), Sonnet re-review CONFIRMED WITH NOTES; spec revision 4e; real-DO test pools for edge and api. Full `pnpm verify` green. Next: **Chat C** (HANDOFF "Next chat": R2 jobs ∥ R4 recruiter app).
 - **Update 2026-10-18 23:30 IST, Chat A:** founder moved to **Claude Max**: one chat = one big task (`docs/progress/SESSION-PLAN.md`). **C1a is merged** into `d1/integration` (AT-D23, D28, D29 photo half, D31/D32 edge; spec review PASS WITH FIXES, security review PASS WITH NOTES, all "fix now" findings fixed and re-review CONFIRMED; spec revision 4d; tag **`cp/d1-06`**). **C1b** is written on `d1/c1b-session` @ `ea59b0a` (not reviewed, built on pre-fix C1a). Next: **Chat B** (HANDOFF "Next chat").
 - **Update 2026-10-18 20:55 IST:** **R3 is merged** into `d1/integration` (`76f3d69` = **`cp/d1-05`**; every review finding due before the merge fixed tests first; spec revision 4c; full `pnpm verify` and CI on PR #4 green). **C1a** (edge lobby half) is written on `d1/c1a-edge-lobby` @ `d17b6aa` (worktree `.claude/worktrees/agent-aca1caeb85b274390`): AT-D23, D28, D29 photo half; **not reviewed, not merged**; `no-secrets.test.ts` and `log-hygiene.test.ts` (AT-D31/D32 edge) still to write. Next: HANDOFF "Next step" 2a-2d (finish C1a, verify:fast, spec + security review, merge, `cp/d1-06`), then C1b (SessionDO).
 - **Update 2026-10-18 03:00 IST:** **R3 is complete and assembled on `d1/r3-merge` (`cbfe5ac`, worktree `.claude/worktrees/agent-af098bea644b1ab65`)**: R3b reports + R3a2 (tests, assignments, invitations, outbox, media) + the lead's mount, route inventory (AT-D13) and log hygiene (AT-D32); verify:fast green; spec review of the reports half PASS WITH FIXES (fixed); security review PASS WITH NOTES (M1 db TLS fixed in 05dec63, L2 publish order due). **Not merged into `d1/integration`** (`6ffe4e1`). Next: HANDOFF "Next step" 2a-2f (security fixes, open spec items, spec review of the R3a half, database review, merge `--no-ff` with the `ec83f46` note, full verify, CI, `cp/d1-05`), then C1.
@@ -157,14 +158,13 @@ Before changing anything, run HANDOFF "Verify first" and report in 5 lines wheth
 stop and tell me what differs.
 
 We are on Claude Max: ONE CHAT = ONE BIG TASK (docs/progress/SESSION-PLAN.md, AUTOPILOT §6 first bullet). This chat's
-task is the one HANDOFF names under "Next chat" (Chat C: Wave 2a, stream R2 jobs in workers/jobs, the mirror
-pipeline, quality, integrity and sweep, in parallel with stream R4, the recruiter app in apps/recruiter; spec
-specs/d1-demo-slice.md §5, §6, §11). Do HANDOFF "Next step" in order: R2 (Opus writer) and R4 (Sonnet writer) in
-their own worktrees from the d1/integration tip, tests first; carry the C1b items into R2 (mirror stage heads the
-canonical start photo before writing media_objects; measure finalise memory at the 20 MB cap); lead wiring of
-queue/consumer.ts, index.ts and app.ts; spec-reviewer + security-reviewer + database-reviewer (Opus) per stream; fix
-test-first; merge --no-ff; full pnpm verify; CI; tag cp/d1-08. The task is done when cp/d1-08 is pushed; then wrap up
-and print the prompt for the next chat in SESSION-PLAN.md. Ask me before the first staging deploy (I must widen the Cloudflare
+task is the one HANDOFF names under "Next chat" (Chat D: Wave 2b, stream C2, the candidate app in apps/candidate:
+camera, blur on device, CSP, S12; plus the lead's e2e-local real flow; spec specs/d1-demo-slice.md §4.5-§4.8, §7,
+§11, and revision 4h: the answer.text splice is code-point aligned). Do HANDOFF "Next step" in order: C2 (Opus
+writer) in its own worktree from the d1/integration tip, tests first; in parallel the lead makes scripts/e2e-local.mjs
+build the recruiter with VITE_DEMO_OUTBOX=1 and runs the real flow locally (closes r3a #1); spec-reviewer +
+security-reviewer (Opus) for C2; fix test-first; merge --no-ff; full pnpm verify; CI incl. e2e-local; tag cp/d1-09.
+The task is done when cp/d1-09 is pushed; then wrap up and print the prompt for the next chat in SESSION-PLAN.md. Ask me before the first staging deploy (I must widen the Cloudflare
 token with R2 + Queues Edit and set CANDIDATE_TOKEN_KID, CANDIDATE_TOKEN_PUBLIC_JWK and API_STAGING_ORIGIN, per
 scripts/ops/README.md). M0a and M0b are built and reviewed but NOT closed; merging into main needs my explicit
 go-ahead. This machine is short of RAM: run pnpm verify / verify:fast with npm_config_workspace_concurrency=1.

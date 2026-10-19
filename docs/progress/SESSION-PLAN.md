@@ -48,5 +48,8 @@ prompt for the next chat. This file is the roadmap; HANDOFF.md says which chat i
 - Chat B (C1b): 2 Opus reviews + 3 Opus writers in parallel + 1 Sonnet re-review, two full verifies: 14% → ~28% of the
   5-hour window, 2% → ~4% weekly, context ~30%, about 1 h 45 min. Parallel fix writers on disjoint regions of the same
   file merged cleanly with `--no-ff`.
+- Chat C (R2 + R4): 2 Opus + 2 Sonnet writers, 1 Opus fix writer, 5 Opus reviews, 2 Sonnet re-reviews, 1 Sonnet
+  measurement, one full verify: ~3% → 43% of a fresh 5-hour window, 4% → 10% weekly, context ~45%. A sleeping laptop
+  stalled two writers overnight (watchdog); SendMessage resumed them with no loss.
 - Weekly limits matter more on Max than the 5-hour window: check `get_usage` after each agent result and record the
   weekly figure in the LOG row.
