@@ -202,3 +202,62 @@ jobs:
           STAGING_SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
           STAGING_SMOKE_TOTP_SECRET: ${{ secrets.STAGING_SMOKE_TOTP_SECRET }}
         run: node scripts/smoke-staging-auth.mjs
+
+  e2e-staging:
+    needs: deploy-staging
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/')) && github.repository == 'TraceHiring/TraceHiring'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: staging
+    concurrency: deploy-staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@1111111111111111111111111111111111111111
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Cache the Playwright browsers
+        uses: actions/cache@1111111111111111111111111111111111111111
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: pnpm --filter @trace/e2e exec playwright install --with-deps chromium
+      - name: Preflight
+        env:
+          E2E_CANDIDATE_URL: https://trace-candidate-staging.pages.dev
+          E2E_RECRUITER_URL: https://trace-recruiter-staging.pages.dev
+          E2E_API_URL: https://trace-api-staging.abhayraj.workers.dev
+          E2E_EDGE_URL: https://trace-edge-staging.abhayraj.workers.dev
+          E2E_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          E2E_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          E2E_SHA: ${{ github.sha }}
+        run: pnpm e2e:staging:preflight
+      - name: Playwright against staging
+        timeout-minutes: 22
+        env:
+          E2E_STAGING: '1'
+          E2E_CANDIDATE_URL: https://trace-candidate-staging.pages.dev
+          E2E_RECRUITER_URL: https://trace-recruiter-staging.pages.dev
+          E2E_API_URL: https://trace-api-staging.abhayraj.workers.dev
+          E2E_EDGE_URL: https://trace-edge-staging.abhayraj.workers.dev
+          E2E_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          E2E_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          E2E_SHA: ${{ github.sha }}
+          E2E_RECRUITER_EMAIL: ${{ secrets.STAGING_SMOKE_EMAIL }}
+          E2E_RECRUITER_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
+          E2E_RECRUITER_TOTP_SECRET: ${{ secrets.STAGING_SMOKE_TOTP_SECRET }}
+          E2E_REVIEWER_EMAIL: ${{ secrets.STAGING_REVIEWER_EMAIL }}
+          E2E_REVIEWER_PASSWORD: ${{ secrets.STAGING_REVIEWER_PASSWORD }}
+          E2E_REVIEWER_TOTP_SECRET: ${{ secrets.STAGING_REVIEWER_TOTP_SECRET }}
+        run: pnpm --filter @trace/e2e exec playwright test tests/d1-slice.spec.ts --project staging
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@1111111111111111111111111111111111111111
+        with:
+          name: e2e-staging-results
+          path: |
+            e2e/test-results
+            !e2e/test-results/**/*.zip
+          retention-days: 7
