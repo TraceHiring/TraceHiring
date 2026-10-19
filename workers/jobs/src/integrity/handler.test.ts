@@ -368,6 +368,20 @@ describe('exactly-once (AT-D16)', () => {
   });
 });
 
+describe('errors leave the stage as constant codes', () => {
+  it('a database error becomes integrity_failed, keeping only its SQLSTATE', async () => {
+    const w = await integrityWorld();
+    const tx = {
+      query: () => Promise.reject(Object.assign(new Error('detail: (len 42)'), { code: '40001' })),
+    };
+    const err = (await runIntegrity(w.message, { tx, evidence: w.evidence }).catch(
+      (e: unknown) => e,
+    )) as Error;
+    expect(err.message).toBe('integrity_failed');
+    expect((err as Error & { code?: string }).code).toBe('40001');
+  });
+});
+
 describe('fail closed', () => {
   it('a hash mismatch stores nothing and throws a constant code', async () => {
     const w = await integrityWorld();

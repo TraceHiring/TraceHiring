@@ -201,6 +201,25 @@ describe('quality stage', () => {
   });
 });
 
+describe('errors leave the stage as constant codes', () => {
+  it('a database error quoting row values becomes quality_failed, keeping only its SQLSTATE', async () => {
+    const { message } = qualityWorld();
+    const tx = {
+      query: () =>
+        Promise.reject(
+          Object.assign(new Error('Failing row contains (The queue will retry)'), {
+            code: '23514',
+          }),
+        ),
+    };
+    const err = (await runQuality(message, { tx, grader: new MockLlmGrader() }).catch(
+      (e: unknown) => e,
+    )) as Error;
+    expect(err.message).toBe('quality_failed');
+    expect((err as Error & { code?: string }).code).toBe('23514');
+  });
+});
+
 describe('AT-D3: the quality result is identical whatever integrity data exists', () => {
   it('ignores every integrity row and never names the integrity schema', async () => {
     const plain = qualityWorld();

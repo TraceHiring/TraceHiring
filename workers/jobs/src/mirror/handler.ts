@@ -39,7 +39,7 @@ const fail = (code: string): never => {
 
 const DEAD = new Set(['revoked', 'expired', 'blocked_age']);
 
-export const runMirror = async (message: SessionMirrorMessage, deps: MirrorDeps): Promise<void> => {
+const runMirrorUnsafe = async (message: SessionMirrorMessage, deps: MirrorDeps): Promise<void> => {
   const { tx, evidence } = deps;
   const orgId = message.orgId;
   const sessionId = message.sessionId;
@@ -151,4 +151,32 @@ export const runMirror = async (message: SessionMirrorMessage, deps: MirrorDeps)
   // After the sessions row exists (L-35: the invitations guard requires it for `submitted`).
   await submitInvitation(tx, orgId, message.invitationId);
   await insertKey(tx, orgId, key, sessionId, message.submittedAt);
+};
+
+const FALLBACK = 'mirror_failed';
+
+const CONSTANT_CODE = /^[a-z][a-z0-9_]{2,63}$/;
+const SQLSTATE = /^[0-9A-Z]{5}$/;
+
+/**
+ * Every error leaves the stage as a constant code: our own codes pass through; anything else (a driver or database
+ * error, whose fields may quote row values) becomes `FALLBACK`, keeping only a well-formed SQLSTATE in `code` so a
+ * caller can still tell a serialization failure (40001) from other failures.
+ */
+const constantError = (err: unknown): Error => {
+  if (err instanceof Error && CONSTANT_CODE.test(err.message)) return err;
+  const out = new Error(FALLBACK);
+  const code =
+    typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
+  if (typeof code === 'string' && SQLSTATE.test(code)) Object.assign(out, { code });
+  return out;
+};
+
+/** The stage entry point (the consumer injects `deps.tx`, one transaction as the stage's worker role). */
+export const runMirror = async (message: SessionMirrorMessage, deps: MirrorDeps): Promise<void> => {
+  try {
+    await runMirrorUnsafe(message, deps);
+  } catch (err) {
+    throw constantError(err);
+  }
 };

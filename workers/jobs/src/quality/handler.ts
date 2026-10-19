@@ -52,7 +52,7 @@ export const rubricSetSha256 = (contentHashes: readonly string[]): Promise<strin
 
 const SectionScores = QualityCardRow.shape.section_scores;
 
-export const runQuality = async (
+const runQualityUnsafe = async (
   message: SessionMirrorMessage,
   deps: QualityDeps,
 ): Promise<void> => {
@@ -157,4 +157,35 @@ export const runQuality = async (
   const cardId = await upsertCard(tx, orgId, sessionId, scoreId);
   await attachCard(tx, orgId, sessionId, cardId);
   await insertKey(tx, orgId, key, cardId, message.submittedAt);
+};
+
+const FALLBACK = 'quality_failed';
+
+const CONSTANT_CODE = /^[a-z][a-z0-9_]{2,63}$/;
+const SQLSTATE = /^[0-9A-Z]{5}$/;
+
+/**
+ * Every error leaves the stage as a constant code: our own codes pass through; anything else (a driver or database
+ * error, whose fields may quote row values) becomes `FALLBACK`, keeping only a well-formed SQLSTATE in `code` so a
+ * caller can still tell a serialization failure (40001) from other failures.
+ */
+const constantError = (err: unknown): Error => {
+  if (err instanceof Error && CONSTANT_CODE.test(err.message)) return err;
+  const out = new Error(FALLBACK);
+  const code =
+    typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
+  if (typeof code === 'string' && SQLSTATE.test(code)) Object.assign(out, { code });
+  return out;
+};
+
+/** The stage entry point (the consumer injects `deps.tx`, one transaction as the stage's worker role). */
+export const runQuality = async (
+  message: SessionMirrorMessage,
+  deps: QualityDeps,
+): Promise<void> => {
+  try {
+    await runQualityUnsafe(message, deps);
+  } catch (err) {
+    throw constantError(err);
+  }
 };

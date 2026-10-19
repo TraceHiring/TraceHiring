@@ -48,7 +48,7 @@ const fail = (code: string): never => {
 const finalState = (meetsCutoff: boolean): ReviewState =>
   meetsCutoff ? 'reviewed' : 'not_reviewed_below_cutoff';
 
-export const runIntegrity = async (
+const runIntegrityUnsafe = async (
   message: SessionMirrorMessage,
   deps: IntegrityDeps,
 ): Promise<void> => {
@@ -135,4 +135,35 @@ export const runIntegrity = async (
     await attachCard(tx, ids, cardId);
   }
   await insertKey(tx, ids.orgId, key, cardId, message.submittedAt);
+};
+
+const FALLBACK = 'integrity_failed';
+
+const CONSTANT_CODE = /^[a-z][a-z0-9_]{2,63}$/;
+const SQLSTATE = /^[0-9A-Z]{5}$/;
+
+/**
+ * Every error leaves the stage as a constant code: our own codes pass through; anything else (a driver or database
+ * error, whose fields may quote row values) becomes `FALLBACK`, keeping only a well-formed SQLSTATE in `code` so a
+ * caller can still tell a serialization failure (40001) from other failures.
+ */
+const constantError = (err: unknown): Error => {
+  if (err instanceof Error && CONSTANT_CODE.test(err.message)) return err;
+  const out = new Error(FALLBACK);
+  const code =
+    typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
+  if (typeof code === 'string' && SQLSTATE.test(code)) Object.assign(out, { code });
+  return out;
+};
+
+/** The stage entry point (the consumer injects `deps.tx`, one transaction as the stage's worker role). */
+export const runIntegrity = async (
+  message: SessionMirrorMessage,
+  deps: IntegrityDeps,
+): Promise<void> => {
+  try {
+    await runIntegrityUnsafe(message, deps);
+  } catch (err) {
+    throw constantError(err);
+  }
 };

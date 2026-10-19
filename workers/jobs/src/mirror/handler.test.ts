@@ -217,6 +217,19 @@ describe('mirror stage', () => {
     });
   });
 
+  it('a database error becomes mirror_failed, keeping only a well-formed SQLSTATE', async () => {
+    const w = await sessionWorld();
+    const tx = {
+      query: () =>
+        Promise.reject(Object.assign(new Error('Key (x)=(y) exists'), { code: 'not a state' })),
+    };
+    const err = (await runMirror(w.message, { tx, evidence: w.evidence }).catch(
+      (e: unknown) => e,
+    )) as Error;
+    expect(err.message).toBe('mirror_failed');
+    expect((err as Error & { code?: string }).code).toBeUndefined();
+  });
+
   describe('exactly-once (AT-D16)', () => {
     it('the same message twice: one row of each, same ids', async () => {
       const w = await sessionWorld();
