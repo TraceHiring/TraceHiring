@@ -50,8 +50,9 @@ Candidate tokens are signed with ES256 (ECDSA P-256, SHA-256). `services/api` si
 (a Worker secret). `workers/edge` and `services/api` verify with the public key (a plain variable, so the
 edge holds no secret). The `kid` has the form `d1-YYYY-MM` (a real month); only the current `kid` signs.
 
-You run this once, on your own computer, before the first staging deploy. The private key goes into
-Cloudflare as a secret and then the file is deleted. It never goes into git, chat or CI.
+You make the key pair once, on your own computer, **before** the first staging deploy (the deploy checks the
+public variables), and you put the private key into Cloudflare **after** it (steps 1 and 3 of "First staging
+deploy" above). Then the file is deleted. It never goes into git, chat or CI.
 
 ### First time
 
@@ -72,14 +73,18 @@ Cloudflare as a secret and then the file is deleted. It never goes into git, cha
    | `candidate-token-<kid>.public.json` | the public JWK, one line | the `staging` variable `CANDIDATE_TOKEN_PUBLIC_JWK` |
    | `candidate-token-<kid>.private.jwk.json` | the private JWK, one line, mode `0600` | the api secret `CANDIDATE_TOKEN_PRIVATE_JWK` |
 
-4. Run the commands it printed, in this order (bash or Git Bash; the paths are the ones it printed):
+4. **Now, before the first deploy:** set the two variables it printed (bash or Git Bash; the paths are the
+   ones it printed):
 
    ```
    gh variable set CANDIDATE_TOKEN_KID --env staging --body d1-2026-10
    gh variable set CANDIDATE_TOKEN_PUBLIC_JWK --env staging < "<public file>"
    ```
 
-   then, from `services/api`:
+5. **After the first deploy has created `trace-api-staging`** (step 2 of "First staging deploy"): put the
+   private key, from `services/api`. The script prints this command too; do not run it earlier. On a Worker
+   that does not exist yet, `wrangler secret put` with piped input does not stop or ask: it creates an empty
+   draft Worker and puts the secret there (wrangler 4.149 `createDraftWorker`).
 
    ```
    pnpm exec wrangler secret put CANDIDATE_TOKEN_PRIVATE_JWK --env staging < "<private file>"
@@ -93,7 +98,7 @@ Cloudflare as a secret and then the file is deleted. It never goes into git, cha
    Get-Content -Raw "<private file>" | pnpm exec wrangler secret put CANDIDATE_TOKEN_PRIVATE_JWK --env staging
    ```
 
-5. **Delete the private file** once `secret put` has succeeded. It is the only copy. If it is lost, make a
+6. **Delete the private file** once `secret put` has succeeded. It is the only copy. If it is lost, make a
    new pair with a new `kid` (the old public key then simply stops being needed).
 
 On Windows the file mode bits do not apply. The private file keeps the permissions of its folder, which is
