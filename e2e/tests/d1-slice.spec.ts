@@ -17,6 +17,11 @@
 //
 // Synthetic data only (`@example.test`, the run id in every name). No email, password, code, token, link or body is
 // printed: failures carry a step, a status, a constant code or a boolean.
+//
+// No cleanup (SEC-W5-8, accepted for D1): there is no delete path before M7. Every run leaves its own test (a unique
+// title), 6 invitations, 4 submitted sessions with their consents, start photos, events and cards, the reviewer's
+// assignment and the demo-outbox entries in the org. On staging these accumulate run after run in the smoke org;
+// local stacks are reset by scripts/e2e-local.mjs. Nothing in them is a real person.
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import {
