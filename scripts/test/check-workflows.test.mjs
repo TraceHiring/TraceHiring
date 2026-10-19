@@ -155,7 +155,7 @@ describe('parseYaml (the subset GitHub workflows use)', () => {
     ]);
     // The upload path's exclusion line is block-scalar text, not a YAML tag.
     expect(d.jobs['e2e-staging'].steps[6].with.path).toBe(
-      'e2e/test-results\n!e2e/test-results/**/trace.zip\n',
+      'e2e/test-results\n!e2e/test-results/**/*.zip\n',
     );
     expect(d.on.workflow_dispatch.inputs.run_e2e).toEqual({
       description: 'Run the e2e jobs',
@@ -2398,7 +2398,7 @@ describe('e2e-staging job (d1 §7.1, AT-D1, AT-D20)', () => {
     );
     expect([...E2E_STAGING_ARTIFACT_PATHS]).toEqual([
       'e2e/test-results',
-      '!e2e/test-results/**/trace.zip',
+      '!e2e/test-results/**/*.zip',
     ]);
     // The six credentials, each bound to the Playwright command only; the reviewer's never reach
     // deploy-staging, and no deploy secret reaches e2e-staging.
@@ -2678,9 +2678,18 @@ describe('e2e-staging job (d1 §7.1, AT-D1, AT-D20)', () => {
     });
 
     it.each([
-      ['no trace exclusion', (w) => (w.path = 'e2e/test-results\n')],
+      ['no zip exclusion', (w) => (w.path = 'e2e/test-results\n')],
+      // SEC-W6-4: a trace can be zipped under any name, so every .zip is excluded, not only trace.zip
+      [
+        'only trace.zip excluded',
+        (w) => (w.path = 'e2e/test-results\n!e2e/test-results/**/trace.zip\n'),
+      ],
+      [
+        'a narrower zip exclusion',
+        (w) => (w.path = 'e2e/test-results\n!e2e/test-results/*/*.zip\n'),
+      ],
       ['the HTML report too', (w) => (w.path = `${w.path}e2e/playwright-report\n`)],
-      ['the whole e2e folder', (w) => (w.path = 'e2e\n!e2e/test-results/**/trace.zip\n')],
+      ['the whole e2e folder', (w) => (w.path = 'e2e\n!e2e/test-results/**/*.zip\n')],
       ['30 days', (w) => (w['retention-days'] = 30)],
       ['no retention', (w) => delete w['retention-days']],
       ['a string retention', (w) => (w['retention-days'] = '7')],
@@ -2688,7 +2697,7 @@ describe('e2e-staging job (d1 §7.1, AT-D1, AT-D20)', () => {
       ['hidden files', (w) => (w['include-hidden-files'] = true)],
     ])('rejects an artifact with %s', (_label, edit) => {
       expect(check((d) => edit(step(d, UPLOAD).with))).toMatch(
-        /e2e-staging must upload exactly e2e\/test-results without trace\.zip/,
+        /e2e-staging must upload exactly e2e\/test-results without any \.zip/,
       );
     });
 

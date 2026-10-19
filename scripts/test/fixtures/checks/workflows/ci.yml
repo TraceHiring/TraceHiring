@@ -258,5 +258,5 @@ jobs:
           name: e2e-staging-results
           path: |
             e2e/test-results
-            !e2e/test-results/**/trace.zip
+            !e2e/test-results/**/*.zip
           retention-days: 7

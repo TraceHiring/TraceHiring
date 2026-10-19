@@ -346,7 +346,8 @@ jobs:
   # or a pull request). The preflight gets the public contract only and checks that every Worker and
   # app serves this commit; the Playwright step is the only one holding the six E2E credentials (the
   # H9 recruiter and the D1 reviewer smoke users). The artifact is e2e/test-results (the manifest,
-  # videos, screenshots; synthetic data only) without any trace.zip, kept 7 days, also on failure.
+  # videos, screenshots; synthetic data only) without any .zip (so no trace, SEC-W6-4), kept 7
+  # days, also on failure.
   # scripts/check-workflows.mjs pins the whole job (E2E_STAGING_*).
   e2e-staging:
     needs: deploy-staging
@@ -411,5 +412,5 @@ jobs:
           name: e2e-staging-results
           path: |
             e2e/test-results
-            !e2e/test-results/**/trace.zip
+            !e2e/test-results/**/*.zip
           retention-days: 7

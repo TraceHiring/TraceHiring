@@ -25,7 +25,7 @@
 //     §7.3); e2e-staging holds only the six E2E credentials, on its pinned Playwright step only
 //   - e2e-staging (when present; d1 §7.1, AT-D1) has the exact needs / if / environment /
 //     permissions and step list of E2E_STAGING_*: the preflight with the public contract only, the
-//     Playwright step, then an always() upload of e2e/test-results without any trace.zip (7 days)
+//     Playwright step, then an always() upload of e2e/test-results without any .zip (7 days)
 //   - deploy-staging (when present) has the exact needs / if / environment / concurrency of §7.2
 //     (the if: admits a push on main, or a workflow_dispatch on d1/** or milestone/**, never a PR)
 //   - deploy-staging's D1 chain (specs/d1-demo-slice.md §7.1, docs/reviews/D1-security-review-bindings.md
@@ -576,7 +576,8 @@ const E2E_RUN = /^\s*node scripts\/e2e-local\.mjs --ci\s*$/;
  * half of DEPLOY_IF: never a push, never a pull request), in the staging environment, which holds
  * the E2E credentials. Its steps are pinned: checkout, setup, the Chromium cache and install, the
  * preflight (the public contract only, no secret), the Playwright step (the only one holding the six
- * credentials) and the upload of e2e/test-results without any trace.zip, kept at most 7 days.
+ * credentials) and the upload of e2e/test-results without any .zip (a trace under any name,
+ * SEC-W6-4), kept at most 7 days.
  */
 export const E2E_STAGING_JOB = 'e2e-staging';
 export const E2E_STAGING_IF =
@@ -599,7 +600,7 @@ export const E2E_BROWSER_CACHE = Object.freeze({
 /** Upload paths, in order: the results folder, minus any Playwright trace (d1 bindings review F8). */
 export const E2E_STAGING_ARTIFACT_PATHS = Object.freeze([
   'e2e/test-results',
-  '!e2e/test-results/**/trace.zip',
+  '!e2e/test-results/**/*.zip',
 ]);
 /**
  * The public half of the E2E env contract (the four staging origins as literals, H4 label
@@ -1870,7 +1871,7 @@ const artifactPaths = (w) =>
  * before the one Playwright step, which runs exactly E2E_STAGING_RUN_CMD with exactly
  * E2E_STAGING_PLAYWRIGHT_ENV; the general secret rules bind the credentials to that command
  * (E2E_STAGING_SECRET_USERS). Then one `if: always()` upload of exactly E2E_STAGING_ARTIFACT_PATHS
- * (no trace.zip), kept at most 7 days. No other step, if: or working-directory.
+ * (no .zip, so no trace), kept at most 7 days. No other step, if: or working-directory.
  */
 function checkE2eStaging(doc, file, out) {
   const j = doc.jobs[E2E_STAGING_JOB];
@@ -2074,7 +2075,7 @@ function checkE2eStaging(doc, file, out) {
       v(
         file,
         uploads.length === 1 ? sw(uploads[0]) : where,
-        `${E2E_STAGING_JOB} must upload exactly e2e/test-results without trace.zip (path: ${E2E_STAGING_ARTIFACT_PATHS.join(' then ')}; retention-days 1 to ${E2E_ARTIFACT_MAX_DAYS}; only name, path and retention-days), in one step with if: always(), after the Playwright step (synthetic data only; d1 bindings review F8: never a trace)`,
+        `${E2E_STAGING_JOB} must upload exactly e2e/test-results without any .zip (path: ${E2E_STAGING_ARTIFACT_PATHS.join(' then ')}; retention-days 1 to ${E2E_ARTIFACT_MAX_DAYS}; only name, path and retention-days), in one step with if: always(), after the Playwright step (synthetic data only; d1 bindings review F8: never a trace)`,
       ),
     );
   }
