@@ -6,9 +6,11 @@
 // 2. Reads the local stack's URLs and publishable key (`supabase status`) and builds both apps
 //    (`pnpm --filter @trace/candidate --filter @trace/recruiter build`) with the demo outbox on
 //    (VITE_DEMO_OUTBOX=1, VITE_TRACE_ENV=dev; spec rev 4f) and the local edge origin for the
-//    candidate app (VITE_EDGE_ORIGIN). No api or Supabase origin: the recruiter's headers plugin
-//    accepts only staging forms (lead, 2026-10-19). Only that call carries these; the root
-//    `pnpm build` (check-no-demo-outbox) is not run.
+//    candidate app (VITE_EDGE_ORIGIN). For the recruiter app it also passes the stack's API URL
+//    (VITE_SUPABASE_URL), its publishable key (VITE_SUPABASE_PUBLISHABLE_KEY) and the local api
+//    Worker origin (VITE_API_ORIGIN, port 8788); the recruiter's headers plugin accepts those
+//    loopback origins because VITE_TRACE_ENV is exactly dev (spec rev 4i). Only that call carries
+//    these; the root `pnpm build` (check-no-demo-outbox) is not run.
 // 2b. Local-only values for the real flow (spec review r3a #1), generated now, never in git, never
 //    printed: random passwords for the operator logins api_login and jobs_{mirror,quality,
 //    integrity}_login (recreated as postgres, one `inherit false, set true` grant each), a fresh
@@ -353,18 +355,25 @@ export function readStack(raw) {
 }
 
 /**
- * The environment of the one app-build call (spec §7.1, rev 4f): the recruiter registers the demo
- * outbox route only with VITE_DEMO_OUTBOX=1 and a VITE_TRACE_ENV other than production (set here,
- * so a parent value cannot turn it off); the candidate app reaches the local edge. No local api or
- * Supabase origin is passed: the recruiter's headers plugin (packages/config/vite/headers-template.js)
- * accepts only the staging forms at build time (lead, 2026-10-19; a locally working recruiter UI is
- * an R5 prerequisite). The real-flow spec signs in through GoTrue directly.
+ * The environment of the one app-build call (spec §7.1, rev 4f, rev 4i): the recruiter registers the
+ * demo outbox route only with VITE_DEMO_OUTBOX=1 and a VITE_TRACE_ENV other than production (set
+ * here, so a parent value cannot turn it off); the candidate app reaches the local edge. The
+ * recruiter app gets the local stack's API URL (VITE_SUPABASE_URL), its publishable key
+ * (VITE_SUPABASE_PUBLISHABLE_KEY) and the local api Worker origin (VITE_API_ORIGIN), so its UI can
+ * sign in and call the api locally. The recruiter's headers plugin
+ * (packages/config/vite/headers-template.js) accepts those loopback origins only because
+ * VITE_TRACE_ENV is exactly `dev`. `stack` is readStack()'s checked result; nothing here is
+ * generated, written or printed.
+ * @param {{ apiUrl: string, publishableKey: string }} stack
  */
-export function buildEnv() {
+export function buildEnv(stack) {
   return {
     VITE_DEMO_OUTBOX: '1',
     VITE_TRACE_ENV: 'dev',
     VITE_EDGE_ORIGIN: E2E_ENV.E2E_EDGE_URL,
+    VITE_SUPABASE_URL: stack.apiUrl,
+    VITE_SUPABASE_PUBLISHABLE_KEY: stack.publishableKey,
+    VITE_API_ORIGIN: E2E_ENV.E2E_API_URL,
   };
 }
 
@@ -598,7 +607,7 @@ export async function main(options) {
     const { stack } = read;
     log(`${TOOL}: building the candidate and recruiter apps (demo outbox on, local edge origin)`);
     const tb = now();
-    const built = await run('pnpm', BUILD_ARGS, { cwd: root, env: buildEnv() });
+    const built = await run('pnpm', BUILD_ARGS, { cwd: root, env: buildEnv(stack) });
     phases.build_ms = now() - tb;
     if (built.error || built.status !== 0) {
       return [
