@@ -128,14 +128,14 @@ describe('candidate sources', () => {
   });
 
   it('(2) ask for the camera exactly once, with audio: false, and never for audio', () => {
-    const camera = all[CAMERA_MODULE];
-    if (camera !== undefined) {
-      const calls = [...camera.matchAll(/getUserMedia\s*\(/g)];
-      expect(calls).toHaveLength(1);
-      const call = /getUserMedia\s*\(\s*\{([\s\S]*?)\}\s*\)/.exec(camera)?.[1] ?? '';
-      expect(call).toMatch(/\baudio\s*:\s*false\b/);
-      expect(call).toMatch(/\bvideo\s*:/);
-    }
+    // SR-9: the camera module must exist; the check cannot pass on a missing file.
+    const camera = all[CAMERA_MODULE] ?? '';
+    expect(all[CAMERA_MODULE]).toBeDefined();
+    const calls = [...camera.matchAll(/getUserMedia\s*\(/g)];
+    expect(calls).toHaveLength(1);
+    const call = /getUserMedia\s*\(\s*\{([\s\S]*?)\}\s*\)/.exec(camera)?.[1] ?? '';
+    expect(call).toMatch(/\baudio\s*:\s*false\b/);
+    expect(call).toMatch(/\bvideo\s*:/);
     expect(where(AUDIO_TRUE)).toEqual([]);
   });
 
