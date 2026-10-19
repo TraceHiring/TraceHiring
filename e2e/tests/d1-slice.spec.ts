@@ -513,16 +513,17 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
       async () => {
         const fresh = (await (await outboxOf(request)).list()).filter((e) => !baseline.has(e.id));
         const invites = fresh.filter((e) => e.kind === 'invite');
-        // Exactly five new invite entries, one per A-E by link token; so none for the blocked invitation.
-        expect(invites).toHaveLength(5);
+        // Exactly five new invite entries, one per A-E by link token; so none for the blocked invitation. Counts
+        // only: a failing toHaveLength would print the entries, and their bodies hold the links (SEC-W5-2).
+        expect(invites.length).toBe(5);
         for (const key of ['A', 'B', 'C', 'D', 'E'] as const) {
           const c = cand(key);
           const mine = invites.filter((e) => linkTokenIn(e.bodyText) === c.invitation.token);
-          expect(mine, key).toHaveLength(1);
+          expect(mine.length, key).toBe(1);
           expect(mine[0]?.candidateLabel, key).toBe(c.invitation.label);
         }
         const blocked = must(run.blockedByInviter, 'the blocked invitation');
-        expect(fresh.filter((e) => e.candidateLabel === blocked.label)).toHaveLength(0);
+        expect(fresh.filter((e) => e.candidateLabel === blocked.label).length).toBe(0);
         const list = await recruiterApi(request).invitations(t.testId);
         expect(list.invitations.find((i) => i.label === blocked.label)?.status).toBe('blocked_age');
       },
@@ -871,7 +872,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
       expect(d?.belowCutoff).toBe(true);
       expect((d?.score ?? 100) < (a?.score ?? 0)).toBe(true);
       // Neither the blocked candidates nor anyone else of this test has a row.
-      expect(list.rows).toHaveLength(4);
+      expect(list.rows.length).toBe(4);
 
       await page.goto(`/tests/${t.testId}/results`);
       await expect(page.getByRole('heading', { level: 2, name: 'Results' })).toBeVisible();
