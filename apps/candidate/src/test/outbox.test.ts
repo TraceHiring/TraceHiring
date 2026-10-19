@@ -422,6 +422,24 @@ describe('failures', () => {
     await expect(o.flush()).resolves.toBe(false);
   });
 
+  it('SR-4: the 10-minute compaction keeps every signal (only heartbeats and superseded edits go)', async () => {
+    const o = make();
+    edge.state.mode = { kind: 'network' };
+    o.choice(1, 'a');
+    await vi.advanceTimersByTimeAsync(60_000);
+    o.signal({ sig: 'untrusted_input', item: 2, via: 'input', count: 1 });
+    o.signal({ sig: 'paste', item: 2, len: 12 });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    edge.state.mode = { kind: 'ok' };
+    await vi.advanceTimersByTimeAsync(30_000);
+    const signals = edge.state.stored.filter((e) => e.kind === 'signal');
+    expect(signals).toEqual([
+      expect.objectContaining({ sig: 'untrusted_input', item: 2, via: 'input', count: 1 }),
+      expect.objectContaining({ sig: 'paste', item: 2, len: 12 }),
+    ]);
+    expect(edge.state.choices.get(1)).toBe('a');
+  });
+
   it('keeps unacknowledged events for at most 10 minutes, without losing the answer text', async () => {
     const o = make();
     edge.state.mode = { kind: 'network' };

@@ -6,9 +6,9 @@
 // (a network failure) is resent with the same numbers and content, never renumbered.
 //
 // Offline (a network failure, 503 or an answer that fits no contract): "Offline: your answers are kept on this
-// device", retry after 1, 2, 4, 8, then every 10 s. Unsent events are kept for at most 10 minutes; older ones are
-// replaced by one edit per item from the last text the edge may hold to the current text, so the answer is never
-// lost. A 400 or 413 refuses the whole batch (nothing of it was stored): its answer edits are dropped, the items go
+// device", retry after 1, 2, 4, 8, then every 10 s. Unsent answer edits and heartbeats are kept for at most 10
+// minutes; older edits are replaced by one edit per item from the last text the edge may hold to the current text,
+// so the answer is never lost, and every signal is kept (SR-4). A 400 or 413 refuses the whole batch (nothing of it was stored): its answer edits are dropped, the items go
 // back to the last acknowledged text (RT-13) and the batch's signals are sent once more; it never loops.
 // 410 ends the stream as `closed` (the caller attaches for the receipt), 401 `superseded` as `superseded`.
 // Events carry metadata only; nothing here logs.
@@ -270,10 +270,13 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
     const oldest = first < 0 ? undefined : queue[first];
     if (oldest === undefined || mono() - oldest.at <= OUTBOX.keepUnsentMs) return;
     const kept = queue.slice(0, first);
+    // SR-4: every unsent signal stays (evidence is never compacted away); heartbeats and the answer edits go, the
+    // edits replaced below by one edit per item.
+    const signals = queue.slice(first).filter((e) => e.body.kind === 'signal');
     const baseText = new Map(confirmed);
     const baseChoice = new Map(confirmedChoice);
     for (const e of kept) applyTo(baseText, baseChoice, e.body);
-    queue = kept;
+    queue = [...kept, ...signals];
     for (const [item, text] of current) {
       const base = baseText.get(item) ?? '';
       if (text !== base) enqueueText(item, base, text);
