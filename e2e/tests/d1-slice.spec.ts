@@ -76,6 +76,10 @@ import {
   BAND_LABEL,
   BLENDED_KEY,
   BLENDED_WORD,
+  D1_CONTEXT_FAMILIES,
+  D1_FLAG_FAMILIES,
+  NEVER_BUILD_TEXT,
+  neverBuildKeys,
   keysDeep,
   orgClient,
   REJECT_WORDS,
@@ -331,6 +335,30 @@ const expectDeployedSha = async (when: 'start' | 'end'): Promise<void> => {
   if (wrong.length > 0) {
     throw new Error(`at the ${when} of the run, not on E2E_SHA: ${wrong.join(', ')}`);
   }
+};
+
+/**
+ * Rule 7 on a report (SR-R5-2): no gaze, IP address or ASN in the visible text; no key (any depth) of the integrity
+ * card whose words include ip, asn or gaze; every flag family is a D1 flag family and every timeline or per-family
+ * row names a D1 family (connectivity only as context). Counts and key names only, never a value, in a failure.
+ */
+const expectRule7 = async (page: Page, integrity: IntegrityCard): Promise<void> => {
+  expect(NEVER_BUILD_TEXT.test(await visibleText(page))).toBe(false);
+  expect(neverBuildKeys(integrity)).toEqual([]);
+  if (integrity.state !== 'ready') return;
+  expect(integrity.flags.map((f) => f.family).filter((f) => !D1_FLAG_FAMILIES.includes(f))).toEqual(
+    [],
+  );
+  const timelineFamilies = (integrity.timeline as { family?: string | null }[]).map(
+    (e) => e.family ?? null,
+  );
+  expect(timelineFamilies.filter((f) => f !== null && !D1_CONTEXT_FAMILIES.includes(f))).toEqual(
+    [],
+  );
+  const rowFamilies = (integrity.signalsByFamily as { family?: string }[]).map((r) => r.family);
+  expect(rowFamilies.filter((f) => f === undefined || !D1_CONTEXT_FAMILIES.includes(f))).toEqual(
+    [],
+  );
 };
 
 test.beforeAll(async () => {
@@ -1085,6 +1113,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
       const { integrity, meta } = expectSeparateCards(r.bodies);
       expect(integrity.state === 'ready' && integrity.band).toBe('review');
       expectNoticeHash('B', meta);
+      await expectRule7(page, integrity);
       await expect(page.getByText(meta.report.noticeHashPrefix, { exact: true })).toBeVisible();
       await expectNoCombinedNumber();
       await expectNoRejectControl(page);
@@ -1152,6 +1181,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
         integrity.state === 'ready' && integrity.flags.some((f) => f.family === 'input_origin'),
       ).toBe(true);
       expectNoticeHash('C', meta);
+      await expectRule7(page, integrity);
       await expectNoCombinedNumber();
       await expectNoRejectControl(page);
       r.stop();
@@ -1219,6 +1249,13 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
       await pause(page);
     });
     await step(page, 'the reviewer opens report C: Strong concern', async () => {
+      const reportId = must(cand('C').reportId, "C's report");
+      const integrityAnswer = page.waitForResponse(
+        (res) =>
+          res.request().method() === 'GET' &&
+          res.status() === 200 &&
+          new URL(res.url()).pathname.endsWith(`/reports/${reportId}/integrity`),
+      );
       await rowOf(page, cand('C').invitation.label)
         .filter({ hasText: t.name })
         .getByRole('link', { name: 'Open report' })
@@ -1226,6 +1263,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
       await expect(page.locator('[data-region="integrity-card"] [data-headline]')).toHaveText(
         BAND_LABEL.strong_concern,
       );
+      await expectRule7(page, (await (await integrityAnswer).json()) as IntegrityCard);
       await expectNoRejectControl(page);
       await pause(page);
     });

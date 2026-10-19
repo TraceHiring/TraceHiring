@@ -104,6 +104,27 @@ export const REJECT_WORDS = /reject|decision|decide|confirm|overturn|appeal|noti
  */
 export const BLENDED_WORD = /\b(overall|combined|total|trust|honesty|composite)\b/i;
 
+/** Rule 7 on screen: no gaze, no IP address, no ASN, anywhere in a report's visible text. */
+export const NEVER_BUILD_TEXT = /\bgaze\b|IP address|\bASN\b/i;
+const NEVER_BUILD_WORDS: ReadonlySet<string> = new Set(['ip', 'asn', 'gaze']);
+/** A key's words (camelCase and snake_case split, lower case): `ipAddress` is ip+address, `description` is one word. */
+export const keyWords = (key: string): string[] =>
+  key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .filter((w) => w !== '')
+    .map((w) => w.toLowerCase());
+/** Rule 7 on the wire: keys (any depth) with a word ip, asn or gaze; whole words only, so `zip` is not one. */
+export const neverBuildKeys = (value: unknown): string[] =>
+  keysDeep(value).filter((k) => keyWords(k).some((w) => NEVER_BUILD_WORDS.has(w)));
+/**
+ * The D1 flag families (rule table packages/band-engine/src/rules/d1-v1.json and SIGNAL_CATALOG in
+ * packages/shared/src/signal-catalog.ts); `connectivity` exists only for context entries, never for a flag.
+ */
+export const D1_FLAG_FAMILIES: readonly string[] = ['paste', 'input_origin', 'focus'];
+export const D1_CONTEXT_FAMILIES: readonly string[] = [...D1_FLAG_FAMILIES, 'connectivity'];
+
 /** Every key of a JSON value at any depth. */
 export const keysDeep = (value: unknown): string[] => {
   if (Array.isArray(value)) return value.flatMap(keysDeep);
