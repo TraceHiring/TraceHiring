@@ -72,6 +72,6 @@ export function observedText(observed: {
   if (observed.durationMs !== undefined) {
     parts.push(`${(observed.durationMs / 1000).toFixed(1)} s`);
   }
-  if (observed.count !== undefined) parts.push(`${observed.count} in total`);
+  if (observed.count !== undefined) parts.push(`Count ${observed.count}`);
   return parts.length === 0 ? 'No value recorded' : parts.join(' · ');
 }

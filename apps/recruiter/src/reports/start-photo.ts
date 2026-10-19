@@ -1,6 +1,6 @@
 // The start photo flow (specs/d1-demo-slice.md §6.1 "Start photo", rule 8): ask for a single-use link, fetch the
 // bytes once from the api origin, draw them on a canvas with a tiled watermark of the viewer's role, org and time,
-// and show the result as a `data:` URL. The /media/ URL lives only inside `view()`: it is never stored in state,
+// and show the result as a `data:` URL. The media URL lives only inside `view()`: it is never stored in state,
 // logged, put in an error or handed to the DOM, so no breadcrumb can carry it.
 import { MediaLinkResponse } from '@trace/shared/contracts/d1';
 import { useSyncExternalStore } from 'react';
