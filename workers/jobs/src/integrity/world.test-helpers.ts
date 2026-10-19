@@ -7,6 +7,9 @@ import type { EvidenceHead, EvidenceObject, EvidenceReader } from '@trace/shared
 import { newDb, table, type FakeDb } from './fake-db.test-helpers.js';
 import { sha256HexBytes } from './load.js';
 
+/** The seeded rule table d1-v1 (the same JSON the migration seeds per org). */
+export const D1_RULES = rules;
+
 const id = (n: number): string =>
   `8f3d2b6a-1c9e-4a7f-b5d3-7e2c9a${(0x41b0 + n).toString(16).padStart(6, '0')}`;
 
