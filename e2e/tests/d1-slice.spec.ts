@@ -70,6 +70,7 @@ import {
 import {
   BAND_LABEL,
   BLENDED_KEY,
+  BLENDED_WORD,
   keysDeep,
   orgClient,
   REJECT_WORDS,
@@ -942,7 +943,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
     /** Rule 1 in the DOM: one score in the quality card, a band label (no number) in the integrity card. */
     const expectNoCombinedNumber = async () => {
       const text = await visibleText(page);
-      expect(text).not.toMatch(BLENDED_KEY);
+      expect(text).not.toMatch(BLENDED_WORD);
       await expect(page.locator('[data-region="quality-card"] [data-headline]')).toHaveCount(1);
       const band = (
         await page.locator('[data-region="integrity-card"] [data-headline]').innerText()
@@ -1006,9 +1007,10 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
       });
       await expect(img).toBeVisible();
       expect(((await img.getAttribute('src')) ?? '').startsWith('data:image/')).toBe(true);
-      // The browser fetched the bytes once; the same link is spent (single use).
-      const again = await request.get(link.url);
-      expect(again.status()).toBe(404);
+      // The browser fetched the bytes once; the same link is spent (single use). Node's fetch, not the Playwright
+      // request context, so the link never becomes a step title in the report.
+      const again = await fetch(link.url, { cache: 'no-store' });
+      expect(again.status).toBe(404);
       await pause(page);
     });
 

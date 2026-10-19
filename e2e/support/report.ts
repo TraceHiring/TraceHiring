@@ -98,6 +98,11 @@ export const BAND_LABEL: Readonly<Record<Band, string>> = {
 export const BLENDED_KEY = /overall|combined|total|trust|honesty|composite/i;
 /** Words that name a reject-type control or path (AT-D13); none may be a control on any D1 screen. */
 export const REJECT_WORDS = /reject|decision|decide|confirm|overturn|appeal|notice|shortlist/i;
+/**
+ * The same blended-value words as whole words, for on-screen text: "Untrusted input" (the tier note of an
+ * input-origin flag, §6.1) is evidence wording, not a trust score.
+ */
+export const BLENDED_WORD = /\b(overall|combined|total|trust|honesty|composite)\b/i;
 
 /** Every key of a JSON value at any depth. */
 export const keysDeep = (value: unknown): string[] => {

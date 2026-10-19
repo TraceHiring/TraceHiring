@@ -9,6 +9,7 @@ import {
   type APIRequestContext,
   type Browser,
   type BrowserContext,
+  type Locator,
   type Page,
 } from '@playwright/test';
 import { claimsOf } from './auth.js';
@@ -51,6 +52,22 @@ const tokenIn = (storage: Record<string, string>): string | null => {
   return null;
 };
 
+/**
+ * Puts `value` into an input without `fill`: Playwright names a `fill` step after the text typed, so the HTML report
+ * (a CI artifact) would hold the email, the password or the code. The sign-in forms are uncontrolled (AuthPanel reads
+ * them with FormData on submit), so setting `value` is what typing leaves behind. The value is an evaluate argument,
+ * which no step title shows.
+ */
+const setValue = async (field: Locator, value: string): Promise<void> => {
+  await field.waitFor({ state: 'visible' });
+  await field.evaluate((el, v) => {
+    if (!(el instanceof HTMLInputElement)) throw new Error('not an input');
+    el.focus();
+    el.value = v;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, value);
+};
+
 /** The current access token of a signed-in recruiter page (re-read, so a refreshed token is used). */
 export const accessToken = async (page: Page): Promise<string> => {
   const token = tokenIn(await readStorage(page));
@@ -72,8 +89,8 @@ export const signInThroughUi = async (
     const page = await context.newPage();
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
-    await page.locator('input[autocomplete="username"]').fill(user.email);
-    await page.locator('input[name="password"]').fill(user.password);
+    await setValue(page.locator('input[autocomplete="username"]'), user.email);
+    await setValue(page.locator('input[name="password"]'), user.password);
     await page.getByRole('button', { name: 'Sign in with password', exact: true }).click();
 
     const enrol = page.getByRole('heading', { name: 'Set up two-step sign-in', exact: true });
@@ -104,14 +121,14 @@ export const signInThroughUi = async (
     const picker = page.getByRole('heading', { name: 'Choose an organisation', exact: true });
     // One retry in the next 30-second window: a code typed at the very end of its window can expire in flight.
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      await page.getByLabel(codeLabel, { exact: true }).fill(totp(secret));
+      await setValue(page.getByLabel(codeLabel, { exact: true }), totp(secret));
       await page.getByRole('button', { name: submit, exact: true }).click();
       try {
         await expect(signedIn.or(picker)).toBeVisible({ timeout: 15_000 });
         break;
-      } catch (e) {
+      } catch {
+        // The assertion's own message is dropped: it may quote the page, and this step typed a code into it.
         if (attempt === 1) throw new Error('the TOTP step did not sign in');
-        void e;
         await sleep(30_000 - (Date.now() % 30_000) + 500);
       }
     }
