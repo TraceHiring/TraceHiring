@@ -28,6 +28,7 @@ const EXPECTED = {
     'pnpm -r --if-present build',
     'node scripts/check-bundle-size.mjs',
     'node scripts/check-headers.mjs',
+    'node scripts/check-no-demo-outbox.mjs',
     'node scripts/scan-dist.mjs',
   ],
   verify: ['pnpm typecheck', 'pnpm lint', 'pnpm test', 'pnpm test:rls', 'pnpm build'],

@@ -190,13 +190,15 @@ jobs:
       # the staging bytes (an env.staging define or alias cannot ship unscanned). No secret here:
       # the recruiter's Supabase URL and publishable key are public staging variables (m0b §2.7, H10),
       # and so are its Sentry DSN (d1 AT-D22, H6) and the api origin its CSP connect-src names
-      # (https://trace-api-staging.<label>.workers.dev; d1 §7.1 check-headers).
+      # (https://trace-api-staging.<label>.workers.dev; d1 §7.1 check-headers). VITE_DEMO_OUTBOX=1 makes
+      # the staging recruiter build include the demo outbox (d1 §6.1); every other build omits it (AT-D18).
       - name: Build
         env:
           VITE_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
           VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
           VITE_API_ORIGIN: ${{ vars.API_STAGING_ORIGIN }}
+          VITE_DEMO_OUTBOX: '1'
         run: |
           set -euo pipefail
           VITE_APP_VERSION="$GITHUB_SHA" pnpm build

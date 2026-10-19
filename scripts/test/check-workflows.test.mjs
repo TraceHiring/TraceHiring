@@ -701,6 +701,8 @@ describe('checkWorkflow', () => {
           'SENTRY_DSN_WORKERS',
           // d1 §7.1 check-headers: the recruiter CSP api origin, on the staging build only
           'VITE_API_ORIGIN',
+          // d1 §6.1, AT-D18: the demo-outbox flag, on the staging build only
+          'VITE_DEMO_OUTBOX',
           // security review S8: the same origin, read by the check-deploy-vars step
           'API_STAGING_ORIGIN',
           // d1 §7.1 (review F4): the candidate-token public values, passed to the api and edge
@@ -1210,12 +1212,13 @@ describe('checkWorkflow', () => {
   });
 
   describe('VITE_SUPABASE_* only on the deploy build step (m0b §2.7)', () => {
-    it('lists exactly the four build variables and their public vars sources (m0b §2.7, d1 AT-D22, d1 §7.1 recruiter CSP)', () => {
+    it('lists exactly the five build variables and their sources (m0b §2.7, d1 AT-D22, d1 §7.1 recruiter CSP, d1 AT-D18)', () => {
       expect(BUILD_ONLY_ENV).toEqual({
         VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
         VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
         VITE_SENTRY_DSN: '${{ vars.VITE_SENTRY_DSN }}',
         VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
+        VITE_DEMO_OUTBOX: '1',
       });
       for (const name of Object.keys(BUILD_ONLY_ENV)) expect(ENV_ALLOW_LIST).toContain(name);
     });
@@ -1232,6 +1235,30 @@ describe('checkWorkflow', () => {
         expect(msgs(checkWorkflow(d, 'ci.yml', ctx))).toMatch(/VITE_API_ORIGIN must be exactly/);
       },
     );
+
+    it('the staging build step may set VITE_DEMO_OUTBOX to exactly 1 only (d1 §6.1, AT-D18)', () => {
+      const ok = doc();
+      ok.jobs['deploy-staging'].steps[2].env.VITE_DEMO_OUTBOX = '1';
+      expect(checkWorkflow(ok, 'ci.yml', ctx)).toEqual([]);
+      for (const value of ['0', 'true', '${{ vars.VITE_DEMO_OUTBOX }}']) {
+        const bad = doc();
+        bad.jobs['deploy-staging'].steps[2].env.VITE_DEMO_OUTBOX = value;
+        expect(msgs(checkWorkflow(bad, 'ci.yml', ctx))).toMatch(/VITE_DEMO_OUTBOX must be exactly/);
+      }
+    });
+
+    it('rejects VITE_DEMO_OUTBOX anywhere but the staging build step (a demo build elsewhere)', () => {
+      const atWorkflow = doc();
+      atWorkflow.env = { ...(atWorkflow.env ?? {}), VITE_DEMO_OUTBOX: '1' };
+      expect(msgs(checkWorkflow(atWorkflow, 'ci.yml', ctx))).toMatch(
+        /VITE_DEMO_OUTBOX may be set only on the deploy-staging build step/,
+      );
+      const onStatic = doc();
+      onStatic.jobs.static.env = { ...(onStatic.jobs.static.env ?? {}), VITE_DEMO_OUTBOX: '1' };
+      expect(msgs(checkWorkflow(onStatic, 'ci.yml', ctx))).toMatch(
+        /VITE_DEMO_OUTBOX may be set only on the deploy-staging build step/,
+      );
+    });
 
     it.each([
       ['workflow env', (d) => (d.env.VITE_API_ORIGIN = '${{ vars.API_STAGING_ORIGIN }}')],
