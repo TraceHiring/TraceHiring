@@ -91,8 +91,10 @@ Spec review: **PASS.** Security review: **PASS.** Info notes accepted: no `Vary`
 
 ## Confirming re-review
 
-Pending (the lead fills this in).
+Sonnet spec-reviewer on `f3af009`: W1 CONFIRMED, W2 CONFIRMED, W3 CONFIRMED WITH NOTES, W4 CONFIRMED (merge integrity checked per stream; rules 1-9 hold). Notes: (1) `test-staging-roles-local.mjs` was not run by the re-reviewer; the lead ran it in `test:rls` (full `pnpm verify`). (2) README step 2 says to wait for a green deploy-staging job but the org sign-in smoke step is red until H9; intent clear, wording to tidy with the first staging run.
 
 ## Checks
 
-Pending (the lead fills this in).
+- `verify:fast` exit 0 on `f3af009` (242 s): edge 417, api 403, jobs 240, scripts 2390 + 1 skipped.
+- `e2e-local` on this machine on `f3af009`: 17 passed, 1 skipped (109 s), the recruiter built with the local sign-in config.
+- Full `pnpm verify` and Linux CI on PR #4: recorded in the handoff with the `cp/d1-10` tag.
