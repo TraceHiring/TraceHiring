@@ -39,13 +39,55 @@ describe('demo outbox gating (AT-D18)', () => {
     expect(importers).toEqual(['./routes.tsx']);
     const routes = all['./routes.tsx'] ?? '';
     expect(routes).toMatch(
-      /import\.meta\.env\.VITE_DEMO_OUTBOX\s*===\s*'1'\s*&&\s*import\.meta\.env\.VITE_TRACE_ENV\s*!==\s*'production'\s*\?\s*demoOutboxExtras\s*:\s*null/,
+      /import\.meta\.env\.VITE_DEMO_OUTBOX\s*===\s*'1'\s*&&\s*\(\s*import\.meta\.env\.VITE_TRACE_ENV\s*===\s*'dev'\s*\|\|\s*import\.meta\.env\.VITE_TRACE_ENV\s*===\s*'staging'\s*\)\s*\?\s*demoOutboxExtras\s*:\s*null/,
     );
   });
 
   it('uses the flag and the environment nowhere else', () => {
     expect(where(/VITE_DEMO_OUTBOX/).sort()).toEqual(['./routes.tsx', './vite-env.d.ts']);
     expect(where(/VITE_TRACE_ENV/).sort()).toEqual(['./routes.tsx', './vite-env.d.ts']);
+  });
+});
+
+// R4 re-review note 1: a bare `import.meta.env` is replaced by an object holding every VITE_* key of the build, so
+// passing it on would name VITE_DEMO_OUTBOX in a flagged build's entry chunk. Only member reads are allowed; Vite
+// inlines each value and nothing else reaches the bundle.
+describe('no whole-environment object (AT-D18 hardening)', () => {
+  const BARE_ENV = /import\s*\.\s*meta\s*\.\s*env(?!\s*\.\s*[A-Za-z_$])/;
+  const inApp = sources.filter(([file]) => file !== './vite-env.d.ts');
+
+  it('uses import.meta.env only as import.meta.env.<NAME>', () => {
+    expect(where(BARE_ENV, inApp)).toEqual([]);
+  });
+
+  it('the pattern catches the whole-object forms and lets member reads through', () => {
+    for (const bad of [
+      'f(import.meta.env)',
+      'const e = import.meta.env;',
+      'import.meta.env[name]',
+      'const { MODE } = import.meta.env',
+      'import.meta.env ?? {}',
+    ]) {
+      expect(BARE_ENV.test(bad), bad).toBe(true);
+    }
+    for (const good of [
+      'import.meta.env.VITE_API_ORIGIN?.trim()',
+      "import.meta.env.VITE_DEMO_OUTBOX === '1'",
+    ]) {
+      expect(BARE_ENV.test(good), good).toBe(false);
+    }
+  });
+
+  it('main.tsx reads the fields its callees need, each as a member read', () => {
+    const main = all['./main.tsx'] ?? '';
+    for (const name of [
+      'VITE_SENTRY_DSN',
+      'VITE_SUPABASE_URL',
+      'VITE_SUPABASE_PUBLISHABLE_KEY',
+      'VITE_API_ORIGIN',
+    ]) {
+      expect(main).toContain(`import.meta.env.${name}`);
+    }
   });
 });
 

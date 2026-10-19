@@ -1,6 +1,7 @@
 // AT-D18 (specs/d1-demo-slice.md §5.3, §6.1): a production-flavour recruiter build contains no demo-outbox
-// string. The recruiter includes the outbox only when it is built with VITE_DEMO_OUTBOX=1 (staging, e2e-local);
-// every other build (CI static, local verify, any production build) is production-flavour and is checked.
+// string. The recruiter includes the outbox only when it is built with VITE_DEMO_OUTBOX=1 and VITE_TRACE_ENV exactly
+// dev or staging (e2e-local, the staging deploy); every other build (CI static, local verify, any production build,
+// also one that has the flag with another or no VITE_TRACE_ENV) is production-flavour and is checked.
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -78,22 +79,49 @@ describe('runCheck', () => {
     expect(runCheck({ root: makeTempDir(), env: {} })).toMatchObject({ ok: false, missing: true });
   });
 
-  it('skips only a build made with VITE_DEMO_OUTBOX=1 exactly', () => {
+  // SEC-W2-1: an allow-list that mirrors the app's gate (routes.tsx): skipped only for the flag "1" and
+  // VITE_TRACE_ENV exactly "dev" or "staging".
+  it('skips only a build made with VITE_DEMO_OUTBOX=1 exactly and VITE_TRACE_ENV exactly dev or staging', () => {
     const root = repo({ ...clean, [`${DIST}/assets/a.js`]: 'demo-outbox' });
-    expect(runCheck({ root, env: { VITE_DEMO_OUTBOX: '1' } })).toEqual({
-      ok: true,
-      skipped: true,
-      hits: [],
-    });
-    for (const value of ['0', 'true', 'yes', ' 1', '']) {
-      expect(runCheck({ root, env: { VITE_DEMO_OUTBOX: value } }).ok).toBe(false);
+    for (const traceEnv of ['staging', 'dev']) {
+      const env = { VITE_DEMO_OUTBOX: '1', VITE_TRACE_ENV: traceEnv };
+      expect(runCheck({ root, env })).toEqual({ ok: true, skipped: true, hits: [] });
     }
+    for (const value of ['0', 'true', 'yes', ' 1', '']) {
+      const env = { VITE_DEMO_OUTBOX: value, VITE_TRACE_ENV: 'staging' };
+      expect(runCheck({ root, env }).ok).toBe(false);
+    }
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['production', 'production'],
+    ['prod', 'prod'],
+    ['Production', 'Production'],
+    ['empty', ''],
+    ['Staging', 'Staging'],
+    ['DEV', 'DEV'],
+    [' dev', ' dev'],
+    ['test', 'test'],
+  ])('checks a VITE_DEMO_OUTBOX=1 build whose VITE_TRACE_ENV is %s', (_label, traceEnv) => {
+    const env = {
+      VITE_DEMO_OUTBOX: '1',
+      ...(traceEnv === undefined ? {} : { VITE_TRACE_ENV: traceEnv }),
+    };
+    const dirty = repo({ ...clean, [`${DIST}/assets/a.js`]: 'demo-outbox' });
+    expect(runCheck({ root: dirty, env })).toEqual({
+      ok: false,
+      skipped: false,
+      hits: [`${DIST}/assets/a.js`],
+    });
+    expect(runCheck({ root: repo(clean), env })).toEqual({ ok: true, skipped: false, hits: [] });
+    expect(runCheck({ root: makeTempDir(), env })).toMatchObject({ ok: false, missing: true });
   });
 });
 
 describe('the CLI', () => {
   const cli = (root, env = {}) => {
-    const { VITE_DEMO_OUTBOX: _drop, ...rest } = process.env;
+    const { VITE_DEMO_OUTBOX: _drop, VITE_TRACE_ENV: _dropEnv, ...rest } = process.env;
     return spawnSync(process.execPath, [SCRIPT, root], {
       encoding: 'utf8',
       env: { ...rest, ...env },
@@ -107,11 +135,34 @@ describe('the CLI', () => {
     expect(bad.stderr).toContain(`${DIST}/assets/a.js`);
   });
 
-  it('exits 0 with a skip notice for a demo build', () => {
-    const r = cli(repo({ ...clean, [`${DIST}/assets/a.js`]: 'demo-outbox' }), {
-      VITE_DEMO_OUTBOX: '1',
-    });
-    expect(r.status).toBe(0);
-    expect(r.stdout).toMatch(/skipped/);
+  it('checks a flagged production build: exit 1 on a hit, 0 when clean', () => {
+    const env = { VITE_DEMO_OUTBOX: '1', VITE_TRACE_ENV: 'production' };
+    const ok = cli(repo(clean), env);
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).not.toMatch(/skipped/);
+    const bad = cli(repo({ ...clean, [`${DIST}/assets/a.js`]: 'demo-outbox' }), env);
+    expect(bad.status).toBe(1);
+    expect(bad.stderr).toContain(`${DIST}/assets/a.js`);
+  });
+
+  it('checks a flagged build with a mistyped flavour (prod): exit 1 on a hit', () => {
+    const env = { VITE_DEMO_OUTBOX: '1', VITE_TRACE_ENV: 'prod' };
+    const bad = cli(repo({ ...clean, [`${DIST}/assets/a.js`]: 'demo-outbox' }), env);
+    expect(bad.status).toBe(1);
+    expect(
+      cli(repo({ ...clean, [`${DIST}/assets/a.js`]: 'demo-outbox' }), { VITE_DEMO_OUTBOX: '1' })
+        .status,
+    ).toBe(1);
+  });
+
+  it('exits 0 with a skip notice for a staging or dev demo build', () => {
+    for (const traceEnv of ['staging', 'dev']) {
+      const r = cli(repo({ ...clean, [`${DIST}/assets/a.js`]: 'demo-outbox' }), {
+        VITE_DEMO_OUTBOX: '1',
+        VITE_TRACE_ENV: traceEnv,
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/skipped/);
+    }
   });
 });

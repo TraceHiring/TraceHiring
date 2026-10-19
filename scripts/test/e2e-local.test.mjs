@@ -9,6 +9,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { headersTemplatePlugin } from '../../packages/config/vite/headers-template.js';
 import { runCheck } from '../check-no-demo-outbox.mjs';
 import {
   BUILD_ARGS,
@@ -317,8 +318,17 @@ describe('readStack and buildEnv', () => {
       ok: true,
       stack: { apiUrl: s.API_URL, publishableKey: s.PUBLISHABLE_KEY, dbUrl: s.DB_URL },
     });
+  });
+
+  it('does not fall back to ANON_KEY: the recruiter headers plugin accepts only an sb_publishable_ key (SR-E-3)', () => {
+    const s = fakeStack();
     const anon = { ...s, PUBLISHABLE_KEY: '', ANON_KEY: `anon_${hex(4)}` };
-    expect(readStack(anon).stack.publishableKey).toBe(anon.ANON_KEY);
+    expect(readStack(anon)).toMatchObject({ ok: false });
+    expect(readStack({ ...s, PUBLISHABLE_KEY: undefined, ANON_KEY: anon.ANON_KEY }).ok).toBe(false);
+    // The key is also not taken from ANON_KEY when the publishable one is present.
+    expect(readStack({ ...s, ANON_KEY: anon.ANON_KEY }).stack.publishableKey).toBe(
+      s.PUBLISHABLE_KEY,
+    );
   });
 
   it('refuses a stack that is not running, not on 127.0.0.1 or missing a value', () => {
@@ -328,24 +338,58 @@ describe('readStack and buildEnv', () => {
     expect(readStack({ ...fakeStack(), DB_URL: '' }).ok).toBe(false);
   });
 
-  it('builds with the demo outbox on, a non-production flavour and the local edge origin only', () => {
-    expect(buildEnv()).toEqual({
+  it("builds with the demo outbox on, a local flavour, the local edge and api origins and the stack's Supabase values", () => {
+    const { stack } = readStack(fakeStack());
+    expect(buildEnv(stack)).toEqual({
       // spec rev 4f: the recruiter registers the outbox route only for VITE_DEMO_OUTBOX=1 and a
       // VITE_TRACE_ENV other than production (set explicitly, so a parent value cannot win).
       VITE_DEMO_OUTBOX: '1',
       VITE_TRACE_ENV: 'dev',
       // The candidate app reads the edge origin; it has no headers plugin.
       VITE_EDGE_ORIGIN: 'http://127.0.0.1:8787',
+      // Spec rev 4i: the recruiter's headers plugin accepts loopback origins for VITE_TRACE_ENV=dev, so
+      // the local recruiter UI can sign in (stack API URL and publishable key) and reach the api Worker.
+      VITE_SUPABASE_URL: stack.apiUrl,
+      VITE_SUPABASE_PUBLISHABLE_KEY: stack.publishableKey,
+      VITE_API_ORIGIN: 'http://127.0.0.1:8788',
     });
   });
 
-  it('gives the build no local api or Supabase origin (the recruiter headers plugin refuses them)', () => {
-    // Lead, first real run of 2a257c7: packages/config/vite/headers-template.js accepts only the
-    // staging forms of VITE_SUPABASE_URL and VITE_API_ORIGIN at build time, so neither is passed.
-    const env = buildEnv();
-    for (const name of ['VITE_API_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_PUBLISHABLE_KEY']) {
-      expect(env).not.toHaveProperty(name);
-    }
+  it('takes the Supabase values from the stack it is given and nothing else (nothing generated)', () => {
+    const a = buildEnv({ apiUrl: 'http://127.0.0.1:54399', publishableKey: 'pk-one' });
+    const b = buildEnv({ apiUrl: 'http://127.0.0.1:54399', publishableKey: 'pk-one' });
+    expect(a).toEqual(b);
+    expect(a.VITE_SUPABASE_URL).toBe('http://127.0.0.1:54399');
+    expect(a.VITE_SUPABASE_PUBLISHABLE_KEY).toBe('pk-one');
+    // The service-role key, the database URL and the operator values never reach a build.
+    expect(Object.keys(a).sort()).toEqual([
+      'VITE_API_ORIGIN',
+      'VITE_DEMO_OUTBOX',
+      'VITE_EDGE_ORIGIN',
+      'VITE_SUPABASE_PUBLISHABLE_KEY',
+      'VITE_SUPABASE_URL',
+      'VITE_TRACE_ENV',
+    ]);
+  });
+
+  it('the api origin is the local api Worker that stackProcesses serves, and the Supabase URL is loopback', () => {
+    const { stack } = readStack(fakeStack());
+    const env = buildEnv(stack);
+    expect(env.VITE_API_ORIGIN).toBe(E2E_ENV.E2E_API_URL);
+    expect(new URL(env.VITE_SUPABASE_URL).hostname).toBe('127.0.0.1');
+  });
+
+  it('the build env passes the recruiter headers plugin (a dev build with loopback origins)', () => {
+    const { stack } = readStack(fakeStack());
+    const env = buildEnv(stack);
+    // Real plugin, real template: the publishable-key shape is checked in configResolved too, so the
+    // synthetic key is made here with a valid prefix and length.
+    const key = ['sb', 'publishable', 'a'.repeat(30)].join('_');
+    const plugin = headersTemplatePlugin();
+    // configResolved only validates the env; it reads no file.
+    expect(() =>
+      plugin.configResolved({ root: '.', env: { ...env, VITE_SUPABASE_PUBLISHABLE_KEY: key } }),
+    ).not.toThrow();
   });
 });
 
@@ -392,17 +436,21 @@ describe('main', () => {
     expect(h.sql.every((q) => q.url === h.deps.stackEnv().DB_URL)).toBe(true);
   });
 
-  it('builds both apps with exactly the demo-outbox env, on that one call only', async () => {
+  it('builds both apps with exactly the demo-outbox and local-origin env, on that one call only', async () => {
     const h = harness();
     const before = process.env.VITE_DEMO_OUTBOX;
     expect(await main(h.deps)).toBe(0);
     const i = h.calls.indexOf(`pnpm ${BUILD_ARGS.join(' ')}`);
+    const stack = h.deps.stackEnv();
     expect(h.runOpts[i]).toEqual({
       cwd: h.root,
       env: {
         VITE_DEMO_OUTBOX: '1',
         VITE_TRACE_ENV: 'dev',
         VITE_EDGE_ORIGIN: 'http://127.0.0.1:8787',
+        VITE_SUPABASE_URL: stack.API_URL,
+        VITE_SUPABASE_PUBLISHABLE_KEY: stack.PUBLISHABLE_KEY,
+        VITE_API_ORIGIN: 'http://127.0.0.1:8788',
       },
     });
     // The Supabase steps run without it; this process's own environment is not changed.

@@ -42,12 +42,14 @@ export function buildRoutes(demo: DemoExtras | null): RouteObject[] {
   ];
 }
 
-// The demo outbox gate (d1 spec §7.1, AT-D18): both `VITE_DEMO_OUTBOX=1` and a non-production `VITE_TRACE_ENV`
-// are needed, so a production build that inherits the flag still drops the outbox. Both variables are replaced
-// at build time; the condition is written inline (not through a helper) so that when it is constant-false the
-// bundler drops the outbox module, its route, path, labels and the lazy import of the screen.
+// The demo outbox gate (d1 spec §7.1, AT-D18): `VITE_DEMO_OUTBOX=1` and a `VITE_TRACE_ENV` of exactly `dev` or
+// `staging` are both needed (an allow-list: unset, `production`, `prod` or any other value drops the outbox, even
+// when the build inherits the flag). Both variables are replaced at build time; the condition is written inline
+// (not through a helper) so that when it is constant-false the bundler drops the outbox module, its route, path,
+// labels and the lazy import of the screen. The bundle check script skips in exactly this case.
 export const routes: RouteObject[] = buildRoutes(
-  import.meta.env.VITE_DEMO_OUTBOX === '1' && import.meta.env.VITE_TRACE_ENV !== 'production'
+  import.meta.env.VITE_DEMO_OUTBOX === '1' &&
+    (import.meta.env.VITE_TRACE_ENV === 'dev' || import.meta.env.VITE_TRACE_ENV === 'staging')
     ? demoOutboxExtras
     : null,
 );

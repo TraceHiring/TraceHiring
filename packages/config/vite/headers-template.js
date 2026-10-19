@@ -4,7 +4,10 @@
 // or is dropped when the variable is unset, so local and CI builds keep connect-src 'self'. Any other
 // value fails the build without echoing it. The same holds for the Sentry token (VITE_SENTRY_DSN, d1
 // AT-D22) and the api token (VITE_API_ORIGIN, d1 spec §7.1): each is dropped when its variable is unset,
-// and a token may appear at most once. It lives here, not in vite.config.ts, because a config file may
+// and a token may appear at most once. One exception (d1 spec rev 4i): when the build says
+// VITE_TRACE_ENV=dev exactly (e2e-local), VITE_SUPABASE_URL and VITE_API_ORIGIN may also be a loopback
+// origin, http://127.0.0.1:<port> or http://localhost:<port>; no other build accepts one, and check-headers
+// still refuses an http origin in a shipped _headers. The Sentry rule has no such exception. It lives here, not in vite.config.ts, because a config file may
 // not touch fs (the trace/vite-config-env rule). check-headers checks the emitted file.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -42,13 +45,31 @@ function sentryOrigin(value) {
 const API_ORIGIN = /^https:\/\/trace-api-staging\.[a-z0-9-]+\.workers\.dev\/?$/;
 
 /**
+ * A loopback origin of the local stack: http, 127.0.0.1 or localhost (lower case), a port of 1-65535 without a
+ * leading zero, one trailing slash at most, and no path, query, fragment or userinfo.
+ */
+const LOOPBACK_ORIGIN = /^http:\/\/(?:127\.0\.0\.1|localhost):([1-9][0-9]{0,4})\/?$/;
+
+/**
+ * True for a loopback origin that an explicitly local build (VITE_TRACE_ENV=dev exactly) may use.
+ * @param {unknown} value
+ * @param {unknown} traceEnv
+ */
+function isLocalOrigin(value, traceEnv) {
+  if (traceEnv !== 'dev' || typeof value !== 'string') return false;
+  const m = LOOPBACK_ORIGIN.exec(value);
+  return m !== null && Number(m[1]) <= 65535;
+}
+
+/**
  * The api origin for connect-src (never a path), or null when the variable is unset or empty.
  * @param {unknown} value
+ * @param {unknown} [traceEnv] VITE_TRACE_ENV; "dev" also allows a loopback origin
  * @returns {string | null}
  */
-function apiOrigin(value) {
+function apiOrigin(value, traceEnv) {
   if (value === undefined || value === null || value === '') return null;
-  if (typeof value !== 'string' || !API_ORIGIN.test(value)) {
+  if (typeof value !== 'string' || !(API_ORIGIN.test(value) || isLocalOrigin(value, traceEnv))) {
     throw new Error(
       'VITE_API_ORIGIN must be https://trace-api-staging.<subdomain>.workers.dev (value not shown)',
     );
@@ -86,11 +107,12 @@ const SUPABASE_URL = /^https:\/\/[a-z0-9]{20}\.supabase\.co\/?$/;
 /**
  * The Supabase origin for connect-src, or null when the variable is unset or empty.
  * @param {unknown} value
+ * @param {unknown} [traceEnv] VITE_TRACE_ENV; "dev" also allows a loopback origin
  * @returns {string | null}
  */
-function supabaseOrigin(value) {
+function supabaseOrigin(value, traceEnv) {
   if (value === undefined || value === null || value === '') return null;
-  if (typeof value !== 'string' || !SUPABASE_URL.test(value)) {
+  if (typeof value !== 'string' || !(SUPABASE_URL.test(value) || isLocalOrigin(value, traceEnv))) {
     throw new Error(
       'VITE_SUPABASE_URL must be https://<20 lowercase letters or digits>.supabase.co (value not shown)',
     );
@@ -120,12 +142,13 @@ function checkPublishableKey(value) {
  * @param {unknown} supabaseUrl
  * @param {unknown} [sentryDsn] VITE_SENTRY_DSN; when set, the template must hold the Sentry token exactly once
  * @param {unknown} [apiOriginValue] VITE_API_ORIGIN; when set, the template must hold the api token exactly once
+ * @param {unknown} [traceEnv] VITE_TRACE_ENV; only "dev" lets the Supabase and api values be loopback origins
  * @returns {string}
  */
-export function renderHeaders(template, supabaseUrl, sentryDsn, apiOriginValue) {
-  const origin = supabaseOrigin(supabaseUrl);
+export function renderHeaders(template, supabaseUrl, sentryDsn, apiOriginValue, traceEnv) {
+  const origin = supabaseOrigin(supabaseUrl, traceEnv);
   const ingest = sentryOrigin(sentryDsn);
-  const api = apiOrigin(apiOriginValue);
+  const api = apiOrigin(apiOriginValue, traceEnv);
   if (template.split(SUPABASE_ORIGIN_TOKEN).length !== 2) {
     throw new Error(`_headers.template must contain ${SUPABASE_ORIGIN_TOKEN} exactly once`);
   }
@@ -150,17 +173,20 @@ export function headersTemplatePlugin(options = {}) {
   let sentryDsn;
   /** @type {unknown} */
   let apiOriginValue;
+  /** @type {unknown} */
+  let traceEnv;
   return {
     name: /** @type {const} */ ('trace:headers-template'),
     /** @param {{ root: string, env: Record<string, unknown> }} config */
     configResolved(config) {
       root = config.root;
+      traceEnv = config.env['VITE_TRACE_ENV'];
       supabaseUrl = config.env['VITE_SUPABASE_URL'];
-      supabaseOrigin(supabaseUrl);
+      supabaseOrigin(supabaseUrl, traceEnv);
       sentryDsn = config.env['VITE_SENTRY_DSN'];
       sentryOrigin(sentryDsn);
       apiOriginValue = config.env['VITE_API_ORIGIN'];
-      apiOrigin(apiOriginValue);
+      apiOrigin(apiOriginValue, traceEnv);
       checkPublishableKey(config.env['VITE_SUPABASE_PUBLISHABLE_KEY']);
     },
     /** @this {{ emitFile(file: { type: 'asset', fileName: string, source: string }): unknown }} */
@@ -169,7 +195,7 @@ export function headersTemplatePlugin(options = {}) {
       this.emitFile({
         type: 'asset',
         fileName: '_headers',
-        source: renderHeaders(template, supabaseUrl, sentryDsn, apiOriginValue),
+        source: renderHeaders(template, supabaseUrl, sentryDsn, apiOriginValue, traceEnv),
       });
     },
   };

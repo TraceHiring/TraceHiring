@@ -193,6 +193,7 @@ jobs:
       # (https://trace-api-staging.<label>.workers.dev; d1 §7.1 check-headers). VITE_DEMO_OUTBOX=1 makes
       # the staging recruiter build include the demo outbox (d1 §6.1); every other build omits it (AT-D18).
       # VITE_EDGE_ORIGIN is the candidate app's edge, the origin its _headers connect-src names (d1 §4.7).
+      # VITE_TRACE_ENV=staging is the flavour the outbox gate allows (only dev or staging; SEC-W2-1).
       - name: Build
         env:
           VITE_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
@@ -201,6 +202,7 @@ jobs:
           VITE_API_ORIGIN: ${{ vars.API_STAGING_ORIGIN }}
           VITE_DEMO_OUTBOX: '1'
           VITE_EDGE_ORIGIN: https://trace-edge-staging.abhayraj.workers.dev
+          VITE_TRACE_ENV: staging
         run: |
           set -euo pipefail
           VITE_APP_VERSION="$GITHUB_SHA" pnpm build

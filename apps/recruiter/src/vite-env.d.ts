@@ -10,8 +10,8 @@ interface ImportMetaEnv {
   readonly VITE_SENTRY_DSN?: string;
   /** The api Worker origin; set only for the staging build (d1 spec §7.1). */
   readonly VITE_API_ORIGIN?: string;
-  /** "1" in a non-production build that shows the demo outbox; unset in production (d1 AT-D18). */
+  /** "1" in a build that shows the demo outbox (only with VITE_TRACE_ENV dev or staging); unset otherwise (d1 AT-D18). */
   readonly VITE_DEMO_OUTBOX?: string;
-  /** The deploy flavour ("production", "staging", ...); the outbox is also off when it is "production" (d1 §7.1). */
+  /** The deploy flavour; the outbox is on only when it is exactly "dev" or "staging" (d1 §7.1, AT-D18). */
   readonly VITE_TRACE_ENV?: string;
 }

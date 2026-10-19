@@ -349,6 +349,8 @@ describe('deploy-staging: commands', () => {
       VITE_DEMO_OUTBOX: '1',
       // d1 §4.7: the candidate app's edge origin, the literal its _headers connect-src names.
       VITE_EDGE_ORIGIN: 'https://trace-edge-staging.abhayraj.workers.dev',
+      // d1 AT-D18 (SEC-W2-1): the outbox gate's allow-list needs the flavour, exactly staging here.
+      VITE_TRACE_ENV: 'staging',
     });
   });
 
