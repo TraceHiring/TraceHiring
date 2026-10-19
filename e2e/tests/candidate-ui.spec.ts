@@ -210,7 +210,7 @@ test.describe('the candidate UI against the local stack (spec §4.1, §4.5, §4.
         const jwt = await signInWithTotp(request, {
           supabaseUrl: env('E2E_SUPABASE_URL'),
           publishableKey: env('E2E_SUPABASE_PUBLISHABLE_KEY'),
-          email: env('E2E_STORE_RECRUITER_EMAIL'),
+          email: env('E2E_UI_RECRUITER_EMAIL'),
           password: env('E2E_USER_PASSWORD'),
         });
         const claims = claimsOf(jwt);
@@ -354,19 +354,12 @@ test.describe('the candidate UI against the local stack (spec §4.1, §4.5, §4.
         expect(afterShot.tracks.length).toBeGreaterThan(0);
         expect(afterShot.tracks.every((t) => t.readyState === 'ended')).toBe(true);
 
-        // The photo is encoded asynchronously after the shot; "Use this photo" does nothing until it is ready
-        // (PhotoStep.use returns when jpegRef is still null), so a click that sent nothing is repeated.
+        // The photo is encoded asynchronously after the shot; "Use this photo" is disabled until the JPEG is ready.
         const put = page.waitForRequest(isPhotoPut, { timeout: 20_000 });
         const response = page.waitForResponse((r) => isPhotoPut(r.request()), { timeout: 20_000 });
         void response.catch(() => undefined);
-        let sent = false;
-        void put.then(() => (sent = true)).catch(() => undefined);
-        for (let attempt = 0; attempt < 6 && !sent; attempt += 1) {
-          await button('Use this photo')
-            .click({ timeout: 2_000 })
-            .catch(() => undefined);
-          await sleep(1_000);
-        }
+        await expect(button('Use this photo')).toBeEnabled();
+        await button('Use this photo').click();
         const request_ = await put;
         const res = await response;
         const body = request_.postDataBuffer();
