@@ -610,6 +610,9 @@ describe('main', () => {
       for (const s of w.secrets) expect(text).toContain(s.name);
     }
     expect(text).toMatch(/dry run/i);
+    // SEC-W3-3: five sequential puts, each a new Worker version, so the old-password window is tens of seconds.
+    expect(text).toMatch(/tens of seconds/);
+    expect(text).not.toMatch(/a few seconds/);
     expect(text).not.toContain(OP_PW);
     expect(text).not.toContain(REF);
     for (const g of h.generated) expect(text).not.toContain(g);

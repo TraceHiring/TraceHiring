@@ -405,7 +405,7 @@ function planLines(target) {
     ),
     '  Not touched: CANDIDATE_TOKEN_PRIVATE_JWK (scripts/ops/candidate-token-key.mjs) and trace-edge-staging (no secret).',
     '  A re-run makes new passwords and replaces these secrets; between steps 1 and 2 the Workers hold the old',
-    '  passwords for a few seconds.',
+    '  passwords for tens of seconds (five secret puts in a row, each deploys a new Worker version).',
   ];
 }
 

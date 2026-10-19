@@ -190,10 +190,10 @@ whose project is not this one.
 
 ### Re-running and rotation
 
-A re-run is the rotation: new passwords first (step 4), then new secrets (step 5). Between the two, for a few
-seconds, the Workers still hold the old passwords, so api calls that need the database fail and jobs
-messages fail and are retried (the Queue retries 5 times; the one-minute sweep re-enqueues what is left). Run it
-when no candidate is in a test.
+A re-run is the rotation: new passwords first (step 4), then new secrets (step 5). Between the two, for tens of
+seconds (five `secret put` calls in a row, and each one deploys a new Worker version), the Workers still hold
+the old passwords. In that window api calls that need the database fail, and jobs messages fail and are retried
+(the Queue retries 5 times; the one-minute sweep re-enqueues what is left). Run it when no candidate is in a test.
 
 If a `secret put` fails, the script stops and names the secrets that are now stale. Fix the cause and run it
 again with `--yes`; it makes a fresh set of passwords and sets every secret again.
