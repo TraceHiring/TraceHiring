@@ -318,7 +318,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
 
     const signIn = async (who: 'recruiter' | 'reviewer'): Promise<Signed> => {
       const user = who === 'recruiter' ? env.recruiter : env.reviewer;
-      const session = await signInThroughUi(browser, env.recruiterUrl, user);
+      const session = await signInThroughUi(browser, env.recruiterUrl, user, who);
       const claims = claimsOf(session.jwt);
       expect(claims.aal).toBe('aal2');
       expect(amrOf(claims)).toEqual(['password', 'totp']);

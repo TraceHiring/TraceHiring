@@ -83,24 +83,47 @@ export const accessToken = async (page: Page): Promise<string> => {
   }
 };
 
+/** A sign-in failure whose message is a constant naming the role and the stage (never a value or a page). */
+class SignInError extends Error {}
+
+/** Empties every input of the page (after a submit has read the form), so no later snapshot can show a value. */
+const clearInputs = (page: Page): Promise<void> =>
+  page
+    .evaluate(() => {
+      for (const el of Array.from(document.querySelectorAll('input'))) el.value = '';
+    })
+    .catch(() => undefined);
+
 /**
  * Signs `user` in through the app in a fresh context without video or trace, and returns the session. Fails when
  * the user sees the org picker (the slice needs a user in exactly one org) or no org at all.
+ *
+ * SEC-W5-1: a failed locator assertion carries an aria snapshot of the page, input values included, into the
+ * report's error-context.md, whatever PLAYWRIGHT_NO_COPY_PROMPT says. So every failure in here is rethrown as a
+ * fresh SignInError (no matcher result, no snapshot) that names `role` and the stage only; the inputs are cleared
+ * right after each submit; and the context is closed in `finally` (the staging project's 20 s action and
+ * navigation timeouts make a stuck call reach it).
  */
 export const signInThroughUi = async (
   browser: Browser,
   recruiterUrl: string,
   user: UiUser,
+  role: string,
 ): Promise<UiSession> => {
   const context = await browser.newContext({ baseURL: recruiterUrl });
+  let stage = 'opening the app';
+  const fail = (why: string) => new SignInError(`${role} sign-in: ${why}`);
   try {
     const page = await context.newPage();
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
+    stage = 'password';
     await setValue(page.locator('input[autocomplete="username"]'), user.email);
     await setValue(page.locator('input[name="password"]'), user.password);
     await page.getByRole('button', { name: 'Sign in with password', exact: true }).click();
+    await clearInputs(page);
 
+    stage = 'reaching the TOTP screen';
     const enrol = page.getByRole('heading', { name: 'Set up two-step sign-in', exact: true });
     const challenge = page.getByRole('heading', { name: 'Two-step sign-in', exact: true });
     await expect(enrol.or(challenge)).toBeVisible({ timeout: 20_000 });
@@ -108,50 +131,49 @@ export const signInThroughUi = async (
     let codeLabel: string;
     let submit: string;
     if (await enrol.isVisible()) {
-      if (user.totpSecret !== null) {
-        throw new Error('the user has no TOTP factor yet; enrol it before a staging run');
-      }
+      if (user.totpSecret !== null) throw fail('no TOTP factor yet; enrol it before a staging run');
       secret = ((await page.locator('p', { hasText: 'Key:' }).locator('code').textContent()) ?? '')
         .replace(/\s/g, '')
         .trim();
-      if (!/^[A-Z2-7]+=*$/i.test(secret)) throw new Error('the enrolment screen shows no key');
+      if (!/^[A-Z2-7]+=*$/i.test(secret)) throw fail('the enrolment screen shows no key');
       codeLabel = '6-digit code from the app';
       submit = 'Verify and continue';
     } else {
-      if (user.totpSecret === null) {
-        throw new Error('the user is already enrolled; this run has no TOTP secret for it');
-      }
+      if (user.totpSecret === null) throw fail('already enrolled, and this run has no TOTP secret');
       secret = user.totpSecret;
       codeLabel = '6-digit code from your authenticator app';
       submit = 'Verify';
     }
+    stage = 'TOTP code';
     const signedIn = page.getByText(/^Signed in to /);
     const picker = page.getByRole('heading', { name: 'Choose an organisation', exact: true });
     // One retry in the next 30-second window: a code typed at the very end of its window can expire in flight.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       await setValue(page.getByLabel(codeLabel, { exact: true }), totp(secret));
       await page.getByRole('button', { name: submit, exact: true }).click();
+      await clearInputs(page);
       try {
         await expect(signedIn.or(picker)).toBeVisible({ timeout: 15_000 });
         break;
       } catch {
-        // The assertion's own message is dropped: it may quote the page, and this step typed a code into it.
-        if (attempt === 1) throw new Error('the TOTP step did not sign in');
+        if (attempt === 1) throw fail('the TOTP step did not sign in');
         await sleep(30_000 - (Date.now() % 30_000) + 500);
       }
     }
-    if (await picker.isVisible()) {
-      throw new Error('the user belongs to several organisations; the slice needs exactly one');
-    }
+    stage = 'reading the session';
+    if (await picker.isVisible()) throw fail('several organisations; the slice needs exactly one');
     const storage = await readStorage(page);
     const jwt = tokenIn(storage);
-    if (jwt === null) throw new Error('no session after sign-in');
+    if (jwt === null) throw fail('no session after sign-in');
     const claims = claimsOf(jwt);
-    if (claims.aal !== 'aal2') throw new Error('the session is not aal2');
-    if (typeof claims.sub !== 'string') throw new Error('the session has no subject');
+    if (claims.aal !== 'aal2') throw fail('the session is not aal2');
+    if (typeof claims.sub !== 'string') throw fail('the session has no subject');
     return { storage, jwt, userId: claims.sub };
+  } catch (e) {
+    if (e instanceof SignInError) throw e;
+    throw fail(`failed at ${stage}`);
   } finally {
-    await context.close();
+    await context.close().catch(() => undefined);
   }
 };
 

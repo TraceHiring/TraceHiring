@@ -14,6 +14,14 @@ if (STAGING && process.env['E2E_LOCAL'] === '1') {
   throw new Error('set E2E_LOCAL=1 or E2E_STAGING=1, not both');
 }
 const VIEWPORT = { width: 1280, height: 720 };
+if (STAGING) {
+  // SEC-W5-1: Playwright 1.63 writes an aria snapshot of the first open page into error-context.md when a test
+  // fails (ArtifactsRecorder._takePageSnapshot, on context close and at test end); the snapshot holds input values.
+  // This variable is the only switch for that path. Set here, before any worker starts, so CI needs no extra env.
+  // A failed locator assertion carries its own snapshot regardless: the slice's sign-in rethrows every failure as a
+  // fresh constant error, so that snapshot never reaches a report (support/recruiter-ui.ts).
+  process.env['PLAYWRIGHT_NO_COPY_PROMPT'] = '1';
+}
 
 const local: PlaywrightTestProject = {
   name: 'local',
@@ -33,6 +41,10 @@ const staging: PlaywrightTestProject = {
     // A staging run never keeps or uploads a trace, whatever E2E_TRACE says.
     trace: 'off',
     permissions: ['camera', 'clipboard-read', 'clipboard-write'],
+    // SEC-W5-1: a stuck action or navigation throws within 20 s, so the sign-in helper's `finally` closes its
+    // context long before the test timeout (an explicit assertion timeout in the spec still wins).
+    actionTimeout: 20_000,
+    navigationTimeout: 20_000,
   },
 };
 
