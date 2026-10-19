@@ -27,6 +27,16 @@ describe('FlagCard (AT-D19)', () => {
     }
   });
 
+  it('shows every signal sequence number of every flag as evidence', () => {
+    for (const [index, flag] of INTEGRITY_READY.flags.entries()) {
+      const plain = text(renderToString(<FlagCard flag={flag} index={index + 1} />));
+      expect(flag.signalSeqs.length).toBeGreaterThan(0);
+      expect(plain).toContain('Events');
+      for (const seq of flag.signalSeqs) expect(plain).toContain(`#${seq}`);
+      expect(plain).toContain(flag.signalSeqs.map((seq) => `#${seq}`).join(', '));
+    }
+  });
+
   it('paste flag: observed length and the T3 tier note', () => {
     const flag = INTEGRITY_READY.flags[0];
     if (flag === undefined) throw new Error('fixture');

@@ -26,6 +26,8 @@ export function FlagCard({ flag, index }: { flag: Flag; index: number }) {
           <span className={styles.mono}>{formatOffset(flag.atMs)}</span>{' '}
           <span className={styles.muted}>({flag.atMs} ms into the session)</span>
         </dd>
+        <dt>Events</dt>
+        <dd className={styles.mono}>{flag.signalSeqs.map((seq) => `#${seq}`).join(', ')}</dd>
         <dt>Evidence tier</dt>
         <dd>{tierNote(flag)}</dd>
       </dl>
