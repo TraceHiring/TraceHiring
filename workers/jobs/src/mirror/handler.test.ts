@@ -234,6 +234,23 @@ describe('mirror stage', () => {
       await expect(run(w, { ...w.message, served })).rejects.toThrow(/^mirror_bad_message$/);
     });
 
+    // Spec F4: exactly one of photo and photoSkippedReason (as private.mirror_session requires).
+    it('neither a photo nor a skip reason is malformed, nothing written', async () => {
+      const w = await sessionWorld();
+      await expect(run(w, { ...w.message, photo: null, photoSkippedReason: null })).rejects.toThrow(
+        /^mirror_bad_message$/,
+      );
+      for (const t of written) expect(table(w.db, t)).toHaveLength(0);
+    });
+
+    it('both a photo and a skip reason is malformed, nothing written', async () => {
+      const w = await sessionWorld();
+      await expect(run(w, { ...w.message, photoSkippedReason: 'declined' })).rejects.toThrow(
+        /^mirror_bad_message$/,
+      );
+      for (const t of written) expect(table(w.db, t)).toHaveLength(0);
+    });
+
     it('another org sees no invitation (trace.job_org_id)', async () => {
       const w = await sessionWorld();
       await expect(run(w, w.message, W.otherOrg)).rejects.toThrow(/^mirror_invitation_missing$/);

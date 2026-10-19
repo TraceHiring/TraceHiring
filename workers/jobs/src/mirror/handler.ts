@@ -45,6 +45,10 @@ const runMirrorUnsafe = async (message: SessionMirrorMessage, deps: MirrorDeps):
   const sessionId = message.sessionId;
   const key = jobKey(sessionId, 'session_mirror', message.rulesetVersionId);
   if (message.jobKey !== key) return fail('mirror_bad_message');
+  // Spec F4: exactly one of photo and photoSkippedReason (private.mirror_session's rule).
+  if ((message.photo === null) === (message.photoSkippedReason === null)) {
+    return fail('mirror_bad_message');
+  }
 
   // Served items: one per position and per item version (a repeat is a malformed message, never a retry).
   const positions = new Set(message.served.map((s) => s.position));
