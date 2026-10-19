@@ -48,7 +48,7 @@ import {
   type StartAnswer,
 } from '../support/candidate-ui.js';
 import { readDb } from '../support/db.js';
-import { expectRefusal, jsonOf, keysOf, poll } from '../support/http.js';
+import { expectRefusal, jsonOf, keysOf, sleep } from '../support/http.js';
 import { headerMarkers, isMetadataMarker } from '../support/jpeg.js';
 import { newManifest, writeManifest, type Manifest } from '../support/manifest.js';
 import { linkTokenIn, outboxReader, type OutboxReader } from '../support/outbox.js';
@@ -84,6 +84,7 @@ import {
   type OrgClient,
   type QualityCard,
   type ReportMeta,
+  type ResultsList,
 } from '../support/report.js';
 import { readSliceEnv, sliceMode, type SliceEnv } from '../support/slice-env.js';
 
@@ -139,6 +140,8 @@ interface Cand {
   reportId?: string;
   score?: number;
   integrity?: IntegrityCard;
+  /** Started right after this candidate's submit (SR-R5-1); awaited by the AT-D17 test. */
+  ready?: Promise<Ready>;
 }
 
 interface Signed {
@@ -228,6 +231,52 @@ const outboxOf = async (request: APIRequestContext): Promise<OutboxReader> =>
   outboxReader(request, { api: envOf().api, orgId: run.orgId, jwt: (await ctxOf()).jwt });
 
 /** The row of a results or review table whose row header is exactly `label`. */
+interface Ready {
+  ms: number;
+  reportId: string;
+  score: number;
+  integrity: IntegrityCard;
+}
+
+/** One org-api GET as the recruiter, with Node's fetch (it outlives the test that starts it); undefined if not 200. */
+const orgGet = async <T>(path: string): Promise<T | undefined> => {
+  const res = await fetch(`${envOf().api}/v1/orgs/${run.orgId}${path}`, {
+    headers: { Authorization: `Bearer ${await accessToken(recruiterOf().page)}` },
+    cache: 'no-store',
+  });
+  return res.status === 200 ? ((await res.json()) as T) : undefined;
+};
+
+/**
+ * AT-D17 for one candidate, from its own submit: polls its results row until the quality value is ready, then its
+ * integrity card until it is not pending; `ms` = ready time - submit time. Gives up at 90 s after the submit.
+ */
+const waitReady = async (key: Key, submittedAt: number): Promise<Ready> => {
+  const { testId } = testOf();
+  const { label } = cand(key).invitation;
+  const deadline = submittedAt + READY_LIMIT_MS;
+  let row: { reportId: string; score: number } | undefined;
+  for (;;) {
+    if (row === undefined) {
+      const list = await orgGet<ResultsList>(`/tests/${testId}/results`).catch(() => undefined);
+      const mine = list?.rows.find((r) => r.label === label);
+      if (mine?.quality.state === 'ready')
+        row = { reportId: mine.reportId, score: mine.quality.score };
+    }
+    if (row !== undefined) {
+      const card = await orgGet<IntegrityCard>(`/reports/${row.reportId}/integrity`).catch(
+        () => undefined,
+      );
+      if (card !== undefined && card.state !== 'pending') {
+        return { ms: Date.now() - submittedAt, ...row, integrity: card };
+      }
+    }
+    if (Date.now() >= deadline)
+      throw new Error(`${key}: both cards not ready within 90 s of its submit`);
+    await sleep(1000);
+  }
+};
+
 const rowOf = (page: Page, label: string) =>
   page.locator('tr', { has: page.getByRole('rowheader', { name: label, exact: true }) });
 
@@ -663,6 +712,9 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
         // D1-11, rule 5: exactly the receipt.
         expect(keysOf(c.receipt)).toEqual(['receiptRef', 'submittedAt']);
       });
+      // SR-R5-1: this candidate's readiness clock runs from its own submit, not from the end of the slowest flow.
+      c.ready = waitReady(key, c.submittedAt ?? Date.now());
+      c.ready.catch(() => undefined);
     };
 
     const flows: [Key, () => Promise<void>][] = [
@@ -849,37 +901,33 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
     );
   });
 
-  test('AT-D17: both cards of A-D are ready within 90 s of the submit', async ({ request }) => {
-    test.setTimeout(READY_LIMIT_MS + 120_000);
-    const api = recruiterApi(request);
-    const t = testOf();
+  test('AT-D17: both cards of A-D are ready within 90 s of the submit', async () => {
+    test.setTimeout(READY_LIMIT_MS + 60_000);
     await step(
       recruiterOf().page,
       'Waiting for the results: quality first, then integrity',
       async () => {
-        await Promise.all(
-          ADULTS.map(async (key) => {
-            const c = cand(key);
-            const submittedAt = must(c.submittedAt, `${key}'s submit time`);
-            const left = () => Math.max(1_000, submittedAt + READY_LIMIT_MS - Date.now());
-            const row = await api.readyRow(t.testId, c.invitation.label, left());
-            c.reportId = row.reportId;
-            if (row.quality.state === 'ready') c.score = row.quality.score;
-            c.integrity = await poll(
-              `${key}'s integrity card`,
-              { timeoutMs: left(), everyMs: 1000 },
-              async () => {
-                const card = await api.integrity(row.reportId);
-                return card.state === 'pending' ? undefined : card;
-              },
-            );
-            const ms = Date.now() - submittedAt;
-            must(run.manifest, 'the manifest').timeToReadyMs[key] = ms;
-            expect(ms, `${key} time_to_ready_ms`).toBeLessThanOrEqual(READY_LIMIT_MS);
-          }),
+        // Each poll started at its own candidate's submit (SR-R5-1); this only collects them.
+        const settled = await Promise.allSettled(
+          ADULTS.map((key) => must(cand(key).ready, `${key}'s readiness poll`)),
         );
+        const failed: string[] = [];
+        settled.forEach((r, i) => {
+          const key = must(ADULTS[i], 'a candidate');
+          if (r.status === 'rejected') {
+            failed.push(r.reason instanceof Error ? r.reason.message : `${key}: failed`);
+            return;
+          }
+          const c = cand(key);
+          c.reportId = r.value.reportId;
+          c.score = r.value.score;
+          c.integrity = r.value.integrity;
+          must(run.manifest, 'the manifest').timeToReadyMs[key] = r.value.ms;
+          if (r.value.ms > READY_LIMIT_MS) failed.push(`${key}: time_to_ready_ms above 90 s`);
+        });
+        if (failed.length > 0) throw new Error(failed.join('\n'));
       },
-      READY_LIMIT_MS + 60_000,
+      READY_LIMIT_MS + 30_000,
     );
   });
 
