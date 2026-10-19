@@ -6,6 +6,7 @@ import { useId, type ReactNode } from 'react';
 import { usePoller, type CardPoller, type PollSnapshot } from '../common/poller';
 import styles from './Report.module.css';
 import { BAND_LABEL, type ReadyIntegrity } from './labels';
+import { bundledRuleTable, permilleAsPercent } from './rule-table';
 
 function CardShell({
   region,
@@ -88,6 +89,49 @@ export function QualityCardView({ snapshot }: { snapshot: PollSnapshot<QualityCa
   );
 }
 
+/** The bundled rule table the card names, row by row; the fallback line when this build has no such table. */
+function RuleTableView({ version }: { version: string }) {
+  const table = bundledRuleTable(version);
+  if (table === null) {
+    return <p className={styles.note}>Rule table not available in this build</p>;
+  }
+  return (
+    <>
+      <p className={styles.note}>Families: {table.families.join(', ')}</p>
+      <p className={styles.note}>
+        Coverage floor {permilleAsPercent(table.coverageFloorPermille)} · Photo missing factor{' '}
+        {permilleAsPercent(table.coveragePhotoMissingFactorPermille)}
+      </p>
+      <table className={styles.table}>
+        <thead>
+          <tr>
+            <th scope="col">Rule</th>
+            <th scope="col">Kinds</th>
+            <th scope="col">Family</th>
+            <th scope="col">Tier</th>
+            <th scope="col">Severity</th>
+            <th scope="col">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {table.rules.map((rule) => (
+            <tr key={rule.id}>
+              <th scope="row" className={styles.mono}>
+                {rule.id}
+              </th>
+              <td>{rule.kinds.join(', ')}</td>
+              <td>{rule.family}</td>
+              <td>{rule.tier}</td>
+              <td>{rule.severity}</td>
+              <td>{rule.validated ? 'Validated' : 'Context only'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
 function IntegrityReady({ card }: { card: ReadyIntegrity }) {
   const [first, ...more] = card.reasons;
   return (
@@ -114,6 +158,7 @@ function IntegrityReady({ card }: { card: ReadyIntegrity }) {
           give the same band. Client-reported (T3) signals can reach Review only; untrusted input is
           hard evidence. Signals that have not been validated are shown as context only.
         </p>
+        <RuleTableView version={card.ruleTableVersion} />
       </details>
     </>
   );
