@@ -24,4 +24,19 @@ Writer lead requests: 1 (staging flag) and 2 (check script) done in `e8c62a7`; 3
 the spec reviewer recommended (spec revision 4f).
 
 ## Fix round
-(filled in after the fix writer and the confirming re-review)
+Sonnet fix writer on `d1/r4-fixes` (`c0b2dab` + merge of `b86829d`, tip `e9497e5`; report
+`docs/reviews/D1-r4-fix-report.md`; `apps/recruiter` 27 files / 354 tests): SR-1 `3ff806a` (bundled `d1-v1` rule
+table for a `ready` card with a matching `ruleTableVersion`, fallback text otherwise), SR-2 `28a0c3f`, SR-3 `1ba1412`
+(terminal header errors stop all three pollers), SR-4 UI `4e0c134`, SR-5 `c634290`, SR-6 `3822d1d`, SEC-2 `93d0518`
+(the gate is inline in `routes.tsx`: a helper defeated tree-shaking and `check-no-demo-outbox` caught it).
+
+**Sonnet confirming re-review: CONFIRMED WITH NOTES** (every assigned finding fixed with a test that fails on revert;
+SR-5 and SR-6 add coverage of behaviour that was already right and are meaningful guards; no new defect; rules 1, 2,
+6, 7, 8 hold). Notes and lead dispositions:
+1. Low: the `VITE_DEMO_OUTBOX=1` + `VITE_TRACE_ENV=production` arm has no automated bundle check (the script skips
+   any flagged build; `main.tsx:19,26` pass the whole `import.meta.env`, so a flagged build's entry chunk names the
+   key). Only public `VITE_*` values reach the bundle. **Carried to Chat E** (before the first staging dispatch):
+   `main.tsx` passes only the fields it needs, and the check skips only when `VITE_TRACE_ENV !== 'production'`.
+2. Low: `unauthorized` is terminal on the report page (a session refresh needs a reload). **Accepted** (matches the
+   finding's intent and the text shown).
+3. Info: `VITE_TRACE_ENV` is set by no workflow; the flag's absence is the primary guard. **Accepted** (rev 4f).
