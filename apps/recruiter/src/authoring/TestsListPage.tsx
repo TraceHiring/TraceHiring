@@ -19,6 +19,7 @@ export const statusText = (test: TestRow): string =>
       ? `Published v${test.versionNo}`
       : `Retired v${test.versionNo}`;
 
+/** `canCreate` is true for staff (owner, admin, recruiter): only they get "New test", the editor link and "Invite". */
 export function TestsView({ data, canCreate }: { data: TestListResponse; canCreate: boolean }) {
   return (
     <div className={ui.stack}>
@@ -46,7 +47,11 @@ export function TestsView({ data, canCreate }: { data: TestListResponse; canCrea
                 <td>{statusText(test)}</td>
                 <td>{test.invitationCount}</td>
                 <td className={ui.row}>
-                  <Link to={`/tests/${test.id}`}>{test.status === 'draft' ? 'Edit' : 'Open'}</Link>
+                  {canCreate && (
+                    <Link to={`/tests/${test.id}`}>
+                      {test.status === 'draft' ? 'Edit' : 'Open'}
+                    </Link>
+                  )}
                   <Link to={`/tests/${test.id}/results`}>Results</Link>
                   {canCreate && test.status === 'published' && (
                     <Link to={`/tests/${test.id}/invite`}>Invite</Link>

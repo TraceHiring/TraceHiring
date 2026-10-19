@@ -2,11 +2,11 @@
 // (draft only; a published version is read-only in D1). Publish opens a dialog with the Q20 freeze copy and is
 // refused without a valid cutoff.
 import type { TestDetailResponse } from '@trace/shared/contracts/d1';
-import { useCallback, useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import type { ApiClient } from '../api/client';
+import type { ApiClient, ApiResult } from '../api/client';
 import { createTest, getTest } from '../api/endpoints';
-import { useApi } from '../api/runtime';
+import { useApi, useOrgInfo } from '../api/runtime';
 import { errorText } from '../common/messages';
 import { useResource } from '../common/useResource';
 import ui from '../common/Ui.module.css';
@@ -14,6 +14,7 @@ import { DraftFormView } from './DraftFormView';
 import { publishDraft, saveDraft } from './editor-actions';
 import { fromDetail, isCutoffValid, toRequest, type DraftForm } from './editor-model';
 import { ReviewersPanel } from './ReviewersPanel';
+import { NO_ACCESS_TEXT, isStaff } from '../shell/nav';
 
 export const FREEZE_COPY =
   'Settings freeze when you publish, including the cutoff; later changes create a new version';
@@ -148,19 +149,45 @@ function EditorBody({
   );
 }
 
+/**
+ * The loader of the test detail, or null when the caller is not staff (owner, admin, recruiter): then nothing is
+ * requested at all. This is UX only; the server refuses a reviewer too.
+ */
+export function testDetailLoader(
+  api: ApiClient,
+  testId: string,
+  roles: readonly string[] | null,
+): (() => Promise<ApiResult<TestDetailResponse>>) | null {
+  if (roles === null || !isStaff(roles)) return null;
+  return () => getTest(api, testId);
+}
+
 /** Route `/tests/:testId`. */
 export function TestEditorRoute() {
   const { testId } = useParams();
   const api = useApi();
+  const info = useOrgInfo();
+  const roles = info === null ? null : info.roles;
+  const staff = roles !== null && isStaff(roles);
   const valid = testId !== undefined && UUID.test(testId);
-  const load = useCallback(
+  const load = useMemo(
     () =>
       api !== null && valid
-        ? getTest(api, testId)
-        : Promise.resolve({ ok: false as const, code: 'not_found' }),
-    [api, testId, valid],
+        ? testDetailLoader(api, testId, roles)
+        : staff
+          ? () => Promise.resolve({ ok: false as const, code: 'not_found' })
+          : null,
+    [api, testId, valid, roles, staff],
   );
   const [state, reload] = useResource(load);
+  if (!staff) {
+    return (
+      <section className={ui.stack}>
+        <h2 className={ui.title}>Test</h2>
+        <p role="status">{NO_ACCESS_TEXT}</p>
+      </section>
+    );
+  }
   return (
     <section className={ui.stack}>
       <h2 className={ui.title}>{state.kind === 'ready' ? state.data.test.name : 'Test'}</h2>
