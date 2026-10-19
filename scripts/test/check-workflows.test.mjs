@@ -19,6 +19,7 @@ import {
   E2E_STAGING_PREFLIGHT_CMD,
   E2E_STAGING_PREFLIGHT_ENV,
   E2E_STAGING_RUN_CMD,
+  E2E_STAGING_RUN_MINUTES,
   E2E_STAGING_SECRET_USERS,
   STAGING_SECRET_USERS,
   PAGES_STEP_LINES,
@@ -2747,6 +2748,26 @@ describe('e2e-staging job (d1 §7.1, AT-D1, AT-D20)', () => {
     ])('requires one Playwright step: rejects %s', (_label, edit) => {
       expect(check(edit)).toMatch(
         /e2e-staging must run exactly pnpm --filter @trace\/e2e exec playwright test tests\/d1-slice\.spec\.ts --project staging in one step with no if:/,
+      );
+    });
+
+    // Spec review SR-W6-1: the slice's summed step timeouts are capped at 20 minutes (W5), so the
+    // Playwright step gets 22, inside the job's 25.
+    it('gives the Playwright step exactly 22 minutes', () => {
+      expect(E2E_STAGING_RUN_MINUTES).toBe(22);
+      expect(E2E_STAGING_RUN_MINUTES).toBeLessThan(E2E_STAGING_MAX_MINUTES);
+      expect(step(doc(), PLAYWRIGHT)['timeout-minutes']).toBe(22);
+    });
+
+    it.each([
+      ['no step timeout', (s) => delete s['timeout-minutes']],
+      ['18 minutes', (s) => (s['timeout-minutes'] = 18)],
+      ['25 minutes', (s) => (s['timeout-minutes'] = 25)],
+      ['a string', (s) => (s['timeout-minutes'] = '22')],
+      ['an expression', (s) => (s['timeout-minutes'] = '${{ inputs.minutes }}')],
+    ])('rejects a Playwright step with %s', (_label, edit) => {
+      expect(check((d) => edit(step(d, PLAYWRIGHT)))).toMatch(
+        /e2e-staging\.steps\[5\].*the Playwright step must set timeout-minutes: 22/,
       );
     });
 

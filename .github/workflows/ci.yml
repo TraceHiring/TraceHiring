@@ -388,7 +388,7 @@ jobs:
           E2E_SHA: ${{ github.sha }}
         run: pnpm e2e:staging:preflight
       - name: Slice spec against staging
-        timeout-minutes: 18
+        timeout-minutes: 22
         env:
           E2E_STAGING: '1'
           E2E_CANDIDATE_URL: https://trace-candidate-staging.pages.dev

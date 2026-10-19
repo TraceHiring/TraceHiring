@@ -586,6 +586,8 @@ export const E2E_STAGING_MAX_MINUTES = 25;
 export const E2E_STAGING_PREFLIGHT_CMD = 'pnpm e2e:staging:preflight';
 export const E2E_STAGING_RUN_CMD =
   'pnpm --filter @trace/e2e exec playwright test tests/d1-slice.spec.ts --project staging';
+/** Spec review SR-W6-1: the slice's step timeouts sum to at most 20 minutes (W5); 22 fits in 25. */
+export const E2E_STAGING_RUN_MINUTES = 22;
 const E2E_STAGING_RUN_RE =
   /^\s*pnpm --filter @trace\/e2e exec playwright test tests\/d1-slice\.spec\.ts --project staging\s*$/;
 const E2E_CHROMIUM_CMD = 'pnpm --filter @trace/e2e exec playwright install --with-deps chromium';
@@ -2031,6 +2033,15 @@ function checkE2eStaging(doc, file, out) {
     );
   }
   const pw = playwrights.length === 1 ? playwrights[0] : -1;
+  if (pw >= 0 && steps[pw]['timeout-minutes'] !== E2E_STAGING_RUN_MINUTES) {
+    out.push(
+      v(
+        file,
+        sw(pw),
+        `the Playwright step must set timeout-minutes: ${E2E_STAGING_RUN_MINUTES} (the slice's step timeouts sum to at most 20; the job allows ${E2E_STAGING_MAX_MINUTES}; SR-W6-1)`,
+      ),
+    );
+  }
   const pfOk =
     preflights.length === 1 &&
     runOf(steps[preflights[0]]).trim() === E2E_STAGING_PREFLIGHT_CMD &&
