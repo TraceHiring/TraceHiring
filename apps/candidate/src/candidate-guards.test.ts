@@ -110,6 +110,9 @@ const CONTRACTS = /['"]@trace\/shared\/contracts\/candidate['"]/g;
 const CONTRACTS_TYPE_IMPORT =
   /(?:^|\n)import\s+type\s*\{[^}]*\}\s*from\s*['"]@trace\/shared\/contracts\/candidate['"]/g;
 
+/** A specifier that names a test or a test helper (any script extension, or none). */
+const TEST_IMPORT = /\.test(?:-helpers)?(?:\.[cm]?[jt]sx?)?$/;
+
 /** The sources (file names) in which `pattern` occurs. */
 const where = (pattern: RegExp): string[] =>
   sources.filter(([, text]) => pattern.test(text)).map(([file]) => file);
@@ -190,7 +193,7 @@ describe('candidate sources', () => {
   it('never import a test helper', () => {
     const bad = sources.flatMap(([file, text]) =>
       specifiers(text)
-        .filter((s) => /\.test(?:-helpers)?(?:\.tsx?)?$/.test(s))
+        .filter((s) => TEST_IMPORT.test(s))
         .map((s) => `${file}: ${s}`),
     );
     expect(bad).toEqual([]);
@@ -198,6 +201,21 @@ describe('candidate sources', () => {
 });
 
 describe('guard patterns (negative controls)', () => {
+  it('flag an import of a test or test helper, with or without an extension (SEC-4)', () => {
+    for (const bad of [
+      './x.test',
+      './x.test.ts',
+      './x.test-helpers',
+      './x.test-helpers.ts',
+      './x.test-helpers.js',
+      '../x.test.mjs',
+      './x.test-helpers.tsx',
+    ])
+      expect(TEST_IMPORT.test(bad), bad).toBe(true);
+    for (const ok of ['./test/Test', './testing', './latest', './x.tested.ts'])
+      expect(TEST_IMPORT.test(ok), ok).toBe(false);
+  });
+
   it('flag camera access outside the camera module', () => {
     for (const bad of [
       'navigator.mediaDevices.getUserMedia({ video: true })',
