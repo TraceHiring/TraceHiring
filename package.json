@@ -14,7 +14,9 @@
     "build": "pnpm -r --if-present build && node scripts/check-bundle-size.mjs && node scripts/check-headers.mjs && node scripts/check-no-demo-outbox.mjs && node scripts/scan-dist.mjs",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:rls && pnpm build",
     "verify:fast": "node scripts/verify-fast.mjs",
-    "db:types": "node scripts/db-types.mjs"
+    "db:types": "node scripts/db-types.mjs",
+    "e2e:staging:preflight": "node scripts/e2e-staging-preflight.mjs",
+    "e2e:record": "node scripts/e2e-staging-preflight.mjs --record"
   },
   "devDependencies": {
     "@commitlint/cli": "catalog:",
