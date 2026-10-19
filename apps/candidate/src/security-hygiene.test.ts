@@ -17,7 +17,7 @@ const sources: [string, string][] = (
   readdirSync(path.join(appDir, 'src'), { recursive: true, encoding: 'utf8' }) as string[]
 )
   .map((file) => file.split(path.sep).join('/'))
-  .filter((file) => /\.(?:ts|tsx|css)$/.test(file) && !/\.test\.tsx?$/.test(file))
+  .filter((file) => /\.(?:ts|tsx|css)$/.test(file) && !/\.test(?:-helpers)?\.tsx?$/.test(file))
   .map((file) => [file, read('src', file)]);
 
 /** Inline style or script in markup or code. */
