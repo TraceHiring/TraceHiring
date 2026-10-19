@@ -6,7 +6,7 @@
 //  - `CandidateUi`: the screens a person walks through (link, code, age, notice and consent, photo, rules, test,
 //    submit), with the selectors of apps/candidate.
 // Tokens, links, codes and bodies stay in variables; nothing here prints one.
-import { expect, type Page, type Request } from '@playwright/test';
+import { expect, type Locator, type Page, type Request } from '@playwright/test';
 import { sha256Hex } from './candidate.js';
 import { sleep } from './http.js';
 import type { OutboxReader } from './outbox.js';
@@ -193,6 +193,27 @@ export const secondsOf = (text: string): number => {
   return text.split(':').reduce((total, part) => total * 60 + Number(part), 0);
 };
 
+/**
+ * Puts `value` into a React-controlled input without `fill` (SEC-W5-4: a fill step's title is the typed text). The
+ * native value setter plus an `input` event is what React's onChange listens for; the value travels as an evaluate
+ * argument, which no step title shows. Used only before the test screen, where no signal listener runs.
+ */
+export const typeQuietly = async (field: Locator, value: string): Promise<void> => {
+  await field.waitFor({ state: 'visible' });
+  await field.evaluate((el, v) => {
+    if (!(el instanceof HTMLInputElement)) throw new Error('not an input');
+    el.focus();
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    if (setter === undefined) throw new Error('no value setter');
+    setter.call(el, v);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, value);
+  // A boolean, so a failure never prints the code; React keeps the value only if its onChange took it.
+  await expect
+    .poll(async () => (await field.inputValue()) === value, { timeout: 5_000 })
+    .toBe(true);
+};
+
 /** The notice as the edge sent it (GET /v1/lobby/notice). */
 export interface Notice {
   noticeVersionId: string;
@@ -269,7 +290,7 @@ export class CandidateUi {
     await this.button('Email me a code').click();
     await expect(this.page.getByText(/We sent a 6-digit code to your email/)).toBeVisible();
     const otp = await outbox.newOtp(label, baseline);
-    await this.page.getByLabel('6-digit code').fill(otp.code);
+    await typeQuietly(this.page.getByLabel('6-digit code'), otp.code);
     await this.button('Continue').click();
     await expect(this.heading('Your age')).toBeVisible();
   }
