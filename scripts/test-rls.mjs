@@ -182,10 +182,11 @@ export function windowsCommandLine(cmd, args) {
 }
 
 /**
- * Runs a command and captures its output as bytes. Never throws and never rejects:
+ * Runs a command and captures its output as bytes. Never throws and never rejects. `env`, when
+ * given, is merged over the parent's environment (the child keeps PATH and the rest).
  * @returns {Promise<{ status: number|null, stdout: Buffer, stderr: Buffer, error: Error|null }>}
  */
-export function spawnRun(cmd, args, { cwd, timeoutMs } = {}) {
+export function spawnRun(cmd, args, { cwd, timeoutMs, env } = {}) {
   return new Promise((resolve) => {
     let settled = false;
     let timedOut = false;
@@ -199,6 +200,7 @@ export function spawnRun(cmd, args, { cwd, timeoutMs } = {}) {
       resolve({ status, stdout: Buffer.concat(out), stderr: Buffer.concat(err), error });
     };
     let child;
+    const childEnv = env === undefined ? {} : { env: { ...process.env, ...env } };
     try {
       // pnpm is a .cmd shim on Windows, which Node only starts through a shell.
       child =
@@ -208,8 +210,14 @@ export function spawnRun(cmd, args, { cwd, timeoutMs } = {}) {
               shell: true,
               stdio: ['ignore', 'pipe', 'pipe'],
               windowsHide: true,
+              ...childEnv,
             })
-          : spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+          : spawn(cmd, args, {
+              cwd,
+              stdio: ['ignore', 'pipe', 'pipe'],
+              windowsHide: true,
+              ...childEnv,
+            });
     } catch (e) {
       resolve({ status: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error: e });
       return;
