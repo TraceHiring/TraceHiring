@@ -2,11 +2,12 @@
 // trace_worker in the one transaction the consumer opens and commits. Neutral code (rule 1): it writes public session
 // facts only and knows no score or band.
 //
-// Order: hash-check final.json and the start photo (R2) -> lock the invitation -> `session_mirror` key present:
-// done (duplicate) -> invitation revoked/expired/blocked_age: `mirror_dead_invitation` (retried, then the DLQ for an
-// operator look) -> the invitation's session id must be the message's -> the consent row must exist for the message's
-// consentId, invitation and ruleset -> both adult answers (rule 9) -> sessions, session_items, responses,
-// media_objects (verified photo only), reports, invitation `submitted`, key.
+// Order: message checks -> lock the invitation -> `session_mirror` key present: done (duplicate; spec F5, before any
+// R2 read, so a redelivery after success never depends on R2) -> invitation revoked/expired/blocked_age:
+// `mirror_dead_invitation` (retried, then the DLQ for an operator look) -> the invitation's session id must be the
+// message's -> the consent row must exist for the message's consentId, invitation and ruleset -> both adult answers
+// (rule 9) -> hash-check final.json and the start photo (R2) -> sessions, session_items, responses, media_objects
+// (verified photo only), reports, invitation `submitted`, key.
 //
 // The job writes the rows itself rather than through private.mirror_session because the carried C1b binding needs
 // a photo the head check refused to be dropped while the message still names it, and mirror_session refuses a
@@ -39,27 +40,11 @@ const fail = (code: string): never => {
 
 const DEAD = new Set(['revoked', 'expired', 'blocked_age']);
 
-const runMirrorUnsafe = async (message: SessionMirrorMessage, deps: MirrorDeps): Promise<void> => {
-  const { tx, evidence } = deps;
-  const orgId = message.orgId;
-  const sessionId = message.sessionId;
-  const key = jobKey(sessionId, 'session_mirror', message.rulesetVersionId);
-  if (message.jobKey !== key) return fail('mirror_bad_message');
-  // Spec F4: exactly one of photo and photoSkippedReason (private.mirror_session's rule).
-  if ((message.photo === null) === (message.photoSkippedReason === null)) {
-    return fail('mirror_bad_message');
-  }
-
-  // Served items: one per position and per item version (a repeat is a malformed message, never a retry).
-  const positions = new Set(message.served.map((s) => s.position));
-  const itemIds = new Set(message.served.map((s) => s.itemVersionId));
-  if (positions.size !== message.served.length || itemIds.size !== message.served.length) {
-    return fail('mirror_bad_message');
-  }
-  if (message.served.some((s) => !Number.isInteger(s.position) || s.position < 1)) {
-    return fail('mirror_bad_message');
-  }
-
+/** final.json's answers as response rows (hash-checked, served positions only, storable text only). */
+const readAnswers = async (
+  evidence: EvidenceReader,
+  message: SessionMirrorMessage,
+): Promise<{ itemVersionId: string; row: Omit<ResponseInsert, 'session_item_id'> }[]> => {
   const final = await readFinalAnswers(evidence, message);
   const itemAt = new Map(message.served.map((s) => [s.position, s.itemVersionId]));
   const answers: { itemVersionId: string; row: Omit<ResponseInsert, 'session_item_id'> }[] = [];
@@ -97,7 +82,30 @@ const runMirrorUnsafe = async (message: SessionMirrorMessage, deps: MirrorDeps):
       });
     }
   }
-  const photo = await verifiedPhoto(evidence, message);
+
+  return answers;
+};
+
+const runMirrorUnsafe = async (message: SessionMirrorMessage, deps: MirrorDeps): Promise<void> => {
+  const { tx, evidence } = deps;
+  const orgId = message.orgId;
+  const sessionId = message.sessionId;
+  const key = jobKey(sessionId, 'session_mirror', message.rulesetVersionId);
+  if (message.jobKey !== key) return fail('mirror_bad_message');
+  // Spec F4: exactly one of photo and photoSkippedReason (private.mirror_session's rule).
+  if ((message.photo === null) === (message.photoSkippedReason === null)) {
+    return fail('mirror_bad_message');
+  }
+
+  // Served items: one per position and per item version (a repeat is a malformed message, never a retry).
+  const positions = new Set(message.served.map((s) => s.position));
+  const itemIds = new Set(message.served.map((s) => s.itemVersionId));
+  if (positions.size !== message.served.length || itemIds.size !== message.served.length) {
+    return fail('mirror_bad_message');
+  }
+  if (message.served.some((s) => !Number.isInteger(s.position) || s.position < 1)) {
+    return fail('mirror_bad_message');
+  }
 
   const invitation = await lockInvitation(tx, orgId, message.invitationId);
   if (invitation === null) return fail('mirror_invitation_missing');
@@ -118,6 +126,10 @@ const runMirrorUnsafe = async (message: SessionMirrorMessage, deps: MirrorDeps):
   if (invitation.adult_self_declared !== true || invitation.adult_confirmed_by_inviter === false) {
     return fail('mirror_not_adult');
   }
+
+  // Spec F5: R2 is read only now, after the key check, so a redelivery after success never depends on it.
+  const answers = await readAnswers(evidence, message);
+  const photo = await verifiedPhoto(evidence, message);
 
   await upsertSession(tx, orgId, {
     sessionId,

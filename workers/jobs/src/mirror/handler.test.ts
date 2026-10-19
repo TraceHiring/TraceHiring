@@ -279,6 +279,29 @@ describe('mirror stage', () => {
       expect(w.db.tables).toEqual(before);
     });
 
+    // Spec F5: the key is checked before any R2 read, so a redelivery after the mirror committed is a no-op even
+    // when an evidence object has since gone or changed.
+    it.each([
+      [
+        'final.json is gone',
+        (w: SessionWorld) => w.evidence.objects.delete(w.message.evidence.finalKey),
+      ],
+      [
+        'final.json changed',
+        (w: SessionWorld) => w.evidence.put(w.message.evidence.finalKey, '{}'),
+      ],
+      ['the start photo is gone', (w: SessionWorld) => w.evidence.objects.delete(PHOTO_KEY)],
+    ])('a redelivery after success is a duplicate when %s', async (_name, change) => {
+      const w = await sessionWorld();
+      await run(w);
+      const before = structuredClone(w.db.tables);
+      change(w);
+      const gets = w.evidence.gets;
+      await run(w);
+      expect(w.db.tables).toEqual(before);
+      expect(w.evidence.gets).toBe(gets); // final.json was not even read
+    });
+
     it('a replay with the key lost re-reads the same rows instead of adding new ones', async () => {
       const w = await sessionWorld();
       await run(w);
