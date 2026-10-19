@@ -19,10 +19,13 @@ export const BINDING_UNAVAILABLE = 'binding_unavailable';
 export interface QueueHandlerDeps {
   /** Where stage errors are reported (the Sentry adapter in production). */
   reporter: ErrorReporter;
-  /** The three stages. Stream R2 implements them; until then notImplementedStages. */
-  stages: Stages;
-  /** The database part of the sweep: private.sweep_pending(limit). */
-  pendingStages(limit: number): Promise<readonly PendingStage[]>;
+  /**
+   * The three stages, or a factory that builds them from the invocation's env (their database secrets and the
+   * evidence bucket are bindings). Placeholder: notImplementedStages.
+   */
+  stages: Stages | ((env: Env) => Stages);
+  /** The database part of the sweep: private.sweep_pending(limit), with the invocation's env. */
+  pendingStages(limit: number, env: Env): Promise<readonly PendingStage[]>;
   /** Where log lines go. Defaults to the logger's own sink (console). Tests inject their own. */
   sink?: ((line: string) => void) | undefined;
 }
@@ -47,7 +50,8 @@ const loggerFor = (env: Env, sink: QueueHandlerDeps['sink']): { log: Logger; rel
 export const createQueueHandlers = (deps: QueueHandlerDeps): QueueHandlers => ({
   queue: async (batch, env) => {
     const { log, release } = loggerFor(env, deps.sink);
-    await processBatch(batch, { stages: deps.stages, log, reporter: deps.reporter, release });
+    const stages = typeof deps.stages === 'function' ? deps.stages(env) : deps.stages;
+    await processBatch(batch, { stages, log, reporter: deps.reporter, release });
   },
 
   scheduled: async (_controller, env, ctx) => {
@@ -56,7 +60,7 @@ export const createQueueHandlers = (deps: QueueHandlerDeps): QueueHandlers => ({
     if (queue === undefined || evidence === undefined) throw new Error(BINDING_UNAVAILABLE);
     const { log } = loggerFor(env, deps.sink);
     const run = runSweep({
-      pendingStages: deps.pendingStages,
+      pendingStages: (limit) => deps.pendingStages(limit, env),
       readMirror: r2TextReader(evidence),
       send: queueSender(queue),
       log,
