@@ -144,7 +144,6 @@ From the repository root. `read -rs` keeps the URL off the screen and out of you
 
 ```
 read -rs TRACE_OPERATOR_DB_URL && export TRACE_OPERATOR_DB_URL
-export SUPABASE_STAGING_PROJECT_REF="$(gh variable get SUPABASE_STAGING_PROJECT_REF --env staging)"
 node scripts/ops/staging-worker-secrets.mjs --env staging --dry-run
 node scripts/ops/staging-worker-secrets.mjs --env staging --yes
 unset TRACE_OPERATOR_DB_URL
@@ -155,14 +154,14 @@ unset TRACE_OPERATOR_DB_URL
 ```
 $s = Read-Host -AsSecureString 'staging session pooler URL'
 $env:TRACE_OPERATOR_DB_URL = [System.Net.NetworkCredential]::new('', $s).Password
-$env:SUPABASE_STAGING_PROJECT_REF = gh variable get SUPABASE_STAGING_PROJECT_REF --env staging
 node scripts/ops/staging-worker-secrets.mjs --env staging --dry-run
 node scripts/ops/staging-worker-secrets.mjs --env staging --yes
 Remove-Item Env:TRACE_OPERATOR_DB_URL; Remove-Variable s
 ```
 
-`SUPABASE_STAGING_PROJECT_REF` is public (it is also in `docs/infra/environments.md`). The script refuses a URL
-whose project is not this one.
+The staging project ref (`vsugnnxeahjtgzmgmyfu`, public, from `docs/infra/environments.md`) is pinned in the
+script, so you do not need to set anything else. The script refuses a URL whose project is not this one. If
+`SUPABASE_STAGING_PROJECT_REF` happens to be set in your shell, it must hold the same value, or the script stops.
 
 - `--dry-run` runs the checks and prints the plan (role, secret and Worker names only). It changes nothing and
   does not call wrangler.

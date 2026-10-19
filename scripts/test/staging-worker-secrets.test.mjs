@@ -13,6 +13,7 @@ import { ALLOW_LIST, WORKER_DIRS } from '../check-staging-secrets.mjs';
 import { LOGIN_ROLES } from '../lib/e2e-local-secrets.mjs';
 import {
   PLAN,
+  STAGING_PROJECT_REF,
   generateValues,
   main,
   parseCli,
@@ -412,10 +413,14 @@ describe('generateValues and secretValues', () => {
 
 // --- main, with an injected sink and spawn stub ---------------------------------------------------
 
+// main checks against the pinned staging ref (SEC-W3-4); the ref is public (docs/infra/environments.md).
+const SREF = STAGING_PROJECT_REF;
+const stagingPooler = (over = {}) => poolerUrl({ user: `postgres.${SREF}`, ...over });
+
 /** A deps object whose spawnSync is scripted; every call and every printed line is recorded. */
 function harness({
   platform = 'linux',
-  env = { TRACE_OPERATOR_DB_URL: poolerUrl(), SUPABASE_STAGING_PROJECT_REF: REF },
+  env = { TRACE_OPERATOR_DB_URL: stagingPooler(), SUPABASE_STAGING_PROJECT_REF: SREF },
   hasPsql = true,
   psql = { status: 0, stdout: '', stderr: '' },
   list = () => ({ status: 0, stdout: '[]', stderr: '' }),
@@ -461,7 +466,7 @@ function harness({
 
 /** Every string that must never be printed, thrown or put on a command line. */
 function secretsOf(h) {
-  const values = [OP_PW, poolerUrl(), ...h.generated];
+  const values = [OP_PW, stagingPooler(), ...h.generated];
   for (const run of h.puts()) values.push(run.opts.input);
   for (const run of h.psqlRuns()) {
     values.push(...(run.opts.input.match(/SCRAM-SHA-256\$[^']+/g) ?? []));
@@ -502,7 +507,7 @@ describe('main', () => {
     expect(run.opts.input).toContain('begin;');
     expect(run.opts.input).toContain('grant trace_api to api_login with inherit false, set true;');
     expect(run.opts.env.PGSSLMODE).toBe('require');
-    expect(run.opts.env.PGUSER).toBe(`postgres.${REF}`);
+    expect(run.opts.env.PGUSER).toBe(`postgres.${SREF}`);
     expect(run.opts.env.TRACE_OPERATOR_DB_URL).toBeUndefined();
   });
 
@@ -510,7 +515,7 @@ describe('main', () => {
     const h = harness();
     await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps });
     const puts = h.puts();
-    const target = parseOperatorUrl(poolerUrl(), REF);
+    const target = parseOperatorUrl(stagingPooler(), SREF);
     const expected = PLAN.flatMap((w) => w.secrets.map((s) => [w.dir, s.name]));
     expect(puts.map((p) => [p.opts.cwd, p.args.at(-3)])).toEqual(
       expected.map(([dir, name]) => [join(ROOT, dir), name]),
@@ -524,7 +529,7 @@ describe('main', () => {
       expect(p.opts.env.TRACE_OPERATOR_DB_URL).toBeUndefined();
     }
     const api = puts.find((p) => p.args[4] === 'API_DB_URL');
-    expect(api.opts.input.startsWith(`${PG}://api_login.${REF}:`)).toBe(true);
+    expect(api.opts.input.startsWith(`${PG}://api_login.${SREF}:`)).toBe(true);
     expect(api.opts.input.endsWith(`@${target.host}:5432/postgres?sslmode=require`)).toBe(true);
     expect(apiDbSsl(api.opts.input)).toBe('require');
     for (const name of ['JOBS_MIRROR_DB_URL', 'JOBS_QUALITY_DB_URL', 'JOBS_INTEGRITY_DB_URL']) {
@@ -535,8 +540,8 @@ describe('main', () => {
   it('keeps wrangler from writing a debug log to disk (no WRANGLER_LOG, logs off, sanitised)', async () => {
     const h = harness({
       env: {
-        TRACE_OPERATOR_DB_URL: poolerUrl(),
-        SUPABASE_STAGING_PROJECT_REF: REF,
+        TRACE_OPERATOR_DB_URL: stagingPooler(),
+        SUPABASE_STAGING_PROJECT_REF: SREF,
         WRANGLER_LOG: 'debug',
         WRANGLER_WRITE_LOGS: 'true',
         WRANGLER_LOG_SANITIZE: 'false',
@@ -614,7 +619,7 @@ describe('main', () => {
     expect(text).toMatch(/tens of seconds/);
     expect(text).not.toMatch(/a few seconds/);
     expect(text).not.toContain(OP_PW);
-    expect(text).not.toContain(REF);
+    expect(text).not.toContain(SREF);
     for (const g of h.generated) expect(text).not.toContain(g);
   });
 
@@ -639,26 +644,26 @@ describe('main', () => {
   it.each([
     [
       'TRACE_OPERATOR_DB_URL is missing',
-      { SUPABASE_STAGING_PROJECT_REF: REF },
+      { SUPABASE_STAGING_PROJECT_REF: SREF },
       'TRACE_OPERATOR_DB_URL',
     ],
     [
-      'SUPABASE_STAGING_PROJECT_REF is missing',
-      { TRACE_OPERATOR_DB_URL: poolerUrl() },
+      'SUPABASE_STAGING_PROJECT_REF is set to another project',
+      { TRACE_OPERATOR_DB_URL: stagingPooler(), SUPABASE_STAGING_PROJECT_REF: OTHER_REF },
       'SUPABASE_STAGING_PROJECT_REF',
     ],
     [
       'the URL is loopback',
       {
         TRACE_OPERATOR_DB_URL: pgUrl({ user: 'postgres', host: '127.0.0.1', port: '54322' }),
-        SUPABASE_STAGING_PROJECT_REF: REF,
+        SUPABASE_STAGING_PROJECT_REF: SREF,
       },
       'e2e-local',
     ],
     [
       'the URL is another project',
-      { TRACE_OPERATOR_DB_URL: poolerUrl(), SUPABASE_STAGING_PROJECT_REF: OTHER_REF },
-      'SUPABASE_STAGING_PROJECT_REF',
+      { TRACE_OPERATOR_DB_URL: pgUrl({ user: `postgres.${OTHER_REF}`, host: POOLER }) },
+      'staging project',
     ],
   ])('refuses when %s (exit 2, nothing runs, the variable named)', async (_n, env, named) => {
     const h = harness({ env });
@@ -800,5 +805,17 @@ describe('main', () => {
     const text = h.out.join('');
     for (const w of PLAN) for (const s of w.secrets) expect(text).toContain(s.name);
     expect(text).toMatch(/check-staging-secrets/);
+  });
+
+  it('works without SUPABASE_STAGING_PROJECT_REF (the ref is pinned in the script)', async () => {
+    const h = harness({ env: { TRACE_OPERATOR_DB_URL: stagingPooler() } });
+    expect(await main({ argv: ['--env', 'staging', '--dry-run'], deps: h.deps })).toBe(0);
+  });
+
+  it('pins the staging ref that docs/infra/environments.md records', () => {
+    const doc = readFileSync(join(ROOT, 'docs', 'infra', 'environments.md'), 'utf8');
+    const row = doc.split(/\r?\n/).find((l) => l.startsWith('| `SUPABASE_STAGING_PROJECT_REF` |'));
+    expect(row).toContain(`\`${STAGING_PROJECT_REF}\``);
+    expect(STAGING_PROJECT_REF).toMatch(/^[a-z0-9]{20}$/);
   });
 });

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Operator script: the four staging database login roles and the staging Worker secrets that hold them
 // (specs/d1-demo-slice.md §3 "Roles", §7.1 secrets and the check-staging-secrets allow-list, §8 DC-D7; ADR-031).
-//   TRACE_OPERATOR_DB_URL=... SUPABASE_STAGING_PROJECT_REF=... \
-//     node scripts/ops/staging-worker-secrets.mjs --env staging [--dry-run | --yes]
+//   TRACE_OPERATOR_DB_URL=... node scripts/ops/staging-worker-secrets.mjs --env staging [--dry-run | --yes]
 // Run by the founder, once, on their own computer, AFTER the first staging deploy (the Workers must exist) and
 // before the D1 staging smoke. A re-run rotates: new passwords, then new secrets.
 //   1. Checks: --env staging only; TRACE_OPERATOR_DB_URL is the staging project's Supabase session pooler
 //      (postgres.<ref> @ aws-N-<region>.pooler.supabase.com:5432) or direct host (postgres @ db.<ref>.supabase.co),
-//      with ?sslmode=require (or verify-ca / verify-full); the ref equals SUPABASE_STAGING_PROJECT_REF; psql exists;
+//      with ?sslmode=require (or verify-ca / verify-full); its ref is the pinned STAGING_PROJECT_REF (and equals
+//      SUPABASE_STAGING_PROJECT_REF when that is set); psql exists;
 //      and (with --yes) `wrangler secret list` works for trace-api-staging and trace-jobs-staging. wrangler 4.149's
 //      `secret put` with piped input creates an empty draft Worker when the Worker is missing (createDraftWorker,
 //      fallback "yes" in a non-interactive context), so a missing Worker stops the run here, before the database.
@@ -42,7 +42,12 @@ import {
 } from './lib.mjs';
 
 const TAG = 'staging-worker-secrets';
-/** The public staging project ref (GitHub variable of the same name, docs/infra/environments.md). */
+/**
+ * The staging project ref, pinned (public: docs/infra/environments.md, the GitHub variable of the same name; a test
+ * keeps the two equal). The operator URL must point at this project. SUPABASE_STAGING_PROJECT_REF is optional; when
+ * it is set it must equal this value, so a stale shell variable cannot quietly aim the script elsewhere.
+ */
+export const STAGING_PROJECT_REF = 'vsugnnxeahjtgzmgmyfu';
 export const REF_ENV = 'SUPABASE_STAGING_PROJECT_REF';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OPTIONS = {
@@ -143,7 +148,7 @@ const isLoopback = (host) =>
 export function parseOperatorUrl(raw, expectedRef) {
   const fail = (why) => ({ ok: false, why });
   if (typeof expectedRef !== 'string' || !REF_RE.test(expectedRef)) {
-    return fail(`${REF_ENV} must be set to the 20-character staging project ref`);
+    return fail('the expected staging project ref must be 20 lower-case letters or digits');
   }
   const text = typeof raw === 'string' ? raw.trim() : '';
   if (text === '') return fail(`${DB_URL_ENV} is not set`);
@@ -203,7 +208,7 @@ export function parseOperatorUrl(raw, expectedRef) {
     );
   }
   if (ref !== expectedRef) {
-    return fail(`${DB_URL_ENV} is not the staging project named by ${REF_ENV}`);
+    return fail(`${DB_URL_ENV} is not the staging project (${REF_ENV})`);
   }
   return { ok: true, kind, ref, host };
 }
@@ -424,7 +429,11 @@ export async function main({ argv, deps = realScriptDeps() }) {
   if (typeof raw !== 'string' || raw.trim() === '') {
     return fail(2, `${DB_URL_ENV} is not set (the staging session-pooler string, as postgres)`);
   }
-  const target = parseOperatorUrl(raw, (deps.env[REF_ENV] ?? '').trim());
+  const refFromEnv = (deps.env[REF_ENV] ?? '').trim();
+  if (refFromEnv !== '' && refFromEnv !== STAGING_PROJECT_REF) {
+    return fail(2, `${REF_ENV} is set but is not the staging project ref this script is pinned to`);
+  }
+  const target = parseOperatorUrl(raw, STAGING_PROJECT_REF);
   if (!target.ok) return fail(2, target.why);
   const operatorUrl = raw.trim();
   if (!pgEnvOf(operatorUrl).ok) return fail(2, `${DB_URL_ENV} cannot be handed to psql`);
