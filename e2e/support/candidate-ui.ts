@@ -228,9 +228,29 @@ export class CandidateUi {
     this.page.getByRole('heading', { level: 2, name: `Question ${n} of ${of}`, exact: true });
   option = (name: string) => this.page.getByRole('radio', { name, exact: true });
 
-  /** Opens `/i#token`; the test is named and the fragment is gone from the address. */
+  /**
+   * Opens `/i#token`; the test is named and the fragment is gone from the address. SEC-W5-3: the token is never part
+   * of a navigation URL (call logs and step titles print those). The page goes to `/i`, and a one-shot init script
+   * (an argument, never printed) puts the fragment back with history.replaceState before the app's first script
+   * reads it; it is removed as soon as that document has loaded, so a later reload is untouched. A navigation error
+   * is rethrown with a constant message.
+   */
   async openLink(token: string, testName: string): Promise<void> {
-    await this.page.goto(`${this.origin}/i#${token}`);
+    const once = await this.page.addInitScript(
+      ({ value }) => {
+        if (location.pathname === '/i' && location.hash === '') {
+          history.replaceState(history.state, '', `/i#${value}`);
+        }
+      },
+      { value: token },
+    );
+    try {
+      await this.page.goto(`${this.origin}/i`);
+    } catch {
+      throw new Error('opening the candidate link failed');
+    } finally {
+      await once.dispose();
+    }
     await expect(this.heading('Confirm it is you')).toBeVisible();
     await expect(this.page.getByText(testName)).toBeVisible();
     const href = await this.page.evaluate(() => location.href);
