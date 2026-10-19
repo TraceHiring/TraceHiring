@@ -7,6 +7,8 @@ import { runIntegrity } from './handler.js';
 import { SQL } from './store.js';
 import {
   IDS,
+  PHOTO_BYTES,
+  PHOTO_SHA,
   addQualityCard,
   fullscreenExit,
   heartbeat,
@@ -262,6 +264,76 @@ describe('score-first triage from meets_cutoff only (AT-D14, rule 6)', () => {
     ).catch((e: unknown) => e as Error);
     expect((err as Error).message).toBe('integrity_retry');
     expect(table(w.db, 'integrity_cards')).toHaveLength(0);
+  });
+});
+
+describe('the stored result is checked on every path (spec F1, F2; rule 3)', () => {
+  const awaiting = async (opts: Parameters<typeof integrityWorld>[0] = {}) => {
+    const w = await integrityWorld({ ...opts, meetsCutoff: null });
+    await run(w);
+    expect(card(w.db)?.['review_state']).toBe('awaiting_quality');
+    return w;
+  };
+  const result = (db: FakeDb) => table(db, 'results')[0]!;
+
+  it.each([
+    ['another engine_version', 'engine_version', 'band-engine-0.0.0-other'],
+    ['another band', 'band', 'clear'],
+  ])(
+    'F1: a stored result with %s fails the flip with integrity_input_changed',
+    async (_n, col, value) => {
+      const w = await awaiting();
+      result(w.db)[col] = value;
+      addQualityCard(w.db, true);
+      const before = structuredClone(w.db.tables);
+      await expect(run(w)).rejects.toThrow(/^integrity_input_changed$/);
+      expect(w.db.tables).toEqual(before);
+    },
+  );
+
+  it.each([
+    ['another engine_version', 'engine_version', 'band-engine-0.0.0-other'],
+    ['another band', 'band', 'clear'],
+  ])(
+    'F1: a stored result with %s fails the direct path with integrity_input_changed',
+    async (_n, col, value) => {
+      // a result row without a card (as if the card insert of an earlier run had not committed)
+      const w = await awaiting();
+      w.db.tables['integrity_cards'] = [];
+      result(w.db)[col] = value;
+      addQualityCard(w.db, true);
+      await expect(run(w)).rejects.toThrow(/^integrity_input_changed$/);
+      expect(table(w.db, 'integrity_cards')).toHaveLength(0);
+    },
+  );
+
+  it('F2: the flip takes photo_missing from the stored result, so a photo deleted since does not dead-letter it', async () => {
+    const w = await awaiting();
+    expect(result(w.db)['photo_missing']).toBe(false);
+    w.evidence.objects.delete(`media/${IDS.org}/${IDS.session}/start_photo.jpg`);
+    addQualityCard(w.db, true);
+    await run(w);
+    expect(card(w.db)).toMatchObject({ review_state: 'reviewed', photo_missing: false });
+    expect(table(w.db, 'results')).toHaveLength(1);
+  });
+
+  it('F2: the flip keeps a stored photo_missing true even when the photo shows up later', async () => {
+    const w = await awaiting({ photo: 'missing_object' });
+    expect(result(w.db)['photo_missing']).toBe(true);
+    w.evidence.put(`media/${IDS.org}/${IDS.session}/start_photo.jpg`, new Uint8Array(PHOTO_BYTES), {
+      sha256: PHOTO_SHA,
+      blurred: '1',
+    });
+    addQualityCard(w.db, true);
+    await run(w);
+    expect(card(w.db)).toMatchObject({ review_state: 'reviewed', photo_missing: true });
+  });
+
+  it('F2: the flip still checks the events: changed events.ndjson is integrity_events_hash_mismatch', async () => {
+    const w = await awaiting();
+    w.evidence.put(w.message.evidence.eventsKey, '');
+    addQualityCard(w.db, true);
+    await expect(run(w)).rejects.toThrow(/^integrity_events_hash_mismatch$/);
   });
 });
 

@@ -253,6 +253,23 @@ describe('full chain against the real schema', () => {
     expect(await pending()).toEqual([]);
   });
 
+  it('spec F2: the flip uses the stored photo_missing, so a photo deleted between the runs does not block it', async () => {
+    const s = await seedSession(h, f, { cutoff: 40, lines: [paste(1, 1_000)] });
+    await mirror(s);
+    await integrity(s);
+    expect((await snapshot(s.session)).icards[0]).toMatchObject({
+      review_state: 'awaiting_quality',
+      photo_missing: false,
+    });
+    s.evidence.objects.delete(`media/${f.org}/${s.session}/start_photo.jpg`);
+    await quality(s);
+    await integrity(s);
+    expect((await snapshot(s.session)).icards[0]).toMatchObject({
+      review_state: 'reviewed',
+      photo_missing: false,
+    });
+  });
+
   it('a start photo with another sha256 is not recorded and counts as missing', async () => {
     const s = await seedSession(h, f, { cutoff: 40, lines: [], photo: 'other_sha' });
     await all(s);

@@ -38,8 +38,8 @@ export const SQL = {
     'values ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::integrity.band, $7::numeric, $8::smallint, ' +
     '$9::smallint, $10::boolean, $11, now()) on conflict do nothing',
   result:
-    'select id::text as id, input_hash, band::text as band from integrity.results where org_id = $1::uuid ' +
-    'and session_id = $2::uuid and ruleset_version_id = $3::uuid',
+    'select id::text as id, input_hash, band::text as band, engine_version, photo_missing ' +
+    'from integrity.results where org_id = $1::uuid and session_id = $2::uuid and ruleset_version_id = $3::uuid',
   insertFlags:
     'insert into integrity.flags (org_id, session_id, rule_id, family, tier, severity, untrusted, raw_media, count, ' +
     'first_offset_ms, state, signal_seqs) select $1::uuid, $2::uuid, x.rule_id, x.family, x.tier, x.severity, ' +
@@ -160,12 +160,17 @@ export interface ResultInsert {
   inputHash: string;
 }
 
-/** Inserts the result (or finds the stored one) and returns its id and input hash. */
-export const upsertResult = async (
-  tx: SqlTx,
-  ids: Ids,
-  r: ResultInsert,
-): Promise<{ id: string; input_hash: string; band: string }> => {
+/** A stored integrity.results row: what a later run checks (spec F1) and re-uses (photo_missing, spec F2). */
+export interface StoredResult {
+  id: string;
+  input_hash: string;
+  band: string;
+  engine_version: string;
+  photo_missing: boolean;
+}
+
+/** Inserts the result (or finds the stored one) and returns it. */
+export const upsertResult = async (tx: SqlTx, ids: Ids, r: ResultInsert): Promise<StoredResult> => {
   await tx.query(SQL.insertResult, [
     ids.orgId,
     ids.sessionId,
@@ -182,18 +187,19 @@ export const upsertResult = async (
   return readResult(tx, ids);
 };
 
-export const readResult = async (
-  tx: SqlTx,
-  ids: Ids,
-): Promise<{ id: string; input_hash: string; band: string }> => {
+export const readResult = async (tx: SqlTx, ids: Ids): Promise<StoredResult> => {
   const row = (
-    await tx.query<{ id: string; input_hash: string; band: string }>(SQL.result, [
-      ids.orgId,
-      ids.sessionId,
-      ids.rulesetVersionId,
-    ])
+    await tx.query<StoredResult>(SQL.result, [ids.orgId, ids.sessionId, ids.rulesetVersionId])
   )[0];
   if (row === undefined) throw new Error('integrity_result_not_stored');
+  if (
+    typeof row.photo_missing !== 'boolean' ||
+    typeof row.engine_version !== 'string' ||
+    typeof row.band !== 'string' ||
+    typeof row.input_hash !== 'string'
+  ) {
+    throw new Error('integrity_bad_result');
+  }
   return row;
 };
 

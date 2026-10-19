@@ -12,7 +12,6 @@
 // A card guard error because a quality card landed between the gate read and the awaiting insert aborts the
 // transaction: it is thrown as `integrity_retry`, so the message is retried and the next run takes the final path.
 // Rule 1: no score, no quality type; an integrity result never touches a quality card.
-import { BAND_ENGINE_VERSION } from '@trace/band-engine';
 import type { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
 import { jobKey, type EvidenceReader, type SqlTx } from '@trace/shared/jobs';
 import { callBand, flagRows, ruleTableOf, timelineRows } from './band-call.js';
@@ -35,6 +34,7 @@ import {
   upsertResult,
   type Ids,
   type ReviewState,
+  type StoredResult,
 } from './store.js';
 
 export interface IntegrityDeps {
@@ -52,6 +52,18 @@ const isAwaitingGuardError = (err: unknown): boolean =>
   err instanceof Error &&
   (err as { code?: unknown }).code === '42501' &&
   err.message.startsWith(AWAITING_GUARD);
+
+/**
+ * Spec F1, rule 3: the stored result must be the one this run computes: the same input hash, engine version and
+ * band. A result from another engine version (or with another band) is never re-used for a card.
+ */
+const sameResult = (
+  stored: StoredResult,
+  band: { inputHash: string; output: { engineVersion: string; band: string } },
+): boolean =>
+  stored.input_hash === band.inputHash &&
+  stored.engine_version === band.output.engineVersion &&
+  stored.band === band.output.band;
 
 const finalState = (meetsCutoff: boolean): ReviewState =>
   meetsCutoff ? 'reviewed' : 'not_reviewed_below_cutoff';
@@ -87,7 +99,11 @@ const runIntegrityUnsafe = async (
   const ruleRow = await loadRuleTable(tx, ids);
   const table = ruleTableOf(ruleRow);
   const signals = await loadSignals(evidence, message);
-  const photoMissing = await isPhotoMissing(evidence, message);
+  // Spec F2 / O4: the flip takes photo_missing from integrity's own stored result (no new R2 head), so a photo that
+  // disappears between the runs cannot change the input; input_hash still checks the events.
+  const stored = existing === null ? null : await readResult(tx, ids);
+  const photoMissing =
+    stored === null ? await isPhotoMissing(evidence, message) : stored.photo_missing;
   const band = await callBand(
     table,
     signals,
@@ -109,7 +125,7 @@ const runIntegrityUnsafe = async (
       photoMissing,
       inputHash: band.inputHash,
     });
-    if (result.input_hash !== band.inputHash) return fail('integrity_input_changed');
+    if (!sameResult(result, band)) return fail('integrity_input_changed');
     resultId = result.id;
     if (gate === null) {
       // awaiting_quality outcome (m-6): signals, result and card commit together; no flag, timeline, pointer or key.
@@ -124,12 +140,9 @@ const runIntegrityUnsafe = async (
       return;
     }
   } else {
-    const result = await readResult(tx, ids);
     // The stored result was computed from the same frozen evidence and rule table; anything else is a bug.
-    if (result.input_hash !== band.inputHash || BAND_ENGINE_VERSION !== band.output.engineVersion) {
-      return fail('integrity_input_changed');
-    }
-    resultId = result.id;
+    if (stored === null || !sameResult(stored, band)) return fail('integrity_input_changed');
+    resultId = stored.id;
   }
 
   // Final outcome (gate known): flags first, in the state the card will need (L-28), then the card.

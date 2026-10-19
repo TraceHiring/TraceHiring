@@ -161,7 +161,13 @@ export const integrityHandlers: Record<string, Handler> = {
   [SQL.result]: (db, [org, s, rs]) =>
     visible(db, 'results', org)
       .filter((r) => r['session_id'] === s && r['ruleset_version_id'] === rs)
-      .map((r) => ({ id: r['id'], input_hash: r['input_hash'], band: r['band'] })),
+      .map((r) => ({
+        id: r['id'],
+        input_hash: r['input_hash'],
+        band: r['band'],
+        engine_version: r['engine_version'],
+        photo_missing: r['photo_missing'],
+      })),
   [SQL.insertFlags]: (db, [org, s, state, rows]) => {
     const card = table(db, 'integrity_cards').find(
       (c) => c['org_id'] === org && c['session_id'] === s,
