@@ -89,7 +89,9 @@ export const E2E_ENV = Object.freeze({
 /**
  * The synthetic users of the local stack (`key` names their E2E_<key>_EMAIL variable). The owner
  * owns the org; the others are members. STORE_RECRUITER is the real-flow spec's own recruiter
- * (e2e/tests/candidate-store.spec.ts enrols its TOTP), so the slice spec's recruiter stays new.
+ * (e2e/tests/candidate-store.spec.ts enrols its TOTP), so the slice spec's recruiter stays new;
+ * UI_RECRUITER is e2e/tests/candidate-ui.spec.ts's own, because GoTrue refuses a second TOTP
+ * enrolment below aal2 (422).
  */
 export const USERS = Object.freeze(
   [
@@ -111,6 +113,12 @@ export const USERS = Object.freeze(
       email: 'e2e-store-recruiter@example.test',
       roles: 'recruiter',
       name: 'E2E store recruiter',
+    },
+    {
+      key: 'UI_RECRUITER',
+      email: 'e2e-ui-recruiter@example.test',
+      roles: 'recruiter',
+      name: 'E2E UI recruiter',
     },
   ].map((u) => Object.freeze(u)),
 );

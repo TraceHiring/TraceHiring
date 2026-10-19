@@ -509,12 +509,38 @@ describe('main', () => {
     expect(enrol.every((o) => o.password === pw)).toBe(true);
     expect(h.operators.flatMap((o) => o.argv).includes(pw)).toBe(false);
     for (const u of USERS) expect(u.email).toMatch(/^e2e-[a-z-]+@example\.test$/);
-    expect(USERS.map((u) => u.key)).toEqual(['OWNER', 'RECRUITER', 'REVIEWER', 'STORE_RECRUITER']);
+    expect(USERS.map((u) => u.key)).toEqual([
+      'OWNER',
+      'RECRUITER',
+      'REVIEWER',
+      'STORE_RECRUITER',
+      'UI_RECRUITER',
+    ]);
     const org = h.operators.find((o) => o.name === 'createOrg');
     expect(org.argv).toEqual(expect.arrayContaining(['--slug', 'e2e-local', '--kind', 'customer']));
     const members = h.operators.filter((o) => o.name === 'addMember');
     const rolesOf = (o) => o.argv[o.argv.indexOf('--roles') + 1];
-    expect(members.map(rolesOf)).toEqual(['recruiter', 'reviewer', 'recruiter']);
+    expect(members.map(rolesOf)).toEqual(['recruiter', 'reviewer', 'recruiter', 'recruiter']);
+  });
+
+  it('creates a separate recruiter for the candidate-UI spec, a member like the store recruiter', async () => {
+    // Each spec enrols its own TOTP factor; GoTrue needs aal2 to enrol a second one (422), so the
+    // candidate-UI spec (e2e/tests/candidate-ui.spec.ts) cannot reuse the store recruiter.
+    const h = harness();
+    await main(h.deps);
+    expect(USERS.find((u) => u.key === 'UI_RECRUITER')).toMatchObject({
+      email: 'e2e-ui-recruiter@example.test',
+      roles: 'recruiter',
+    });
+    const enrolled = h.operators.find(
+      (o) => o.name === 'enrolSmokeUser' && o.argv.includes('e2e-ui-recruiter@example.test'),
+    );
+    expect(enrolled.password).toBe(h.pw.opts.env.E2E_USER_PASSWORD);
+    const member = h.operators.filter((o) => o.name === 'addMember').at(-1);
+    expect(member.argv[member.argv.indexOf('--roles') + 1]).toBe('recruiter');
+    const orgId = h.pw.opts.env.E2E_ORG_ID;
+    expect(member.argv[member.argv.indexOf('--org-id') + 1]).toBe(orgId);
+    expect(h.pw.opts.env.E2E_UI_RECRUITER_EMAIL).toBe('e2e-ui-recruiter@example.test');
   });
 
   // Security review SEC-E1: TRACE_OPERATOR_DB_URL is the staging operator variable; the operator
