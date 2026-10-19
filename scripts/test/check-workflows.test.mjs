@@ -705,6 +705,8 @@ describe('checkWorkflow', () => {
           'VITE_DEMO_OUTBOX',
           // d1 §4.7: the candidate app's edge origin (the staging edge, as its CSP names it)
           'VITE_EDGE_ORIGIN',
+          // d1 AT-D18 (SEC-W2-1): the deploy flavour, on the staging build only
+          'VITE_TRACE_ENV',
           // security review S8: the same origin, read by the check-deploy-vars step
           'API_STAGING_ORIGIN',
           // d1 §7.1 (review F4): the candidate-token public values, passed to the api and edge
@@ -1214,7 +1216,7 @@ describe('checkWorkflow', () => {
   });
 
   describe('VITE_SUPABASE_* only on the deploy build step (m0b §2.7)', () => {
-    it('lists exactly the six build variables and their sources (m0b §2.7, d1 AT-D22, d1 §7.1 recruiter CSP, d1 AT-D18, d1 §4.7)', () => {
+    it('lists exactly the seven build variables and their sources (m0b §2.7, d1 AT-D22, d1 §7.1 recruiter CSP, d1 AT-D18, d1 §4.7)', () => {
       expect(BUILD_ONLY_ENV).toEqual({
         VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
         VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
@@ -1222,6 +1224,7 @@ describe('checkWorkflow', () => {
         VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
         VITE_DEMO_OUTBOX: '1',
         VITE_EDGE_ORIGIN: 'https://trace-edge-staging.abhayraj.workers.dev',
+        VITE_TRACE_ENV: 'staging',
       });
       for (const name of Object.keys(BUILD_ONLY_ENV)) expect(ENV_ALLOW_LIST).toContain(name);
     });
@@ -1262,6 +1265,30 @@ describe('checkWorkflow', () => {
         bad.jobs['deploy-staging'].steps[2].env.VITE_DEMO_OUTBOX = value;
         expect(msgs(checkWorkflow(bad, 'ci.yml', ctx))).toMatch(/VITE_DEMO_OUTBOX must be exactly/);
       }
+    });
+
+    it('the staging build step sets VITE_TRACE_ENV to exactly staging (the outbox gate allow-list, SEC-W2-1)', () => {
+      const ok = doc();
+      ok.jobs['deploy-staging'].steps[2].env.VITE_TRACE_ENV = 'staging';
+      expect(checkWorkflow(ok, 'ci.yml', ctx)).toEqual([]);
+      for (const value of ['production', 'prod', 'dev', 'Staging', '', '${{ vars.TRACE_ENV }}']) {
+        const bad = doc();
+        bad.jobs['deploy-staging'].steps[2].env.VITE_TRACE_ENV = value;
+        expect(msgs(checkWorkflow(bad, 'ci.yml', ctx))).toMatch(/VITE_TRACE_ENV must be exactly/);
+      }
+    });
+
+    it('rejects VITE_TRACE_ENV anywhere but the staging build step', () => {
+      const atWorkflow = doc();
+      atWorkflow.env = { ...(atWorkflow.env ?? {}), VITE_TRACE_ENV: 'staging' };
+      expect(msgs(checkWorkflow(atWorkflow, 'ci.yml', ctx))).toMatch(
+        /VITE_TRACE_ENV may be set only on the deploy-staging build step/,
+      );
+      const onStatic = doc();
+      onStatic.jobs.static.env = { ...(onStatic.jobs.static.env ?? {}), VITE_TRACE_ENV: 'staging' };
+      expect(msgs(checkWorkflow(onStatic, 'ci.yml', ctx))).toMatch(
+        /VITE_TRACE_ENV may be set only on the deploy-staging build step/,
+      );
     });
 
     it('rejects VITE_DEMO_OUTBOX anywhere but the staging build step (a demo build elsewhere)', () => {

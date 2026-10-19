@@ -1,6 +1,6 @@
 // The demo outbox gate (d1 spec §7.1, AT-D18; security review finding 2): the route and nav item exist only
-// when the build sets VITE_DEMO_OUTBOX=1 AND it is not a production build (VITE_TRACE_ENV). The real route
-// table is re-evaluated under each combination of the two variables.
+// when the build sets VITE_DEMO_OUTBOX=1 AND VITE_TRACE_ENV is exactly "dev" or "staging" (an allow-list, SEC-W2-1).
+// The real route table is re-evaluated under each combination of the two variables.
 import type { RouteObject } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,13 +23,21 @@ describe('the demo outbox gate', () => {
   beforeEach(() => vi.unstubAllEnvs());
   afterEach(() => vi.unstubAllEnvs());
 
-  it('registers the route with the flag "1" and a non-production environment', async () => {
+  it('registers the route only with the flag "1" and VITE_TRACE_ENV exactly "dev" or "staging"', async () => {
     expect(await tablePaths('1', 'staging')).toContain('demo-outbox');
-    expect(await tablePaths('1', undefined)).toContain('demo-outbox');
+    expect(await tablePaths('1', 'dev')).toContain('demo-outbox');
   });
 
-  it('drops the route in a production environment even with the flag set', async () => {
-    expect(await tablePaths('1', 'production')).not.toContain('demo-outbox');
+  // SEC-W2-1: an allow-list, so a mistyped or unset flavour never ships the outbox.
+  it.each(['production', 'prod', 'Production', 'PRODUCTION', 'Dev', 'Staging', ' dev', '', 'test'])(
+    'drops the route with the flag set and VITE_TRACE_ENV=%j',
+    async (traceEnv) => {
+      expect(await tablePaths('1', traceEnv)).not.toContain('demo-outbox');
+    },
+  );
+
+  it('drops the route with the flag set and VITE_TRACE_ENV unset', async () => {
+    expect(await tablePaths('1', undefined)).not.toContain('demo-outbox');
   });
 
   it('drops the route without the flag, in any environment', async () => {
