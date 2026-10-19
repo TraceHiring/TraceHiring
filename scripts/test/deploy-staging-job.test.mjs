@@ -337,7 +337,7 @@ describe('deploy-staging: commands', () => {
     for (const s of STEPS) expect(run(s), String(stateOf(s))).not.toContain('${{');
   });
 
-  it('builds the recruiter with its public build variables only, all from vars (m0b §2.7, d1 AT-D22, d1 §7.1 CSP)', () => {
+  it('builds the apps with their public build values only, from vars or a public literal (m0b §2.7, d1 AT-D22, d1 §7.1 CSP, d1 §4.7)', () => {
     expect(stepIn('built').env).toEqual({
       VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
       VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
@@ -347,6 +347,8 @@ describe('deploy-staging: commands', () => {
       VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
       // d1 §6.1, AT-D18: only the staging recruiter build includes the demo outbox.
       VITE_DEMO_OUTBOX: '1',
+      // d1 §4.7: the candidate app's edge origin, the literal its _headers connect-src names.
+      VITE_EDGE_ORIGIN: 'https://trace-edge-staging.abhayraj.workers.dev',
     });
   });
 
