@@ -33,26 +33,45 @@ export const MCQ_OPTIONS = [
 ] as const;
 /** The anchors of the written item's rubric (also words a strong answer holds). */
 export const WRITTEN_ANCHORS = ['queue', 'retry', 'idempotent'] as const;
+/** The editor's default Answer Quality cutoff (spec §6.2, L-15). */
+export const DEFAULT_CUTOFF = 40;
 
 const org = (ctx: RecruiterCtx, path: string) => `${ctx.api}/v1/orgs/${ctx.orgId}${path}`;
 const authed = (ctx: RecruiterCtx) => ({ Authorization: `Bearer ${ctx.jwt}` });
 
-/** Creates a 30-minute test with 3 MCQ items and 1 written item, and publishes it. */
-export const createPublishedTest = async (
+/** The fields of `GET /tests/:id` the specs read (hand-typed; e2e imports nothing from @trace/shared). */
+export interface TestDetail {
+  test: { id: string; name: string };
+  version: {
+    id: string;
+    versionNo: number;
+    status: string;
+    qualityCutoff: number;
+    sections: { items: unknown[] }[];
+  };
+}
+
+export const getTestDetail = async (
   request: APIRequestContext,
   ctx: RecruiterCtx,
-  name: string,
-): Promise<PublishedTest> => {
-  const created = await jsonOf<{ test: { id: string }; version: { id: string } }>(
-    await request.post(org(ctx, '/tests'), {
-      headers: authed(ctx),
-      data: { name, durationMinutes: 30 },
-    }),
-    201,
-    'creating the test',
+  testId: string,
+): Promise<TestDetail> =>
+  jsonOf<TestDetail>(
+    await request.get(org(ctx, `/tests/${testId}`), { headers: authed(ctx) }),
+    200,
+    'reading the test',
   );
-  const testId = created.test.id;
-  const versionId = created.version.id;
+
+/**
+ * Saves the content into an existing draft (30 minutes, 3 MCQ items, 1 written item with rubric anchors, cutoff 40)
+ * and publishes it. Returns the publish answer's status and cutoff.
+ */
+export const fillAndPublish = async (
+  request: APIRequestContext,
+  ctx: RecruiterCtx,
+  draft: PublishedTest,
+): Promise<{ status: string; qualityCutoff: number }> => {
+  const { testId, versionId, name } = draft;
   const mcq = (n: number) => ({
     format: 'mcq',
     prompt: `Synthetic question ${n}: which option is marked correct?`,
@@ -65,7 +84,7 @@ export const createPublishedTest = async (
       data: {
         name,
         durationMinutes: 30,
-        qualityCutoff: 40,
+        qualityCutoff: DEFAULT_CUTOFF,
         sections: [
           { format: 'mcq', name: 'Reasoning', weight: 60, items: [mcq(1), mcq(2), mcq(3)] },
           {
@@ -96,7 +115,7 @@ export const createPublishedTest = async (
     200,
     'saving the draft',
   );
-  await jsonOf<unknown>(
+  return jsonOf<{ status: string; qualityCutoff: number }>(
     await request.post(org(ctx, `/tests/${testId}/publish`), {
       headers: authed(ctx),
       data: { testVersionId: versionId },
@@ -104,7 +123,25 @@ export const createPublishedTest = async (
     200,
     'publishing the test',
   );
-  return { testId, versionId, name };
+};
+
+/** Creates a 30-minute test with 3 MCQ items and 1 written item, and publishes it. */
+export const createPublishedTest = async (
+  request: APIRequestContext,
+  ctx: RecruiterCtx,
+  name: string,
+): Promise<PublishedTest> => {
+  const created = await jsonOf<{ test: { id: string }; version: { id: string } }>(
+    await request.post(org(ctx, '/tests'), {
+      headers: authed(ctx),
+      data: { name, durationMinutes: 30 },
+    }),
+    201,
+    'creating the test',
+  );
+  const draft = { testId: created.test.id, versionId: created.version.id, name };
+  await fillAndPublish(request, ctx, draft);
+  return draft;
 };
 
 /** Invites one candidate (18+ confirmed by the inviter by default). */

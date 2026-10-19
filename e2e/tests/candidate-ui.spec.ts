@@ -18,10 +18,20 @@
 // Skipped unless E2E_LOCAL=1 (scripts/e2e-local.mjs sets the stack up and the environment). Synthetic data only.
 // Nothing is printed that could hold a link, token, code or body: assertions that touch those compare booleans.
 import { randomBytes } from 'node:crypto';
-import { expect, test, type Page, type Request } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { amrOf, claimsOf, signInWithTotp } from '../support/auth.js';
 import { sha256Hex } from '../support/candidate.js';
-import { env, sleep } from '../support/http.js';
+import {
+  cameraRecord,
+  instrumentCamera,
+  isPhotoPut,
+  secondsOf,
+  waitUntil,
+  watchNetwork,
+  type MediaRecord,
+  type PhotoPut,
+} from '../support/candidate-ui.js';
+import { env } from '../support/http.js';
 import { headerMarkers, isMetadataMarker } from '../support/jpeg.js';
 import { outboxReader } from '../support/outbox.js';
 import {
@@ -57,145 +67,6 @@ const setup: {
   published?: PublishedTest;
   invitation?: Invitation;
 } = {};
-
-// ---- What the browser records -----------------------------------------------------------------------------------
-
-interface MediaRecord {
-  calls: { at: number; constraints: unknown }[];
-  tracks: { kind: string; readyState: string }[];
-}
-interface Seen {
-  method: string;
-  origin: string;
-  path: string;
-  /** The whole URL, for a token check only (never printed). */
-  url: string;
-  contentType: string;
-  body: Buffer | null;
-}
-interface PhotoPut {
-  body: Buffer;
-  sha256Header: string;
-  contentType: string;
-  status: number;
-  answer: unknown;
-}
-interface AckedEvent {
-  kind?: string;
-  item?: number;
-  option?: string | null;
-  i?: string;
-}
-
-/**
- * Wraps `navigator.mediaDevices.getUserMedia` before any page script runs, on every document: it records when it is
- * called (wall clock, comparable with Node's) and with which constraints, and keeps the tracks it returned.
- */
-const instrumentCamera = (page: Page) =>
-  page.addInitScript(() => {
-    const store = globalThis as unknown as {
-      __e2eCamera?: { calls: { at: number; constraints: unknown }[]; tracks: MediaStreamTrack[] };
-    };
-    const record = {
-      calls: [] as { at: number; constraints: unknown }[],
-      tracks: [] as MediaStreamTrack[],
-    };
-    store.__e2eCamera = record;
-    const devices = navigator.mediaDevices;
-    if (typeof devices === 'undefined') return;
-    const original = devices.getUserMedia.bind(devices);
-    devices.getUserMedia = async (constraints?: MediaStreamConstraints) => {
-      record.calls.push({
-        at: Date.now(),
-        constraints: JSON.parse(JSON.stringify(constraints ?? null)) as unknown,
-      });
-      const stream = await original(constraints);
-      record.tracks.push(...stream.getTracks());
-      return stream;
-    };
-  });
-
-const cameraRecord = (page: Page): Promise<MediaRecord> =>
-  page.evaluate(() => {
-    const store = globalThis as unknown as {
-      __e2eCamera?: { calls: { at: number; constraints: unknown }[]; tracks: MediaStreamTrack[] };
-    };
-    const rec = store.__e2eCamera;
-    return {
-      calls: rec?.calls ?? [],
-      tracks: (rec?.tracks ?? []).map((t) => ({ kind: t.kind, readyState: t.readyState })),
-    };
-  });
-
-/** Everything the page sends and receives that the assertions need, collected from page events. */
-const watchNetwork = (page: Page) => {
-  const seen: Seen[] = [];
-  const sockets: string[] = [];
-  const acked: AckedEvent[] = [];
-  const state: { consentResponseAt: number | null; consentStatus: number | null } = {
-    consentResponseAt: null,
-    consentStatus: null,
-  };
-  page.on('request', (req: Request) => {
-    let url: URL;
-    try {
-      url = new URL(req.url());
-    } catch {
-      return;
-    }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
-    seen.push({
-      method: req.method(),
-      origin: url.origin,
-      path: url.pathname,
-      url: req.url(),
-      contentType: req.headers()['content-type'] ?? '',
-      body: req.postDataBuffer(),
-    });
-  });
-  page.on('websocket', (ws) => sockets.push(ws.url()));
-  page.on('response', (res) => {
-    const req = res.request();
-    let path = '';
-    try {
-      path = new URL(res.url()).pathname;
-    } catch {
-      return;
-    }
-    if (req.method() !== 'POST') return;
-    if (path === '/v1/lobby/consent') {
-      state.consentResponseAt = Date.now();
-      state.consentStatus = res.status();
-    }
-    if (path === '/v1/session/events' && res.status() === 200) {
-      try {
-        const sent = req.postDataJSON() as { events?: AckedEvent[] } | null;
-        acked.push(...(sent?.events ?? []));
-      } catch {
-        // a body that is not JSON is not an event batch
-      }
-    }
-  });
-  return { seen, sockets, acked, state };
-};
-
-const waitUntil = async (what: string, timeoutMs: number, probe: () => boolean) => {
-  const deadline = Date.now() + timeoutMs;
-  while (!probe()) {
-    if (Date.now() >= deadline)
-      throw new Error(`${what}: not within ${Math.round(timeoutMs / 1000)} s`);
-    await sleep(200);
-  }
-};
-
-const isPhotoPut = (r: Request) =>
-  r.method() === 'PUT' && new URL(r.url()).pathname === '/v1/lobby/photo';
-
-/** `mm:ss` or `h:mm:ss` (the timer's text) in seconds. */
-const secondsOf = (text: string): number => {
-  expect(text).toMatch(/^\d{1,2}(:\d{2}){1,2}$/);
-  return text.split(':').reduce((total, part) => total * 60 + Number(part), 0);
-};
 
 // ---- The spec ---------------------------------------------------------------------------------------------------
 
