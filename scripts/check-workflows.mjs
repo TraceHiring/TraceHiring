@@ -605,6 +605,9 @@ export const BUILD_ONLY_ENV = Object.freeze({
   // d1 §7.1 check-headers: the recruiter CSP's connect-src api origin
   // (https://trace-api-staging.<label>.workers.dev), a public value; unset drops the CSP token.
   VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
+  // d1 §6.1, AT-D18: only the staging recruiter build includes the demo outbox (mock Messaging); every other
+  // build is production-flavour and is checked by scripts/check-no-demo-outbox.mjs.
+  VITE_DEMO_OUTBOX: '1',
 });
 
 /**
@@ -822,6 +825,8 @@ export const ENV_ALLOW_LIST = Object.freeze([
   'VITE_SENTRY_DSN',
   // d1 §7.1 check-headers: the recruiter CSP api origin, the deploy-staging build step only.
   'VITE_API_ORIGIN',
+  // d1 §6.1, AT-D18: the staging recruiter build's demo-outbox flag, the deploy-staging build step only.
+  'VITE_DEMO_OUTBOX',
   // The check-deploy-vars step reads the same public variable (security review S8).
   'API_STAGING_ORIGIN',
   // d1 AT-D22 (specs/d1-demo-slice.md §7.1, L-24): the Workers deploy step passes it to jobs and api

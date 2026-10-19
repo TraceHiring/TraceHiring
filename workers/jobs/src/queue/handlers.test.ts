@@ -178,3 +178,44 @@ describe('scheduled()', () => {
     await expect(Promise.all(pending)).resolves.toBeDefined();
   });
 });
+
+describe('stages and the sweep database part built per invocation env (lead wiring, spec §11)', () => {
+  it('a stages factory receives the env of the queue() call', async () => {
+    const seen: Env[] = [];
+    const handlers = createQueueHandlers({
+      reporter: { capture() {} },
+      stages: (env) => {
+        seen.push(env);
+        return okStages;
+      },
+      pendingStages: () => Promise.resolve([]),
+    });
+    const env = envWith({ JOBS_MIRROR_DB_URL: 'synthetic' });
+    const message = fakeMessage(validMessage());
+    const { ctx } = execution();
+
+    await handlers.queue(fakeBatch([message]), env, ctx);
+
+    expect(seen).toEqual([env]);
+    expect(message.acked()).toBe(1);
+  });
+
+  it('pendingStages receives the env of the scheduled() call', async () => {
+    const b = bindings();
+    const seen: Env[] = [];
+    const handlers = createQueueHandlers({
+      reporter: { capture() {} },
+      stages: okStages,
+      pendingStages: (_limit, env) => {
+        seen.push(env);
+        return Promise.resolve([]);
+      },
+    });
+    const env = envWith({ MIRROR_QUEUE: b.queue, EVIDENCE: b.evidence });
+    const { ctx } = execution();
+
+    await handlers.scheduled(controller, env, ctx);
+
+    expect(seen).toEqual([env]);
+  });
+});

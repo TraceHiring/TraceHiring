@@ -345,6 +345,8 @@ describe('deploy-staging: commands', () => {
       // The recruiter CSP's connect-src api origin (https://trace-api-staging.<label>.workers.dev);
       // the headers plugin drops the token when it is unset.
       VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
+      // d1 §6.1, AT-D18: only the staging recruiter build includes the demo outbox.
+      VITE_DEMO_OUTBOX: '1',
     });
   });
 

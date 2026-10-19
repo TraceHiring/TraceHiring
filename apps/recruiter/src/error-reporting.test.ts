@@ -255,4 +255,43 @@ describe('recruiter Sentry wiring (AT-D22)', () => {
     const text = JSON.stringify(envelopes);
     for (const value of s.all) expect(text).not.toContain(value);
   });
+
+  it('with the real SDK, a start-photo fetch breadcrumb never reaches Sentry (d1 R3-6)', async () => {
+    const envelopes: unknown[] = [];
+    const transport = () => ({
+      send(envelope: unknown) {
+        envelopes.push(envelope);
+        return Promise.resolve({});
+      },
+      flush() {
+        return Promise.resolve(true);
+      },
+    });
+    const jti = '7d3f9a21-5c4e-4b8a-9e10-2f6b8c4d1a73';
+    try {
+      expect(initErrorReporting({ VITE_SENTRY_DSN: dsn() }, Sentry, { transport })).toBe(true);
+      Sentry.addBreadcrumb({
+        type: 'http',
+        category: 'fetch',
+        data: {
+          url: `https://trace-api-staging.example.workers.dev/media/${jti}?exp=1&sig=c2ln`,
+          method: 'GET',
+          status_code: 200,
+        },
+      });
+      Sentry.addBreadcrumb({
+        type: 'http',
+        category: 'fetch',
+        data: { url: 'https://trace-api-staging.example.workers.dev/v1/orgs', method: 'GET' },
+      });
+      reportAppError(new TypeError('synthetic'));
+      await Sentry.flush(2000);
+    } finally {
+      await Sentry.close(2000);
+    }
+    const text = JSON.stringify(envelopes);
+    expect(text).toContain('/v1/orgs');
+    expect(text).not.toMatch(/\/media\//i);
+    expect(text).not.toContain(jti);
+  });
 });

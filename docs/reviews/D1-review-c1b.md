@@ -62,6 +62,20 @@ defect; tests changed for old behaviour were moved to the working key, not loose
 3. Note: no test of attach after auto-submit; the same `finished(meta)` gate covers it. **Accepted.**
 4. Note: the 20 MB cap is tested on fakes only. **Carried to Chat C** (R2 jobs): measure finalise memory in workerd at
    the cap against the 128 MB limit.
+   **Measured (Chat C, 2026-10-19, read-only Sonnet helper; scripts kept outside the repo):** the real `SessionCore`
+   (Node, esbuild bundle, v8-serialised KV) and the real `SessionDO` in workerd (`@cloudflare/vitest-pool-workers`,
+   the `edge-do` bindings, SQLite storage) seeded to the cap (49 180 events, 20.95 MB stored, 8.6 MB
+   `events.ndjson`), then `submit`. `events.ndjson` is bounded by the 50 000-event cap (~9-10 MB; answer edits are
+   not in it). Delta at finalise: Node heap+arrayBuffers **+46.5 MB** (50k signals +47.2); workerd process private
+   bytes **+47 MB** with the R2 put stubbed, +94 MB on the full path, which includes miniflare's in-process local R2
+   copy (not present in production); realistic isolate delta **+47 to +60 MB**, so ~60-85 MB of 128 with the isolate
+   baseline. `kv.list` is lazy in workerd (first `next()` 2 ms, full pass 204 ms); a fully materialised list would
+   push the delta to ~+103 MB. Largest live structures: the `eventsNdjson` string rope
+   (`session-evidence.ts:206`), its flatten + `TextEncoder` copy for `sha256Hex` (`session-core.ts:881`,
+   `encoding.ts:24-30`) and the string body converted by the R2 put (`session-core.ts:949-950`).
+   **Lead: accepted for D1** (margin ~40-65 MB). **Carried (owner M3a, or earlier if a cap is raised or `kv.list`
+   stops being lazy):** encode `events.ndjson` once to a single `Uint8Array` used for both the hash and the put
+   (about -20 to -25 MB).
 
 Full `pnpm verify` exit 0 on `67d9d1f` (before note 1's fix; re-run on the merge into `d1/integration`).
 
