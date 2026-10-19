@@ -96,6 +96,28 @@ export const stripQuery = (url: string): string => {
   return cut < 0 ? url : url.slice(0, cut);
 };
 
+/**
+ * Whether a URL or path names the media route `/media/...` (d1 §6.2 R3-6): its path holds the link's jti, so no
+ * such URL may reach Sentry, even without its query. Case-insensitive and percent-decoded; fails closed (an
+ * undecodable string that mentions media counts as a media URL).
+ */
+export const isMediaUrl = (v: unknown): boolean => {
+  if (typeof v !== 'string') return false;
+  let s = v;
+  try {
+    s = decodeURIComponent(v);
+  } catch {
+    return /media/i.test(v);
+  }
+  return /^(?:[a-z][a-z0-9+.-]*:\/\/[^/?#]*)?\/media(?:[/?#]|$)/i.test(s.trim());
+};
+
+/** A breadcrumb whose data names a media URL (url, from or to). */
+const isMediaBreadcrumb = (breadcrumb: unknown): boolean => {
+  const data = isRecord(breadcrumb) ? breadcrumb['data'] : undefined;
+  return isRecord(data) && ['url', 'from', 'to'].some((k) => isMediaUrl(data[k]));
+};
+
 /** A URL without its query, redacted; undefined for anything that is not a string. */
 const safeUrl = (v: unknown): string | undefined =>
   typeof v === 'string' ? redactString(stripQuery(v)) : undefined;
@@ -180,10 +202,11 @@ const scrubBreadcrumbInner = (breadcrumb: unknown): SentryBreadcrumbLike => {
  * `beforeBreadcrumb`: keeps the type, category, level and timestamp, and from the data only the
  * URLs (without query strings, redacted), the method and the status code. The message goes (console
  * breadcrumbs carry whole log lines, click breadcrumbs carry page text). Returns null, which drops
- * the breadcrumb, if it cannot be read. Never throws.
+ * the breadcrumb, if it cannot be read or names a media URL (d1 R3-6). Never throws.
  */
 export const scrubSentryBreadcrumb = <B extends object>(breadcrumb: B): B | null => {
   try {
+    if (isMediaBreadcrumb(breadcrumb)) return null;
     return scrubBreadcrumbInner(breadcrumb) as B;
   } catch {
     return null;
@@ -235,12 +258,18 @@ const scrubEventInner = (event: object, hint: SentryHintLike | undefined): Sentr
       }),
     request:
       request &&
-      compact({ url: safeUrl(request['url']), method: label(request['method'], METHOD) }),
+      compact({
+        url: isMediaUrl(request['url']) ? undefined : safeUrl(request['url']),
+        method: label(request['method'], METHOD),
+      }),
     contexts: scrubContexts(e['contexts']),
     exception: exceptionValues && {
       values: exceptionValues.map((x) => scrubException(x, value)),
     },
-    breadcrumbs: breadcrumbs?.slice(-MAX_BREADCRUMBS).map(scrubBreadcrumbInner),
+    breadcrumbs: breadcrumbs
+      ?.filter((b) => !isMediaBreadcrumb(b))
+      .slice(-MAX_BREADCRUMBS)
+      .map(scrubBreadcrumbInner),
   });
 };
 

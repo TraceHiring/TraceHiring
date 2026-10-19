@@ -324,6 +324,30 @@ describe('PUT /v1/orgs/:orgId/tests/:testId', () => {
       ]);
     }
   });
+
+  it('only an owner, admin or recruiter may read the editor view, which carries the answer keys (R4 spec review #4)', async () => {
+    const cases: { roles: string[]; status: number; code: string }[] = [
+      { roles: ['reviewer'], status: 404, code: 'not_found' },
+      { roles: ['hiring_manager'], status: 404, code: 'not_found' },
+      { roles: ['admin'], status: 403, code: 'aal2_required' },
+    ];
+    for (const { roles, status, code } of cases) {
+      const db = authoringDb();
+      const { call } = testsApp(db);
+      const created = TestDetailResponse.parse(await (await create(call)).json());
+      const member = rowsOf(db, 'memberships')[0];
+      if (member === undefined) throw new Error('fixture: no membership row');
+      member.roles = roles;
+      const before = db.calls.length;
+      const res = await call('GET', `/v1/orgs/${ORG}/tests/${created.test.id}`);
+      expect(res.status, roles.join()).toBe(status);
+      expect(await res.text()).toBe(`{"error":{"code":"${code}"}}`);
+      // Refused before any authoring table is read.
+      expect(db.calls.slice(before).map((c) => `${c.method} ${c.table}`)).toEqual([
+        'select memberships',
+      ]);
+    }
+  });
 });
 
 describe('the tests router: caller and contract failures', () => {
