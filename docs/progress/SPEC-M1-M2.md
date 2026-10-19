@@ -5,9 +5,9 @@ Parallel docs-only chat, 2026-10-19, branch `spec/m1-m2` (cut from `trace/d1/int
 ## 1. Status
 | Item | State |
 | --- | --- |
-| `specs/m1-test-authoring.md` | revision 3 (§1.6 R2 rows, §1.7 R3 rows); final confirming re-review in progress |
-| `specs/m2-scheduling-invites.md` | revision 3 (§1.5 R2 rows, §1.6 R3 rows); final confirming re-review in progress |
-| Reviewers | Round 1 (rev 1, `3dc2018`): spec-reviewer **BLOCK** (4 High, 11 Medium, Lows), database-reviewer **BLOCK** (4 Blocking, 8 High, 11 Medium, Lows); every finding resolved in revision 2 (binding tables). Round 2 (rev 2, `a79c4b6`): spec-reviewer **BLOCK** (2 new High: D1 default-settings regression, session-token lifetime), database-reviewer **BLOCK** (2 new High: message re-plan loop, overlapping section draws); all new findings resolved in revision 3. Round 3: confirming re-review |
+| `specs/m1-test-authoring.md` | **Approved by autopilot reviewers** (revision 4; binding rows §1.6 R2, §1.7 R3) |
+| `specs/m2-scheduling-invites.md` | **Approved by autopilot reviewers** (revision 4; binding rows §1.5 R2, §1.6 R3, §1.7 R4) |
+| Reviewers | Round 1 (rev 1, `3dc2018`): spec-reviewer **BLOCK** (4 High, 11 Medium, Lows), database-reviewer **BLOCK** (4 Blocking, 8 High, 11 Medium, Lows); every finding resolved in revision 2 (binding tables). Round 2 (rev 2, `a79c4b6`): spec-reviewer **BLOCK** (2 new High: D1 default-settings regression, session-token lifetime), database-reviewer **BLOCK** (2 new High: message re-plan loop, overlapping section draws); all new findings resolved in revision 3. Round 3 (rev 3, `93c36b9`): both **PASS WITH FINDINGS** (no Blocking/High); all fixed in revision 4 (`7b5ef2b`); database-reviewer final confirmation **PASS** (two Low notes folded in). |
 
 ## 2. Questions for the founder (rules 1–9 or a founder answer). Each has the safe default the specs build until you answer.
 | # | Question | Why it is yours | Default built until you answer |
@@ -33,7 +33,12 @@ Parallel docs-only chat, 2026-10-19, branch `spec/m1-m2` (cut from `trace/d1/int
 | F-7 | **Workers CPU on the Free plan** (D1 OPEN-8a) may also limit import and invite batches | M1 DC-M1-4, M2 DC-M2-3/5 | Only if the day-one checks fail: Workers Paid (USD 5/month). |
 | F-8 | **Worker secrets the lead generates** (no account needed, but they must be set on staging): `MEMBER_INVITE_PEPPER` (M1 R2-14) | M1 staging | The operator runbook script prints the command; you run it (as for `CANDIDATE_TOKEN_PRIVATE_JWK`). |
 
-## 4. Log
+## 4. Next step (for the BUILD chats, not this chat)
+- M1 ∥ M2 BUILD starts after D1 CLOSE, on `m12/integration` (F-6): lead Wave 0 per M1 §11.2 and M2 §11 (migrations M1-a…d then M2-a…c with pgTAP red first, contracts, ADR-032 `fflate`, ADR-033 `aws4fetch`, the ADR-030 amendment, MT-15, the build-notes "Autopilot changes" rows for F-6 and the Q24 draw deviation), then the streams. Merge `spec/m1-m2` (docs only) into the integration branch first.
+- Founder: answer Q-M1-1…4, Q-M2-1…3 when convenient (defaults are built); F-1…F-5 and F-8 before the staging parts of M1/M2.
+
+## 5. Log
+- 2026-10-19: revision 4 after round-3 re-reviews (both PASS WITH FINDINGS); final database confirmation PASS; both specs approved; pushed `spec/m1-m2`.
 - 2026-10-19: revision 3 after round-2 re-reviews (both BLOCK on new findings); stale section text rewritten.
 - 2026-10-19: revision 2 of both specs after round-1 reviews (both BLOCK); new questions Q-M1-4, Q-M2-2, Q-M2-3; link-token HMAC proposal withdrawn (Q32 followed).
 - 2026-10-19: branch cut; sources read (CLAUDE.md, AUTOPILOT §2, SESSION-PLAN, build-order M1/M2, plan §1–§5, §8–§10, §12, plan-conflicts, build-notes §0/§2 M1–M2/§4, ADR-017/029/030, D1 spec §1/§3/§6/§9/§11, D1 migrations via a read-only summary); both specs drafted (revision 1).

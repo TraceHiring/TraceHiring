@@ -4,7 +4,7 @@
 - **Revision 2 (2026-10-19, same chat).** Applies both first reviews (spec-reviewer and database-reviewer, both BLOCK): binding resolutions R2-1…R2-23 in §1.6, folded into the sections below where marked.
 - **Revision 3 (2026-10-19, same chat).** Applies the confirming re-reviews of revision 2 (both BLOCK on new findings): binding rows R3-1…R3-11 in §1.7, and the stale section text both reviews listed is rewritten to match R2/R3.
 - **Revision 4 (2026-10-19, same chat).** Round-3 re-reviews: spec-reviewer and database-reviewer both **PASS WITH FINDINGS** (no Blocking/High); the remaining M1 item (E11 cap text) is fixed.
-- Status: **draft, under autopilot review** (the approval line is added at the end of §14 when the reviewers pass).
+- Status: **approved** (see the last line of §14).
 
 ## 0. Sources and precedence
 CLAUDE.md rules 1–9 > `docs/build-notes.md` §0 founder answers > `docs/plan-conflicts.md` > `docs/adr/` > `docs/plan.md` > `docs/design/` (AUTOPILOT §1). M1 text: `docs/build-order.md` "M1 · Test authoring ∥ M2". Plan: §3.1 steps 1–3, §4 (formats, content pipeline), §5 module A, §8.2 rule 4, §9.1 (`jobs`, `tests`, `sections`, `items`, `item_variants`, `pools`), §11 #22, #31. Build-notes: Q18–Q27 (all "Can-default", accepted as written by the founder on 2026-10-10, §0 row "Can-default"), Q20 (answer), Q21 (answer), §4 "M1 — Test authoring" and the invariants list. Design: screen 04 (`docs/design/screens/04-assessment-setup-integrity.png`; plan wins where they differ, build-notes Q33/Q34). **D1 is the base:** every D1 table, trigger and contract named here is the one in `specs/d1-demo-slice.md` §3 and in migrations `20261014065417_d1_authoring.sql` … `20261014175327_d1_media_audit.sql`; M1 extends them additively (fix forward, never edit a placed migration).
@@ -410,3 +410,5 @@ Waves: Wave 1 = A1, A6, A2 · Wave 2 = A3, A4, A5 · then e2e (lead + Sonnet: `e
 - OPEN-M1-2: Q-M1-2 (D1 notice until M3b) — founder; default stands.
 - OPEN-M1-3: Q-M1-3 (Q58 owner of ABH-7 empirical check) — founder.
 - OPEN-M1-4: DC-M1-4 Workers CPU (OPEN-8a) — founder gate if it fails.
+
+**Spec approved by autopilot reviewers** (2026-10-19, revision 4): spec-reviewer (Opus) — round 1 BLOCK, round 2 BLOCK, round 3 PASS WITH FINDINGS, every finding fixed in §1.6 (R2), §1.7 (R3) and revision 4; database-reviewer (Opus) — round 1 BLOCK, round 2 BLOCK, round 3 PASS WITH FINDINGS, final confirmation **PASS** on `7b5ef2b`. Founder questions Q-M1-1…Q-M1-4 and gates F-1, F-6, F-7, F-8 stay open in `docs/progress/SPEC-M1-M2.md`; BUILD builds their safe defaults.
