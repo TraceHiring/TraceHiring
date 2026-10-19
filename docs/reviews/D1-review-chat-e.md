@@ -98,3 +98,16 @@ Sonnet spec-reviewer on `f3af009`: W1 CONFIRMED, W2 CONFIRMED, W3 CONFIRMED WITH
 - `verify:fast` exit 0 on `f3af009` (242 s): edge 417, api 403, jobs 240, scripts 2390 + 1 skipped.
 - `e2e-local` on this machine on `f3af009`: 17 passed, 1 skipped (109 s), the recruiter built with the local sign-in config.
 - Full `pnpm verify` and Linux CI on PR #4: recorded in the handoff with the `cp/d1-10` tag.
+- CI on PR #4 green on `f3af009` (static, rls, security, migrations, e2e-local).
+
+## Stream R5 (slice E2E): W5 `d1/r5-slice`, W6 `d1/r5-ci`
+
+A Sonnet pre-flight found the missing pieces: no `e2e-staging` job, no `local`/`staging` projects, no `e2e:record` or `e2e:staging:preflight`, no slice helpers. W5 (Opus) wrote the slice spec and helpers; W6 (Opus) the CI job, the check-workflows pins, the preflight launcher and `enrol-smoke-user --roles reviewer`.
+
+| Review | Verdict | Findings and dispositions |
+| --- | --- | --- |
+| Security, W6 @ `ab43431` | PASS WITH FIXES | SEC-W6-1 Medium no concurrency group (fixed: `concurrency: deploy-staging`); SEC-W6-2 Low a fresh enrolment secret could be filmed (fixed in W5: a verified TOTP factor is checked over GoTrue before any page); SEC-W6-3 Low cache `with:` unpinned (fixed); SEC-W6-4 Info exclude every `*.zip` (fixed); SEC-W6-5 Info needs W5 (merged together) |
+| Security, W5 @ `2bdf802` | BLOCK (staging only) | SEC-W5-1 High a password in the error-context aria snapshot on a timeout; SEC-W5-2 High the org-wide outbox matched by label (fails from run 2 on and prints links); SEC-W5-3 Medium the link token in the goto call log; SEC-W5-4..7 Low (OTP typed with `fill`, sessions not logged out, staging host guard, end-of-run SHA checked on api only); SEC-W5-8 Low no cleanup (accepted for D1, documented in the spec header). 1-7 sent to W5 |
+| Spec, W5 + W6 | W5 PASS WITH FIXES, W6 PASS | SR-R5-1 Medium AT-D17 timer; SR-R5-2 Medium rule 7 not asserted; SR-R5-4, 5, 7 Low; SR-W6-1 Low step timeout: sent to the writers. SR-R5-6 and SR-R5-8 become spec rev 4l text. **SR-R5-3 (AT-D2: record mode writes one video per context; which file is the 5-minute deliverable) is carried to D1 REVIEW (Chat F).** Rev 4l also takes the spec review's sentence list 1-12 (artifact contents, secret map, dispatch `if` and concurrency, layout, steps 1-4 and 10 wording, manifest fields, `e2e:record`, reviewer smoke user `smoke-reviewer+staging@example.com`) |
+
+e2e-local run 1 of a trial merge (W5 `2bdf802` + W6 `62615c1`, scratch branch `d1/r5-trial`, local only): slice steps 1-3 passed on the real stack (UI sign-in with TOTP enrolment, default cutoff, reviewer assignment); step 4 failed on the label-matched outbox (SEC-W5-2); every other spec passed (20 passed, 1 skipped).
