@@ -28,6 +28,10 @@ const EXPECTED = {
     services: [{ binding: 'API', service: 'trace-api-<env>', entrypoint: 'CandidateRpc' }],
     vars: ['VERSION', 'CANDIDATE_TOKEN_PUBLIC_JWK', 'CANDIDATE_APP_ORIGIN', 'MIRROR_TRANSPORT'],
     crons: undefined,
+    // ADR-032 (OPEN-13): the link-route limit, one namespace per env so counters are never shared.
+    ratelimits: [
+      { name: 'LINK_LIMITER', namespace_id: '<ns>', simple: { limit: 300, period: 10 } },
+    ],
   },
   api: {
     durableObjects: { OUTBOX: 'DemoOutboxDO', MEDIA_LINKS: 'MediaLinkDO' },
@@ -49,6 +53,7 @@ const EXPECTED = {
       'SUPABASE_PUBLISHABLE_KEY',
     ],
     crons: undefined,
+    ratelimits: [],
   },
   jobs: {
     durableObjects: {},
@@ -66,10 +71,14 @@ const EXPECTED = {
     services: [],
     vars: ['VERSION', 'TRACE_ENV', 'SENTRY_DSN_WORKERS'],
     crons: ['* * * * *'],
+    ratelimits: [],
   },
 };
 
-const sub = (value, env) => JSON.parse(JSON.stringify(value).replaceAll('<env>', env));
+/** ADR-032: the LINK_LIMITER namespace id per env (unique, so dev and staging never share counters). */
+const NAMESPACE = { dev: '1101', staging: '1102' };
+const sub = (value, env) =>
+  JSON.parse(JSON.stringify(value).replaceAll('<env>', env).replaceAll('<ns>', NAMESPACE[env]));
 const block = (worker, env) => CONFIGS[worker].env[env];
 const names = (list, key) => (list ?? []).map((entry) => entry[key]);
 const sorted = (list) => [...list].sort();
@@ -121,6 +130,10 @@ describe.each(Object.keys(EXPECTED))('%s wrangler.jsonc (spec §4.2)', (worker) 
       expect(cfg().services ?? []).toEqual(sub(exp.services, env));
     });
 
+    it('has the rate limits of the table (ADR-032)', () => {
+      expect(cfg().ratelimits ?? []).toEqual(sub(exp.ratelimits, env));
+    });
+
     it('has the cron triggers of the table', () => {
       expect(cfg().triggers?.crons).toEqual(exp.crons);
     });
@@ -140,6 +153,7 @@ describe.each(Object.keys(EXPECTED))('%s wrangler.jsonc (spec §4.2)', (worker) 
         'queues',
         'services',
         'triggers',
+        'ratelimits',
       ]);
       for (const key of Object.keys(cfg()))
         expect(allowed.has(key), `env.${env}.${key}`).toBe(true);
