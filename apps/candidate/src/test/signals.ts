@@ -86,14 +86,20 @@ export const installSignals = (deps: SignalDeps): Signals => {
     }
   };
 
+  /** Closes a window: the events after its first one go out as one more signal (none if there were none). */
   const close = (key: string) => {
     const open = windows.get(key);
     if (open === undefined) return;
     windows.delete(key);
     clearTimeout(open.timer);
-    emit({ sig: 'untrusted_input', item: open.item, via: open.via, count: open.count });
+    if (open.count > 0) {
+      emit({ sig: 'untrusted_input', item: open.item, via: open.via, count: open.count });
+    }
   };
 
+  // SR-1: the first untrusted event of a window is recorded at once, so the signal is queued before any edit the
+  // event causes (the document capture listener runs before the page's own handlers) and a reload, close or unmount
+  // inside the 5 s window cannot lose it. Further events in the window are counted and sent when it closes.
   const onUntrusted = (via: Via) => (event: Event) => {
     if (event.isTrusted) return;
     const item = currentItem();
@@ -103,10 +109,11 @@ export const installSignals = (deps: SignalDeps): Signals => {
       open.count += 1;
       return;
     }
+    emit({ sig: 'untrusted_input', item, via, count: 1 });
     windows.set(key, {
       item,
       via,
-      count: 1,
+      count: 0,
       timer: setTimeout(() => close(key), SIGNALS.untrustedWindowMs),
     });
   };
@@ -154,6 +161,9 @@ export const installSignals = (deps: SignalDeps): Signals => {
   const flush = () => {
     for (const key of [...windows.keys()]) close(key);
   };
+  // Leaving the page records the open windows too (they reach the outbox, which keeps them while the page lives).
+  const view = doc.defaultView;
+  view?.addEventListener('pagehide', flush, true);
 
   return {
     markSubmitting(on = true) {
@@ -161,9 +171,9 @@ export const installSignals = (deps: SignalDeps): Signals => {
     },
     flush,
     dispose() {
+      flush();
+      view?.removeEventListener('pagehide', flush, true);
       for (const [type, fn] of listeners) doc.removeEventListener(type, fn, true);
-      for (const open of windows.values()) clearTimeout(open.timer);
-      windows.clear();
       lastCopy = null;
     },
   };

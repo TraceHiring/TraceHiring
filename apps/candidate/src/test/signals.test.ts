@@ -6,7 +6,7 @@
 // the pasted, dropped or typed text, clipboard content or file names.
 import { ClientSignal } from '@trace/shared/contracts/candidate';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SignalBody } from './outbox';
+import { createOutbox, type SignalBody } from './outbox';
 import { installSignals, SIGNALS, type Signals } from './signals';
 
 const SECRET = 'pasted words 1234';
@@ -137,21 +137,23 @@ describe('drop (capture phase, prevented)', () => {
 });
 
 describe('untrusted input', () => {
-  it('coalesces synthetic events per item and kind over 5 s', () => {
+  it('records the first synthetic event at once, then coalesces the rest per item and kind over 5 s', () => {
     const el = textarea();
     for (let k = 0; k < 3; k += 1)
       el.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
     el.dispatchEvent(new Event('input', { bubbles: true }));
+    // SR-1: the window's first event is recorded when it happens, before any edit it causes is queued.
+    expect(emitted).toEqual([
+      { sig: 'untrusted_input', item: 2, via: 'keydown', count: 1 },
+      { sig: 'untrusted_input', item: 2, via: 'input', count: 1 },
+    ]);
     vi.advanceTimersByTime(4_999);
-    expect(emitted).toEqual([]);
-    vi.advanceTimersByTime(1);
-    expect(emitted).toEqual(
-      expect.arrayContaining([
-        { sig: 'untrusted_input', item: 2, via: 'keydown', count: 3 },
-        { sig: 'untrusted_input', item: 2, via: 'input', count: 1 },
-      ]),
-    );
     expect(emitted).toHaveLength(2);
+    vi.advanceTimersByTime(1);
+    // The two further keydowns come as one more signal when the window closes; the input window had no more.
+    expect(emitted.slice(2)).toEqual([
+      { sig: 'untrusted_input', item: 2, via: 'keydown', count: 2 },
+    ]);
     // A new window after the first closed.
     item = 1;
     el.dispatchEvent(new Event('beforeinput', { bubbles: true }));
@@ -163,6 +165,80 @@ describe('untrusted input', () => {
       count: 1,
     });
     allValid();
+  });
+
+  it('SR-1: the batch that carries an injected edit also carries the signal (or an earlier one did)', async () => {
+    const sent: { events: { seq: number; kind: string; sig?: string }[] }[] = [];
+    const outbox = createOutbox({
+      api: {
+        events: async (_token, batch) => {
+          sent.push(structuredClone(batch));
+          return {
+            ok: true,
+            value: {
+              ackSeq: batch.events.at(-1)?.seq ?? 0,
+              serverNow: new Date().toISOString(),
+              deadlineAt: new Date(Date.now() + 600_000).toISOString(),
+              state: 'in_progress',
+            },
+          };
+        },
+      },
+      sessionToken: 'fakeSessionHead.fakeSessionBody.fakeSessionSig',
+      streamId: '22222222-2222-4222-8222-222222222222',
+      heartbeatSeconds: 10,
+      texts: new Map(),
+      choices: new Map(),
+      monoNow: () => Date.now(),
+      wallNow: () => Date.now(),
+      on: {
+        status: () => undefined,
+        revert: () => undefined,
+        ack: () => undefined,
+        end: () => undefined,
+      },
+    });
+    signals.dispose();
+    signals = installSignals({
+      doc: document,
+      currentItem: () => 2,
+      emit: (s) => outbox.signal(s),
+      monoNow: () => Date.now(),
+    });
+    const el = textarea();
+    // The page's own handler turns the input into an edit (as React's onChange does, after the capture listener).
+    el.addEventListener('input', () => outbox.text(2, 'injected text', 10_000));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    const events = sent.flatMap((b) => b.events);
+    const edit = events.findIndex((e) => e.kind === 'answer.text');
+    const signal = events.findIndex((e) => e.sig === 'untrusted_input');
+    expect(edit).toBeGreaterThanOrEqual(0);
+    expect(signal).toBeGreaterThanOrEqual(0);
+    expect(signal).toBeLessThan(edit);
+    outbox.stop();
+  });
+
+  it('dispose and pagehide record the open windows', () => {
+    const el = textarea();
+    el.dispatchEvent(new Event('beforeinput', { bubbles: true }));
+    el.dispatchEvent(new Event('beforeinput', { bubbles: true }));
+    window.dispatchEvent(new Event('pagehide'));
+    expect(emitted).toEqual([
+      { sig: 'untrusted_input', item: 2, via: 'beforeinput', count: 1 },
+      { sig: 'untrusted_input', item: 2, via: 'beforeinput', count: 1 },
+    ]);
+    el.dispatchEvent(new Event('beforeinput', { bubbles: true }));
+    el.dispatchEvent(new Event('beforeinput', { bubbles: true }));
+    el.dispatchEvent(new Event('beforeinput', { bubbles: true }));
+    signals.dispose();
+    expect(emitted.slice(2)).toEqual([
+      { sig: 'untrusted_input', item: 2, via: 'beforeinput', count: 1 },
+      { sig: 'untrusted_input', item: 2, via: 'beforeinput', count: 2 },
+    ]);
+    vi.advanceTimersByTime(10_000);
+    expect(emitted).toHaveLength(4);
+    install();
   });
 
   it('ignores trusted events', () => {
