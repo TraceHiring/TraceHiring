@@ -22,10 +22,13 @@ export interface PollerOptions<T> {
   fetchCard(): Promise<ApiResult<T>>;
   /** True when no further poll is needed (the card is ready, or it is final for good). */
   isFinal(value: T): boolean;
+  /** Overrides the 90 s point after which polling slows down (the demo outbox never slows). */
+  slowAfterMs?: number;
 }
 
 export class CardPoller<T> {
   private readonly options: PollerOptions<T>;
+  private readonly slowAfter: number;
   private readonly listeners = new Set<() => void>();
   private snapshot: PollSnapshot<T> = { state: { kind: 'loading' }, slow: false };
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -36,6 +39,7 @@ export class CardPoller<T> {
 
   constructor(options: PollerOptions<T>) {
     this.options = options;
+    this.slowAfter = options.slowAfterMs ?? SLOW_AFTER_MS;
   }
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -80,7 +84,7 @@ export class CardPoller<T> {
       const final = this.options.isFinal(result.data);
       this.set({
         state: { kind: 'value', value: result.data },
-        slow: !final && elapsed >= SLOW_AFTER_MS,
+        slow: !final && elapsed >= this.slowAfter,
       });
       if (final) {
         this.running = false;
@@ -91,10 +95,10 @@ export class CardPoller<T> {
       const previous = this.snapshot.state;
       this.set({
         state: previous.kind === 'value' ? previous : { kind: 'unavailable' },
-        slow: elapsed >= SLOW_AFTER_MS,
+        slow: elapsed >= this.slowAfter,
       });
     }
-    const delay = elapsed >= SLOW_AFTER_MS ? SLOW_MS : FAST_MS;
+    const delay = elapsed >= this.slowAfter ? SLOW_MS : FAST_MS;
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.poll(epoch);
