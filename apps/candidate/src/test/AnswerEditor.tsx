@@ -1,6 +1,7 @@
 // A written answer (specs/d1-demo-slice.md §4.4): a labelled textarea whose every change becomes one `answer.text`
 // splice. `maxLength` matches the edge's `maxChars` (UTF-16 units); an edit the outbox refuses (unstorable text, over
-// the limit) is not applied, so the textarea keeps the last good text.
+// the limit) is not applied, so the textarea keeps the last good text. Spell check is off (SEC-7): answer text is
+// never offered to a browser vendor's server-side spelling service.
 import { useId } from 'react';
 import { COPY } from '../copy';
 import { ui } from '../ui';
@@ -28,7 +29,7 @@ export function AnswerEditor({ value, maxChars, disabled, onChange }: Props) {
         maxLength={maxChars}
         rows={10}
         disabled={disabled}
-        spellCheck
+        spellCheck={false}
         autoComplete="off"
         aria-describedby={countId}
         onChange={(e) => onChange(e.target.value)}
