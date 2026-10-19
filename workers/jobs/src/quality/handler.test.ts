@@ -201,6 +201,61 @@ describe('quality stage', () => {
   });
 });
 
+describe('grader output is validated against the rubric (security review #4)', () => {
+  // The world's rubrics have one criterion, c1 with max_points 4.
+  const lyingGrader = (
+    criteria: (inner: readonly { id: string; points: number; max: number }[]) => unknown,
+  ): LlmGrader => {
+    const inner = new MockLlmGrader();
+    return {
+      grade: async (req, opts) => {
+        const r = await inner.grade(req, opts);
+        return { ...r, criteria: criteria(r.criteria) as typeof r.criteria };
+      },
+    };
+  };
+
+  it.each([
+    ['an unknown criterion id', () => [{ id: 'c9', points: 1, max: 4 }]],
+    [
+      'a duplicate criterion id',
+      () => [
+        { id: 'c1', points: 1, max: 4 },
+        { id: 'c1', points: 1, max: 4 },
+      ],
+    ],
+    [
+      'more criteria than the rubric',
+      () => [
+        { id: 'c1', points: 1, max: 4 },
+        { id: 'c2', points: 1, max: 4 },
+      ],
+    ],
+    ['non-integer points', () => [{ id: 'c1', points: 1.5, max: 4 }]],
+    ['points above max', () => [{ id: 'c1', points: 5, max: 4 }]],
+    ['negative points', () => [{ id: 'c1', points: -1, max: 4 }]],
+    ['a max other than the rubric max', () => [{ id: 'c1', points: 5, max: 8 }]],
+    ['a criterion that is not an object', () => [null]],
+    ['a non-string id', () => [{ id: 1, points: 1, max: 4 }]],
+  ])('%s fails quality_grade_failed and stores nothing', async (_name, criteria) => {
+    const { db, message } = qualityWorld();
+    await expect(run(db, message, lyingGrader(criteria))).rejects.toThrow(/^quality_grade_failed$/);
+    for (const t of ['grader_runs', 'scores', 'quality_cards', 'idempotency_keys']) {
+      expect(table(db, t)).toHaveLength(0);
+    }
+  });
+
+  it('a valid subset of the rubric criteria is accepted', async () => {
+    const { db, message } = qualityWorld();
+    await run(
+      db,
+      message,
+      lyingGrader(() => [{ id: 'c1', points: 4, max: 4 }]),
+    );
+    expect(table(db, 'grader_runs')).toHaveLength(1);
+  });
+});
+
 describe('errors leave the stage as constant codes', () => {
   it('a database error quoting row values becomes quality_failed, keeping only its SQLSTATE', async () => {
     const { message } = qualityWorld();

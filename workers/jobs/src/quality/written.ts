@@ -75,9 +75,31 @@ export const gradeWritten = async (
     typeof adapterVersion !== 'string' ||
     adapterVersion.length < 1 ||
     adapterVersion.length > 64 ||
-    !Array.isArray(criteria)
+    !validCriteria(rubric, criteria)
   ) {
     return fail('quality_grade_failed');
   }
   return { score: totalPercent, run: result };
+};
+
+/**
+ * Security review #4: the grader's per-criterion output must fit the rubric it was given: every id one of the
+ * rubric's (no duplicates, so never more criteria than the rubric), `max` the rubric's max for that id and `points` an
+ * integer in 0..max. Anything else fails the stage before a row is written.
+ */
+const validCriteria = (rubric: RubricSnapshot, criteria: unknown): boolean => {
+  if (!Array.isArray(criteria) || criteria.length > rubric.criteria.length) return false;
+  const maxById = new Map(rubric.criteria.map((c) => [c.id, c.max]));
+  const seen = new Set<string>();
+  for (const c of criteria as unknown[]) {
+    if (!isRecord(c)) return false;
+    const { id, points, max } = c;
+    if (typeof id !== 'string' || seen.has(id) || !maxById.has(id)) return false;
+    seen.add(id);
+    if (typeof max !== 'number' || max !== maxById.get(id)) return false;
+    if (typeof points !== 'number' || !Number.isInteger(points) || points < 0 || points > max) {
+      return false;
+    }
+  }
+  return true;
 };
