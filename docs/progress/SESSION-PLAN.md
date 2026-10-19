@@ -31,6 +31,7 @@ prompt for the next chat. This file is the roadmap; HANDOFF.md says which chat i
 | **C** | **Wave 2a: R2 jobs** (mirror pipeline, quality, integrity, sweep; Opus) **in parallel with R4 recruiter app** (Sonnet writer, Opus review) | both merged, database review done, full verify + CI, `cp/d1-08` |
 | **D** | **Wave 2b: C2 candidate app** (camera, blur, CSP, S12) + lead wiring + `e2e-local` with the real flow (closes r3a #1, the real trace_api SQL) | C2 merged, e2e-local green on Linux CI, `cp/d1-09` |
 | **E** | **Staging readiness:** OPEN-13 (edge volumetric limit), carried items due before staging, then the founder gates (Cloudflare token R2 + Queues Edit, key script, `staging` vars) → first `workflow_dispatch`, smoke, DC-D8; R5 e2e on staging | staging deployed and smoked; AT-D1/D2 E2E green, `cp/d1-10` |
+| **E2** | **Staging half of E** (Chat E part 1 merged the lead work and R5 on 2026-10-19 and stopped at the founder gates): founder gates (a) → first dispatch `run_e2e=false` → founder gates (b) (private key, `staging-worker-secrets.mjs`, smoke users) → dispatch with E2E → DC-D8 | staging deployed and smoked; AT-D1 E2E green on staging, DC-D8 recorded, `cp/d1-10` |
 | **F** | **D1 REVIEW** (fresh chat, `trace-milestone-review`) | `docs/reviews/D1.md` with a verdict |
 | **G** | **D1 FIX + CLOSE** of M0a, M0b, D1 (each merge into `main` only with the founder's explicit go-ahead) | `m0a-reviewed`, `m0b-reviewed`, `d1-reviewed` tags, summaries |
 
@@ -55,5 +56,8 @@ prompt for the next chat. This file is the roadmap; HANDOFF.md says which chat i
   re-review, six e2e-local runs, one full verify: about 31% of 5-hour windows (spanning a reset), 11% → 18% weekly,
   context ~40%, about 2 h 30 min. Running the real flow early found a production bug (Chromium's APP2 ICC profile) that
   no unit test could. Reviewers share the lead's worktree: brief them never to checkout.
+- Chat E part 1 (lead work + R5): 6 Opus writers, 2 Sonnet docs writers, 5 Opus reviews, 2 Sonnet re-reviews, 1 Sonnet
+  pre-flight, three e2e-local runs, one full verify: 25% → 69% of one 5-hour window, weekly 18% → 24%, context ~42%.
+  Running the slice on the real stack early caught an org-wide outbox assumption no review would have proven.
 - Weekly limits matter more on Max than the 5-hour window: check `get_usage` after each agent result and record the
   weekly figure in the LOG row.

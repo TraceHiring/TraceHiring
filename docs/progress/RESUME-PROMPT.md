@@ -8,7 +8,8 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-19 13:25 IST, Chat D (newest; wins over the lines below):** **C2 candidate app and the `e2e-local` real flow are merged** into `d1/integration` (`986540f` = **`cp/d1-09`**): C2 `ffe134f` (spec PASS WITH FIXES, security PASS WITH NOTES, all fix-now findings fixed test first, re-review CONFIRMED WITH NOTES; `docs/reviews/D1-review-c2.md`), e2e-local real flow `c8b1f62` + `04d9e87` (closes r3a #1), candidate UI spec in real Chromium; spec revisions 4i, 4j. Full `pnpm verify` and CI on PR #4 (e2e-local 17 passed on Linux) green. Next: **Chat E** (HANDOFF "Next chat": staging readiness).
+- **Update 2026-10-19 15:45 IST, Chat E part 1 (newest; wins over the lines below):** Chat E's lead work and R5 are **merged** into `d1/integration` (`1887400`): OPEN-13 edge limit (ADR-032), R4 note 1, local recruiter headers, org CORS (N1), `staging-worker-secrets.mjs`, the D1 slice E2E (`e2e/tests/d1-slice.spec.ts`, 27 passed on e2e-local) and the `e2e-staging` job; spec revisions 4k, 4l; review record `docs/reviews/D1-review-chat-e.md`. Full `pnpm verify` green. **Blocked on the founder staging gates**; no `cp/d1-10` yet. Next: **Chat E2** (HANDOFF "Next chat": the staging half).
+- **Update 2026-10-19 13:25 IST, Chat D:** **C2 candidate app and the `e2e-local` real flow are merged** into `d1/integration` (`986540f` = **`cp/d1-09`**): C2 `ffe134f` (spec PASS WITH FIXES, security PASS WITH NOTES, all fix-now findings fixed test first, re-review CONFIRMED WITH NOTES; `docs/reviews/D1-review-c2.md`), e2e-local real flow `c8b1f62` + `04d9e87` (closes r3a #1), candidate UI spec in real Chromium; spec revisions 4i, 4j. Full `pnpm verify` and CI on PR #4 (e2e-local 17 passed on Linux) green. Next: **Chat E** (HANDOFF "Next chat": staging readiness).
 - **Update 2026-10-19 11:30 IST, Chat C:** **R2 jobs and R4 recruiter app are merged** into `d1/integration` (`ab62681` = **`cp/d1-08`**): R4 `9cebeb3`, R2 `3c51438`, lead wiring `6d504da` (stages per env, sweep, db-tests in `test:rls`); five Opus reviews and two Sonnet re-reviews, every fix-now finding fixed test first; spec revisions 4f-4h. Full `pnpm verify` and CI on PR #4 green. Next: **Chat D** (HANDOFF "Next chat": C2 candidate app + `e2e-local` real flow).
 - **Update 2026-10-19 00:30 IST, Chat B:** **C1b is merged** into `d1/integration` (`8a4873a` = **`cp/d1-07`**): SessionDO + session routes, AT-D7, D11 edge, D24-D27 edge, D29 maxChars, D35 edge, D37; spec review PASS WITH FIXES, security review PASS WITH NOTES (3 Medium fixed), Sonnet re-review CONFIRMED WITH NOTES; spec revision 4e; real-DO test pools for edge and api. Full `pnpm verify` green. Next: **Chat C** (HANDOFF "Next chat": R2 jobs ∥ R4 recruiter app).
 - **Update 2026-10-18 23:30 IST, Chat A:** founder moved to **Claude Max**: one chat = one big task (`docs/progress/SESSION-PLAN.md`). **C1a is merged** into `d1/integration` (AT-D23, D28, D29 photo half, D31/D32 edge; spec review PASS WITH FIXES, security review PASS WITH NOTES, all "fix now" findings fixed and re-review CONFIRMED; spec revision 4d; tag **`cp/d1-06`**). **C1b** is written on `d1/c1b-session` @ `ea59b0a` (not reviewed, built on pre-fix C1a). Next: **Chat B** (HANDOFF "Next chat").
@@ -159,13 +160,12 @@ Before changing anything, run HANDOFF "Verify first" and report in 5 lines wheth
 stop and tell me what differs.
 
 We are on Claude Max: ONE CHAT = ONE BIG TASK (docs/progress/SESSION-PLAN.md, AUTOPILOT §6 first bullet). This chat's
-task is the one HANDOFF names under "Next chat" (Chat E: staging readiness; spec specs/d1-demo-slice.md §7, §11 OPEN-13,
-revisions 4f-4j). Do HANDOFF "Next step" in order: lead work tests first (OPEN-13 edge volumetric limit, R4 re-review
-note 1, the recruiter headers template accepting local origins for the e2e-local build), with the Opus reviews it needs;
-then ask me for the staging founder gates and run the first workflow_dispatch from d1/integration, smoke, DC-D8; then
-writer R5 (the D1 slice spec, Sonnet) with spec-reviewer + security-reviewer; e2e-staging; full pnpm verify; CI; tag
-cp/d1-10. The task is done when cp/d1-10 is pushed; then wrap up and print the prompt for the next chat in
-SESSION-PLAN.md. Every reviewer brief says: read other revisions with git show / git diff only, never checkout. Ask me before the first staging deploy (I must widen the Cloudflare
+task is the one HANDOFF names under "Next chat" (Chat E2: the staging half of Chat E; spec specs/d1-demo-slice.md §7,
+revisions 4k-4l; scripts/ops/README.md "First staging deploy"). Do HANDOFF "Next step" in order: check CI, ask me for
+founder gate part (a), run the first workflow_dispatch from d1/integration with run_e2e=false, smoke; then ask me for
+part (b) (private key secret, staging-worker-secrets.mjs, the two smoke users); dispatch with E2E; e2e-staging green;
+DC-D8; record results; tag cp/d1-10. The task is done when cp/d1-10 is pushed; then wrap up and print the prompt for
+the next chat in SESSION-PLAN.md. Every reviewer brief says: read other revisions with git show / git diff only, never checkout. Ask me before the first staging deploy (I must widen the Cloudflare
 token with R2 + Queues Edit and set CANDIDATE_TOKEN_KID, CANDIDATE_TOKEN_PUBLIC_JWK and API_STAGING_ORIGIN, per
 scripts/ops/README.md). M0a and M0b are built and reviewed but NOT closed; merging into main needs my explicit
 go-ahead. This machine is short of RAM: run pnpm verify / verify:fast with npm_config_workspace_concurrency=1.
