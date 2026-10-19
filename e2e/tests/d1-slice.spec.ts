@@ -1165,7 +1165,13 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
         name: 'Candidate at the start of the test, with a viewing watermark',
       });
       await expect(img).toBeVisible();
-      expect(((await img.getAttribute('src')) ?? '').startsWith('data:image/')).toBe(true);
+      const src = (await img.getAttribute('src')) ?? '';
+      expect(src.startsWith('data:image/')).toBe(true);
+      // SR-R5-5: the shown image is the viewer's watermarked canvas, not the uploaded bytes (hashes compared).
+      const shown = Buffer.from(src.slice(src.indexOf(',') + 1), 'base64');
+      const uploaded = must(cand('B').photo, "B's photo").body;
+      expect(shown.length).toBeGreaterThan(0);
+      expect(sha256Hex(shown) === sha256Hex(uploaded)).toBe(false);
       // The browser fetched the bytes once; the same link is spent (single use). Node's fetch, not the Playwright
       // request context, so the link never becomes a step title in the report.
       const again = await fetch(link.url, { cache: 'no-store' });
