@@ -207,6 +207,12 @@ describe('checkCsp', () => {
     ['recruiter', '*.workers.dev', false],
     ['recruiter', 'https://user@trace-api-staging.abhayraj.workers.dev', false],
     ['candidate', 'https://trace-api-staging.abhayraj.workers.dev', false],
+    // d1 rev 4i: a loopback origin is allowed at build time for VITE_TRACE_ENV=dev only; a shipped file never has one.
+    ['recruiter', 'http://127.0.0.1:54321', false],
+    ['recruiter', 'http://localhost:8788', false],
+    ['recruiter', 'http://127.0.0.1:8788/', false],
+    ['candidate', 'http://127.0.0.1:8787', false],
+    ['candidate', 'http://localhost:8787', false],
   ])('connect-src for %s with %s: allowed=%s', (app, origin, allowed) => {
     const csp = base.replace("connect-src 'self'", `connect-src 'self' ${origin}`);
     expect(checkCsp(app, csp)).toEqual(

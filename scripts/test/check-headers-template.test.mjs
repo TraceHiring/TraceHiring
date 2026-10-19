@@ -217,3 +217,40 @@ describe('the plugin reads VITE_API_ORIGIN (d1 §7.1)', () => {
     }
   });
 });
+
+// d1 spec rev 4i: an explicitly local build (VITE_TRACE_ENV=dev, e2e-local) may name the local stack's
+// loopback origins, but a shipped _headers may not: check-headers refuses an http origin whatever built it.
+// CI never builds with VITE_TRACE_ENV=dev.
+describe('a local build and check-headers (d1 rev 4i)', () => {
+  const LOCAL_SUPABASE = 'http://127.0.0.1:54321';
+  const LOCAL_API = 'http://localhost:8788';
+
+  it('the plugin fills both loopback origins for VITE_TRACE_ENV=dev', () => {
+    const [file] = build({
+      VITE_TRACE_ENV: 'dev',
+      VITE_SUPABASE_URL: LOCAL_SUPABASE,
+      VITE_API_ORIGIN: LOCAL_API,
+    });
+    expect(connectSrc(file.source)).toBe(`'self' ${LOCAL_SUPABASE} ${LOCAL_API}`);
+  });
+
+  it('check-headers still refuses that _headers (an http origin is never shippable)', () => {
+    const [file] = build({
+      VITE_TRACE_ENV: 'dev',
+      VITE_SUPABASE_URL: LOCAL_SUPABASE,
+      VITE_API_ORIGIN: LOCAL_API,
+    });
+    const problems = checkHeadersFile('recruiter', file.source);
+    expect(problems).toHaveLength(2);
+    for (const problem of problems) expect(problem).toMatch(/not on the recruiter allow-list/);
+  });
+
+  it('without VITE_TRACE_ENV=dev the same values fail the build', () => {
+    for (const env of [{}, { VITE_TRACE_ENV: 'production' }, { VITE_TRACE_ENV: 'staging' }]) {
+      expect(() => build({ ...env, VITE_SUPABASE_URL: LOCAL_SUPABASE })).toThrow(
+        /VITE_SUPABASE_URL/,
+      );
+      expect(() => build({ ...env, VITE_API_ORIGIN: LOCAL_API })).toThrow(/VITE_API_ORIGIN/);
+    }
+  });
+});
