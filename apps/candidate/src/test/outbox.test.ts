@@ -257,13 +257,21 @@ describe('batching and the wire shape', () => {
     expect(edge.state.texts.get(2) ?? '').toBe(value);
   });
 
-  it('keeps at most 5 batches a second', async () => {
+  it('keeps every gap between event POSTs at 250 ms or more (the edge allows 5 batches a second)', async () => {
     const o = make();
-    for (let k = 0; k < 400; k += 1) o.choice(1, k % 2 === 0 ? 'a' : 'b');
-    await vi.advanceTimersByTimeAsync(2_000);
-    const before = edge.events.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(edge.events.mock.calls.length - before).toBeLessThanOrEqual(5);
+    const times: number[] = [];
+    const real = edge.events.getMockImplementation();
+    edge.events.mockImplementation(async (token, batch) => {
+      times.push(Date.now());
+      return real === undefined ? { ok: false, code: 'network', status: 0 } : real(token, batch);
+    });
+    for (let k = 0; k < 1_000; k += 1) o.choice(1, k % 2 === 0 ? 'a' : 'b');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(edge.state.stored.filter((e) => e.kind === 'answer.choice')).toHaveLength(1_000);
+    expect(times.length).toBeGreaterThanOrEqual(10);
+    const gaps = times.slice(1).map((t, k) => t - (times[k] ?? 0));
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(OUTBOX.minGapMs);
+    expect(OUTBOX.minGapMs).toBeGreaterThanOrEqual(200);
   });
 });
 
