@@ -66,10 +66,17 @@ export const qualityHandlers: Record<string, Handler> = {
       .filter((r) => r['test_version_id'] === tv)
       .sort((a, b) => Number(a['position']) - Number(b['position']))
       .map((r) => ({ id: r['id'], position: r['position'], weight: r['weight'] })),
-  [SQL.items]: (db, [org, tv]) =>
-    visible(db, 'item_versions', org)
+  [SQL.items]: (db, [org, tv]) => {
+    const sectionPos = (r: Row): number =>
+      Number(table(db, 'sections').find((s) => s['id'] === r['section_id'])?.['position']);
+    return visible(db, 'item_versions', org)
       .filter((r) => r['test_version_id'] === tv)
-      .sort((a, b) => Number(a['position']) - Number(b['position']))
+      .sort(
+        (a, b) =>
+          sectionPos(a) - sectionPos(b) ||
+          Number(a['position']) - Number(b['position']) ||
+          (String(a['id']) < String(b['id']) ? -1 : 1),
+      )
       .map((r) => ({
         id: r['id'],
         section_id: r['section_id'],
@@ -77,7 +84,8 @@ export const qualityHandlers: Record<string, Handler> = {
         position: r['position'],
         stem: r['stem'],
         rubric_version_id: r['rubric_version_id'] ?? null,
-      })),
+      }));
+  },
   [SQL.answerKeys]: (db, [org, tv]) => {
     const items = new Set(
       visible(db, 'item_versions', org)

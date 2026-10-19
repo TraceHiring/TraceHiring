@@ -16,10 +16,12 @@ export const SQL = {
   sections:
     'select id::text as id, position::int as position, weight::text as weight from public.sections ' +
     'where org_id = $1::uuid and test_version_id = $2::uuid order by position',
+  // DB review #8: item positions are unique per section only, so the order is section, then item, then id.
   items:
-    'select id::text as id, section_id::text as section_id, format::text as format, position::int as position, ' +
-    'stem, rubric_version_id::text as rubric_version_id from public.item_versions ' +
-    'where org_id = $1::uuid and test_version_id = $2::uuid order by position',
+    'select i.id::text as id, i.section_id::text as section_id, i.format::text as format, ' +
+    'i.position::int as position, i.stem, i.rubric_version_id::text as rubric_version_id ' +
+    'from public.item_versions as i join public.sections as s on s.org_id = i.org_id and s.id = i.section_id ' +
+    'where i.org_id = $1::uuid and i.test_version_id = $2::uuid order by s.position, i.position, i.id',
   answerKeys:
     "select k.item_version_id::text as item_version_id, k.key ->> 'option_id' as option_id " +
     'from public.item_answer_keys as k join public.item_versions as i ' +

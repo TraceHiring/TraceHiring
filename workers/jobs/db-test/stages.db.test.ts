@@ -9,6 +9,7 @@ import { SQL as INTEGRITY_SQL } from '../src/integrity/store.js';
 import { heartbeat, paste, tabHidden, untrusted } from '../src/integrity/world.test-helpers.js';
 import { runMirror } from '../src/mirror/handler.js';
 import { runQuality } from '../src/quality/handler.js';
+import { SQL as QUALITY_SQL } from '../src/quality/store.js';
 import { sweepPending } from '../src/sweep/pending.js';
 import { seedOrg, seedSession, type OrgFixture, type SessionFixture } from './fixtures.js';
 import {
@@ -401,6 +402,49 @@ describe('exactly-once against the real schema (AT-D16)', () => {
     ]);
     expect(snap.results).toEqual(awaiting.results);
     expect(snap.signals).toEqual(awaiting.signals);
+  });
+});
+
+describe('deterministic reads', () => {
+  it('DB #8: quality reads items section by section, then by item position (positions repeat per section)', async () => {
+    const tv = newId();
+    const [s1, s2] = [newId(), newId()];
+    const hex64 = () => newId().replace(/-/g, '').padEnd(64, '0');
+    await h.admin.unsafe(
+      'insert into public.test_versions (id, org_id, test_id, version_no, total_time_seconds, quality_cutoff) ' +
+        'values ($1, $2, $3, 99, 1800, 40)',
+      [tv, f.org, f.test],
+    );
+    // section 2 is inserted first, so heap order alone would put it first
+    await h.admin.unsafe(
+      'insert into public.sections (id, org_id, test_version_id, position, name, format, weight) values ' +
+        "($2, $3, $4, 2, 'Second', 'mcq', 1), ($1, $3, $4, 1, 'First', 'mcq', 1)",
+      [s1, s2, f.org, tv],
+    );
+    const insertItem =
+      'insert into public.item_versions (id, org_id, test_version_id, section_id, format, position, stem, options, ' +
+      "origin, content_sha256) values ($1, $2, $3, $4, 'mcq', $5, 'Synthetic prompt', $6::text::jsonb, 'human', $7)";
+    const opts = JSON.stringify([
+      { id: 'a', text: 'Alpha' },
+      { id: 'b', text: 'Beta' },
+    ]);
+    for (const [section, position] of [
+      [s2, 2],
+      [s2, 1],
+      [s1, 2],
+      [s1, 1],
+    ] as const) {
+      await h.admin.unsafe(insertItem, [newId(), f.org, tv, section, position, opts, hex64()]);
+    }
+    const rows = await h.stage('trace_quality_worker', f.org, (tx) =>
+      tx.query<{ section_id: string; position: number }>(QUALITY_SQL.items, [f.org, tv]),
+    );
+    expect(rows.map((r) => `${r.section_id === s1 ? 1 : 2}:${r.position}`)).toEqual([
+      '1:1',
+      '1:2',
+      '2:1',
+      '2:2',
+    ]);
   });
 });
 
