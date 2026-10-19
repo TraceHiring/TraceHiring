@@ -251,16 +251,31 @@ const expectNoRejectControl = async (page: Page) => {
 };
 
 /**
- * Staging: the api's `/health` version is the deployed SHA (E2E_SHA). Checked before the first step and again at the
- * end, so a deploy that lands during the run fails it. Node's fetch; the error names the check, not a value.
+ * Staging: every deployed element reports the deployed SHA (E2E_SHA): api and edge `/health`, and both apps'
+ * `/version.json` (the forms scripts/smoke-staging.mjs checks). Checked before the first step and again at the end,
+ * so a deploy that lands during the run fails it (SEC-W5-7). Node's fetch; the error names the element, not a value.
  */
 const expectDeployedSha = async (when: 'start' | 'end'): Promise<void> => {
   const env = envOf();
   if (env.deployedSha === null) return;
-  const res = await fetch(`${env.api}/health`, { cache: 'no-store' });
-  const body = (await res.json().catch(() => null)) as { version?: unknown } | null;
-  if (res.status !== 200 || body?.version !== env.deployedSha) {
-    throw new Error(`api /health at the ${when} of the run does not report E2E_SHA`);
+  const targets: [string, string][] = [
+    ['api /health', `${env.api}/health`],
+    ['edge /health', `${env.edge}/health`],
+    ['candidate /version.json', `${env.candidateUrl}/version.json`],
+    ['recruiter /version.json', `${env.recruiterUrl}/version.json`],
+  ];
+  const wrong: string[] = [];
+  for (const [name, url] of targets) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      const body = (await res.json().catch(() => null)) as { version?: unknown } | null;
+      if (res.status !== 200 || body?.version !== env.deployedSha) wrong.push(name);
+    } catch {
+      wrong.push(name);
+    }
+  }
+  if (wrong.length > 0) {
+    throw new Error(`at the ${when} of the run, not on E2E_SHA: ${wrong.join(', ')}`);
   }
 };
 
