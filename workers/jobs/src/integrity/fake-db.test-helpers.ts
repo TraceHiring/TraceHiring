@@ -89,6 +89,8 @@ export const integrityHandlers: Record<string, Handler> = {
     visible(db, 'idempotency_keys', org)
       .filter((r) => r['scope'] === 'integrity_band' && r['key'] === key)
       .map(() => ({ one: 1 })),
+  // The advisory lock: the fake runs one transaction at a time, so it only records the call.
+  [SQL.lockKey]: () => [{ one: 1 }],
   [SQL.session]: (db, [org, id]) =>
     visible(db, 'sessions', org)
       .filter((r) => r['id'] === id)

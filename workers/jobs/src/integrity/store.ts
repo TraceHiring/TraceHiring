@@ -11,6 +11,8 @@ export type ReviewState = 'reviewed' | 'not_reviewed_below_cutoff' | 'awaiting_q
 export const SQL = {
   keyExists:
     "select 1 as one from public.idempotency_keys where org_id = $1::uuid and scope = 'integrity_band' and key = $2",
+  // DB review #1: one run per job key at a time (transaction-scoped; EXECUTE is PUBLIC).
+  lockKey: 'select 1 as one from pg_advisory_xact_lock(hashtextextended($1::text, 0))',
   session:
     'select id::text as id, ruleset_version_id::text as ruleset_version_id, state from public.sessions ' +
     'where org_id = $1::uuid and id = $2::uuid',
@@ -80,6 +82,14 @@ export interface Ids {
 
 export const keyExists = async (tx: SqlTx, orgId: string, key: string): Promise<boolean> =>
   (await tx.query(SQL.keyExists, [orgId, key])).length > 0;
+
+/**
+ * Serialises concurrent runs of one job (DB review #1): a transaction advisory lock on the job key, held until the
+ * consumer's transaction ends. The second run waits, then sees the first run's commit (read committed).
+ */
+export const lockKey = async (tx: SqlTx, key: string): Promise<void> => {
+  await tx.query(SQL.lockKey, [key]);
+};
 
 export const loadSession = async (
   tx: SqlTx,

@@ -309,21 +309,68 @@ describe('exactly-once against the real schema (AT-D16)', () => {
     expect(snap.keys).toHaveLength(1);
   });
 
-  it('two concurrent integrity runs leave one card, one result and one key', async () => {
-    const s = await seedSession(h, f, { cutoff: 40, lines: [paste(1, 1_000)] });
-    await mirror(s);
-    await quality(s);
-    const run = (conn: 'a' | 'b') =>
-      h.stageOn(conn, 'trace_integrity_worker', f.org, (tx) =>
-        runIntegrity(s.message, { tx, evidence: s.evidence }),
-      );
-    const results = await Promise.allSettled([run('a'), run('b')]);
-    for (const r of results) if (r.status === 'rejected') await run('a'); // a retry
+  const integrityOn = (s: SessionFixture, conn: 'a' | 'b') =>
+    h.stageOn(conn, 'trace_integrity_worker', s.message.orgId, (tx) =>
+      runIntegrity(s.message, { tx, evidence: s.evidence }),
+    );
+  const concurrentIntegrity = async (s: SessionFixture) => {
+    const results = await Promise.allSettled([integrityOn(s, 'a'), integrityOn(s, 'b')]);
+    // DB review #1: both runs fulfil, no retry (the advisory lock on the job key serialises them).
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
     const snap = await snapshot(s.session);
     expect(snap.icards).toHaveLength(1);
     expect(snap.results).toHaveLength(1);
     expect(snap.flags).toHaveLength(1);
-    expect(snap.keys.filter((k) => k['scope'] === 'integrity_band')).toHaveLength(1);
+    expect(snap.timeline).toHaveLength(1);
+    expect(snap.keys.filter((k) => k['scope'] === 'integrity_band')).toEqual([
+      { scope: 'integrity_band', result_ref: snap.icards[0]?.['id'] },
+    ]);
+    expect(snap.reports[0]?.['integrity_card_id']).toBe(snap.icards[0]?.['id']);
+    await integrity(s); // a later redelivery is a duplicate
+    expect(await snapshot(s.session)).toEqual(snap);
+    return snap;
+  };
+
+  it('DB #1: two concurrent integrity runs on the direct-final path both fulfil with the same ids', async () => {
+    const s = await seedSession(h, f, { cutoff: 40, lines: [paste(1, 1_000)] });
+    await mirror(s);
+    await quality(s);
+    const snap = await concurrentIntegrity(s);
+    expect(snap.icards[0]).toMatchObject({ review_state: 'reviewed' });
+  });
+
+  it('DB #1: two concurrent quality runs both fulfil with one card, one score and one key', async () => {
+    const s = await seedSession(h, f, { cutoff: 40, lines: [] });
+    await mirror(s);
+    const run = (conn: 'a' | 'b') =>
+      h.stageOn(conn, 'trace_quality_worker', s.message.orgId, (tx) =>
+        runQuality(s.message, { tx, grader }),
+      );
+    const results = await Promise.allSettled([run('a'), run('b')]);
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
+    const snap = await snapshot(s.session);
+    expect(snap.qcards).toHaveLength(1);
+    expect(snap.scores).toHaveLength(1);
+    expect(snap.keys.filter((k) => k['scope'] === 'quality_score')).toEqual([
+      { scope: 'quality_score', result_ref: snap.qcards[0]?.['id'] },
+    ]);
+    await quality(s);
+    expect(await snapshot(s.session)).toEqual(snap);
+  });
+
+  it('DB #1: two concurrent integrity runs on the flip path both fulfil with the same ids', async () => {
+    const s = await seedSession(h, f, { cutoff: 40, lines: [paste(1, 1_000)] });
+    await mirror(s);
+    await integrity(s);
+    const awaiting = await snapshot(s.session);
+    expect(awaiting.icards[0]).toMatchObject({ review_state: 'awaiting_quality' });
+    await quality(s);
+    const snap = await concurrentIntegrity(s);
+    expect(snap.icards).toEqual([
+      expect.objectContaining({ id: awaiting.icards[0]?.['id'], review_state: 'reviewed' }),
+    ]);
+    expect(snap.results).toEqual(awaiting.results);
+    expect(snap.signals).toEqual(awaiting.signals);
   });
 });
 

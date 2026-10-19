@@ -28,6 +28,7 @@ import {
   keyExists,
   loadRuleTable,
   loadSession,
+  lockKey,
   readCard,
   readMeetsCutoff,
   readResult,
@@ -59,6 +60,10 @@ const runIntegrityUnsafe = async (
     rulesetVersionId: message.rulesetVersionId,
   };
   const key = jobKey(ids.sessionId, 'integrity_band', ids.rulesetVersionId);
+  if (await keyExists(tx, ids.orgId, key)) return;
+  // DB review #1: a concurrent run of the same job waits here; once it holds the lock the first run has committed
+  // (or rolled back), so the key is checked again and every read below sees that run's rows.
+  await lockKey(tx, key);
   if (await keyExists(tx, ids.orgId, key)) return;
 
   const session = await loadSession(tx, ids.orgId, ids.sessionId);
