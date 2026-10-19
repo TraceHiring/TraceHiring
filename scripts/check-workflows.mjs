@@ -1882,6 +1882,20 @@ function checkE2eStaging(doc, file, out) {
   if (env !== DEPLOY_ENVIRONMENT) {
     out.push(v(file, where, `${E2E_STAGING_JOB} must use environment: ${DEPLOY_ENVIRONMENT}`));
   }
+  // Security review SEC-W6-1: the same group as deploy-staging, so a later dispatch's deploy (and
+  // migrations) waits until this E2E has finished; a queued run never cancels a running one.
+  const c = j.concurrency;
+  const group = isObj(c) ? c.group : c;
+  const cancel = isObj(c) ? c['cancel-in-progress'] : undefined;
+  if (group !== DEPLOY_CONCURRENCY || isTruthyFlag(cancel)) {
+    out.push(
+      v(
+        file,
+        where,
+        `${E2E_STAGING_JOB} must use concurrency: ${DEPLOY_CONCURRENCY} without cancel-in-progress (a later dispatch may not redeploy staging under a running E2E)`,
+      ),
+    );
+  }
   if (
     !isObj(j.permissions) ||
     JSON.stringify(Object.entries(j.permissions).sort()) !==

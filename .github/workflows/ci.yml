@@ -354,6 +354,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: staging
+    # SEC-W6-1: one group with deploy-staging, so a later dispatch cannot redeploy (or migrate)
+    # staging while this E2E runs; nothing in the group is ever cancelled.
+    concurrency: deploy-staging
     permissions:
       contents: read
     steps:

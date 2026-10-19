@@ -209,6 +209,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: staging
+    concurrency: deploy-staging
     permissions:
       contents: read
     steps:

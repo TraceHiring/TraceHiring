@@ -2491,6 +2491,32 @@ describe('e2e-staging job (d1 §7.1, AT-D1, AT-D20)', () => {
     );
   });
 
+  // Security review SEC-W6-1: one group with deploy-staging, so a second dispatch cannot redeploy
+  // (or migrate) staging under a running E2E, and a queued run never cancels a running one.
+  it('shares deploy-staging’s concurrency group, as a string or a mapping without cancelling', () => {
+    expect(
+      check((d) => (job(d).concurrency = { group: 'deploy-staging', 'cancel-in-progress': false })),
+    ).toBe('');
+  });
+
+  it.each([
+    ['no concurrency', (j) => delete j.concurrency],
+    ['its own group', (j) => (j.concurrency = 'e2e-staging')],
+    ['a per-ref group', (j) => (j.concurrency = 'deploy-staging-${{ github.ref }}')],
+    [
+      'cancel-in-progress',
+      (j) => (j.concurrency = { group: 'deploy-staging', 'cancel-in-progress': true }),
+    ],
+    [
+      'cancel-in-progress as an expression',
+      (j) => (j.concurrency = { group: 'deploy-staging', 'cancel-in-progress': '${{ true }}' }),
+    ],
+  ])('serialises with deploy-staging: rejects %s', (_label, edit) => {
+    expect(check((d) => edit(job(d)))).toMatch(
+      /e2e-staging must use concurrency: deploy-staging without cancel-in-progress/,
+    );
+  });
+
   it('rejects a time limit over 25 minutes, another runner, a container or services', () => {
     expect(check((d) => (job(d)['timeout-minutes'] = 30))).toMatch(
       /e2e-staging must set timeout-minutes: 1 to 25/,
@@ -2791,6 +2817,7 @@ describe('the real ci.yml deploy chain (d1 §7.1)', () => {
     expect(e2e.needs).toBe('deploy-staging');
     expect(e2e.if).toBe(E2E_STAGING_IF);
     expect(e2e.environment).toBe('staging');
+    expect(e2e.concurrency).toBe(real.jobs['deploy-staging'].concurrency);
     expect(e2e.permissions).toEqual({ contents: 'read' });
     expect(e2e['timeout-minutes']).toBeLessThanOrEqual(E2E_STAGING_MAX_MINUTES);
     const runs = e2e.steps.map((s) => s.run).filter((r) => r !== undefined);
