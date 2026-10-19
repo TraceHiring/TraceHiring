@@ -1,7 +1,7 @@
 // SQL of the quality stage (spec d1 §5.1 row `quality`, §3.3 note 5), run as trace_quality_worker inside the one
 // transaction the consumer opens (SET LOCAL ROLE + trace.job_org_id). Constant SQL text, bound parameters only,
-// jsonb sent as `$n::jsonb` text, every value selected as text or a plain number so the result does not depend on
-// the driver's type parsing. Reads public session and authoring rows; writes quality.grader_runs, quality.scores,
+// jsonb sent as `$n::text::jsonb` (a text parameter, so no driver re-encodes it), every value selected as text or
+// a plain number so the result does not depend on the driver's type parsing. Reads public session and authoring rows; writes quality.grader_runs, quality.scores,
 // public.quality_cards, reports.quality_card_id and the `quality_score` key. Nothing here names `integrity`.
 import type { SqlTx } from '@trace/shared/jobs';
 
@@ -38,13 +38,13 @@ export const SQL = {
   insertRun:
     'insert into quality.grader_runs (org_id, session_id, session_item_id, pass_no, grader_kind, model_id, ' +
     'adapter_version, rubric_version_id, raw_score, criteria, computed_at) ' +
-    "values ($1::uuid, $2::uuid, $3::uuid, 1, 'llm', $4, $5, $6::uuid, $7::numeric, $8::jsonb, now()) " +
+    "values ($1::uuid, $2::uuid, $3::uuid, 1, 'llm', $4, $5, $6::uuid, $7::numeric, $8::text::jsonb, now()) " +
     'on conflict do nothing',
   insertScore:
     'insert into quality.scores (org_id, session_id, test_version_id, score, section_scores, quality_cutoff, ' +
     'meets_cutoff, scoring_version, rubric_set_sha256, rubric_version_ids, grader_model_id, grader_adapter_version, ' +
-    'computed_at) values ($1::uuid, $2::uuid, $3::uuid, $4::smallint, $5::jsonb, $6::smallint, $7::boolean, $8, $9, ' +
-    'array(select jsonb_array_elements_text($10::jsonb)::uuid), $11, $12, now()) on conflict do nothing',
+    'computed_at) values ($1::uuid, $2::uuid, $3::uuid, $4::smallint, $5::text::jsonb, $6::smallint, $7::boolean, $8, $9, ' +
+    'array(select jsonb_array_elements_text($10::text::jsonb)::uuid), $11, $12, now()) on conflict do nothing',
   scoreId:
     'select id::text as id from quality.scores where org_id = $1::uuid and session_id = $2::uuid ' +
     'and scoring_version = $3',

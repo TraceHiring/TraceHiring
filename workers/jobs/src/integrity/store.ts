@@ -1,7 +1,7 @@
 // SQL of the integrity stage (spec d1 §5.1 row `integrity`, §3.3 note 5; L-3, L-4, L-7, L-28, m-6, n-6), run as
 // trace_integrity_worker inside the one transaction the consumer opens. Constant SQL text, bound parameters only,
-// jsonb as `$n::jsonb` text, values selected as text or plain numbers. The ONLY quality fact read anywhere in
-// integrity/** is public.quality_cards.meets_cutoff (SQL.meetsCutoff; the role's column grant allows nothing else).
+// jsonb as `$n::text::jsonb` (a text parameter, so no driver re-encodes it), values selected as text or plain
+// numbers. The ONLY quality fact read anywhere in integrity/** is public.quality_cards.meets_cutoff (SQL.meetsCutoff; the role's column grant allows nothing else).
 import type { SqlTx } from '@trace/shared/jobs';
 import type { FlagRow, RuleTableRow, TimelineRow } from './band-call.js';
 import type { LoadedSignal } from './load.js';
@@ -28,7 +28,7 @@ export const SQL = {
   insertSignals:
     'insert into integrity.signals (org_id, session_id, seq, kind, offset_ms, item_position, details) ' +
     'select $1::uuid, $2::uuid, x.seq, x.kind, x.offset_ms, x.item_position, x.details ' +
-    'from jsonb_to_recordset($3::jsonb) as x(seq int, kind text, offset_ms int, item_position int, details jsonb) ' +
+    'from jsonb_to_recordset($3::text::jsonb) as x(seq int, kind text, offset_ms int, item_position int, details jsonb) ' +
     'on conflict do nothing',
   insertResult:
     'insert into integrity.results (org_id, session_id, ruleset_version_id, band_rule_version_id, engine_version, ' +
@@ -41,7 +41,7 @@ export const SQL = {
   insertFlags:
     'insert into integrity.flags (org_id, session_id, rule_id, family, tier, severity, untrusted, raw_media, count, ' +
     'first_offset_ms, state, signal_seqs) select $1::uuid, $2::uuid, x.rule_id, x.family, x.tier, x.severity, ' +
-    'x.untrusted, x.raw_media, x.count, x.first_offset_ms, $3, x.signal_seqs from jsonb_to_recordset($4::jsonb) ' +
+    'x.untrusted, x.raw_media, x.count, x.first_offset_ms, $3, x.signal_seqs from jsonb_to_recordset($4::text::jsonb) ' +
     'as x(rule_id text, family text, tier text, severity text, untrusted boolean, raw_media boolean, count int, ' +
     'first_offset_ms int, signal_seqs int[]) on conflict do nothing',
   insertCard:
@@ -55,7 +55,7 @@ export const SQL = {
     'insert into public.integrity_timeline_entries (org_id, session_id, integrity_card_id, position, entry_kind, ' +
     'signal_kind, family, rule_id, tier, offset_ms, count, observed, flag_state, signal_seqs) ' +
     'select $1::uuid, $2::uuid, $3::uuid, x.position, x.entry_kind, x.signal_kind, x.family, x.rule_id, x.tier, ' +
-    'x.offset_ms, x.count, x.observed, x.flag_state, x.signal_seqs from jsonb_to_recordset($4::jsonb) as ' +
+    'x.offset_ms, x.count, x.observed, x.flag_state, x.signal_seqs from jsonb_to_recordset($4::text::jsonb) as ' +
     'x(position smallint, entry_kind text, signal_kind text, family text, rule_id text, tier text, offset_ms int, ' +
     'count smallint, observed jsonb, flag_state text, signal_seqs int[]) on conflict do nothing',
   attach:

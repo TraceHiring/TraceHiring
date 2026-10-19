@@ -1,7 +1,8 @@
 // SQL of the mirror stage (spec d1 §5.1 row `mirror`, §3.2, §3.4, §10-DB), run as trace_worker inside the one
 // transaction the consumer opens. Only public session rows: sessions, session_items, responses, media_objects, one
 // reports row (both card ids null), invitation -> submitted after the sessions row exists, and the session_mirror
-// key. No consent, signal or result is written. Constant SQL, bound parameters, jsonb as `$n::jsonb` text.
+// key. No consent, signal or result is written. Constant SQL, bound parameters, jsonb as `$n::text::jsonb` (a text
+// parameter: postgres.js would otherwise JSON-encode a string bound to an inferred jsonb parameter a second time).
 //
 // The invitation row is locked first (FOR UPDATE), as private.mirror_session does, so two connections mirroring the
 // same message serialise: the second waits, then (READ COMMITTED) finds the committed key and stops. Every insert is
@@ -27,7 +28,7 @@ export const SQL = {
     'from public.sessions where org_id = $1::uuid and id = $2::uuid',
   insertItems:
     'insert into public.session_items (org_id, session_id, item_version_id, position, served_at) ' +
-    'select $1::uuid, $2::uuid, x.item_version_id, x.position, x.served_at from jsonb_to_recordset($3::jsonb) ' +
+    'select $1::uuid, $2::uuid, x.item_version_id, x.position, x.served_at from jsonb_to_recordset($3::text::jsonb) ' +
     'as x(item_version_id uuid, position int, served_at timestamptz) on conflict do nothing',
   items:
     'select id::text as id, item_version_id::text as item_version_id, position::int as position ' +
@@ -35,7 +36,7 @@ export const SQL = {
   insertResponses:
     'insert into public.responses (org_id, session_id, session_item_id, answer_kind, final_text, final_choice, ' +
     'answer_sha256, final_seq, submitted_at) select $1::uuid, $2::uuid, x.session_item_id, x.answer_kind, ' +
-    'x.final_text, x.final_choice, x.answer_sha256, x.final_seq, $3::timestamptz from jsonb_to_recordset($4::jsonb) ' +
+    'x.final_text, x.final_choice, x.answer_sha256, x.final_seq, $3::timestamptz from jsonb_to_recordset($4::text::jsonb) ' +
     'as x(session_item_id uuid, answer_kind text, final_text text, final_choice text, answer_sha256 text, ' +
     'final_seq int) on conflict do nothing',
   insertMedia:
