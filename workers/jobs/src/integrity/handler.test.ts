@@ -380,6 +380,46 @@ describe('errors leave the stage as constant codes', () => {
     expect(err.message).toBe('integrity_failed');
     expect((err as Error & { code?: string }).code).toBe('40001');
   });
+
+  // DB review #2: only the card guard's 42501 on the awaiting insert is a retry; every other error keeps its SQLSTATE.
+  const failAwaitingInsert = async (fault: Error) => {
+    const w = await integrityWorld({ meetsCutoff: null });
+    return (await shared(w.db, IDS.org, integrityHandlers, (tx) =>
+      runIntegrity(w.message, {
+        tx: {
+          query: <R extends object>(
+            text: string,
+            params?: readonly (string | number | boolean | null)[],
+          ) => (text === SQL.insertCard ? Promise.reject(fault) : tx.query<R>(text, params)),
+        },
+        evidence: w.evidence,
+      }),
+    ).catch((e: unknown) => e)) as Error & { code?: string };
+  };
+
+  it('the card guard 42501 on the awaiting insert is integrity_retry', async () => {
+    const guard = Object.assign(
+      new Error('TRACE_GUARD: awaiting_quality needs no quality card and no flags'),
+      { code: '42501' },
+    );
+    expect((await failAwaitingInsert(guard)).message).toBe('integrity_retry');
+  });
+
+  it.each([
+    ['a serialization failure', '40001', 'could not serialize access'],
+    ['a deadlock', '40P01', 'deadlock detected'],
+    ['an RLS refusal (42501, not the card guard)', '42501', 'new row violates row-level security'],
+  ])('%s on the awaiting insert keeps its SQLSTATE', async (_name, code, text) => {
+    const err = await failAwaitingInsert(Object.assign(new Error(text), { code }));
+    expect(err.message).toBe('integrity_failed');
+    expect(err.code).toBe(code);
+  });
+
+  it('a connection error on the awaiting insert is integrity_failed, not a retry', async () => {
+    const err = await failAwaitingInsert(new Error('write CONNECTION_CLOSED 127.0.0.1:54322'));
+    expect(err.message).toBe('integrity_failed');
+    expect(err.code).toBeUndefined();
+  });
 });
 
 describe('fail closed', () => {

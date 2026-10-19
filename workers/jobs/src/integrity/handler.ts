@@ -46,6 +46,13 @@ const fail = (code: string): never => {
   throw new Error(code);
 };
 
+/** The integrity_cards_guard refusal of an awaiting card (a quality card exists): errcode 42501 and its text. */
+const AWAITING_GUARD = 'TRACE_GUARD: awaiting_quality needs no quality card';
+const isAwaitingGuardError = (err: unknown): boolean =>
+  err instanceof Error &&
+  (err as { code?: unknown }).code === '42501' &&
+  err.message.startsWith(AWAITING_GUARD);
+
 const finalState = (meetsCutoff: boolean): ReviewState =>
   meetsCutoff ? 'reviewed' : 'not_reviewed_below_cutoff';
 
@@ -108,8 +115,11 @@ const runIntegrityUnsafe = async (
       // awaiting_quality outcome (m-6): signals, result and card commit together; no flag, timeline, pointer or key.
       try {
         await insertCard(tx, ids, resultId, ruleRow.id, 'awaiting_quality');
-      } catch {
-        return fail('integrity_retry');
+      } catch (err) {
+        // DB review #2: only the card guard's refusal is a retry; anything else (40001, 40P01, an RLS 42501, a
+        // dropped connection) leaves through constantError with its SQLSTATE.
+        if (isAwaitingGuardError(err)) return fail('integrity_retry');
+        throw err;
       }
       return;
     }

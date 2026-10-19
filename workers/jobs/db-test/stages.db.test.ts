@@ -5,6 +5,7 @@
 import { MockLlmGrader } from '@trace/vendors';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runIntegrity } from '../src/integrity/handler.js';
+import { SQL as INTEGRITY_SQL } from '../src/integrity/store.js';
 import { heartbeat, paste, tabHidden, untrusted } from '../src/integrity/world.test-helpers.js';
 import { runMirror } from '../src/mirror/handler.js';
 import { runQuality } from '../src/quality/handler.js';
@@ -356,6 +357,36 @@ describe('exactly-once against the real schema (AT-D16)', () => {
     ]);
     await quality(s);
     expect(await snapshot(s.session)).toEqual(snap);
+  });
+
+  it('DB #2: a quality card committed after the gate read hits the real card guard: integrity_retry', async () => {
+    const s = await seedSession(h, f, { cutoff: 40, lines: [paste(1, 1_000)] });
+    await mirror(s);
+    const err = await h
+      .stageOn('a', 'trace_integrity_worker', s.message.orgId, (tx) =>
+        runIntegrity(s.message, {
+          evidence: s.evidence,
+          tx: {
+            query: async <R extends object>(
+              text: string,
+              params?: readonly (string | number | boolean | null)[],
+            ) => {
+              const rows = await tx.query<R>(text, params);
+              if (text === INTEGRITY_SQL.meetsCutoff) {
+                await h.stageOn('b', 'trace_quality_worker', s.message.orgId, (qtx) =>
+                  runQuality(s.message, { tx: qtx, grader }),
+                );
+              }
+              return rows;
+            },
+          },
+        }),
+      )
+      .catch((e: unknown) => e as Error);
+    expect((err as Error).message).toBe('integrity_retry');
+    expect((await snapshot(s.session)).icards).toHaveLength(0);
+    await integrity(s); // the queue retry takes the final path
+    expect((await snapshot(s.session)).icards[0]).toMatchObject({ review_state: 'reviewed' });
   });
 
   it('DB #1: two concurrent integrity runs on the flip path both fulfil with the same ids', async () => {

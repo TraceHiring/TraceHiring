@@ -30,8 +30,9 @@ const visible = (db: FakeDb, name: string, org: unknown): Row[] => {
   return table(db, name).filter((r) => r['org_id'] === org);
 };
 
+// The real guards raise with errcode 42501 (migration d1_results).
 const guard = (reason: string): never => {
-  throw new Error(`TRACE_GUARD: ${reason}`);
+  throw Object.assign(new Error(`TRACE_GUARD: ${reason}`), { code: '42501' });
 };
 
 const insertUnique = (
