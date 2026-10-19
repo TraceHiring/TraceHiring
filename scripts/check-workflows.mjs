@@ -588,6 +588,14 @@ export const E2E_STAGING_RUN_CMD =
 const E2E_STAGING_RUN_RE =
   /^\s*pnpm --filter @trace\/e2e exec playwright test tests\/d1-slice\.spec\.ts --project staging\s*$/;
 const E2E_CHROMIUM_CMD = 'pnpm --filter @trace/e2e exec playwright install --with-deps chromium';
+/**
+ * Security review SEC-W6-3: e2e-staging's one actions/cache step restores exactly e2e-local's
+ * Playwright browser cache: this path, this lockfile-hash key, nothing else (no restore-keys).
+ */
+export const E2E_BROWSER_CACHE = Object.freeze({
+  path: '~/.cache/ms-playwright',
+  key: "playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}",
+});
 /** Upload paths, in order: the results folder, minus any Playwright trace (d1 bindings review F8). */
 export const E2E_STAGING_ARTIFACT_PATHS = Object.freeze([
   'e2e/test-results',
@@ -1926,10 +1934,12 @@ function checkE2eStaging(doc, file, out) {
   const preflights = [];
   const playwrights = [];
   const uploads = [];
+  const caches = [];
   steps.forEach((s, i) => {
     if (!isObj(s)) return;
     const run = runOf(s);
     const uses = usesOf(s);
+    if (/^actions\/cache@/i.test(uses)) caches.push(i);
     if (/e2e:staging:preflight/.test(run)) preflights.push(i);
     if (/playwright\s+test/.test(run)) playwrights.push(i);
     if (/^actions\/upload-artifact@/i.test(uses)) uploads.push(i);
@@ -1988,6 +1998,16 @@ function checkE2eStaging(doc, file, out) {
     }
   });
 
+  const cacheWith = caches.length === 1 ? steps[caches[0]].with : undefined;
+  if (!sameEnv(cacheWith, E2E_BROWSER_CACHE)) {
+    out.push(
+      v(
+        file,
+        caches.length === 1 ? sw(caches[0]) : where,
+        `${E2E_STAGING_JOB} must have exactly one actions/cache step with exactly path: ${E2E_BROWSER_CACHE.path} and key: ${E2E_BROWSER_CACHE.key} (e2e-local's browser cache; no other with: key, SEC-W6-3)`,
+      ),
+    );
+  }
   const pwOk =
     playwrights.length === 1 &&
     E2E_STAGING_RUN_RE.test(runOf(steps[playwrights[0]])) &&

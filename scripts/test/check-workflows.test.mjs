@@ -2763,6 +2763,43 @@ describe('e2e-staging job (d1 §7.1, AT-D1, AT-D20)', () => {
         }),
       ).toMatch(/workflow_dispatch must declare exactly one input, run_e2e/);
     });
+
+    // Security review SEC-W6-3: the browser cache is exactly e2e-local's (same path, same key), once.
+    describe('the Playwright browser cache (SEC-W6-3)', () => {
+      const CACHE = /actions\/cache@/;
+      const CACHE_MSG =
+        /e2e-staging must have exactly one actions\/cache step with exactly path: ~\/\.cache\/ms-playwright and key: playwright-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\('pnpm-lock\.yaml'\) \}\}/;
+
+      it('is the same cache as e2e-local’s', () => {
+        const d = doc();
+        expect(step(d, CACHE).with).toEqual(
+          d.jobs['e2e-local'].steps.find((s) => CACHE.test(s.uses ?? '')).with,
+        );
+      });
+
+      it.each([
+        ['a second cache step', (d) => steps(d).splice(3, 0, { ...step(d, CACHE) })],
+        [
+          'a second cache step on another path',
+          (d) =>
+            steps(d).splice(3, 0, {
+              uses: `actions/cache@${SHA}`,
+              with: { path: 'e2e/node_modules', key: 'x' },
+            }),
+        ],
+        ['no cache step', (d) => steps(d).splice(at(d, CACHE), 1)],
+        ['another path', (d) => (step(d, CACHE).with.path = '~/.cache')],
+        ['a second path', (d) => (step(d, CACHE).with.path = '~/.cache/ms-playwright\ne2e\n')],
+        ['another key', (d) => (step(d, CACHE).with.key = 'playwright-${{ github.ref }}')],
+        [
+          'restore-keys',
+          (d) => (step(d, CACHE).with['restore-keys'] = 'playwright-${{ runner.os }}-'),
+        ],
+        ['no with:', (d) => delete step(d, CACHE).with],
+      ])('rejects %s', (_label, edit) => {
+        expect(check(edit)).toMatch(CACHE_MSG);
+      });
+    });
   });
 });
 
