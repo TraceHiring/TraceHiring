@@ -50,15 +50,41 @@ export const hasVerifiedTotp = async (
     200,
     `${role} password sign-in`,
   );
-  if (typeof pw.access_token !== 'string') throw new Error(`${role} password sign-in: no token`);
-  const user = await jsonOf<{ factors?: { factor_type?: string; status?: string }[] | null }>(
-    await request.get(`${auth}/user`, {
-      headers: { ...apikey, Authorization: `Bearer ${pw.access_token}` },
-    }),
-    200,
-    `${role} factor list`,
-  );
-  return (user.factors ?? []).some((f) => f.factor_type === 'totp' && f.status === 'verified');
+  const token = pw.access_token;
+  if (typeof token !== 'string') throw new Error(`${role} password sign-in: no token`);
+  try {
+    const user = await jsonOf<{ factors?: { factor_type?: string; status?: string }[] | null }>(
+      await request.get(`${auth}/user`, {
+        headers: { ...apikey, Authorization: `Bearer ${token}` },
+      }),
+      200,
+      `${role} factor list`,
+    );
+    return (user.factors ?? []).some((f) => f.factor_type === 'totp' && f.status === 'verified');
+  } finally {
+    // SEC-W5-5: this session exists only for the check.
+    await logoutSession(who.supabaseUrl, who.publishableKey, token);
+  }
+};
+
+/**
+ * Ends one GoTrue session (SEC-W5-5): `POST /auth/v1/logout?scope=local` revokes this session's refresh token and
+ * leaves the user's other sessions alone (the staging smoke users are shared with other jobs). Node's fetch, so the
+ * call is no step in the report; best effort, a failure is ignored and nothing is printed.
+ */
+export const logoutSession = async (
+  supabaseUrl: string,
+  publishableKey: string,
+  accessToken: string,
+): Promise<void> => {
+  try {
+    await fetch(`${supabaseUrl.replace(/\/+$/, '')}/auth/v1/logout?scope=local`, {
+      method: 'POST',
+      headers: { apikey: publishableKey, Authorization: `Bearer ${accessToken}` },
+    });
+  } catch {
+    // best effort
+  }
 };
 
 /** Signs in with the password, enrols a TOTP factor and verifies it; returns the aal2 access token. */

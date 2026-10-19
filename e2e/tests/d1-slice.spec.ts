@@ -28,7 +28,7 @@ import {
   type Page,
   type Response,
 } from '@playwright/test';
-import { amrOf, claimsOf, hasVerifiedTotp } from '../support/auth.js';
+import { amrOf, claimsOf, hasVerifiedTotp, logoutSession } from '../support/auth.js';
 import { caption, pause, RECORDING } from '../support/caption.js';
 import { edgeClient, sha256Hex } from '../support/candidate.js';
 import {
@@ -155,8 +155,10 @@ const run: {
   test?: PublishedTest;
   blockedByInviter?: { label: string };
   cands: Partial<Record<Key, Cand>>;
+  /** Access tokens of the GoTrue sessions this run created (memory only; logged out in afterAll). */
+  sessionTokens: string[];
   t0: number;
-} = { outputDir: '', orgId: '', cands: {}, t0: Date.now() };
+} = { outputDir: '', orgId: '', cands: {}, sessionTokens: [], t0: Date.now() };
 
 const must = <T>(value: T | undefined | null, what: string): T => {
   if (value === undefined || value === null)
@@ -271,6 +273,19 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  // SEC-W5-5: end every GoTrue session this run created (scope local: a refreshed token keeps its session id, and
+  // the page's current token is preferred while it can still be read).
+  if (run.env !== undefined) {
+    const env = run.env;
+    for (const signed of [run.recruiter, run.reviewer]) {
+      if (signed === undefined) continue;
+      const current = await accessToken(signed.page).catch(() => null);
+      if (current !== null) run.sessionTokens.push(current);
+    }
+    for (const token of new Set(run.sessionTokens)) {
+      await logoutSession(env.supabaseUrl, env.publishableKey, token);
+    }
+  }
   const contexts = [
     run.recruiter?.context,
     run.reviewer?.context,
@@ -319,6 +334,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
     const signIn = async (who: 'recruiter' | 'reviewer'): Promise<Signed> => {
       const user = who === 'recruiter' ? env.recruiter : env.reviewer;
       const session = await signInThroughUi(browser, env.recruiterUrl, user, who);
+      run.sessionTokens.push(session.jwt);
       const claims = claimsOf(session.jwt);
       expect(claims.aal).toBe('aal2');
       expect(amrOf(claims)).toEqual(['password', 'totp']);
