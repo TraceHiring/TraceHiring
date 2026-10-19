@@ -2,11 +2,12 @@
 // connectivity gaps from server times only, the receipt reference, and the bodies of the two evidence files
 // (`final.json`, `events.ndjson`). Nothing here reads a clock, storage or the network, and nothing here logs. The
 // client's own clock (`t`) is carried as context and never feeds a deadline, coverage or gap (AT-D37).
-import type {
-  ClientEvent,
-  EvidenceEventLine,
-  FinalAnswers,
-  TestPackage,
+import {
+  isStorableText,
+  type ClientEvent,
+  type EvidenceEventLine,
+  type FinalAnswers,
+  type TestPackage,
 } from '@trace/shared/contracts/candidate';
 import { sha256Hex, utf8 } from './encoding.js';
 
@@ -51,8 +52,9 @@ export const applySplice = (text: string, p: number, d: number, i: string): stri
 
 /**
  * Applies one answer edit to the item's state, or returns null when the edit is not valid for the item: a text edit
- * on an MCQ item, a choice on a written item, an option the item does not have, a splice outside the text, or a text
- * longer than the item's `maxChars` (enforced on the rebuilt length, §4.4). The incremental state and the replay at
+ * on an MCQ item, a choice on a written item, an option the item does not have, a splice outside the text, a text
+ * longer than the item's `maxChars` (enforced on the rebuilt length, §4.4), or a rebuilt text that is not storable
+ * (a NUL or a lone surrogate, `isStorableText`). The incremental state and the replay at
  * submit both use this one function.
  */
 export const applyAnswer = (
@@ -71,6 +73,9 @@ export const applyAnswer = (
   const before = prev?.kind === 'text' ? prev.text : '';
   const text = applySplice(before, body.p, body.d, body.i);
   if (text === null || text.length > (item.maxChars ?? DEFAULT_MAX_CHARS)) return null;
+  // Security review #2: the rebuilt text must be storable too (a splice inside a surrogate pair leaves a lone one),
+  // or it would reach final.json and fail the mirror on every attempt.
+  if (!isStorableText(text)) return null;
   return { kind: 'text', text, gseq };
 };
 

@@ -323,6 +323,15 @@ describe('an invalid edit rejects the whole batch (AT-D29 maxChars, RT-13)', () 
     ['an option the item does not have', [choice(1, MCQ, 'zz')]],
     ['an unknown item', [text(1, 9, 0, 0, 'a')]],
     ['a signal on an unknown item', [paste(1, 9, 3)]],
+    // Security review #2: each edit is storable text, but the rebuilt text would hold a lone surrogate.
+    [
+      'an insert that splits a surrogate pair',
+      [text(1, WRITTEN, 0, 0, 'a😀b'), text(2, WRITTEN, 2, 0, 'x')],
+    ],
+    [
+      'a delete that leaves half a surrogate pair',
+      [text(1, WRITTEN, 0, 0, 'a😀b'), text(2, WRITTEN, 2, 1, '')],
+    ],
   ])('rejects %s with bad_request', async (_name, events) => {
     const h = await coreHarness();
     const { view } = await startCore(h);
@@ -387,10 +396,23 @@ const stepArb = fc.record({
   resend: fc.nat(9).map((n) => n < 3),
 });
 
-/** The independent model: the next textarea value after an edit, at most `max` UTF-16 units. */
+/** True when UTF-16 offset `k` of `s` falls between the two halves of a surrogate pair. */
+const insidePair = (s: string, k: number): boolean =>
+  k > 0 &&
+  k < s.length &&
+  /[\uD800-\uDBFF]/.test(s.charAt(k - 1)) &&
+  /[\uDC00-\uDFFF]/.test(s.charAt(k));
+
+/**
+ * The independent model: the next textarea value after an edit, at most `max` UTF-16 units. A textarea edits whole
+ * code points, so the edit's start and end are moved off the middle of a surrogate pair (the rebuilt text must stay
+ * storable; an edit that splits a pair is refused, see the bad_request cases above).
+ */
 const applyEdit = (prev: string, edit: Edit, max: number): string => {
-  const at = edit.at % (prev.length + 1);
-  const del = Math.min(edit.del, prev.length - at);
+  let at = edit.at % (prev.length + 1);
+  if (insidePair(prev, at)) at -= 1;
+  let del = Math.min(edit.del, prev.length - at);
+  if (insidePair(prev, at + del)) del += 1;
   const next = prev.slice(0, at) + edit.ins + prev.slice(at + del);
   // Over the cap: the same edit without its insert (never longer than `prev`, which is within the cap).
   return next.length <= max ? next : prev.slice(0, at) + prev.slice(at + del);
