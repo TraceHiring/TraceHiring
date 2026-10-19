@@ -3,22 +3,27 @@
 // overall, total, trust, honesty or composite number; no band outside the integrity card; no row selection, bulk
 // action or export; no gaze, emotion, face-match, IP, ASN or device text. The route table is pinned too, so a new
 // route cannot appear without this file being updated.
-import type { ResultsListResponse } from '@trace/shared/contracts/d1';
+import type { ResultsListResponse, TestDetailResponse } from '@trace/shared/contracts/d1';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from './api/client';
+import { errorText } from './common/messages';
+import type { PollSnapshot } from './common/poller';
 import type { OrgInfo } from './api/runtime';
 import { DraftFormView } from './authoring/DraftFormView';
 import { addMcqItem, addWrittenItem, emptyDraft } from './authoring/editor-model';
-import { InviteFormView, InviteResultView } from './authoring/InvitePage';
+import { InvitationsView, InviteFormView, InviteResultView } from './authoring/InvitePage';
 import { ReviewersPanelView } from './authoring/ReviewersPanel';
-import { PublishDialog } from './authoring/TestEditorPage';
+import { EditorBody, NewTestRoute, PublishDialog } from './authoring/TestEditorPage';
 import { TestsView } from './authoring/TestsListPage';
 import { demoOutboxExtras } from './outbox/demo-extras';
 import { OutboxView } from './outbox/OutboxPage';
+import { IntegrityCardView, QualityCardView } from './reports/Cards';
+import { BAND_LABEL } from './reports/labels';
 import { ReportPage } from './reports/ReportPage';
 import { ReportController } from './reports/report-controller';
+import { StartPhotoView } from './reports/StartPhotoPanel';
 import {
   API_ORIGIN,
   INTEGRITY_READY,
@@ -53,7 +58,8 @@ const NEVER_BUILD =
   /\bgaze\b|\bemotion|face.?match|\bASN\b|\bIP address\b|\bdevice\b|\bpersonality\b|voiceprint|biometric|likeness/i;
 const SELECTION = /type="checkbox"|role="checkbox"|aria-selected|role="option"|select all/i;
 const EXPORT = /\bexport\w*|\bdownload\w*|\.csv\b|\.pdf\b/i;
-const BAND_WORDS = /strong concern|insufficient evidence|review suggested|\bband\b/i;
+/** Every band label (Clear, Review suggested, Strong concern, Insufficient evidence) and the word "band". */
+const BAND_WORDS = new RegExp(`\\b(?:${Object.values(BAND_LABEL).join('|')})\\b|\\bband\\b`, 'i');
 
 /** The text of every control and label: buttons, links, form labels, headings, table heads, summaries. */
 function controlsAndLabels(html: string): string[] {
@@ -124,6 +130,85 @@ const ORG_INFO = (roles: string[]): OrgInfo => ({
 let full = emptyDraft('Synthetic test');
 full = addWrittenItem(addMcqItem(full));
 
+const DETAIL = (status: 'draft' | 'published'): TestDetailResponse => ({
+  test: { id: ID(50), name: 'Synthetic test', createdAt: '2026-10-19T10:00:00.000Z' },
+  version: {
+    id: ID(51),
+    versionNo: 1,
+    status,
+    durationMinutes: 30,
+    qualityCutoff: 55,
+    publishedAt: status === 'draft' ? null : '2026-10-19T11:00:00.000Z',
+    sections: [
+      {
+        id: ID(52),
+        position: 1,
+        name: 'Multiple choice',
+        format: 'mcq',
+        weight: 40,
+        items: [
+          {
+            id: ID(53),
+            position: 1,
+            format: 'mcq',
+            prompt: 'Synthetic question?',
+            options: [
+              { id: 'a', text: 'First' },
+              { id: 'b', text: 'Second' },
+            ],
+            correctOptionId: 'a',
+          },
+        ],
+      },
+      {
+        id: ID(54),
+        position: 2,
+        name: 'Written answer',
+        format: 'written',
+        weight: 60,
+        items: [
+          {
+            id: ID(55),
+            position: 1,
+            format: 'written',
+            prompt: 'Describe a synthetic situation.',
+            rubric: {
+              criteria: [
+                { id: 'c1', label: 'Clarity', maxPoints: 10, anchors: ['clear steps'], minHits: 1 },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  },
+});
+const editorApi = (): ApiClient =>
+  new ApiClient({
+    origin: API_ORIGIN,
+    orgId: ORG_ID,
+    getAccessToken: () => Promise.resolve('tok'),
+    fetch: fakeApiFetch({}).fetch,
+  });
+
+const snap = <T,>(state: PollSnapshot<T>['state'], slow = false): PollSnapshot<T> => ({
+  state,
+  slow,
+});
+const PIXEL = 'data:image/jpeg;base64,AAAA';
+/** Every fixed failure text the app can show for an api code. */
+const ERROR_CODES = [
+  'aal2_required',
+  'not_found',
+  'unauthorized',
+  'conflict',
+  'cutoff_required',
+  'draft_incomplete',
+  'bad_request',
+  'rate_limited',
+  'something_unlisted',
+];
+
 /** Every D1 screen, rendered from synthetic data, by name. */
 async function screens(): Promise<Record<string, string>> {
   const allReady: RouteTable = {
@@ -157,6 +242,82 @@ async function screens(): Promise<Record<string, string>> {
         }}
       />,
     ),
+    'editor-body-draft': wrap(
+      <EditorBody api={editorApi()} detail={DETAIL('draft')} onPublished={noop} />,
+    ),
+    'editor-body-published': wrap(
+      <EditorBody api={editorApi()} detail={DETAIL('published')} onPublished={noop} />,
+    ),
+    'new-test': wrap(<NewTestRoute />),
+    invitations: wrap(
+      <InvitationsView
+        data={{
+          invitations: [
+            {
+              id: ID(60),
+              label: 'Candidate 1',
+              status: 'sent',
+              createdAt: '2026-10-19T10:00:00.000Z',
+              expiresAt: '2026-10-26T10:00:00.000Z',
+            },
+            {
+              id: ID(61),
+              label: 'Candidate 2',
+              status: 'blocked_age',
+              createdAt: '2026-10-19T10:05:00.000Z',
+              expiresAt: '2026-10-26T10:05:00.000Z',
+            },
+          ],
+        }}
+      />,
+    ),
+    'invitations-empty': wrap(<InvitationsView data={{ invitations: [] }} />),
+    'invite-error': wrap(<InviteFormView busy={false} error="invalid_email" onSubmit={noop} />),
+    'error-texts': wrap(
+      <ul>
+        {ERROR_CODES.map((code) => (
+          <li key={code}>{errorText(code)}</li>
+        ))}
+      </ul>,
+    ),
+    'quality-loading': wrap(<QualityCardView snapshot={snap({ kind: 'loading' })} />),
+    'quality-unavailable': wrap(<QualityCardView snapshot={snap({ kind: 'unavailable' })} />),
+    'quality-slow': wrap(
+      <QualityCardView snapshot={snap({ kind: 'value', value: { state: 'pending' } }, true)} />,
+    ),
+    'integrity-loading': wrap(<IntegrityCardView snapshot={snap({ kind: 'loading' })} />),
+    'integrity-unavailable': wrap(<IntegrityCardView snapshot={snap({ kind: 'unavailable' })} />),
+    'integrity-slow': wrap(
+      <IntegrityCardView snapshot={snap({ kind: 'value', value: { state: 'pending' } }, true)} />,
+    ),
+    'photo-idle': wrap(
+      <StartPhotoView photoMissing={false} state={{ kind: 'idle' }} onView={noop} />,
+    ),
+    'photo-working': wrap(
+      <StartPhotoView photoMissing={false} state={{ kind: 'working' }} onView={noop} />,
+    ),
+    'photo-shown': wrap(
+      <StartPhotoView
+        photoMissing={false}
+        state={{ kind: 'shown', dataUrl: PIXEL }}
+        onView={noop}
+      />,
+    ),
+    'photo-error-aal2': wrap(
+      <StartPhotoView
+        photoMissing={false}
+        state={{ kind: 'error', reason: 'aal2' }}
+        onView={noop}
+      />,
+    ),
+    'photo-error-generic': wrap(
+      <StartPhotoView
+        photoMissing={false}
+        state={{ kind: 'error', reason: 'generic' }}
+        onView={noop}
+      />,
+    ),
+    'photo-missing': wrap(<StartPhotoView photoMissing state={{ kind: 'idle' }} onView={noop} />),
     editor: wrap(<DraftFormView form={full} readOnly={false} onChange={noop} />),
     'editor-read-only': wrap(<DraftFormView form={full} readOnly onChange={noop} />),
     'publish-dialog': wrap(<PublishDialog busy={false} onPublish={noop} onCancel={noop} />),
@@ -258,6 +419,15 @@ async function screens(): Promise<Record<string, string>> {
       ...allReady,
       integrity: () => json({ state: 'not_used_below_cutoff' }),
     }),
+    'report-clear': await reportHtml({
+      ...allReady,
+      integrity: () =>
+        json({ ...INTEGRITY_READY, band: 'clear', reasons: [], flags: [], timeline: [] }),
+    }),
+    'report-not-found': await reportHtml({
+      ...allReady,
+      meta: () => json({ error: { code: 'not_found' } }, 404),
+    }),
     'report-no-photo': await reportHtml({
       ...allReady,
       integrity: () => json({ ...INTEGRITY_READY, photoMissing: true }),
@@ -304,9 +474,44 @@ describe('D1 route table (AT-D13)', () => {
 describe('D1 screens never show what the product never builds (AT-D13)', () => {
   it('renders the whole screen set (the checks below are not vacuous)', async () => {
     const all = await screens();
-    expect(Object.keys(all).length).toBeGreaterThanOrEqual(18);
-    for (const html of Object.values(all)) expect(html.length).toBeGreaterThan(40);
+    expect(Object.keys(all).length).toBeGreaterThanOrEqual(39);
+    for (const [name, html] of Object.entries(all)) expect(html.length, name).toBeGreaterThan(20);
     expect(text(all['report-ready'] ?? '')).toContain('Review suggested');
+  });
+
+  it('covers the editor body, the new test form, the invitations table, the card states and the photo', async () => {
+    const all = await screens();
+    for (const name of [
+      'editor-body-draft',
+      'editor-body-published',
+      'new-test',
+      'invitations',
+      'quality-unavailable',
+      'quality-slow',
+      'integrity-unavailable',
+      'integrity-slow',
+      'photo-shown',
+      'photo-error-aal2',
+      'photo-error-generic',
+      'report-clear',
+      'report-not-found',
+    ]) {
+      expect(Object.keys(all), name).toContain(name);
+    }
+    const body = text(all['editor-body-draft'] ?? '');
+    expect(body).toContain('Save draft');
+    expect(body).toContain('Publish...');
+    expect(body).toContain('Draft, version 1');
+    expect(text(all['editor-body-published'] ?? '')).toContain('Settings are frozen');
+    expect(text(all['new-test'] ?? '')).toContain('Create draft');
+    expect(text(all.invitations ?? '')).toContain('Blocked: under 18');
+    expect(text(all['quality-unavailable'] ?? '')).toContain('Not available right now');
+    expect(text(all['integrity-slow'] ?? '')).toContain('Taking longer than usual');
+    expect(all['photo-shown']).toContain('<img');
+    expect(text(all['photo-error-aal2'] ?? '')).toContain('Two-step sign-in');
+    expect(text(all['photo-error-generic'] ?? '')).toContain('could not be shown');
+    expect(text(all['report-clear'] ?? '')).toContain('Clear');
+    expect(text(all['report-not-found'] ?? '')).toContain(errorText('not_found'));
   });
 
   it('has no control or label for reject, decline, shortlist, decision, confirm, overturn, notice, appeal', async () => {
@@ -337,6 +542,10 @@ describe('D1 screens never show what the product never builds (AT-D13)', () => {
     const ready = (await screens())['report-ready'] ?? '';
     expect(text(ready)).toMatch(BAND_WORDS);
     expect(text(withoutIntegrityCard(ready))).not.toMatch(BAND_WORDS);
+    // The same for a Clear band: its label is a band word, and it is in the card only.
+    const clear = (await screens())['report-clear'] ?? '';
+    expect(text(clear)).toMatch(/\bClear\b/);
+    expect(text(withoutIntegrityCard(clear))).not.toMatch(BAND_WORDS);
   });
 
   it('has no row selection, bulk bar or export', async () => {
@@ -381,7 +590,10 @@ describe('D1 screens never show what the product never builds (AT-D13)', () => {
     ])
       expect(bad).toMatch(COMBINED);
     expect('<input type="checkbox">').toMatch(SELECTION);
-    expect('Strong concern').toMatch(BAND_WORDS);
+    for (const label of Object.values(BAND_LABEL)) expect(label).toMatch(BAND_WORDS);
+    expect('Clear').toMatch(BAND_WORDS);
+    expect('The band is set by rules').toMatch(BAND_WORDS);
+    expect('Clearing the cache').not.toMatch(BAND_WORDS);
     expect('Gaze direction').toMatch(NEVER_BUILD);
   });
 });

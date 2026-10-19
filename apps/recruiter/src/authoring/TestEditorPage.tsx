@@ -53,7 +53,7 @@ export function PublishDialog({
   );
 }
 
-function EditorBody({
+export function EditorBody({
   api,
   detail,
   onPublished,

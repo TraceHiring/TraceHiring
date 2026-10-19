@@ -2,7 +2,11 @@
 // `...@example.test` address; the inviter's age answer is Yes / No / Not sure (default none, which is "unknown").
 // The api returns the invite link once: it is held in this screen's memory only (never stored) and shown with Copy.
 // "No" blocks the invitation: the label and "Blocked: under 18", and no link.
-import { CreateInvitationRequest, type CreateInvitationResponse } from '@trace/shared/contracts/d1';
+import {
+  CreateInvitationRequest,
+  type CreateInvitationResponse,
+  type InvitationListResponse,
+} from '@trace/shared/contracts/d1';
 import { useCallback, useState, type FormEvent } from 'react';
 import { useParams } from 'react-router';
 import type { ApiClient, ApiResult } from '../api/client';
@@ -133,6 +137,31 @@ export function InviteResultView({
   );
 }
 
+/** The invitations of a test: label, status and creation time (no contact address, no link). */
+export function InvitationsView({ data }: { data: InvitationListResponse }) {
+  if (data.invitations.length === 0) return <p>No invitations yet.</p>;
+  return (
+    <table className={ui.table}>
+      <thead>
+        <tr>
+          <th scope="col">Candidate</th>
+          <th scope="col">Status</th>
+          <th scope="col">Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.invitations.map((inv) => (
+          <tr key={inv.id}>
+            <th scope="row">{inv.label}</th>
+            <td>{inv.status === 'blocked_age' ? 'Blocked: under 18' : inv.status}</td>
+            <td>{formatTime(inv.createdAt)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Route `/tests/:testId/invite`. */
@@ -203,29 +232,7 @@ export function InviteRoute() {
       )}
       {copied && <p role="status">Link copied.</p>}
       <h3 className={ui.subtitle}>Invitations</h3>
-      {list.kind === 'ready' &&
-        (list.data.invitations.length === 0 ? (
-          <p>No invitations yet.</p>
-        ) : (
-          <table className={ui.table}>
-            <thead>
-              <tr>
-                <th scope="col">Candidate</th>
-                <th scope="col">Status</th>
-                <th scope="col">Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.data.invitations.map((inv) => (
-                <tr key={inv.id}>
-                  <th scope="row">{inv.label}</th>
-                  <td>{inv.status === 'blocked_age' ? 'Blocked: under 18' : inv.status}</td>
-                  <td>{formatTime(inv.createdAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ))}
+      {list.kind === 'ready' && <InvitationsView data={list.data} />}
       {list.kind === 'error' && (
         <p role="alert" className={ui.alert}>
           {errorText(list.code)}
