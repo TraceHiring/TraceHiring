@@ -340,7 +340,7 @@ export function readStack(raw) {
   };
   if (raw === null || typeof raw !== 'object') return bad;
   const apiUrl = String(raw.API_URL ?? '').replace(/\/+$/, '');
-  const publishableKey = String(raw.PUBLISHABLE_KEY || raw.ANON_KEY || '');
+  const publishableKey = String(raw.PUBLISHABLE_KEY ?? '');
   const dbUrl = String(raw.DB_URL ?? '');
   let host = '';
   let dbHost = '';

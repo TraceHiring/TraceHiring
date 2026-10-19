@@ -318,8 +318,17 @@ describe('readStack and buildEnv', () => {
       ok: true,
       stack: { apiUrl: s.API_URL, publishableKey: s.PUBLISHABLE_KEY, dbUrl: s.DB_URL },
     });
+  });
+
+  it('does not fall back to ANON_KEY: the recruiter headers plugin accepts only an sb_publishable_ key (SR-E-3)', () => {
+    const s = fakeStack();
     const anon = { ...s, PUBLISHABLE_KEY: '', ANON_KEY: `anon_${hex(4)}` };
-    expect(readStack(anon).stack.publishableKey).toBe(anon.ANON_KEY);
+    expect(readStack(anon)).toMatchObject({ ok: false });
+    expect(readStack({ ...s, PUBLISHABLE_KEY: undefined, ANON_KEY: anon.ANON_KEY }).ok).toBe(false);
+    // The key is also not taken from ANON_KEY when the publishable one is present.
+    expect(readStack({ ...s, ANON_KEY: anon.ANON_KEY }).stack.publishableKey).toBe(
+      s.PUBLISHABLE_KEY,
+    );
   });
 
   it('refuses a stack that is not running, not on 127.0.0.1 or missing a value', () => {
