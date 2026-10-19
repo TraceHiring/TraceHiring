@@ -12,6 +12,27 @@ export const env = (name: string): string => {
   return value;
 };
 
+const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost']);
+
+/**
+ * Throws unless every named origin is on 127.0.0.1 or localhost (security review SEC-E4): a local-only spec, which
+ * writes to the database and signs synthetic users in, must never reach a remote api, edge or Supabase. The error
+ * names the variable, never the value.
+ */
+export const requireLocalHosts = (origins: Record<string, string>): void => {
+  for (const [name, value] of Object.entries(origins)) {
+    let host = '';
+    try {
+      host = new URL(value).hostname.toLowerCase();
+    } catch {
+      // reported below
+    }
+    if (!LOCAL_HOSTS.has(host)) {
+      throw new Error(`${name} must be a URL on 127.0.0.1 or localhost for this local-only spec`);
+    }
+  }
+};
+
 const CODE = /^[a-z][a-z0-9_]{0,63}$/;
 
 /** The constant error code of a refusal, or null. */

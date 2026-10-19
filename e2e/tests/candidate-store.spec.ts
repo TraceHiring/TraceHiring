@@ -23,7 +23,7 @@ import {
   type SessionView,
 } from '../support/candidate.js';
 import { psql, readDb } from '../support/db.js';
-import { env, expectRefusal, jsonOf, keysOf, poll } from '../support/http.js';
+import { env, expectRefusal, jsonOf, keysOf, poll, requireLocalHosts } from '../support/http.js';
 import { headerMarkers, isMetadataMarker, stripJpegMetadata } from '../support/jpeg.js';
 import { linkTokenIn, linkTokenOfUrl, outboxReader } from '../support/outbox.js';
 
@@ -93,6 +93,15 @@ const countOf = (sql: string, vars: Record<string, string>, what: string): numbe
   Number(readDb(sql, vars, what)[0] ?? 'NaN');
 
 test.describe('candidate store on the real database (spec review r3a #1)', () => {
+  // Security review SEC-E4: this spec writes to the database and signs users in; local stack only.
+  test.beforeAll(() => {
+    requireLocalHosts({
+      E2E_API_URL: API,
+      E2E_EDGE_URL: EDGE,
+      E2E_SUPABASE_URL: env('E2E_SUPABASE_URL'),
+    });
+  });
+
   test('a recruiter signs in, creates and publishes a test and invites five candidates', async ({
     request,
   }) => {

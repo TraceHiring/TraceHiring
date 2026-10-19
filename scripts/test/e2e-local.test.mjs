@@ -72,6 +72,9 @@ function harness({
   stack = fakeStack(),
   sqlAnswer = () => ({ ok: true, out: '' }),
   operatorCode = () => 0,
+  parentEnv = {},
+  writeFileFails = () => false,
+  removeDirFails = false,
 } = {}) {
   const root = makeTempDir('trace-e2e-root-');
   writeFiles(root, {
@@ -117,7 +120,12 @@ function harness({
       ['enrolSmokeUser', 'createOrg', 'addMember'].map((name) => [
         name,
         async ({ argv: args, deps }) => {
-          h.operators.push({ name, argv: args, password: deps.env.SMOKE_PASSWORD });
+          h.operators.push({
+            name,
+            argv: args,
+            password: deps.env.SMOKE_PASSWORD,
+            operatorUrl: deps.env.TRACE_OPERATOR_DB_URL,
+          });
           h.events.push(`operator ${name}`);
           const code = operatorCode(name, args);
           if (code === 0) deps.stdout.write(`${randomUUID()}\n`);
@@ -126,7 +134,7 @@ function harness({
         },
       ]),
     ),
-    opsDeps: { env: { PATH: 'x' } },
+    opsDeps: { env: { PATH: 'x', ...parentEnv } },
     readText: (file) => {
       h.events.push(`read ${path.relative(root, file).split(path.sep).join('/')}`);
       return JOBS_CONFIG;
@@ -144,7 +152,12 @@ function harness({
     proc: new EventEmitter(),
     // The lock's signal handler calls exit(); record what was already cleaned up at that moment.
     exit: (code) => {
-      h.exitAt = { code, killed: [...h.killed], removed: [...h.removed] };
+      h.exitAt = {
+        code,
+        killed: [...h.killed],
+        removed: [...h.removed],
+        drops: h.sql.filter((q) => !q.sql.includes('create role')).map((q) => q.sql),
+      };
     },
     log: (m) => h.lines.push(m),
     warn: (m) => h.lines.push(m),
@@ -185,11 +198,15 @@ function harness({
     removeDir: (dir) => {
       h.removed.push(dir);
       h.events.push('remove state');
+      if (removeDirFails) throw new Error(`EBUSY: resource busy or locked, rmdir '${dir}'`);
     },
     writeFile: (file, text) => {
-      h.written[path.relative(root, file).split(path.sep).join('/')] = text;
+      const rel = path.relative(root, file).split(path.sep).join('/');
+      if (writeFileFails(rel)) throw new Error(`ENOSPC: no space left, write '${rel}'`);
+      h.written[rel] = text;
+      h.events.push(`write ${rel}`);
     },
-    env: { GITHUB_SHA: 'a'.repeat(40) },
+    env: { GITHUB_SHA: 'a'.repeat(40), ...parentEnv },
   };
   return h;
 }
@@ -366,8 +383,11 @@ describe('main', () => {
     expect(e.filter((x) => x.startsWith('operator ')).at(-1)).toBe('operator addMember');
     expect(e.lastIndexOf('operator addMember')).toBeLessThan(at('start api'));
     // Teardown: every process stops, then the login roles go, then the state folder (and its files).
-    expect(e.lastIndexOf('stop recruiter')).toBeLessThan(at('sql drop'));
-    expect(at('sql drop')).toBeLessThan(at('remove state'));
+    // SEC-E3: the state folder (with the env files) goes first, right after the stop, then the
+    // roles, then the process logs.
+    expect(e.lastIndexOf('stop recruiter')).toBeLessThan(at('remove state'));
+    expect(at('remove state')).toBeLessThan(at('sql drop'));
+    expect(at('sql drop')).toBeLessThan(e.findIndex((x) => x.startsWith(`write ${LOG_DIR}`)));
     expect(h.sql.at(-1).sql).toBe(dropLoginRolesSql());
     expect(h.sql.every((q) => q.url === h.deps.stackEnv().DB_URL)).toBe(true);
   });
@@ -489,12 +509,74 @@ describe('main', () => {
     expect(enrol.every((o) => o.password === pw)).toBe(true);
     expect(h.operators.flatMap((o) => o.argv).includes(pw)).toBe(false);
     for (const u of USERS) expect(u.email).toMatch(/^e2e-[a-z-]+@example\.test$/);
-    expect(USERS.map((u) => u.key)).toEqual(['OWNER', 'RECRUITER', 'REVIEWER', 'STORE_RECRUITER']);
+    expect(USERS.map((u) => u.key)).toEqual([
+      'OWNER',
+      'RECRUITER',
+      'REVIEWER',
+      'STORE_RECRUITER',
+      'UI_RECRUITER',
+    ]);
     const org = h.operators.find((o) => o.name === 'createOrg');
     expect(org.argv).toEqual(expect.arrayContaining(['--slug', 'e2e-local', '--kind', 'customer']));
     const members = h.operators.filter((o) => o.name === 'addMember');
     const rolesOf = (o) => o.argv[o.argv.indexOf('--roles') + 1];
-    expect(members.map(rolesOf)).toEqual(['recruiter', 'reviewer', 'recruiter']);
+    expect(members.map(rolesOf)).toEqual(['recruiter', 'reviewer', 'recruiter', 'recruiter']);
+  });
+
+  it('creates a separate recruiter for the candidate-UI spec, a member like the store recruiter', async () => {
+    // Each spec enrols its own TOTP factor; GoTrue needs aal2 to enrol a second one (422), so the
+    // candidate-UI spec (e2e/tests/candidate-ui.spec.ts) cannot reuse the store recruiter.
+    const h = harness();
+    await main(h.deps);
+    expect(USERS.find((u) => u.key === 'UI_RECRUITER')).toMatchObject({
+      email: 'e2e-ui-recruiter@example.test',
+      roles: 'recruiter',
+    });
+    const enrolled = h.operators.find(
+      (o) => o.name === 'enrolSmokeUser' && o.argv.includes('e2e-ui-recruiter@example.test'),
+    );
+    expect(enrolled.password).toBe(h.pw.opts.env.E2E_USER_PASSWORD);
+    const member = h.operators.filter((o) => o.name === 'addMember').at(-1);
+    expect(member.argv[member.argv.indexOf('--roles') + 1]).toBe('recruiter');
+    const orgId = h.pw.opts.env.E2E_ORG_ID;
+    expect(member.argv[member.argv.indexOf('--org-id') + 1]).toBe(orgId);
+    expect(h.pw.opts.env.E2E_UI_RECRUITER_EMAIL).toBe('e2e-ui-recruiter@example.test');
+  });
+
+  // Security review SEC-E1: TRACE_OPERATOR_DB_URL is the staging operator variable; the operator
+  // scripts prefer it over the local stack (scripts/ops/lib.mjs resolveDbUrl).
+  const operatorUrl = (host) => {
+    const u = new URL(`${['postgres', 'ql'].join('')}://${host}:5432/postgres`);
+    u.username = 'operator';
+    u.password = hex(4);
+    return u.toString();
+  };
+
+  it('refuses to run, before any role SQL or operator, when TRACE_OPERATOR_DB_URL is not local', async () => {
+    for (const host of ['db.example.test', '10.0.0.5']) {
+      const h = harness({ parentEnv: { TRACE_OPERATOR_DB_URL: operatorUrl(host) } });
+      expect(await main(h.deps)).toBe(1);
+      expect(h.sql).toEqual([]);
+      expect(h.operators).toEqual([]);
+      expect(h.started).toEqual([]);
+      expect(h.calls).toEqual([]);
+      const text = h.lines.join('\n');
+      expect(text).toMatch(/TRACE_OPERATOR_DB_URL .*not a local/);
+      expect(text).not.toContain(host);
+    }
+    const garbled = harness({ parentEnv: { TRACE_OPERATOR_DB_URL: 'not a url' } });
+    expect(await main(garbled.deps)).toBe(1);
+    expect(garbled.operators).toEqual([]);
+  });
+
+  it('never hands TRACE_OPERATOR_DB_URL to an operator: each one uses the local stack', async () => {
+    // Even a loopback value (it can be a tunnel to another database, B0-SEC2) is not passed on;
+    // the operator then reads the local stack's own database URL from `supabase status`.
+    const h = harness({ parentEnv: { TRACE_OPERATOR_DB_URL: operatorUrl('127.0.0.1') } });
+    expect(await main(h.deps)).toBe(0);
+    expect(h.operators.length).toBeGreaterThan(0);
+    expect(h.operators.every((o) => o.operatorUrl === undefined)).toBe(true);
+    expect(h.sql.every((q) => q.url === h.deps.stackEnv().DB_URL)).toBe(true);
   });
 
   it('gives Playwright the local origins, the user emails, the password and the org, and no Worker secret', async () => {
@@ -696,6 +778,62 @@ describe('main', () => {
     await main(h.deps);
     expect(h.exitAt.code).toBe(130);
     expect(h.exitAt.killed.sort()).toEqual(['api', 'candidate', 'edge+jobs', 'recruiter']);
+    expect(h.exitAt.removed).toEqual([STATE]);
+  });
+
+  // Security review SEC-E3: a failing log write cannot leave the env files behind.
+  it('removes the state folder and drops the roles even when writing a process log throws', async () => {
+    const h = harness({ writeFileFails: (rel) => rel.startsWith(LOG_DIR) });
+    // A lost log is a warning; the run's own result stands.
+    expect(await main(h.deps)).toBe(0);
+    expect(h.removed).toEqual([STATE]);
+    expect(h.sql.at(-1).sql).toBe(dropLoginRolesSql());
+    expect(h.lines.join('\n')).toMatch(/warning: could not write the api process log/);
+    // The manifest is still written.
+    expect(h.written[MANIFEST]).toBeDefined();
+  });
+
+  it('warns without the folder path when the state folder cannot be removed, and still cleans up', async () => {
+    const h = harness({ removeDirFails: true });
+    expect(await main(h.deps)).toBe(0);
+    const text = h.lines.join('\n');
+    expect(text).toMatch(/warning: could not remove the temporary state folder/);
+    expect(text).not.toContain(STATE);
+    expect(h.sql.at(-1).sql).toBe(dropLoginRolesSql());
+    expect(Object.keys(h.written).filter((k) => k.startsWith(LOG_DIR))).toHaveLength(4);
+  });
+
+  // Security review SEC-E2: a Ctrl+C after the roles were set drops them too (best effort, sync).
+  it('on a signal after the role setup, drops the login roles before the lock handler exits', async () => {
+    const h = harness({ onPlaywright: (state) => state.deps.proc.emit('SIGINT') });
+    await main(h.deps);
+    expect(h.exitAt.drops).toEqual([dropLoginRolesSql()]);
+    expect(h.sql.find((q) => q.sql === dropLoginRolesSql()).url).toBe(h.deps.stackEnv().DB_URL);
+  });
+
+  it('on a signal before the role setup, drops nothing', async () => {
+    const h = harness({
+      answer: (cmd, args, state) => {
+        if (args.includes('build')) state.deps.proc.emit('SIGINT');
+        return ok;
+      },
+    });
+    await main(h.deps);
+    expect(h.exitAt.code).toBe(130);
+    expect(h.exitAt.drops).toEqual([]);
+  });
+
+  it('on a signal, a failing role drop does not stop the rest of the clean-up', async () => {
+    const h = harness({
+      onPlaywright: (state) => state.deps.proc.emit('SIGINT'),
+      sqlAnswer: (sql) => {
+        if (!sql.includes('create role')) throw new Error('spawn docker ENOENT');
+        return { ok: true, out: '' };
+      },
+    });
+    await main(h.deps);
+    expect(h.exitAt.code).toBe(130);
+    expect(h.exitAt.killed).toHaveLength(4);
     expect(h.exitAt.removed).toEqual([STATE]);
   });
 

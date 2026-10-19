@@ -54,7 +54,14 @@ import {
 import { main as addMember } from './ops/add-member.mjs';
 import { main as createOrg } from './ops/create-org.mjs';
 import { main as enrolSmokeUser } from './ops/enrol-smoke-user.mjs';
-import { LOCAL_DB_CONTAINER, isUuid, localStackEnv, realDeps, runSql } from './ops/lib.mjs';
+import {
+  DB_URL_ENV,
+  LOCAL_DB_CONTAINER,
+  isUuid,
+  localStackEnv,
+  realDeps,
+  runSql,
+} from './ops/lib.mjs';
 import { defaultDeps as stackDefaults, redact, withLocalStack } from './test-rls.mjs';
 
 export const LIMIT_MS = 25 * 60 * 1000;
@@ -82,7 +89,9 @@ export const E2E_ENV = Object.freeze({
 /**
  * The synthetic users of the local stack (`key` names their E2E_<key>_EMAIL variable). The owner
  * owns the org; the others are members. STORE_RECRUITER is the real-flow spec's own recruiter
- * (e2e/tests/candidate-store.spec.ts enrols its TOTP), so the slice spec's recruiter stays new.
+ * (e2e/tests/candidate-store.spec.ts enrols its TOTP), so the slice spec's recruiter stays new;
+ * UI_RECRUITER is e2e/tests/candidate-ui.spec.ts's own, because GoTrue refuses a second TOTP
+ * enrolment below aal2 (422).
  */
 export const USERS = Object.freeze(
   [
@@ -104,6 +113,12 @@ export const USERS = Object.freeze(
       email: 'e2e-store-recruiter@example.test',
       roles: 'recruiter',
       name: 'E2E store recruiter',
+    },
+    {
+      key: 'UI_RECRUITER',
+      email: 'e2e-ui-recruiter@example.test',
+      roles: 'recruiter',
+      name: 'E2E UI recruiter',
     },
   ].map((u) => Object.freeze(u)),
 );
@@ -355,6 +370,45 @@ export function buildEnv() {
 
 class StepFailure extends Error {}
 
+/** A file-system error code, safe to print; a message (which can hold a path) is never used. */
+const codeOf = (e) =>
+  typeof e?.code === 'string' && /^[A-Z0-9_]{2,20}$/.test(e.code) ? e.code : 'error';
+
+/**
+ * Security review SEC-E1: the operator scripts prefer TRACE_OPERATOR_DB_URL (the staging operator
+ * variable) over the local stack (scripts/ops/lib.mjs resolveDbUrl). A non-local value in the
+ * parent environment stops the run before anything touches a database; the message names the
+ * variable only, never the value.
+ */
+export function operatorUrlProblem(...envs) {
+  for (const env of envs) {
+    const raw = env?.[DB_URL_ENV];
+    if (raw === undefined || String(raw).trim() === '') continue;
+    let host = '';
+    try {
+      host = new URL(String(raw).trim()).hostname.toLowerCase();
+    } catch {
+      // reported below
+    }
+    if (!['127.0.0.1', 'localhost', '[::1]'].includes(host)) {
+      return `${DB_URL_ENV} is set to a database that is not a local one; unset it before running the local stack (it would point the operator scripts away from the local stack)`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The environment without TRACE_OPERATOR_DB_URL: an operator script then reads the local stack's
+ * own database URL from `supabase status` (the same URL readStack checked). Even a loopback value
+ * is dropped (it can be a tunnel to another database, B0-SEC2), and the docker-exec fallback of
+ * scripts/ops/lib.mjs runSql (no psql installed) works only without it.
+ */
+export const withoutOperatorUrl = (env) => {
+  const copy = { ...env };
+  delete copy[DB_URL_ENV];
+  return copy;
+};
+
 /**
  * Runs an operator script's main() with captured output; returns the one id it prints. A failure
  * names the step, the exit code and the script's first stderr line (fixed messages and a SQLSTATE
@@ -367,7 +421,7 @@ async function operator(deps, step, run, argv, extraEnv = {}) {
     argv,
     deps: {
       ...deps.opsDeps,
-      env: { ...deps.opsDeps.env, ...extraEnv },
+      env: { ...withoutOperatorUrl(deps.opsDeps.env), ...extraEnv },
       stdout: { write: (s) => out.push(String(s)) },
       stderr: { write: (s) => err.push(String(s)) },
     },
@@ -482,7 +536,9 @@ export function defaultDeps(overrides) {
     },
     env: process.env,
     stackEnv: () => localStackEnv(realDeps()),
-    runSql: (args) => runSql(args, realDeps()),
+    // The URL is always the checked local one; without TRACE_OPERATOR_DB_URL the docker-exec
+    // fallback (no psql installed) is allowed too (SEC-E1).
+    runSql: (args) => runSql(args, { ...realDeps(), env: withoutOperatorUrl(process.env) }),
     operators: { enrolSmokeUser, createOrg, addMember },
     opsDeps: realDeps(),
     subtle: globalThis.crypto.subtle,
@@ -505,17 +561,32 @@ export async function main(options) {
     error(USAGE);
     return 2;
   }
+  // SEC-E1: nothing runs (no Docker check, no role SQL, no operator) with a non-local operator URL.
+  const urlProblem = operatorUrlProblem(env, deps.opsDeps?.env);
+  if (urlProblem !== null) {
+    error(`${TOOL}: ${urlProblem}`);
+    error(`${TOOL}: FAILED`);
+    return 1;
+  }
   const ci = argv.includes('--ci');
   const t0 = now();
   const phases = {};
   let playwright = null;
   // Security review 2026-10-17 L2: the lock's signal handler exits at once, so the finally below
   // never runs on Ctrl+C, and on POSIX the detached process groups would survive. This handler is
-  // registered first, so it runs first: it kills every process tree and removes the state folder.
-  const live = { handles: [], stateDir: null };
+  // registered first, so it runs first: it kills every process tree, removes the state folder and
+  // (security review SEC-E2) drops the login roles once they were set, best effort and synchronous.
+  const live = { handles: [], stateDir: null, rolesDbUrl: null };
   const onSignal = () => {
     for (const h of live.handles) h.killNow();
     if (live.stateDir !== null) deps.removeDir(live.stateDir);
+    if (live.rolesDbUrl !== null) {
+      try {
+        deps.runSql({ url: live.rolesDbUrl, sql: dropLoginRolesSql(), vars: {} });
+      } catch {
+        // best effort: the next run recreates the roles
+      }
+    }
   };
   const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'];
   for (const s of SIGNALS) deps.proc.on(s, onSignal);
@@ -558,6 +629,7 @@ export async function main(options) {
       log(`${TOOL}: setting up the local logins, keys, users and org`);
       const tl = now();
       rolesTouched = true;
+      live.rolesDbUrl = stack.dbUrl;
       const local = await prepareLocal(deps, { stack, config, root });
       phases.setup_ms = now() - tl;
       if (!local.ok) return local.problems;
@@ -596,22 +668,40 @@ export async function main(options) {
       return problems;
     } finally {
       await Promise.all(handles.map((h) => h.stop()));
-      for (const h of handles) {
-        const file = path.join(root, ...LOG_DIR.split('/'), `${h.name.replace(/\W/g, '-')}.log`);
-        deps.writeFile(file, redact(h.output()));
+      // Security review SEC-E3: the state folder (with the generated env files) goes first, in its
+      // own try, so nothing after it can leave those files behind. The warning has no path.
+      try {
+        deps.removeDir(stateDir);
+      } catch (e) {
+        deps.warn(
+          `${TOOL}: warning: could not remove the temporary state folder (${codeOf(e)}); delete the trace-e2e-* folder in the OS temp directory by hand`,
+        );
       }
+      live.stateDir = null;
       // The Workers are stopped, so nothing uses the logins any more; a later run recreates them.
       if (rolesTouched) {
-        const dropped = deps.runSql({ url: stack.dbUrl, sql: dropLoginRolesSql(), vars: {} });
+        let dropped;
+        try {
+          dropped = deps.runSql({ url: stack.dbUrl, sql: dropLoginRolesSql(), vars: {} });
+        } catch {
+          dropped = { ok: false, sqlstate: null };
+        }
         if (!dropped.ok) {
           const why = dropped.sqlstate ? `SQLSTATE ${dropped.sqlstate}` : 'no SQLSTATE';
           deps.warn(
             `${TOOL}: warning: could not drop the local login roles (${why}); the next run recreates them`,
           );
         }
+        live.rolesDbUrl = null;
       }
-      deps.removeDir(stateDir);
-      live.stateDir = null;
+      for (const h of handles) {
+        const file = path.join(root, ...LOG_DIR.split('/'), `${h.name.replace(/\W/g, '-')}.log`);
+        try {
+          deps.writeFile(file, redact(h.output()));
+        } catch (e) {
+          deps.warn(`${TOOL}: warning: could not write the ${h.name} process log (${codeOf(e)})`);
+        }
+      }
     }
   });
   for (const s of SIGNALS) deps.proc.off(s, onSignal);
