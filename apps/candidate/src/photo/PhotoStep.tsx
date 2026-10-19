@@ -141,8 +141,16 @@ export function PhotoStep({ api, lobbyToken, onDone, onStepError }: Props) {
     const video = document.createElement('video');
     video.muted = true;
     video.playsInline = true;
-    video.srcObject = res.stream;
     videoRef.current = video;
+    try {
+      video.srcObject = res.stream;
+    } catch {
+      // The stream cannot be shown: the camera goes off at once.
+      stopCamera();
+      setError(COPY.photo.unusable);
+      setPhase('intro');
+      return;
+    }
     try {
       await video.play();
     } catch {

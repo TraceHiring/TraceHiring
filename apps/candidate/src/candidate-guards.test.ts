@@ -1,17 +1,53 @@
-// Raw-source guards for the candidate app (CLAUDE.md rule 8, specs/d1-demo-slice.md §4.7 AT-D30, m0-foundations §1,
-// §9.2, build-notes Q17). The test reads this app's own production sources as text, so a forbidden name fails here
-// even if a build would tree-shake it:
+// @vitest-environment happy-dom
+// AT-D30 (CLAUDE.md rules 8 and 9, specs/d1-demo-slice.md §4.7, m0-foundations §1, §9.2, build-notes Q17).
+// Raw-source guards read this app's own production sources as text, so a forbidden name fails here even if a build
+// would tree-shake it:
 //   (1) `getUserMedia` / `mediaDevices` appear only in src/photo/camera.ts (the one camera module);
 //   (2) its one call asks for `audio: false`, and `audio: true` appears nowhere;
 //   no screen capture, device listing, recorder, ImageCapture or HTML Media Capture (`capture=`) anywhere;
 //   no error reporter, Sentry or analytics; `fetch(` only in src/api.ts;
 //   imports: React, local files under src/, the logger, the token stylesheet, and the candidate contracts as a
 //   top-level `import type` only (a runtime import would pull zod into the bundle, spec D3).
-// The behavioural half of AT-D30 (items 3 and 4: when the camera is asked for and that every track stops) is
-// src/camera-flow.test.tsx.
-import { describe, expect, it } from 'vitest';
+// A behavioural walk of the real App (happy-dom, mocked fetch, camera, canvas and media element) then checks
+//   (3) the camera is never asked for before the consent call answered success, exactly once on the photo step, and
+//       never on the rules or test steps; (4) every track stops as soon as the shot is taken and on unmount; plus
+//   the camera-denied skip path and the under-18 path (no consent, no camera).
+import { createElement } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import indexHtml from '../index.html?raw';
 import pkg from '../package.json';
+import { App } from './App';
+import type { Boot } from './boot';
+import { COPY } from './copy';
+import {
+  buttonByText,
+  CANVAS_JPEG,
+  click,
+  deferred,
+  fakeCamera,
+  fakeCanvasAndVideo,
+  h1Text,
+  mockFetch,
+  mount,
+  nextOrder,
+  settle,
+  sha256HexOf,
+  typeInto,
+  waitFor,
+  waitForButton,
+  type Mounted,
+} from './dom.test-helpers';
+import {
+  json,
+  LINK_TOKEN,
+  LOBBY_TOKEN,
+  MCQ_ITEM,
+  NOTICE,
+  SESSION_TOKEN,
+  viewAt,
+  WRITTEN_ITEM,
+} from './fixtures.test-helpers';
+import { SESSION_KEY } from './session-store';
 
 const all = import.meta.glob('./**/*.{ts,tsx}', {
   query: '?raw',
@@ -309,3 +345,260 @@ describe('candidate package.json', () => {
     ).toEqual([]);
   });
 });
+
+// ---- (3) and (4): the camera in the real App ---------------------------------------------------------------------
+
+const ORIGIN = 'https://trace-edge-staging.example-sub.workers.dev';
+const BOOT: Boot = { linkToken: LINK_TOKEN, badLink: false, stored: null, origin: ORIGIN };
+
+/** The edge as the walk needs it; `consent` can be held back to prove the camera waits for it. */
+const edgeRoutes = (opts: { consent?: Promise<Response> } = {}) => {
+  const now = Date.now();
+  return mockFetch({
+    'POST /v1/invite/resolve': () =>
+      json(200, { state: 'sent', title: 'Synthetic aptitude test', durationMinutes: 30 }),
+    'POST /v1/otp/request': () =>
+      json(200, { resendAfterSeconds: 30, expiresInSeconds: 600, channel: 'email' }),
+    'POST /v1/otp/verify': () =>
+      json(200, {
+        lobbyToken: LOBBY_TOKEN,
+        expiresAt: new Date(now + 1_800_000).toISOString(),
+        next: 'age',
+      }),
+    'POST /v1/lobby/age': (req) =>
+      (req.body as { adult: boolean }).adult
+        ? json(200, { ok: true })
+        : json(403, { error: 'not_eligible' }),
+    'GET /v1/lobby/notice': () => json(200, NOTICE),
+    'POST /v1/lobby/consent': () => opts.consent ?? json(200, { ok: true }),
+    'PUT /v1/lobby/photo': (req) =>
+      json(200, { sha256: req.headers['x-photo-sha256'], bytes: (req.body as Uint8Array).length }),
+    'POST /v1/session/start': () =>
+      json(200, {
+        sessionToken: SESSION_TOKEN,
+        expiresAt: new Date(now + 5_400_000).toISOString(),
+        view: viewAt(now),
+      }),
+    'GET /v1/session/items/:pos': (req) =>
+      json(200, req.path.endsWith('/1') ? MCQ_ITEM : WRITTEN_ITEM),
+    'POST /v1/session/events': () =>
+      json(200, {
+        ackSeq: 0,
+        serverNow: new Date().toISOString(),
+        deadlineAt: new Date(now + 1_800_000).toISOString(),
+        state: 'in_progress',
+      }),
+  });
+};
+
+describe(
+  'AT-D30 behaviour: the camera only after consent, once, and always stopped',
+  { timeout: 20_000 },
+  () => {
+    let app: Mounted | undefined;
+
+    beforeEach(() => {
+      sessionStorage.removeItem(SESSION_KEY);
+      fakeCanvasAndVideo();
+      vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    });
+    afterEach(async () => {
+      await app?.unmount();
+      app = undefined;
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    /** Link → OTP → 18+; stops on the consent screen with the box ticked. */
+    const toConsent = async (container: HTMLElement) => {
+      await click(await waitForButton(container, COPY.otp.send));
+      const input = await waitFor(
+        () => container.querySelector<HTMLInputElement>('input[autocomplete="one-time-code"]'),
+        'code input',
+      );
+      await typeInto(input, '123456');
+      await click(await waitForButton(container, COPY.otp.verify));
+      await click(await waitForButton(container, COPY.age.adult));
+      const notice = await waitFor(
+        () => container.querySelector('[data-testid="notice-text"]'),
+        'notice',
+      );
+      expect(notice.textContent).toBe(NOTICE.bodyText);
+      await click(
+        await waitFor(
+          () => container.querySelector<HTMLInputElement>('input[type="checkbox"]'),
+          'agree box',
+        ),
+      );
+    };
+
+    it('walks consent → photo → rules → test: camera after consent, once, tracks stopped at the shot', async () => {
+      const camera = fakeCamera();
+      const held = deferred<Response>();
+      const edge = edgeRoutes({ consent: held.promise });
+      app = await mount(createElement(App, { boot: BOOT }));
+      const { container } = app;
+      await toConsent(container);
+      await click(await waitForButton(container, COPY.consent.agree));
+      // The consent call is in flight: no photo step, no camera.
+      await settle(50);
+      expect(edge.paths()).toContain('POST /v1/lobby/consent');
+      expect(h1Text(container)).toBe(COPY.consent.title);
+      expect(camera.getUserMedia).not.toHaveBeenCalled();
+      const consentAnsweredAt = nextOrder();
+      held.resolve(json(200, { ok: true }));
+
+      // The photo step loads, but the camera waits for the candidate.
+      const turnOn = await waitForButton(container, COPY.photo.start);
+      expect(h1Text(container)).toBe(COPY.photo.title);
+      expect(camera.getUserMedia).not.toHaveBeenCalled();
+      await click(turnOn);
+      const take = await waitForButton(container, COPY.photo.take);
+      expect(camera.getUserMedia).toHaveBeenCalledTimes(1);
+      expect(camera.calls[0]?.order).toBeGreaterThan(consentAnsweredAt);
+      expect(camera.calls[0]?.constraints).toEqual({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+      expect(camera.tracks[0]?.stop).not.toHaveBeenCalled();
+      // No video element is ever on screen; the preview is the canvas.
+      expect(container.querySelector('video')).toBeNull();
+      expect(container.querySelector('canvas')).not.toBeNull();
+
+      await click(take);
+      // (4) the track stops as soon as the shot is taken.
+      expect(camera.tracks[0]?.stop).toHaveBeenCalled();
+      await click(await waitForButton(container, COPY.photo.use));
+      await waitFor(() => h1Text(container) === COPY.rules.title, 'rules');
+
+      // Only the processed, APP0-only JPEG left the device, with the hash of exactly those bytes (rev 4i).
+      const upload = edge.calls.find((c) => c.method === 'PUT');
+      const body = upload?.body as Uint8Array;
+      expect(upload?.headers['content-type']).toBe('image/jpeg');
+      expect(body.length).toBeLessThan(CANVAS_JPEG.length);
+      expect([...body].some((b, k) => b === 0xff && body[k + 1] === 0xe2)).toBe(false);
+      expect(upload?.headers['x-photo-sha256']).toBe(await sha256HexOf(body));
+
+      await click(
+        container.querySelector<HTMLInputElement>('input[type="checkbox"]') as HTMLInputElement,
+      );
+      await click(await waitForButton(container, COPY.rules.start));
+      await waitFor(() => h1Text(container) === 'Synthetic aptitude test', 'test screen');
+      await waitFor(() => container.querySelector('input[type="radio"]'), 'first item');
+      const start = edge.calls.find((c) => c.path === '/v1/session/start');
+      expect(start?.body).toEqual({
+        rulesAcknowledged: true,
+        photo: { sha256: upload?.headers['x-photo-sha256'] },
+      });
+      // Never again on the rules or the test step.
+      expect(camera.getUserMedia).toHaveBeenCalledTimes(1);
+      // Every request went to the edge origin, and the only binary body was the photo.
+      expect(edge.fn.mock.calls.every(([url]) => String(url).startsWith(`${ORIGIN}/v1/`))).toBe(
+        true,
+      );
+      expect(edge.calls.filter((c) => c.body instanceof Uint8Array)).toHaveLength(1);
+    });
+
+    it('(4) stops every track when the photo step unmounts with the camera on', async () => {
+      const camera = fakeCamera();
+      edgeRoutes();
+      app = await mount(createElement(App, { boot: BOOT }));
+      const { container } = app;
+      await toConsent(container);
+      await click(await waitForButton(container, COPY.consent.agree));
+      await click(await waitForButton(container, COPY.photo.start));
+      await waitForButton(container, COPY.photo.take);
+      expect(camera.tracks).toHaveLength(1);
+      expect(camera.tracks[0]?.stop).not.toHaveBeenCalled();
+      await app.unmount();
+      app = undefined;
+      expect(camera.tracks[0]?.stop).toHaveBeenCalled();
+    });
+
+    it('stops the tracks when the candidate leaves the live camera with "Continue without a photo"', async () => {
+      const camera = fakeCamera();
+      const edge = edgeRoutes();
+      app = await mount(createElement(App, { boot: BOOT }));
+      const { container } = app;
+      await toConsent(container);
+      await click(await waitForButton(container, COPY.consent.agree));
+      await click(await waitForButton(container, COPY.photo.start));
+      await waitForButton(container, COPY.photo.take);
+      await click(buttonByText(container, COPY.photo.skip) as HTMLButtonElement);
+      expect(camera.tracks[0]?.stop).toHaveBeenCalled();
+      await waitFor(() => h1Text(container) === COPY.rules.title, 'rules');
+      expect(edge.calls.some((c) => c.method === 'PUT')).toBe(false);
+    });
+
+    it('camera denied: a plain-language screen, then "Continue without a photo" starts with camera_denied', async () => {
+      const camera = fakeCamera('NotAllowedError');
+      const edge = edgeRoutes();
+      app = await mount(createElement(App, { boot: BOOT }));
+      const { container } = app;
+      await toConsent(container);
+      await click(await waitForButton(container, COPY.consent.agree));
+      await click(await waitForButton(container, COPY.photo.start));
+      await waitFor(() => h1Text(container) === COPY.photo.deniedTitle, 'denied screen');
+      expect(container.textContent).toContain(COPY.photo.denied);
+      expect(buttonByText(container, COPY.photo.retry)).toBeDefined();
+      await click(await waitForButton(container, COPY.photo.skip));
+      await waitFor(() => h1Text(container) === COPY.rules.title, 'rules');
+      await click(
+        container.querySelector<HTMLInputElement>('input[type="checkbox"]') as HTMLInputElement,
+      );
+      await click(await waitForButton(container, COPY.rules.start));
+      await waitFor(() => h1Text(container) === 'Synthetic aptitude test', 'test screen');
+      const start = edge.calls.find((c) => c.path === '/v1/session/start');
+      expect(start?.body).toEqual({
+        rulesAcknowledged: true,
+        photo: { skippedReason: 'camera_denied' },
+      });
+      expect(edge.calls.some((c) => c.method === 'PUT')).toBe(false);
+      expect(camera.getUserMedia).toHaveBeenCalledTimes(1);
+      expect(camera.tracks).toHaveLength(0);
+    });
+
+    it('no camera: "Continue without a photo" starts with no_camera', async () => {
+      fakeCamera('NotFoundError');
+      const edge = edgeRoutes();
+      app = await mount(createElement(App, { boot: BOOT }));
+      const { container } = app;
+      await toConsent(container);
+      await click(await waitForButton(container, COPY.consent.agree));
+      await click(await waitForButton(container, COPY.photo.start));
+      await waitFor(() => h1Text(container) === COPY.photo.noneTitle, 'no-camera screen');
+      await click(await waitForButton(container, COPY.photo.skip));
+      await waitFor(() => h1Text(container) === COPY.rules.title, 'rules');
+      await click(
+        container.querySelector<HTMLInputElement>('input[type="checkbox"]') as HTMLInputElement,
+      );
+      await click(await waitForButton(container, COPY.rules.start));
+      await waitFor(() => edge.calls.find((c) => c.path === '/v1/session/start'), 'start');
+      expect(edge.calls.find((c) => c.path === '/v1/session/start')?.body).toEqual({
+        rulesAcknowledged: true,
+        photo: { skippedReason: 'no_camera' },
+      });
+    });
+
+    it('under 18 (rule 9): blocked with neutral copy; no notice, consent, photo or camera', async () => {
+      const camera = fakeCamera();
+      const edge = edgeRoutes();
+      app = await mount(createElement(App, { boot: BOOT }));
+      const { container } = app;
+      await click(await waitForButton(container, COPY.otp.send));
+      const input = await waitFor(
+        () => container.querySelector<HTMLInputElement>('input[autocomplete="one-time-code"]'),
+        'code input',
+      );
+      await typeInto(input, '123456');
+      await click(await waitForButton(container, COPY.otp.verify));
+      await click(await waitForButton(container, COPY.age.minor));
+      await waitFor(() => h1Text(container) === COPY.blocked.title, 'blocked');
+      await settle(50);
+      expect(edge.calls.find((c) => c.path === '/v1/lobby/age')?.body).toEqual({ adult: false });
+      expect(edge.paths().filter((p) => /notice|consent|photo|session/.test(p))).toEqual([]);
+      expect(camera.getUserMedia).not.toHaveBeenCalled();
+      expect(container.querySelectorAll('button')).toHaveLength(0);
+    });
+  },
+);
