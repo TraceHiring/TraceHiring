@@ -11,6 +11,7 @@ import { COPY } from '../copy';
 import { saveSession } from '../session-store';
 import { ErrorSummary, Status, StepHeading, ui } from '../ui';
 import { AnswerEditor } from './AnswerEditor';
+import { remainingMs } from './clock';
 import { McqItem } from './McqItem';
 import { createOutbox, type EndReason, type Outbox } from './outbox';
 import { installSignals, type Signals } from './signals';
@@ -66,6 +67,9 @@ export function Test({ api, sessionToken, view, offsetMs, onReceipt, onEnd }: Pr
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(() => document.fullscreenElement !== null);
+  /** Set by the timer at zero; the auto-submit runs from this component, after the outbox exists (SR-2). */
+  const [timeUp, setTimeUp] = useState(false);
+  const clockRef = useRef(clock);
 
   const outboxRef = useRef<Outbox | null>(null);
   const signalsRef = useRef<Signals | null>(null);
@@ -120,7 +124,11 @@ export function Test({ api, sessionToken, view, offsetMs, onReceipt, onEnd }: Pr
           if ('text' in value) setTexts((t) => ({ ...t, [item]: value.text }));
           else setChoices((c) => ({ ...c, [item]: value.choice }));
         },
-        ack: (info) => setClock({ deadlineAtMs: info.deadlineAtMs, offsetMs: info.offsetMs }),
+        ack: (info) => {
+          const next = { deadlineAtMs: info.deadlineAtMs, offsetMs: info.offsetMs };
+          clockRef.current = next;
+          setClock(next);
+        },
         end: (reason) => streamEnded(reason),
       },
     });
@@ -148,7 +156,9 @@ export function Test({ api, sessionToken, view, offsetMs, onReceipt, onEnd }: Pr
   }, [current]);
 
   const itemRefused = useEffectEvent((res: ApiFailure, position: number) => {
-    if (res.code === 'closed') return void receiptFromAttach();
+    // SR-3: an item is 410 once the deadline passed, while the session may still run (the grace is for saves). An
+    // attach now would open a new stream and supersede this one; submitting ends the session and returns the receipt.
+    if (res.code === 'closed') return void submit(true);
     if (res.code === 'superseded') return onEnd('superseded');
     if (res.code === 'token_invalid' || res.code === 'token_expired') return onEnd('invalid');
     if (res.status === 429) {
@@ -175,15 +185,21 @@ export function Test({ api, sessionToken, view, offsetMs, onReceipt, onEnd }: Pr
     });
   }, [api, sessionToken, current, items, itemAttempt]);
 
-  const submit = async (auto: boolean) => {
+  const submit = async (automatic: boolean) => {
     if (finishing.current || done.current) return;
+    if (outboxRef.current === null) return; // not mounted yet: the caller runs again once it is (SR-2)
+    let auto = automatic;
     finishing.current = true;
     setError(null);
     setPhase(auto ? 'timeup' : 'submitting');
     signalsRef.current?.flush();
     for (;;) {
       const outbox = outboxRef.current;
-      if (!alive.current || done.current || outbox === null) return;
+      if (!alive.current || done.current) return;
+      if (outbox === null) {
+        finishing.current = false;
+        return;
+      }
       const flushed = await outbox.flush();
       if (!alive.current || done.current) return;
       if (flushed) {
@@ -201,14 +217,27 @@ export function Test({ api, sessionToken, view, offsetMs, onReceipt, onEnd }: Pr
         if (res.code === 'out_of_order') continue;
       }
       if (!auto) {
-        finishing.current = false;
-        setPhase('working');
-        setError(COPY.test.submitOffline);
-        return;
+        const { deadlineAtMs, offsetMs: offset } = clockRef.current;
+        if (remainingMs(deadlineAtMs, offset, Date.now()) > 0) {
+          finishing.current = false;
+          setPhase('working');
+          setError(COPY.test.submitOffline);
+          return;
+        }
+        // SR-8: time ran out while this manual submit was in flight: keep the answers locked and keep trying.
+        auto = true;
+        setPhase('timeup');
       }
       await sleep(SUBMIT_RETRY_MS);
     }
   };
+
+  // SR-2: the auto-submit runs here, after this component's own effects created the outbox (a child's effect runs
+  // before its parent's, so the timer must not submit directly).
+  const autoSubmit = useEffectEvent(() => void submit(true));
+  useEffect(() => {
+    if (timeUp) autoSubmit();
+  }, [timeUp]);
 
   const index = positions.indexOf(current);
   const item = items[current];
@@ -251,7 +280,7 @@ export function Test({ api, sessionToken, view, offsetMs, onReceipt, onEnd }: Pr
         <Timer
           deadlineAtMs={clock.deadlineAtMs}
           offsetMs={clock.offsetMs}
-          onExpire={() => void submit(true)}
+          onExpire={() => setTimeUp(true)}
         />
       </div>
       <Status message={statusLine} />
