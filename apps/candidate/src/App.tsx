@@ -24,6 +24,11 @@ import { APP_VERSION } from './version';
 
 export const PRODUCT_NAME = COPY.product;
 
+/** The wait after a link-route 429 without a usable Retry-After: the edge limiter's 10 s period. */
+const RATE_LIMIT_WAIT_SECONDS = 10;
+/** The longest wait honoured, so a proxy's large Retry-After cannot keep "Try again" disabled for long. */
+const RATE_LIMIT_MAX_WAIT_SECONDS = 60;
+
 const PhotoStep = lazy(() => import('./photo/PhotoStep'));
 const Test = lazy(() => import('./test/Test'));
 
@@ -64,6 +69,19 @@ export function App({ boot = EMPTY_BOOT }: { boot?: Boot }) {
     if (res.ok) return dispatch({ type: 'resolved', res: res.value });
     if (res.code === 'invalid_link' || res.code === 'bad_request')
       return dispatch({ type: 'unavailable', why: 'invalid' });
+    // The edge's coarse link limit (OPEN-13): wait for Retry-After (10 s when missing, at most 60 s) before "Try again".
+    if (res.code === 'rate_limited') {
+      const wait = res.retryAfterSeconds;
+      return dispatch({
+        type: 'error',
+        why: 'rate_limited',
+        retry: true,
+        waitSeconds:
+          wait !== undefined && wait >= 1
+            ? Math.min(wait, RATE_LIMIT_MAX_WAIT_SECONDS)
+            : RATE_LIMIT_WAIT_SECONDS,
+      });
+    }
     dispatch({ type: 'error', why: isOffline(res) ? 'network' : 'generic', retry: true });
   }, [api, boot]);
 
@@ -109,7 +127,13 @@ export function App({ boot = EMPTY_BOOT }: { boot?: Boot }) {
       case 'blocked':
         return <BlockedStep />;
       case 'error':
-        return <ErrorStep why={step.why} onRetry={step.retry ? retry : null} />;
+        return (
+          <ErrorStep
+            why={step.why}
+            onRetry={step.retry ? retry : null}
+            waitSeconds={step.waitSeconds}
+          />
+        );
       case 'submitted':
         return <SubmittedStep receipt={step.receipt} />;
       case 'otp':
