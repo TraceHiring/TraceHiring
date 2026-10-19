@@ -1,5 +1,10 @@
 # Spec — D1 · Demo slice (thin end-to-end, staging, synthetic data only)
 
+- **Revision 4j (2026-10-19, lead, BUILD Wave 2b).** From the C2 reviews (docs/reviews/D1-review-c2.md; none changes rules 1–9):
+  - §4.6 `untrusted_input`: the first untrusted event of an item's 5 s window (per `via`) is emitted at once with `count: 1`, ahead of any edit it causes, and the rest of the window follows as one more signal with the remaining count (SR-1). Unsent signals survive the 10-minute offline compaction; only heartbeats and superseded edits are dropped (SR-4). `dragover` is also prevented in the capture phase (SR-11).
+  - §4.7 `sessionStorage`: the stored `view` snapshot never holds answers (`answers: []`); a reload restores answers from `attach` (SEC-2). The answer textarea has `spellCheck={false}` (SEC-7). The test screen auto-submits at zero after its outbox exists, an item 410 submits instead of attaching, and a failed manual submit after time-up joins the 5 s auto retry (SR-2, SR-3, SR-8).
+  - §4.5 device: the camera starts only when the candidate clicks "Turn on camera"; "Use this photo" stays disabled until the stripped JPEG is ready (C2 decision 5, lead item).
+
 - **Revision 4i (2026-10-19, lead, BUILD Wave 2b).** Found by the first `e2e-local` real flow (none changes rules 1–9):
   - §4.5 Upload: Chromium's `canvas.toBlob('image/jpeg', 0.85)` writes an APP2 ICC profile (472 bytes) after the JFIF APP0, which the edge refuses (415 `bad_media`, revision 4d hardening). The edge stays strict. The candidate app strips every APP1–APP15 and COM segment before the first scan (all other segments and the scan data byte for byte; a malformed stream is refused on the device), and `X-Photo-Sha256` is the hash of the stripped bytes. The e2e support code does the same.
   - §4.7 `public/_headers`: the edge origin is `https://trace-edge-staging.abhayraj.workers.dev` (H4 label `abhayraj`); `VITE_EDGE_ORIGIN` is that literal on the deploy-staging build step (check-workflows pins it) and `http://127.0.0.1:8787` in the `e2e-local` build. The app fails closed without a valid origin.
