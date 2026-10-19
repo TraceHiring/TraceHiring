@@ -26,6 +26,9 @@
 //   5c. `node scripts/test-concurrency-local.mjs` (M0b review M0B-DB-5): two connections demote the two
 //      owners of one org at once, under READ COMMITTED and REPEATABLE READ; the second must be refused.
 //      Only its `test-concurrency-local: ` stdout lines are printed on failure; its stderr never is.
+//   5d. `node scripts/test-staging-roles-local.mjs` (d1 Chat E spec review SR-E-5): the real staging
+//      login-role SQL of scripts/ops/staging-worker-secrets.mjs, run in one rolled-back transaction.
+//      Only its `test-staging-roles-local: ` stdout lines are printed on failure; its stderr never is.
 //   6. db-types drift: `supabase gen types typescript --local --schema public` goes to a temp
 //      file, compared byte for byte with packages/db-types/src/database.ts (never overwritten;
 //      `pnpm db:types` regenerates it on purpose).
@@ -85,6 +88,8 @@ export const EXCLUDED_SERVICES = Object.freeze(
 export const AUTH_TEST_ARGS = Object.freeze(['scripts/test-auth-local.mjs']);
 /** M0B-DB-5: two connections demote an org's two owners at once, run with node after AT-B8. */
 export const CONCURRENCY_TEST_ARGS = Object.freeze(['scripts/test-concurrency-local.mjs']);
+/** d1 SR-E-5: the staging login-role SQL against the local stack, rolled back, run with node after M0B-DB-5. */
+export const STAGING_ROLES_TEST_ARGS = Object.freeze(['scripts/test-staging-roles-local.mjs']);
 /** d1 AT-D16 (stream R2): the jobs stages against the real schema, grants and card guard (Node, local DB). */
 export const JOBS_DB_TEST_ARGS = Object.freeze([
   '--filter',
@@ -752,6 +757,19 @@ export async function main(options) {
         .map((l) => `  | ${redact(l)}`);
       problems.push(
         `the two-connection owner-demotion test failed (M0B-DB-5${conc.error ? `, ${conc.error.code ?? 'error'}` : ''})`,
+        ...lines,
+      );
+    }
+    // d1 SR-E-5: its stdout holds only fixed messages; stderr is never printed.
+    log('test-rls: running the staging login-role SQL test (d1 SR-E-5)');
+    const roles = await run('node', STAGING_ROLES_TEST_ARGS, { cwd: root });
+    if (roles.status !== 0) {
+      const lines = toText(roles.stdout)
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('test-staging-roles-local: '))
+        .map((l) => `  | ${redact(l)}`);
+      problems.push(
+        `the staging login-role SQL test failed (d1 SR-E-5${roles.error ? `, ${roles.error.code ?? 'error'}` : ''})`,
         ...lines,
       );
     }

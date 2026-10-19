@@ -23,6 +23,7 @@ import {
   DOCKER_MESSAGE,
   AUTH_TEST_ARGS,
   CONCURRENCY_TEST_ARGS,
+  STAGING_ROLES_TEST_ARGS,
   JOBS_DB_TEST_ARGS,
   EXCLUDED_SERVICES,
   FLOORS,
@@ -231,6 +232,7 @@ describe('§8.3 step 2: the shared lock', () => {
       'test',
       'auth',
       'concurrency',
+      'stagingroles',
       'jobsdb',
       'gen',
     ]);
@@ -550,6 +552,34 @@ describe('m0b M0B-DB-5: the two-connection owner-demotion test runs after AT-B8'
   });
 });
 
+describe('d1 chat e SR-E-5: the staging login-role SQL runs on the local stack after the concurrency test', () => {
+  it('runs node scripts/test-staging-roles-local.mjs from the root after the concurrency test', async () => {
+    const h = harness();
+    expect(await h.go()).toBe(0);
+    const call = h.stub.calls.find((c) => c.key === 'stagingroles');
+    expect(call.line).toBe(`node ${STAGING_ROLES_TEST_ARGS.join(' ')}`);
+    expect(STAGING_ROLES_TEST_ARGS).toEqual(['scripts/test-staging-roles-local.mjs']);
+    expect(call.opts.cwd).toBe(h.root);
+  });
+
+  it('fails the run when it fails, printing only its own stdout lines', async () => {
+    const h = harness({
+      responses: {
+        stagingroles: {
+          status: 1,
+          stdout: 'test-staging-roles-local: TR002 guard: FAILED\nnoise\n',
+          stderr: fakeDbUrl(),
+        },
+      },
+    });
+    expect(await h.go()).toBe(1);
+    expect(h.out.all()).toMatch(/test-staging-roles-local: TR002 guard: FAILED/);
+    expect(h.out.all()).toMatch(/SR-E-5/);
+    expect(h.out.all()).not.toContain('noise');
+    expect(h.out.all()).not.toContain('postgresql://');
+  });
+});
+
 describe('d1 AT-D16: the jobs real-database tests run after the concurrency test', () => {
   it('runs the @trace/jobs db config from the root, after the concurrency test and before gen types', async () => {
     const h = harness();
@@ -598,6 +628,7 @@ describe('§8.3 steps 3–4: start and reset', () => {
       'test',
       'auth',
       'concurrency',
+      'stagingroles',
       'jobsdb',
       'gen',
     ]);
@@ -910,7 +941,7 @@ describe('§8.3 step 6: db-types drift', () => {
       '--schema',
       'public',
     ]);
-    expect(h.stub.calls[7].line).toBe(`pnpm ${GEN_TYPES_ARGS.join(' ')}`);
+    expect(h.stub.calls[8].line).toBe(`pnpm ${GEN_TYPES_ARGS.join(' ')}`);
     expect(DB_TYPES_FILE).toBe('packages/db-types/src/database.ts');
   });
 
@@ -984,6 +1015,7 @@ describe('§8.3 step 6: db-types drift', () => {
       'test',
       'auth',
       'concurrency',
+      'stagingroles',
       'jobsdb',
       'gen',
     ]);
@@ -1012,11 +1044,12 @@ describe('--stop (CI)', () => {
       'test',
       'auth',
       'concurrency',
+      'stagingroles',
       'jobsdb',
       'gen',
       'stop',
     ]);
-    expect(h.stub.calls[8].line).toBe(`pnpm ${STOP_ARGS.join(' ')}`);
+    expect(h.stub.calls[9].line).toBe(`pnpm ${STOP_ARGS.join(' ')}`);
     expect(heldDuringStop).toBe(true);
     expect(existsSync(h.lockFile)).toBe(false);
   });

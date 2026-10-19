@@ -94,6 +94,7 @@ const KEYS = [
   ['gen', (l) => l.startsWith('pnpm exec supabase gen types')],
   ['auth', (l) => l.startsWith('node scripts/test-auth-local.mjs')],
   ['concurrency', (l) => l.startsWith('node scripts/test-concurrency-local.mjs')],
+  ['stagingroles', (l) => l.startsWith('node scripts/test-staging-roles-local.mjs')],
   ['jobsdb', (l) => l.startsWith('pnpm --filter @trace/jobs exec vitest')],
   ['stop', (l) => l.startsWith('pnpm exec supabase stop')],
 ];
