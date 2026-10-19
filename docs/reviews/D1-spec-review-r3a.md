@@ -53,7 +53,7 @@ Every §6.2 row owned by these modules matches path, verb, role set, contract an
 | --- | --- |
 | 1 | Open, due before D1 CLOSE: the real trace_api SQL of the candidate store runs in `e2e-local` (R5 flow steps 1–7), recorded in the D1 summary. |
 | 2 | Fixed in `ffe674a` (the losing attempt rewrites the frozen package on its 0-row path; race test). |
-| 3 | Open, due before R4 integrates the editor (`toDetail` must tolerate a half-written draft; a lead contract decision). |
+| 3 | **Fixed (Chat C, lead, no contract change):** for a draft, `toDetail` leaves out an mcq item without its key and a written item without a stored rubric, so GET keeps working and the next PUT replaces the children; a published or retired version stays fail-closed (503). Test first: `services/api/src/modules/tests/authoring.test.ts`. |
 | 4 | Fixed in `76f203d` (POST and PUT tests need an authoring role). |
 | 5 | (a) R5; (b) fixed in `2c11bb5` (default fetch test). |
 | 6 | (a) AT-D33 wording recorded in spec revision 4c; (b) FOUNDER-QUEUE row (rule 9, M3a); (c) and (d) noted, no change in R3. |

@@ -197,12 +197,34 @@ export const loadContent = async (
 export const itemsOf = (content: Content, sectionId: string): ItemRow[] =>
   content.items.filter((i) => i.section_id === sectionId).sort((a, b) => a.position - b.position);
 
+/**
+ * Whether an item has its answer key (mcq) or a stored rubric (written). A draft can lack one after a PUT failed
+ * between the item insert and the key or rubric insert (spec §6.2 "half-written draft is harmless"; spec review
+ * r3a #3): the editor view leaves such an item out and the next PUT replaces the children; publish validates.
+ * A published or retired version is never incomplete, so there toDetail stays fail-closed (503 unavailable).
+ */
+const isComplete = (content: Content, item: ItemRow): boolean =>
+  item.format === 'mcq'
+    ? content.keys.has(item.id)
+    : content.rubrics.has(item.rubric_version_id ?? '');
+
 /** The org-side editor view (it carries the answer key; never sent to the candidate path). */
 export const toDetail = (
   test: TestRow,
   version: VersionRow,
   content: Content,
-): TestDetailResponse => ({
+): TestDetailResponse =>
+  version.status === 'draft'
+    ? toDetailOf(test, version, draftView(content))
+    : toDetailOf(test, version, content);
+
+/** The draft's content without its incomplete items. */
+const draftView = (content: Content): Content => ({
+  ...content,
+  items: content.items.filter((i) => isComplete(content, i)),
+});
+
+const toDetailOf = (test: TestRow, version: VersionRow, content: Content): TestDetailResponse => ({
   test: { id: test.id, name: test.name, createdAt: test.created_at },
   version: {
     id: version.id,
