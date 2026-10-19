@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 // AT-D18 (specs/d1-demo-slice.md §5.3, §6.1; L-11): a production-flavour recruiter build contains no demo-outbox
 // string. The recruiter includes the demo outbox (mock Messaging: invite links and OTPs) only when it is built
-// with VITE_DEMO_OUTBOX=1 exactly (the staging deploy and e2e-local); every other build is production-flavour and
-// is checked here, after `pnpm -r build`. Every file under apps/recruiter/dist/ is read as text (js, css, html,
-// source maps). Fails (exit 1) on any hit or when the dist folder is missing; a demo build is skipped with a notice.
-// Optional argument: the repository root (default: this script's repo). Reads only VITE_DEMO_OUTBOX.
+// with VITE_DEMO_OUTBOX=1 exactly and a VITE_TRACE_ENV other than production (the staging deploy and e2e-local);
+// every other build is production-flavour and is checked here, after `pnpm -r build`, including one that has the
+// flag but VITE_TRACE_ENV=production (the app's inline gate in routes.tsx must keep the outbox out of it). Every
+// file under apps/recruiter/dist/ is read as text (js, css, html, source maps). Fails (exit 1) on any hit or when
+// the dist folder is missing; a demo build is skipped with a notice.
+// Optional argument: the repository root (default: this script's repo). Reads only VITE_DEMO_OUTBOX and
+// VITE_TRACE_ENV.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +34,8 @@ export function findDemoOutbox(root) {
 
 /** { ok, skipped, hits, missing? } for one repository root and environment. */
 export function runCheck({ root, env }) {
-  if (env.VITE_DEMO_OUTBOX === '1') return { ok: true, skipped: true, hits: [] };
+  if (env.VITE_DEMO_OUTBOX === '1' && env.VITE_TRACE_ENV !== 'production')
+    return { ok: true, skipped: true, hits: [] };
   if (!existsSync(path.join(root, RECRUITER_DIST))) {
     return { ok: false, skipped: false, hits: [], missing: true };
   }
@@ -43,7 +47,9 @@ if (isEntryPoint(import.meta.url)) {
   const root = process.argv[2] ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const result = runCheck({ root, env: process.env });
   if (result.skipped) {
-    console.log('check-no-demo-outbox: skipped (a VITE_DEMO_OUTBOX=1 demo build)');
+    console.log(
+      'check-no-demo-outbox: skipped (a VITE_DEMO_OUTBOX=1 demo build, not for production)',
+    );
   } else if (result.missing === true) {
     console.error(
       `check-no-demo-outbox: ${RECRUITER_DIST} is missing; build the recruiter app first`,

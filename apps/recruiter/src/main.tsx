@@ -18,14 +18,22 @@ if (!container) {
 }
 
 // Sentry only when the build has a DSN (d1 AT-D22); window errors go through the adapter either way.
-initErrorReporting(import.meta.env);
+// Each callee gets only the fields it reads, as static member reads that Vite inlines: passing the whole
+// environment object would put one naming every VITE_* key of the build (the demo flag too) into the entry chunk.
+initErrorReporting({ VITE_SENTRY_DSN: import.meta.env.VITE_SENTRY_DSN });
 installGlobalErrorReporting(window);
 
 const router = createBrowserRouter(routes);
 
 // No client (state `unconfigured`) unless both build variables are set (specs/m0b-tenancy.md §2.7).
 const storage = browserSessionStorage(window);
-const supabase = createRecruiterSupabase(import.meta.env, storage);
+const supabase = createRecruiterSupabase(
+  {
+    VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
+    VITE_SUPABASE_PUBLISHABLE_KEY: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+  },
+  storage,
+);
 const authFlow = new AuthFlow(supabase, storage);
 void authFlow.start();
 
