@@ -15,6 +15,12 @@ SPEC → BUILD (may take several sessions) → REVIEW → FIX (repeat REVIEW and
   - If two streams hit a merge conflict, or the usage guard reports 95%+, drop to 2 writers for the rest of the session.
   - Prefer finishing and merging 3 streams cleanly over starting 6 that half-finish.
   - Models (founder, 2026-10-11): **Sonnet** for Low/mechanical writers and small re-reviews; **Opus** for the lead, specs, and first reviews of code that touches rules 1–9.
+  - Efficiency rules (founder, 2026-10-19; they add steps or information and remove no gate: every stream still gets tests first, its full set of Opus first reviews, fixes test first, a confirming re-review, full `pnpm verify` and Linux CI):
+    - **Pre-flight before writers start.** A read-only Sonnet agent lists every lead-owned file, dependency, contract, check script and binding the stream's acceptance tests and spec text need, and flags what is missing; the lead adds those first (tests first), so writers do not hit them as review findings.
+    - **Reviewer focus without gaps.** Each first reviewer keeps its full scope and is also told what the other reviewers on the same diff cover in depth, so it spends its depth on its own area and still reports anything it finds elsewhere.
+    - **Fix writers by risk.** A fix round whose findings touch code under rules 1–9 (results, bands, cutoff, rejection paths, candidate data, media) uses an Opus fix writer; a round of only mechanical or test-gap findings may use Sonnet. When unsure, Opus.
+    - **One confirming re-review for streams that finish together.** The re-review may cover two fix rounds in one agent, with a separate verdict and finding list per stream.
+    - **Self-contained writer briefs.** The lead's prompt gives the exact interfaces, file paths, lead decisions and spec section numbers the writer needs; the writer still reads those spec sections in full.
 - REVIEW: always a fresh session that did not write the code. Run the trace-milestone-review skill and write docs/reviews/M<X>.md.
 - FIX: fix every Blocking finding, one commit per finding, each with a regression test.
 - CLOSE: requires PASS, or PASS WITH CONDITIONS with an owner milestone for each Medium (M8 and M13 need a clean PASS). Write docs/milestones/M<X>-summary.md (built, deferred and why, Deferred gates table, autopilot decisions, how to demo). Merge milestone/m<X> into main with --no-ff, tag m<X>-reviewed, update Linear if connected (otherwise list the changes in the summary).
