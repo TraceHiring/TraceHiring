@@ -39,6 +39,10 @@ catalog:
   # Dev tooling for e2e/ (specs/d1-demo-slice.md §7.2, no ADR): the newest release older than two weeks
   # (1.63.0, published 2026-09-04; 1.64.0 came out 2026-10-07).
   '@playwright/test': 1.63.0
+  # DOM test runtime for apps/candidate (d1 AT-D30 behavioural test, AT-D36; dev tooling, no ADR): the newest
+  # release older than two weeks (20.14.5, published 2026-09-12; 20.14.6 came out 2026-10-08). Not jsdom: jsdom
+  # 30 needs undici 8, which the undici security override below pins to 7.
+  happy-dom: 20.14.5
   # Sentry adapter (m0-foundations §9.2, d1 AT-D22): recruiter app, workers/jobs, services/api only.
   '@sentry/cloudflare': 11.1.0
   '@sentry/react': 11.1.0
