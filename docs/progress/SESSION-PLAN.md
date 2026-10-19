@@ -51,5 +51,9 @@ prompt for the next chat. This file is the roadmap; HANDOFF.md says which chat i
 - Chat C (R2 + R4): 2 Opus + 2 Sonnet writers, 1 Opus fix writer, 5 Opus reviews, 2 Sonnet re-reviews, 1 Sonnet
   measurement, one full verify: ~3% → 43% of a fresh 5-hour window, 4% → 10% weekly, context ~45%. A sleeping laptop
   stalled two writers overnight (watchdog); SendMessage resumed them with no loss.
+- Chat D (C2 + e2e-local real flow): 3 Opus writer runs, 1 Sonnet writer, 2 Opus reviews, 1 Sonnet pre-flight, 1 Sonnet
+  re-review, six e2e-local runs, one full verify: about 31% of 5-hour windows (spanning a reset), 11% → 18% weekly,
+  context ~40%, about 2 h 30 min. Running the real flow early found a production bug (Chromium's APP2 ICC profile) that
+  no unit test could. Reviewers share the lead's worktree: brief them never to checkout.
 - Weekly limits matter more on Max than the 5-hour window: check `get_usage` after each agent result and record the
   weekly figure in the LOG row.
