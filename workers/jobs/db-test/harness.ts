@@ -1,7 +1,7 @@
 // Real-database harness for the jobs stages (spec d1 §5.1, ADR-031). Node only, never bundled.
 //
 // It connects with the `postgres` driver to the shared local Supabase database (127.0.0.1:54322, db `postgres`;
-// override with JOBS_TEST_DB_URL) and runs each stage exactly as the consumer will: on a login role that holds one
+// override with JOBS_TEST_DB_URL, local hosts only) and runs each stage exactly as the consumer will: on a login role that holds one
 // worker role `with inherit false, set true`, one transaction of
 //   BEGIN; SET LOCAL ROLE <trace_worker|trace_quality_worker|trace_integrity_worker>;
 //   SELECT set_config('trace.job_org_id', <org>, true); <stage>; COMMIT
@@ -22,11 +22,30 @@ const localUrl = (user: string, password: string): string => {
   const scheme = ['postgres', 'ql'].join('');
   return `${scheme}://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:54322/postgres`;
 };
-const operatorUrl = (): string => {
-  const override = process.env['JOBS_TEST_DB_URL'];
-  if (override !== undefined && override !== '') return override;
-  const word = ['post', 'gres'].join('');
-  return localUrl(word, word);
+/** The hosts the harness may connect to (the set of LOCAL_DB_HOSTS in src/queue/stage-db.ts). */
+const LOCAL_DB_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+const NOT_LOCAL = 'db-test: JOBS_TEST_DB_URL must name a local database';
+
+/**
+ * The operator URL (DB review #3, security review #1): the local stack, or JOBS_TEST_DB_URL only when its host is
+ * local. Anything else throws before a connection is opened; the error never quotes the URL.
+ */
+export const operatorUrl = (
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string => {
+  const override = env['JOBS_TEST_DB_URL'];
+  if (override === undefined || override === '') {
+    const word = ['post', 'gres'].join('');
+    return localUrl(word, word);
+  }
+  let host: string;
+  try {
+    host = new URL(override).hostname.toLowerCase();
+  } catch {
+    throw new Error(NOT_LOCAL);
+  }
+  if (!LOCAL_DB_HOSTS.has(host)) throw new Error(NOT_LOCAL);
+  return override;
 };
 const withUser = (url: string, user: string, password: string): string => {
   const u = new URL(url);
