@@ -562,11 +562,19 @@ export async function main(options) {
   let playwright = null;
   // Security review 2026-10-17 L2: the lock's signal handler exits at once, so the finally below
   // never runs on Ctrl+C, and on POSIX the detached process groups would survive. This handler is
-  // registered first, so it runs first: it kills every process tree and removes the state folder.
-  const live = { handles: [], stateDir: null };
+  // registered first, so it runs first: it kills every process tree, removes the state folder and
+  // (security review SEC-E2) drops the login roles once they were set, best effort and synchronous.
+  const live = { handles: [], stateDir: null, rolesDbUrl: null };
   const onSignal = () => {
     for (const h of live.handles) h.killNow();
     if (live.stateDir !== null) deps.removeDir(live.stateDir);
+    if (live.rolesDbUrl !== null) {
+      try {
+        deps.runSql({ url: live.rolesDbUrl, sql: dropLoginRolesSql(), vars: {} });
+      } catch {
+        // best effort: the next run recreates the roles
+      }
+    }
   };
   const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'];
   for (const s of SIGNALS) deps.proc.on(s, onSignal);
@@ -609,6 +617,7 @@ export async function main(options) {
       log(`${TOOL}: setting up the local logins, keys, users and org`);
       const tl = now();
       rolesTouched = true;
+      live.rolesDbUrl = stack.dbUrl;
       const local = await prepareLocal(deps, { stack, config, root });
       phases.setup_ms = now() - tl;
       if (!local.ok) return local.problems;
@@ -660,6 +669,7 @@ export async function main(options) {
             `${TOOL}: warning: could not drop the local login roles (${why}); the next run recreates them`,
           );
         }
+        live.rolesDbUrl = null;
       }
       deps.removeDir(stateDir);
       live.stateDir = null;

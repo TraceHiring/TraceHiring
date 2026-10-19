@@ -150,7 +150,12 @@ function harness({
     proc: new EventEmitter(),
     // The lock's signal handler calls exit(); record what was already cleaned up at that moment.
     exit: (code) => {
-      h.exitAt = { code, killed: [...h.killed], removed: [...h.removed] };
+      h.exitAt = {
+        code,
+        killed: [...h.killed],
+        removed: [...h.removed],
+        drops: h.sql.filter((q) => !q.sql.includes('create role')).map((q) => q.sql),
+      };
     },
     log: (m) => h.lines.push(m),
     warn: (m) => h.lines.push(m),
@@ -738,6 +743,40 @@ describe('main', () => {
     await main(h.deps);
     expect(h.exitAt.code).toBe(130);
     expect(h.exitAt.killed.sort()).toEqual(['api', 'candidate', 'edge+jobs', 'recruiter']);
+    expect(h.exitAt.removed).toEqual([STATE]);
+  });
+
+  // Security review SEC-E2: a Ctrl+C after the roles were set drops them too (best effort, sync).
+  it('on a signal after the role setup, drops the login roles before the lock handler exits', async () => {
+    const h = harness({ onPlaywright: (state) => state.deps.proc.emit('SIGINT') });
+    await main(h.deps);
+    expect(h.exitAt.drops).toEqual([dropLoginRolesSql()]);
+    expect(h.sql.find((q) => q.sql === dropLoginRolesSql()).url).toBe(h.deps.stackEnv().DB_URL);
+  });
+
+  it('on a signal before the role setup, drops nothing', async () => {
+    const h = harness({
+      answer: (cmd, args, state) => {
+        if (args.includes('build')) state.deps.proc.emit('SIGINT');
+        return ok;
+      },
+    });
+    await main(h.deps);
+    expect(h.exitAt.code).toBe(130);
+    expect(h.exitAt.drops).toEqual([]);
+  });
+
+  it('on a signal, a failing role drop does not stop the rest of the clean-up', async () => {
+    const h = harness({
+      onPlaywright: (state) => state.deps.proc.emit('SIGINT'),
+      sqlAnswer: (sql) => {
+        if (!sql.includes('create role')) throw new Error('spawn docker ENOENT');
+        return { ok: true, out: '' };
+      },
+    });
+    await main(h.deps);
+    expect(h.exitAt.code).toBe(130);
+    expect(h.exitAt.killed).toHaveLength(4);
     expect(h.exitAt.removed).toEqual([STATE]);
   });
 
