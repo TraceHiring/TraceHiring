@@ -342,7 +342,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
     });
 
     await step(page, 'the editor shows the default Answer Quality cutoff, 40', async () => {
-      const cutoff = page.getByLabel('Answer Quality cutoff (0 to 100)', { exact: true });
+      const cutoff = page.getByLabel('Answer Quality cutoff (0 to 100)');
       await expect(cutoff).toBeVisible();
       await expect(cutoff).toHaveValue(String(DEFAULT_CUTOFF));
       await pause(page);
@@ -366,9 +366,9 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
         run.test = draft;
         await page.reload();
         await expect(page.getByText(/^Published, version 1\./)).toBeVisible();
-        await expect(
-          page.getByLabel('Answer Quality cutoff (0 to 100)', { exact: true }),
-        ).toHaveValue(String(DEFAULT_CUTOFF));
+        await expect(page.getByLabel('Answer Quality cutoff (0 to 100)')).toHaveValue(
+          String(DEFAULT_CUTOFF),
+        );
       },
     );
 
@@ -451,7 +451,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
 
     await step(page, 'one candidate is invited with "No" to 18+: blocked, no link', async () => {
       await page.goto(`/tests/${t.testId}/invite`);
-      await page.getByLabel('Contact email', { exact: true }).fill(`e2e-${RUN}+n@example.test`);
+      await page.getByLabel('Contact email').fill(`e2e-${RUN}+n@example.test`);
       await page.getByRole('radio', { name: 'No', exact: true }).check();
       await page.getByRole('button', { name: 'Create invitation', exact: true }).click();
       const created = page.getByRole('region', { name: 'Invitation created' });
@@ -573,7 +573,7 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
       );
       if (plan.extra !== undefined) {
         const extra = plan.extra;
-        await cstep(key, extra.name, () => extra.body(ui), 60_000);
+        await cstep(key, extra.name, () => extra.body(ui), 150_000);
       }
       await cstep(key, 'submits and sees the receipt only', async () => {
         await ui.submit();

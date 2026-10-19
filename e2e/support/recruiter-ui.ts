@@ -70,9 +70,17 @@ const setValue = async (field: Locator, value: string): Promise<void> => {
 
 /** The current access token of a signed-in recruiter page (re-read, so a refreshed token is used). */
 export const accessToken = async (page: Page): Promise<string> => {
-  const token = tokenIn(await readStorage(page));
-  if (token === null) throw new Error('the recruiter page holds no session');
-  return token;
+  // A read during a navigation can lose its execution context; try again on the next document.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const token = tokenIn(await readStorage(page));
+      if (token !== null) return token;
+    } catch {
+      // retried below
+    }
+    if (attempt >= 4) throw new Error('the recruiter page holds no session');
+    await sleep(500);
+  }
 };
 
 /**
