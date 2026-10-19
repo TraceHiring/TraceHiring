@@ -39,12 +39,13 @@ describe('demo outbox gating (AT-D18)', () => {
     expect(importers).toEqual(['./routes.tsx']);
     const routes = all['./routes.tsx'] ?? '';
     expect(routes).toMatch(
-      /import\.meta\.env\.VITE_DEMO_OUTBOX\s*===\s*'1'\s*\?\s*demoOutboxExtras\s*:\s*null/,
+      /import\.meta\.env\.VITE_DEMO_OUTBOX\s*===\s*'1'\s*&&\s*import\.meta\.env\.VITE_TRACE_ENV\s*!==\s*'production'\s*\?\s*demoOutboxExtras\s*:\s*null/,
     );
   });
 
-  it('uses the flag nowhere else', () => {
+  it('uses the flag and the environment nowhere else', () => {
     expect(where(/VITE_DEMO_OUTBOX/).sort()).toEqual(['./routes.tsx', './vite-env.d.ts']);
+    expect(where(/VITE_TRACE_ENV/).sort()).toEqual(['./routes.tsx', './vite-env.d.ts']);
   });
 });
 

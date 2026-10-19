@@ -42,8 +42,12 @@ export function buildRoutes(demo: DemoExtras | null): RouteObject[] {
   ];
 }
 
-// `VITE_DEMO_OUTBOX` is replaced at build time: when it is not '1' the condition is constant-false and the
-// outbox module is dropped from the bundle.
+// The demo outbox gate (d1 spec §7.1, AT-D18): both `VITE_DEMO_OUTBOX=1` and a non-production `VITE_TRACE_ENV`
+// are needed, so a production build that inherits the flag still drops the outbox. Both variables are replaced
+// at build time; the condition is written inline (not through a helper) so that when it is constant-false the
+// bundler drops the outbox module, its route, path, labels and the lazy import of the screen.
 export const routes: RouteObject[] = buildRoutes(
-  import.meta.env.VITE_DEMO_OUTBOX === '1' ? demoOutboxExtras : null,
+  import.meta.env.VITE_DEMO_OUTBOX === '1' && import.meta.env.VITE_TRACE_ENV !== 'production'
+    ? demoOutboxExtras
+    : null,
 );

@@ -12,4 +12,6 @@ interface ImportMetaEnv {
   readonly VITE_API_ORIGIN?: string;
   /** "1" in a non-production build that shows the demo outbox; unset in production (d1 AT-D18). */
   readonly VITE_DEMO_OUTBOX?: string;
+  /** The deploy flavour ("production", "staging", ...); the outbox is also off when it is "production" (d1 §7.1). */
+  readonly VITE_TRACE_ENV?: string;
 }
