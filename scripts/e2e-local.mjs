@@ -54,7 +54,14 @@ import {
 import { main as addMember } from './ops/add-member.mjs';
 import { main as createOrg } from './ops/create-org.mjs';
 import { main as enrolSmokeUser } from './ops/enrol-smoke-user.mjs';
-import { LOCAL_DB_CONTAINER, isUuid, localStackEnv, realDeps, runSql } from './ops/lib.mjs';
+import {
+  DB_URL_ENV,
+  LOCAL_DB_CONTAINER,
+  isUuid,
+  localStackEnv,
+  realDeps,
+  runSql,
+} from './ops/lib.mjs';
 import { defaultDeps as stackDefaults, redact, withLocalStack } from './test-rls.mjs';
 
 export const LIMIT_MS = 25 * 60 * 1000;
@@ -356,6 +363,41 @@ export function buildEnv() {
 class StepFailure extends Error {}
 
 /**
+ * Security review SEC-E1: the operator scripts prefer TRACE_OPERATOR_DB_URL (the staging operator
+ * variable) over the local stack (scripts/ops/lib.mjs resolveDbUrl). A non-local value in the
+ * parent environment stops the run before anything touches a database; the message names the
+ * variable only, never the value.
+ */
+export function operatorUrlProblem(...envs) {
+  for (const env of envs) {
+    const raw = env?.[DB_URL_ENV];
+    if (raw === undefined || String(raw).trim() === '') continue;
+    let host = '';
+    try {
+      host = new URL(String(raw).trim()).hostname.toLowerCase();
+    } catch {
+      // reported below
+    }
+    if (!['127.0.0.1', 'localhost', '[::1]'].includes(host)) {
+      return `${DB_URL_ENV} is set to a database that is not a local one; unset it before running the local stack (it would point the operator scripts away from the local stack)`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The environment without TRACE_OPERATOR_DB_URL: an operator script then reads the local stack's
+ * own database URL from `supabase status` (the same URL readStack checked). Even a loopback value
+ * is dropped (it can be a tunnel to another database, B0-SEC2), and the docker-exec fallback of
+ * scripts/ops/lib.mjs runSql (no psql installed) works only without it.
+ */
+export const withoutOperatorUrl = (env) => {
+  const copy = { ...env };
+  delete copy[DB_URL_ENV];
+  return copy;
+};
+
+/**
  * Runs an operator script's main() with captured output; returns the one id it prints. A failure
  * names the step, the exit code and the script's first stderr line (fixed messages and a SQLSTATE
  * or HTTP status only, never a value), redacted.
@@ -367,7 +409,7 @@ async function operator(deps, step, run, argv, extraEnv = {}) {
     argv,
     deps: {
       ...deps.opsDeps,
-      env: { ...deps.opsDeps.env, ...extraEnv },
+      env: { ...withoutOperatorUrl(deps.opsDeps.env), ...extraEnv },
       stdout: { write: (s) => out.push(String(s)) },
       stderr: { write: (s) => err.push(String(s)) },
     },
@@ -482,7 +524,9 @@ export function defaultDeps(overrides) {
     },
     env: process.env,
     stackEnv: () => localStackEnv(realDeps()),
-    runSql: (args) => runSql(args, realDeps()),
+    // The URL is always the checked local one; without TRACE_OPERATOR_DB_URL the docker-exec
+    // fallback (no psql installed) is allowed too (SEC-E1).
+    runSql: (args) => runSql(args, { ...realDeps(), env: withoutOperatorUrl(process.env) }),
     operators: { enrolSmokeUser, createOrg, addMember },
     opsDeps: realDeps(),
     subtle: globalThis.crypto.subtle,
@@ -504,6 +548,13 @@ export async function main(options) {
   if (!argv.every((a) => a === '--ci' || a === '--stop')) {
     error(USAGE);
     return 2;
+  }
+  // SEC-E1: nothing runs (no Docker check, no role SQL, no operator) with a non-local operator URL.
+  const urlProblem = operatorUrlProblem(env, deps.opsDeps?.env);
+  if (urlProblem !== null) {
+    error(`${TOOL}: ${urlProblem}`);
+    error(`${TOOL}: FAILED`);
+    return 1;
   }
   const ci = argv.includes('--ci');
   const t0 = now();

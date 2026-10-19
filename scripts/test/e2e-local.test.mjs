@@ -72,6 +72,7 @@ function harness({
   stack = fakeStack(),
   sqlAnswer = () => ({ ok: true, out: '' }),
   operatorCode = () => 0,
+  parentEnv = {},
 } = {}) {
   const root = makeTempDir('trace-e2e-root-');
   writeFiles(root, {
@@ -117,7 +118,12 @@ function harness({
       ['enrolSmokeUser', 'createOrg', 'addMember'].map((name) => [
         name,
         async ({ argv: args, deps }) => {
-          h.operators.push({ name, argv: args, password: deps.env.SMOKE_PASSWORD });
+          h.operators.push({
+            name,
+            argv: args,
+            password: deps.env.SMOKE_PASSWORD,
+            operatorUrl: deps.env.TRACE_OPERATOR_DB_URL,
+          });
           h.events.push(`operator ${name}`);
           const code = operatorCode(name, args);
           if (code === 0) deps.stdout.write(`${randomUUID()}\n`);
@@ -126,7 +132,7 @@ function harness({
         },
       ]),
     ),
-    opsDeps: { env: { PATH: 'x' } },
+    opsDeps: { env: { PATH: 'x', ...parentEnv } },
     readText: (file) => {
       h.events.push(`read ${path.relative(root, file).split(path.sep).join('/')}`);
       return JOBS_CONFIG;
@@ -189,7 +195,7 @@ function harness({
     writeFile: (file, text) => {
       h.written[path.relative(root, file).split(path.sep).join('/')] = text;
     },
-    env: { GITHUB_SHA: 'a'.repeat(40) },
+    env: { GITHUB_SHA: 'a'.repeat(40), ...parentEnv },
   };
   return h;
 }
@@ -495,6 +501,42 @@ describe('main', () => {
     const members = h.operators.filter((o) => o.name === 'addMember');
     const rolesOf = (o) => o.argv[o.argv.indexOf('--roles') + 1];
     expect(members.map(rolesOf)).toEqual(['recruiter', 'reviewer', 'recruiter']);
+  });
+
+  // Security review SEC-E1: TRACE_OPERATOR_DB_URL is the staging operator variable; the operator
+  // scripts prefer it over the local stack (scripts/ops/lib.mjs resolveDbUrl).
+  const operatorUrl = (host) => {
+    const u = new URL(`${['postgres', 'ql'].join('')}://${host}:5432/postgres`);
+    u.username = 'operator';
+    u.password = hex(4);
+    return u.toString();
+  };
+
+  it('refuses to run, before any role SQL or operator, when TRACE_OPERATOR_DB_URL is not local', async () => {
+    for (const host of ['db.example.test', '10.0.0.5']) {
+      const h = harness({ parentEnv: { TRACE_OPERATOR_DB_URL: operatorUrl(host) } });
+      expect(await main(h.deps)).toBe(1);
+      expect(h.sql).toEqual([]);
+      expect(h.operators).toEqual([]);
+      expect(h.started).toEqual([]);
+      expect(h.calls).toEqual([]);
+      const text = h.lines.join('\n');
+      expect(text).toMatch(/TRACE_OPERATOR_DB_URL .*not a local/);
+      expect(text).not.toContain(host);
+    }
+    const garbled = harness({ parentEnv: { TRACE_OPERATOR_DB_URL: 'not a url' } });
+    expect(await main(garbled.deps)).toBe(1);
+    expect(garbled.operators).toEqual([]);
+  });
+
+  it('never hands TRACE_OPERATOR_DB_URL to an operator: each one uses the local stack', async () => {
+    // Even a loopback value (it can be a tunnel to another database, B0-SEC2) is not passed on;
+    // the operator then reads the local stack's own database URL from `supabase status`.
+    const h = harness({ parentEnv: { TRACE_OPERATOR_DB_URL: operatorUrl('127.0.0.1') } });
+    expect(await main(h.deps)).toBe(0);
+    expect(h.operators.length).toBeGreaterThan(0);
+    expect(h.operators.every((o) => o.operatorUrl === undefined)).toBe(true);
+    expect(h.sql.every((q) => q.url === h.deps.stackEnv().DB_URL)).toBe(true);
   });
 
   it('gives Playwright the local origins, the user emails, the password and the org, and no Worker secret', async () => {
