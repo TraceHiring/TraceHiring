@@ -2,11 +2,13 @@
 // method and path (§6.2: the three reports/:id GETs, /media/:jti, the org endpoints and /health)
 // and no path or verb that could reject, decide, confirm, overturn, appeal, notify or shortlist.
 // Parameter names are normalised to `:p`, so a renamed parameter is not a new route. Only the
-// shared `*` middleware is left out; `/media/:jti` is registered for every method so that a
+// shared `*` middleware and the org CORS middleware (that one handler, by identity; security
+// review N1, org-cors.test.ts) are left out; `/media/:jti` is registered for every method so that a
 // non-GET gets the same 404 with the R3-6 headers, and the test below proves it serves only GET.
 import { noopErrorReporter } from '@trace/shared/log';
 import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
+import { orgCors } from './org-cors.js';
 
 const ALLOWED = [
   'GET /health',
@@ -35,12 +37,13 @@ const FORBIDDEN = /reject|decision|decide|confirm|overturn|appeal|notice|shortli
 
 const app = () => createApp({ reporter: noopErrorReporter });
 
-/** Every route of the app as `METHOD /path`, the shared `*` middleware left out. */
+/** Every route of the app as `METHOD /path`, the shared `*` and org CORS middleware left out. */
 const routes = () =>
   [
     ...new Set(
       app()
         .routes.filter((r) => !(r.method === 'ALL' && (r.path === '*' || r.path === '/*')))
+        .filter((r) => r.handler !== orgCors)
         .map((r) => `${r.method} ${r.path.replace(/:[A-Za-z_]\w*/g, ':p')}`),
     ),
   ].sort();

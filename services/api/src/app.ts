@@ -19,6 +19,7 @@ import { createReportQualityRoutes } from './modules/report-quality/routes.js';
 import { createReportsRoutes } from './modules/reports/routes.js';
 import { cardSource, createOrgDeps, type OrgDeps } from './modules/tests/org-context.js';
 import { createTestsRoutes, packagesFromEnv } from './modules/tests/routes.js';
+import { ORG_CORS_PATH, orgCors } from './org-cors.js';
 
 const SERVICE = 'api';
 
@@ -43,6 +44,8 @@ export const createApp = (deps: AppDeps): Hono<{ Bindings: Env }> => {
     c.json(healthBody(SERVICE, resolveVersion(c.env.VERSION), now()), 200, NO_STORE),
   );
 
+  // Security review N1: CORS for the recruiter origin on the org routes only, registered before them.
+  app.use(ORG_CORS_PATH, orgCors);
   app.route('/', createTestsRoutes({ org, packages: packagesFromEnv }));
   app.route('/', createAssignmentsRoutes(org));
   app.route('/', createInvitationsRoutes({ org, delivery: deliveryFromEnv }));
