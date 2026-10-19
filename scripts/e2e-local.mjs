@@ -3,7 +3,19 @@
 // of DC-D6, §8). Lead-only: it starts and resets the shared local Supabase stack.
 //   node scripts/e2e-local.mjs [--ci] [--stop]
 // 1. Docker check, the test-rls lock, `supabase start -x …` and `supabase db reset` (withLocalStack).
-// 2. Builds both apps (`pnpm --filter @trace/candidate --filter @trace/recruiter build`).
+// 2. Reads the local stack's URLs and publishable key (`supabase status`) and builds both apps
+//    (`pnpm --filter @trace/candidate --filter @trace/recruiter build`) with the demo outbox on
+//    (VITE_DEMO_OUTBOX=1, VITE_TRACE_ENV=dev; spec rev 4f) and the local api, edge and Supabase
+//    origins. Only that call carries them; the root `pnpm build` (check-no-demo-outbox) is not run.
+// 2b. Local-only values for the real flow (spec review r3a #1), generated now, never in git, never
+//    printed: random passwords for the operator logins api_login and jobs_{mirror,quality,
+//    integrity}_login (recreated as postgres, one `inherit false, set true` grant each), a fresh
+//    ES256 candidate-token pair (kid d1-YYYY-MM) and a media-link HMAC key. They reach the Workers
+//    through files in the temporary state folder: `--env-file` for api and for edge (the public
+//    key list only), and `.dev.vars` beside a copy of the jobs config there, because wrangler 4
+//    hands --env-file only to a session's first Worker. Then the synthetic users
+//    (e2e-*@example.test, one generated password), the org and its members through the operator
+//    scripts; Playwright gets the emails, the password and the org id in its env only.
 // 3. Starts two `wrangler dev` sessions with one shared --persist-to folder (R2, Queue, DO state):
 //    services/api alone on 8788, and workers/edge with workers/jobs on 8787. One multi-config
 //    session serves only its first Worker on the port, so it cannot give both the candidate app
@@ -13,18 +25,34 @@
 //    app (5173) and the recruiter app (5174), the ports the Workers' dev origins name.
 // 4. Waits for each /health or /version.json, checks that each session started its Workers, and
 //    runs Playwright (`e2e/`, E2E_LOCAL=1) against the stack.
-// 5. Always stops every process it started and removes the state folder; writes the per-phase
+// 5. Always stops every process it started, drops the four login roles and removes the state
+//    folder (with the generated files); writes the per-phase
 //    timings to e2e/test-results/dc-d9.json and the redacted process logs next to it. Fails when a
 //    step fails or the whole run takes longer than the 25-minute CI job limit.
-// Every value is local and synthetic; nothing reads a secret. Child output is redacted before it
-// is printed or written (it can hold the local stack's keys or a connection URL).
+// Every value is local and synthetic; nothing reads a repository secret. Child output is redacted
+// before it is printed or written (it can hold the local stack's keys or a connection URL).
 // --ci marks the run as the CI job's in the manifest; --stop runs `supabase stop` at the end.
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntryPoint } from './lib/cli.mjs';
+import {
+  LOGIN_ROLES,
+  candidateTokenKeys,
+  dotenvText,
+  dropLoginRolesSql,
+  jobsDevConfig,
+  kidFor,
+  loginRolesSql,
+  workerSecrets,
+} from './lib/e2e-local-secrets.mjs';
+import { main as addMember } from './ops/add-member.mjs';
+import { main as createOrg } from './ops/create-org.mjs';
+import { main as enrolSmokeUser } from './ops/enrol-smoke-user.mjs';
+import { LOCAL_DB_CONTAINER, isUuid, localStackEnv, realDeps, runSql } from './ops/lib.mjs';
 import { defaultDeps as stackDefaults, redact, withLocalStack } from './test-rls.mjs';
 
 export const LIMIT_MS = 25 * 60 * 1000;
@@ -49,18 +77,70 @@ export const E2E_ENV = Object.freeze({
   E2E_EDGE_URL: 'http://127.0.0.1:8787',
   E2E_API_URL: 'http://127.0.0.1:8788',
 });
+/**
+ * The synthetic users of the local stack (`key` names their E2E_<key>_EMAIL variable). The owner
+ * owns the org; the others are members. STORE_RECRUITER is the real-flow spec's own recruiter
+ * (e2e/tests/candidate-store.spec.ts enrols its TOTP), so the slice spec's recruiter stays new.
+ */
+export const USERS = Object.freeze(
+  [
+    { key: 'OWNER', email: 'e2e-owner@example.test', roles: null, name: 'E2E owner' },
+    {
+      key: 'RECRUITER',
+      email: 'e2e-recruiter@example.test',
+      roles: 'recruiter',
+      name: 'E2E recruiter',
+    },
+    {
+      key: 'REVIEWER',
+      email: 'e2e-reviewer@example.test',
+      roles: 'reviewer',
+      name: 'E2E reviewer',
+    },
+    {
+      key: 'STORE_RECRUITER',
+      email: 'e2e-store-recruiter@example.test',
+      roles: 'recruiter',
+      name: 'E2E store recruiter',
+    },
+  ].map((u) => Object.freeze(u)),
+);
+/**
+ * Every wrangler and vite child gets these over the parent environment: no telemetry; .env loading
+ * on (else --env-file is ignored); process.env never copied into the bindings (it would give the
+ * edge every variable of this process).
+ */
+export const WRANGLER_CHILD_ENV = Object.freeze({
+  WRANGLER_SEND_METRICS: 'false',
+  DO_NOT_TRACK: '1',
+  CLOUDFLARE_INCLUDE_PROCESS_ENV: 'false',
+  CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: 'true',
+});
 const WRANGLER = 'node_modules/wrangler/bin/wrangler.js';
 const VITE = (app) => `apps/${app}/node_modules/vite/bin/vite.js`;
 const USAGE = 'usage: node scripts/e2e-local.mjs [--ci] [--stop]';
 const TAIL_LINES = 20;
 const TOOL = 'e2e-local';
 
+const toPosix = (p) => String(p).split(path.sep).join('/');
+
+/** The generated files of one run, all under `<state folder>/config/` (removed with it). */
+export function configPaths(stateDir) {
+  const base = `${toPosix(stateDir)}/config`;
+  return {
+    apiEnvFile: `${base}/api.env`,
+    edgeEnvFile: `${base}/edge.env`,
+    jobsConfig: `${base}/jobs/wrangler.jsonc`,
+    jobsDevVars: `${base}/jobs/.dev.vars`,
+  };
+}
+
 /**
  * The long-running processes, in start order. `script` is repo-relative and runs under the current
  * node (no shell, so stopping the process stops what it started). `names` are the Worker names a
- * wrangler session must report starting.
+ * wrangler session must report starting. `config` is configPaths() of the run.
  */
-export function stackProcesses(persistDir) {
+export function stackProcesses(persistDir, config) {
   const common = ['--env', 'dev', '--ip', '127.0.0.1', '--persist-to', persistDir];
   return [
     {
@@ -72,6 +152,8 @@ export function stackProcesses(persistDir) {
         '8788',
         '--inspector-port',
         '9231',
+        '--env-file',
+        config.apiEnvFile,
       ]),
       ready: `${E2E_ENV.E2E_API_URL}/health`,
       // A one-config session prints "Your Worker has access to…", not the name (wrangler 4.149).
@@ -81,9 +163,9 @@ export function stackProcesses(persistDir) {
       name: 'edge+jobs',
       cwd: '.',
       script: WRANGLER,
-      args: ['dev', '-c', 'workers/edge/wrangler.jsonc', '-c', 'workers/jobs/wrangler.jsonc']
+      args: ['dev', '-c', 'workers/edge/wrangler.jsonc', '-c', config.jobsConfig]
         .concat(common)
-        .concat(['--port', '8787', '--inspector-port', '9230']),
+        .concat(['--port', '8787', '--inspector-port', '9230', '--env-file', config.edgeEnvFile]),
       ready: `${E2E_ENV.E2E_EDGE_URL}/health`,
       names: ['trace-edge-dev', 'trace-jobs-dev'],
     },
@@ -123,7 +205,7 @@ export function startProcess(spec, root) {
   let exitedWith = null;
   const child = spawn(process.execPath, [path.join(root, spec.script), ...spec.args], {
     cwd: path.join(root, spec.cwd),
-    env: { ...process.env, WRANGLER_SEND_METRICS: 'false', DO_NOT_TRACK: '1' },
+    env: { ...process.env, ...WRANGLER_CHILD_ENV },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
     // Its own process group on POSIX, so stop() reaches workerd and esbuild too.
@@ -224,6 +306,166 @@ export async function waitReady(handle, url, { fetch, now, sleep, timeoutMs = RE
   }
 }
 
+const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost']);
+
+/**
+ * The local stack's values from `supabase status -o env` (localStackEnv), or a problem: the API URL
+ * must be on 127.0.0.1 and the publishable key and database URL present. No value is printed.
+ * @returns {{ ok: true, stack: { apiUrl: string, publishableKey: string, dbUrl: string } } | { ok: false, problem: string }}
+ */
+export function readStack(raw) {
+  const bad = {
+    ok: false,
+    problem:
+      'could not read `supabase status` of the local stack (an API URL on 127.0.0.1, the publishable key and the database URL)',
+  };
+  if (raw === null || typeof raw !== 'object') return bad;
+  const apiUrl = String(raw.API_URL ?? '').replace(/\/+$/, '');
+  const publishableKey = String(raw.PUBLISHABLE_KEY || raw.ANON_KEY || '');
+  const dbUrl = String(raw.DB_URL ?? '');
+  let host = '';
+  let dbHost = '';
+  try {
+    host = new URL(apiUrl).hostname;
+    dbHost = new URL(dbUrl).hostname;
+  } catch {
+    return bad;
+  }
+  if (host !== '127.0.0.1' || !LOCAL_HOSTS.has(dbHost) || publishableKey === '') return bad;
+  return { ok: true, stack: { apiUrl, publishableKey, dbUrl } };
+}
+
+/**
+ * The environment of the one app-build call (spec §7.1, rev 4f): the recruiter registers the demo
+ * outbox route only with VITE_DEMO_OUTBOX=1 and a VITE_TRACE_ENV other than production (set here,
+ * so a parent value cannot turn it off); the apps reach the local api, edge and Supabase. The
+ * publishable key is a public value (L-10).
+ */
+export function buildEnv(stack) {
+  return {
+    VITE_DEMO_OUTBOX: '1',
+    VITE_TRACE_ENV: 'dev',
+    VITE_API_ORIGIN: E2E_ENV.E2E_API_URL,
+    VITE_EDGE_ORIGIN: E2E_ENV.E2E_EDGE_URL,
+    VITE_SUPABASE_URL: stack.apiUrl,
+    VITE_SUPABASE_PUBLISHABLE_KEY: stack.publishableKey,
+  };
+}
+
+class StepFailure extends Error {}
+
+/**
+ * Runs an operator script's main() with captured output; returns the one id it prints. A failure
+ * names the step, the exit code and the script's first stderr line (fixed messages and a SQLSTATE
+ * or HTTP status only, never a value), redacted.
+ */
+async function operator(deps, step, run, argv, extraEnv = {}) {
+  const out = [];
+  const err = [];
+  const code = await run({
+    argv,
+    deps: {
+      ...deps.opsDeps,
+      env: { ...deps.opsDeps.env, ...extraEnv },
+      stdout: { write: (s) => out.push(String(s)) },
+      stderr: { write: (s) => err.push(String(s)) },
+    },
+  });
+  const id = out.join('').trim();
+  if (code !== 0 || !isUuid(id)) {
+    const why = err.join('').trim().split(/\r?\n/)[0] ?? '';
+    throw new StepFailure(`${step} failed (exit ${code}${why ? `; ${redact(why)}` : ''})`);
+  }
+  return id.toLowerCase();
+}
+
+/**
+ * Step 2b: the login-role passwords, the keys, the Worker files and the synthetic users and org.
+ * Writes only into the state folder (`config`, configPaths()). Returns the extra Playwright env.
+ * @returns {Promise<{ ok: true, playwrightEnv: Record<string, string> } | { ok: false, problems: string[] }>}
+ */
+export async function prepareLocal(deps, { stack, config, root }) {
+  try {
+    const passwords = Object.fromEntries(
+      LOGIN_ROLES.map(({ login }) => [login, deps.randomHex(24)]),
+    );
+    const roles = deps.runSql({ url: stack.dbUrl, sql: loginRolesSql(passwords), vars: {} });
+    if (!roles.ok) {
+      throw new StepFailure(
+        `setting up the local login roles failed (${roles.sqlstate ? `SQLSTATE ${roles.sqlstate}` : 'no SQLSTATE'})`,
+      );
+    }
+    const keys = await candidateTokenKeys(deps.subtle, kidFor(deps.now()));
+    const secrets = workerSecrets({ stack, passwords, keys, hmacKey: deps.randomHex(32) });
+    const jobsDir = path.join(root, 'workers', 'jobs');
+    const jobsConfig = jobsDevConfig(
+      deps.readText(path.join(jobsDir, 'wrangler.jsonc')),
+      path.join(jobsDir, 'src', 'index.ts'),
+    );
+    deps.writeSecret(config.apiEnvFile, dotenvText(secrets.api));
+    deps.writeSecret(config.edgeEnvFile, dotenvText(secrets.edge));
+    deps.writeSecret(config.jobsConfig, jobsConfig);
+    deps.writeSecret(config.jobsDevVars, dotenvText(secrets.jobs));
+
+    // The synthetic users, the org and its members (prior art: scripts/test-auth-local.mjs).
+    const password = `E2e${deps.randomHex(12)}9`;
+    const { enrolSmokeUser: enrol, createOrg: create, addMember: add } = deps.operators;
+    const ids = {};
+    for (const u of USERS) {
+      ids[u.key] = await operator(
+        deps,
+        `enrol-smoke-user (${u.email})`,
+        enrol,
+        ['--env', 'local', '--email', u.email],
+        { SMOKE_PASSWORD: password },
+      );
+    }
+    const owner = USERS.find((u) => u.roles === null);
+    const orgId = await operator(deps, 'create-org', create, [
+      '--name',
+      'E2E local',
+      '--slug',
+      'e2e-local',
+      '--kind',
+      'customer',
+      '--owner-user-id',
+      ids[owner.key],
+      '--display-name',
+      owner.name,
+      '--request-id',
+      randomUUID(),
+    ]);
+    for (const u of USERS.filter((x) => x.roles !== null)) {
+      await operator(deps, `add-member (${u.email})`, add, [
+        '--org-id',
+        orgId,
+        '--user-id',
+        ids[u.key],
+        '--roles',
+        u.roles,
+        '--display-name',
+        u.name,
+        '--request-id',
+        randomUUID(),
+      ]);
+    }
+    return {
+      ok: true,
+      playwrightEnv: {
+        E2E_SUPABASE_URL: stack.apiUrl,
+        E2E_SUPABASE_PUBLISHABLE_KEY: stack.publishableKey,
+        E2E_DB_CONTAINER: LOCAL_DB_CONTAINER,
+        E2E_ORG_ID: orgId,
+        E2E_USER_PASSWORD: password,
+        ...Object.fromEntries(USERS.map((u) => [`E2E_${u.key}_EMAIL`, u.email])),
+      },
+    };
+  } catch (e) {
+    // The helpers' own messages name a step or a variable, never a value; anything else is redacted.
+    return { ok: false, problems: [redact(String(e?.message ?? e))] };
+  }
+}
+
 /** Every dependency, with the real ones as defaults (tests inject all of them). */
 export function defaultDeps(overrides) {
   return {
@@ -238,6 +480,18 @@ export function defaultDeps(overrides) {
       writeFileSync(file, text);
     },
     env: process.env,
+    stackEnv: () => localStackEnv(realDeps()),
+    runSql: (args) => runSql(args, realDeps()),
+    operators: { enrolSmokeUser, createOrg, addMember },
+    opsDeps: realDeps(),
+    subtle: globalThis.crypto.subtle,
+    randomHex: (bytes) => randomBytes(bytes).toString('hex'),
+    readText: (file) => readFileSync(file, 'utf8'),
+    // Owner-only on POSIX; never overwrites (the state folder is new for every run).
+    writeSecret: (file, text) => {
+      mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      writeFileSync(file, text, { flag: 'wx', mode: 0o600 });
+    },
     ...overrides,
   };
 }
@@ -267,9 +521,12 @@ export async function main(options) {
 
   const result = await withLocalStack(deps, { stop: argv.includes('--stop') }, async () => {
     phases.supabase_ms = now() - t0;
-    log(`${TOOL}: building the candidate and recruiter apps`);
+    const read = readStack(deps.stackEnv());
+    if (!read.ok) return [read.problem];
+    const { stack } = read;
+    log(`${TOOL}: building the candidate and recruiter apps (demo outbox on, local origins)`);
     const tb = now();
-    const built = await run('pnpm', BUILD_ARGS, { cwd: root });
+    const built = await run('pnpm', BUILD_ARGS, { cwd: root, env: buildEnv(stack) });
     phases.build_ms = now() - tb;
     if (built.error || built.status !== 0) {
       return [
@@ -282,9 +539,10 @@ export async function main(options) {
     live.stateDir = stateDir;
     const handles = live.handles;
     const problems = [];
+    const config = configPaths(stateDir);
+    let rolesTouched = false;
     try {
-      const ts = now();
-      const specs = stackProcesses(stateDir.split(path.sep).join('/'));
+      const specs = stackProcesses(toPosix(stateDir), config);
       // An earlier, interrupted run may still hold a port: then the new process (strictPort)
       // would fail while the old one answers, and the run would test a stale build (L2).
       for (const spec of specs) {
@@ -295,6 +553,15 @@ export async function main(options) {
         }
       }
       if (problems.length > 0) return problems;
+
+      log(`${TOOL}: setting up the local logins, keys, users and org`);
+      const tl = now();
+      rolesTouched = true;
+      const local = await prepareLocal(deps, { stack, config, root });
+      phases.setup_ms = now() - tl;
+      if (!local.ok) return local.problems;
+
+      const ts = now();
       for (const spec of specs) {
         log(`${TOOL}: starting ${spec.name}`);
         handles.push(start(spec, root));
@@ -320,7 +587,7 @@ export async function main(options) {
         [path.join(root, PLAYWRIGHT_CLI), 'test'],
         {
           cwd: path.join(root, 'e2e'),
-          env: { ...E2E_ENV },
+          env: { ...E2E_ENV, ...local.playwrightEnv },
         },
       );
       phases.playwright_ms = now() - tp;
@@ -331,6 +598,16 @@ export async function main(options) {
       for (const h of handles) {
         const file = path.join(root, ...LOG_DIR.split('/'), `${h.name.replace(/\W/g, '-')}.log`);
         deps.writeFile(file, redact(h.output()));
+      }
+      // The Workers are stopped, so nothing uses the logins any more; a later run recreates them.
+      if (rolesTouched) {
+        const dropped = deps.runSql({ url: stack.dbUrl, sql: dropLoginRolesSql(), vars: {} });
+        if (!dropped.ok) {
+          const why = dropped.sqlstate ? `SQLSTATE ${dropped.sqlstate}` : 'no SQLSTATE';
+          deps.warn(
+            `${TOOL}: warning: could not drop the local login roles (${why}); the next run recreates them`,
+          );
+        }
       }
       deps.removeDir(stateDir);
       live.stateDir = null;
