@@ -12,6 +12,38 @@ refusal (nothing was changed).
 | `candidate-token-key.mjs` | Generates the ES256 key pair that signs candidate tokens | `specs/d1-demo-slice.md` §4.3, ADR-030 |
 | `staging-worker-secrets.mjs` | Creates the four staging database login roles and sets the staging Worker secrets that hold them | `specs/d1-demo-slice.md` §3, §7.1, ADR-031 |
 
+## First staging deploy (do these in this order)
+
+Both Worker-secret steps below run **after** the first deploy, because `wrangler secret put` on a Worker that
+does not exist yet silently creates an empty draft Worker (see "Why after the first deploy" below). The CI
+dispatch input `run_e2e` (boolean, default `true`, `.github/workflows/ci.yml`) turns the e2e jobs on; the first
+dispatch runs without them, because nothing on staging is ready for them yet.
+
+1. Make the candidate-token key pair and set its two **variables** (`CANDIDATE_TOKEN_KID`,
+   `CANDIDATE_TOKEN_PUBLIC_JWK`): see the key pair section below. The deploy checks these variables, so they come
+   first. Keep the private file for step 3.
+2. First dispatch, without e2e (from the repository checkout, on the `d1/**` branch being deployed):
+
+   ```
+   gh workflow run ci.yml --ref <branch> -f run_e2e=false
+   ```
+
+   Wait until `deploy-staging` is green. It applies the migrations and creates `trace-api-staging`,
+   `trace-jobs-staging` and `trace-edge-staging`. If only the "org sign-in" smoke step fails because a smoke
+   user is missing, carry on; step 5 fixes it.
+3. The api secret `CANDIDATE_TOKEN_PRIVATE_JWK` (`wrangler secret put`, from `services/api`), then delete the
+   private file: see the key pair section below.
+4. The login roles and the other api and jobs secrets: `staging-worker-secrets.mjs --yes` (section below).
+5. The staging smoke users (recruiter and reviewer, `enrol-smoke-user.mjs`) and their GitHub secrets, as listed
+   in `docs/progress/FOUNDER-QUEUE.md`.
+6. Dispatch again with e2e (`run_e2e` defaults to `true`):
+
+   ```
+   gh workflow run ci.yml --ref <branch>
+   ```
+
+   Its "Check Worker secrets" step confirms that both Workers hold only allowed secret names.
+
 ## Candidate-token key pair (`candidate-token-key.mjs`)
 
 Candidate tokens are signed with ES256 (ECDSA P-256, SHA-256). `services/api` signs with the private key
@@ -121,7 +153,8 @@ It also sets `MEDIA_LINK_HMAC_KEY` (64 random hex characters) on the api Worker.
 `CANDIDATE_TOKEN_PRIVATE_JWK` (see the key pair section above) and it never touches the edge Worker, which holds
 no secret.
 
-You run it once, on your own computer, **after the first staging deploy** and before the D1 staging smoke. It
+You run it once, on your own computer, **after the first staging deploy** and before the D1 staging smoke
+(step 4 of "First staging deploy" above). It
 makes new random passwords, gives them to Postgres, then puts each connection string into Cloudflare. It never
 prints, logs or saves a password, a key or your database URL.
 
