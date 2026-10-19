@@ -14,6 +14,7 @@ import { seedOrg, seedSession, type OrgFixture, type SessionFixture } from './fi
 import {
   SCHEMA_STATE_SQL,
   cleanupOrg,
+  cleanupStaleOrgs,
   newId,
   openHarness,
   type Harness,
@@ -109,10 +110,8 @@ const snapshot = async (session: string) => ({
 beforeAll(async () => {
   const started = Date.now();
   h = await openHarness();
-  // orgs a crashed earlier run left behind
-  for (const r of await q("select id::text from public.orgs where slug like 'jobs-dbtest-%'", [])) {
-    await cleanupOrg(h.admin, String(r['id']));
-  }
+  // orgs a crashed earlier run left behind (older than 30 minutes, never a concurrent run's)
+  await cleanupStaleOrgs(h.admin);
   schemaBefore = String((await q(SCHEMA_STATE_SQL, []))[0]?.['fp']);
   f = await seedOrg(h, ORG, [40, 60]);
   console.info(`db-test setup ${Date.now() - started} ms`);

@@ -65,6 +65,21 @@ const connect = (url: string): Sql =>
     onnotice: () => {},
   });
 
+/** An independent operator connection, or one to `url` (built by roleUrl, so on the same local server). */
+export const openOperator = (url: string = operatorUrl()): Sql => connect(url);
+/** The URL of a temporary login role on the operator's (local) server. */
+export const roleUrl = (user: string, password: string): string =>
+  withUser(operatorUrl(), user, password);
+
+/**
+ * The tag of one run's temporary login roles: its creation time (epoch seconds, 8 hex) and 4 random bytes, so a
+ * later run can tell a stale role from one a concurrent run created a moment ago.
+ */
+export const loginTag = (now: number = Date.now()): string =>
+  `${Math.floor(now / 1000)
+    .toString(16)
+    .padStart(8, '0')}_${randomBytes(4).toString('hex')}`;
+
 /** SqlTx over one postgres.js transaction: constant text, bound params (the shape the consumer injects). */
 export const sqlTxOf = (t: postgres.TransactionSql): SqlTx => ({
   query: async <R extends object>(text: string, params: readonly SqlParam[] = []): Promise<R[]> =>
@@ -117,7 +132,7 @@ export const openHarness = async (): Promise<Harness> => {
   const base = operatorUrl();
   const admin = connect(base);
   await dropStaleLogins(admin);
-  const tag = randomBytes(4).toString('hex');
+  const tag = loginTag();
   const logins = new Map<WorkerRole, { name: string; password: string }>();
   for (const role of ROLES) {
     const name = `jobs_dbtest_${tag}_${role.replace('trace_', '')}`;
@@ -170,15 +185,39 @@ export const openHarness = async (): Promise<Harness> => {
   };
 };
 
-/** Drops temporary login roles a crashed earlier run may have left behind. */
-export const dropStaleLogins = async (admin: Sql): Promise<void> => {
+/** A run's leftovers are stale only after this long (no db-test file runs anywhere near 30 minutes). */
+export const STALE_AFTER_MS = 30 * 60 * 1000;
+// jobs_dbtest_<created, 8 hex epoch seconds>_<8 hex random>_<role>; the older form had only the random part.
+const LOGIN_NAME = /^jobs_dbtest_([0-9a-f]{8})(?:_([0-9a-f]{8}))?_[a-z_]+$/;
+
+/**
+ * Drops temporary login roles a crashed earlier run left behind (DB review #4, security review #3): only a role with
+ * no session in pg_stat_activity and, for a role whose name carries its creation time, older than STALE_AFTER_MS, so
+ * a concurrent run's roles (connected, or created a moment ago and not yet connected) are never dropped.
+ */
+export const dropStaleLogins = async (admin: Sql, now: number = Date.now()): Promise<void> => {
   const rows = await admin.unsafe<{ rolname: string }[]>(
-    "select rolname from pg_roles where rolname ~ '^jobs_dbtest_[0-9a-f]{8}_[a-z_]+$'",
+    'select r.rolname from pg_roles as r ' +
+      "where r.rolname ~ '^jobs_dbtest_[0-9a-f]{8}(_[0-9a-f]{8})?_[a-z_]+$' " +
+      'and not exists (select 1 from pg_stat_activity as a where a.usename = r.rolname)',
   );
   for (const r of rows) {
-    if (/^jobs_dbtest_[0-9a-f]{8}_[a-z_]+$/.test(r.rolname))
-      await admin.unsafe(`drop role if exists ${r.rolname}`);
+    const m = LOGIN_NAME.exec(r.rolname);
+    if (m === null) continue;
+    const createdMs = m[2] === undefined ? null : parseInt(m[1] ?? '', 16) * 1000;
+    if (createdMs !== null && now - createdMs < STALE_AFTER_MS) continue;
+    await admin.unsafe(`drop role if exists ${r.rolname}`);
   }
+};
+
+/** Removes `jobs-dbtest-%` orgs a crashed earlier run left behind: older than STALE_AFTER_MS only (DB review #4). */
+export const cleanupStaleOrgs = async (admin: Sql): Promise<void> => {
+  const rows = await admin.unsafe<{ id: string }[]>(
+    "select id::text as id from public.orgs where slug like 'jobs-dbtest-%' " +
+      'and created_at < now() - make_interval(secs => $1::int)',
+    [String(STALE_AFTER_MS / 1000)],
+  );
+  for (const r of rows) await cleanupOrg(admin, r.id);
 };
 
 export const newId = (): string => randomUUID();
@@ -201,6 +240,7 @@ declare
   v_rels regclass[] := '{}';
   v_names text[] := '{}';
 begin
+  set local lock_timeout = '5s';
   set local session_replication_role = replica;
   for r in
     select tg.tgrelid::regclass as rel, tg.tgname
