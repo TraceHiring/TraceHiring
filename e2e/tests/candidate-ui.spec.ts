@@ -349,10 +349,14 @@ test.describe('the candidate UI against the local stack (spec §4.1, §4.5, §4.
         await button('Turn on camera').click();
         await expect(button('Take photo')).toBeVisible();
         await button('Take photo').click();
-        await expect(page.getByText('Photo taken. The camera is off.')).toBeVisible();
+        // The camera goes off at the shot itself, before the JPEG is encoded.
         const afterShot = await cameraRecord(page);
         expect(afterShot.tracks.length).toBeGreaterThan(0);
         expect(afterShot.tracks.every((t) => t.readyState === 'ended')).toBe(true);
+        // Encoding runs on the CPU; a 2-vCPU CI runner took over 5 s (run 39216018759), so allow 30 s.
+        await expect(page.getByText('Photo taken. The camera is off.')).toBeVisible({
+          timeout: 30_000,
+        });
 
         // The photo is encoded asynchronously after the shot; "Use this photo" is disabled until the JPEG is ready.
         const put = page.waitForRequest(isPhotoPut, { timeout: 20_000 });
@@ -395,7 +399,8 @@ test.describe('the candidate UI against the local stack (spec §4.1, §4.5, §4.
         expect(photo.status).toBe(200);
         expect(photo.answer).toEqual({ sha256: sha256Hex(body), bytes: body.length });
       },
-      { timeout: STEP_MS },
+      // The JPEG encode alone may take up to 30 s on a CI runner (above).
+      { timeout: 2 * STEP_MS },
     );
 
     await test.step(
