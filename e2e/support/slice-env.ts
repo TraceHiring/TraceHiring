@@ -8,7 +8,8 @@
 //          (users not yet TOTP-enrolled: the app's own enrolment screen; E2E_DB_CONTAINER optional, extra db checks)
 // Staging: E2E_STAGING=1, E2E_SHA (the deployed commit, 40 hex; api /health must report it at the start and at
 //          the end), E2E_RECRUITER_EMAIL, E2E_RECRUITER_PASSWORD, E2E_RECRUITER_TOTP_SECRET, E2E_REVIEWER_EMAIL,
-//          E2E_REVIEWER_PASSWORD, E2E_REVIEWER_TOTP_SECRET (both users must already hold a verified TOTP factor,
+//          E2E_REVIEWER_PASSWORD, E2E_REVIEWER_TOTP_SECRET (the five origins must equal STAGING_ORIGINS below;
+//          both users must already hold a verified TOTP factor,
 //          checked over GoTrue before any page opens: SEC-W6-2); the org id is read from the recruiter's own
 //          memberships, not from a variable.
 // Optional: E2E_SHA on local (manifest only), E2E_RECORD=1 (record mode).
@@ -86,15 +87,23 @@ const fullSha = (name: string): string => {
 const BASE32 = /^[A-Z2-7]{16,128}=*$/i;
 
 /**
- * Staging guard (never production): every origin is https, and the four Trace origins name a staging host. The error
- * names the variable, never the value.
+ * The staging origins, exactly (docs/infra/environments.md: the Pages projects, the Workers on the `abhayraj`
+ * workers.dev subdomain, Supabase project `trace-staging` ref `vsugnnxeahjtgzmgmyfu`). These are public URLs, not
+ * secrets. A staging run reaches nothing else, so it can never touch production (SEC-W5-6).
  */
-const requireStagingHosts = (origins: Record<string, string>, traceHosts: readonly string[]) => {
+export const STAGING_ORIGINS: Readonly<Record<string, string>> = {
+  E2E_CANDIDATE_URL: 'https://trace-candidate-staging.pages.dev',
+  E2E_RECRUITER_URL: 'https://trace-recruiter-staging.pages.dev',
+  E2E_API_URL: 'https://trace-api-staging.abhayraj.workers.dev',
+  E2E_EDGE_URL: 'https://trace-edge-staging.abhayraj.workers.dev',
+  E2E_SUPABASE_URL: 'https://vsugnnxeahjtgzmgmyfu.supabase.co',
+};
+
+/** Staging guard: each origin equals its pinned staging origin. The error names the variable, never the value. */
+const requireStagingOrigins = (origins: Record<string, string>) => {
   for (const [name, value] of Object.entries(origins)) {
-    const url = new URL(value);
-    if (url.protocol !== 'https:') throw new Error(`${name} must be an https URL on staging`);
-    if (traceHosts.includes(name) && !url.hostname.toLowerCase().includes('staging')) {
-      throw new Error(`${name} must be a staging host`);
+    if (STAGING_ORIGINS[name] === undefined || value !== STAGING_ORIGINS[name]) {
+      throw new Error(`${name} is not the staging origin`);
     }
   }
 };
@@ -118,12 +127,7 @@ export const readSliceEnv = (): SliceEnv => {
     recruiter = { email: need('E2E_RECRUITER_EMAIL'), password, totpSecret: null };
     reviewer = { email: need('E2E_REVIEWER_EMAIL'), password, totpSecret: null };
   } else {
-    requireStagingHosts(origins, [
-      'E2E_CANDIDATE_URL',
-      'E2E_RECRUITER_URL',
-      'E2E_API_URL',
-      'E2E_EDGE_URL',
-    ]);
+    requireStagingOrigins(origins);
     const secret = (name: string) => {
       const value = need(name).replace(/\s/g, '');
       if (!BASE32.test(value)) throw new Error(`${name} is not a base32 TOTP secret`);
