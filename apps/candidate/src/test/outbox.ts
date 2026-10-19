@@ -14,6 +14,7 @@
 // Events carry metadata only; nothing here logs.
 import type { ClientEvent, ClientSignal, SessionState } from '@trace/shared/contracts/candidate';
 import { isOffline, type ApiFailure, type CandidateApi } from '../api';
+import { OFFLINE_MESSAGE } from '../copy';
 import { isStorableText } from '../text';
 import { applySplice, spliceOf } from './splice';
 
@@ -27,7 +28,7 @@ export const OUTBOX = {
   backoffMs: [1_000, 2_000, 4_000, 8_000, 10_000],
   keepUnsentMs: 10 * 60_000,
   lenEvery: 25,
-  offlineMessage: 'Offline: your answers are kept on this device',
+  offlineMessage: OFFLINE_MESSAGE,
 } as const;
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;

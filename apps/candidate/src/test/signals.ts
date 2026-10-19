@@ -22,8 +22,8 @@ export interface SignalDeps {
 }
 
 export interface Signals {
-  /** From now on a fullscreen exit is the submit, not a signal. */
-  markSubmitting(): void;
+  /** From now on a fullscreen exit is the submit, not a signal (`false` again if the submit did not go through). */
+  markSubmitting(on?: boolean): void;
   /** Emits the open untrusted-input windows now (before a submit). */
   flush(): void;
   /** Removes every listener and timer. */
@@ -156,8 +156,8 @@ export const installSignals = (deps: SignalDeps): Signals => {
   };
 
   return {
-    markSubmitting() {
-      submitting = true;
+    markSubmitting(on = true) {
+      submitting = on;
     },
     flush,
     dispose() {
