@@ -472,8 +472,12 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
     test.setTimeout(120_000);
     const { page } = recruiterOf();
     const t = testOf();
+    // The demo outbox is org-wide and labels are per test (another test's "Candidate 1" is in it too): this run's
+    // entries are the ones that are not in this baseline, matched by link token, never by label.
+    let baseline = new Set<string>();
 
     await step(page, 'Step 4: five candidates are invited (18+ yes)', async () => {
+      baseline = await (await outboxOf(request)).ids();
       const ctx = await ctxOf();
       for (const key of ['A', 'B', 'C', 'D', 'E'] as const) {
         const invitation = await inviteCandidate(
@@ -507,18 +511,18 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
       page,
       'the demo outbox holds one link per 18+ invitation and nothing for the blocked one',
       async () => {
-        const entries = await (await outboxOf(request)).list();
+        const fresh = (await (await outboxOf(request)).list()).filter((e) => !baseline.has(e.id));
+        const invites = fresh.filter((e) => e.kind === 'invite');
+        // Exactly five new invite entries, one per A-E by link token; so none for the blocked invitation.
+        expect(invites).toHaveLength(5);
         for (const key of ['A', 'B', 'C', 'D', 'E'] as const) {
           const c = cand(key);
-          const mine = entries.filter(
-            (e) => e.kind === 'invite' && e.candidateLabel === c.invitation.label,
-          );
+          const mine = invites.filter((e) => linkTokenIn(e.bodyText) === c.invitation.token);
           expect(mine, key).toHaveLength(1);
-          const token = linkTokenIn(mine[0]?.bodyText ?? '');
-          expect(token !== null && token === c.invitation.token, key).toBe(true);
+          expect(mine[0]?.candidateLabel, key).toBe(c.invitation.label);
         }
         const blocked = must(run.blockedByInviter, 'the blocked invitation');
-        expect(entries.filter((e) => e.candidateLabel === blocked.label)).toHaveLength(0);
+        expect(fresh.filter((e) => e.candidateLabel === blocked.label)).toHaveLength(0);
         const list = await recruiterApi(request).invitations(t.testId);
         expect(list.invitations.find((i) => i.label === blocked.label)?.status).toBe('blocked_age');
       },

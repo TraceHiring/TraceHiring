@@ -155,9 +155,11 @@ test.describe('the candidate UI against the local stack (spec §4.1, §4.5, §4.
     await test.step(
       'asks for a code, reads it from the demo outbox, enters it',
       async () => {
+        // The outbox is org-wide and labels are per test: take the one OTP for this label created after a baseline.
+        const baseline = await outbox.ids();
         await button('Email me a code').click();
         await expect(page.getByText(/We sent a 6-digit code to your email/)).toBeVisible();
-        const otp = await outbox.nextOtp(invitation.label, new Set());
+        const otp = await outbox.newOtp(invitation.label, baseline);
         await page.getByLabel('6-digit code').fill(otp.code);
         await button('Continue').click();
         await expect(heading('Your age')).toBeVisible();

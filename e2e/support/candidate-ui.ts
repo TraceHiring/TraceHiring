@@ -239,11 +239,16 @@ export class CandidateUi {
     expect(href.includes(token)).toBe(false);
   }
 
-  /** Asks for a code, reads it from the demo outbox, enters it; the age step follows. */
+  /**
+   * Asks for a code, reads it from the demo outbox, enters it; the age step follows. The outbox is org-wide and
+   * labels are per test, so the code is the one OTP entry for `label` created after a baseline taken just before
+   * the request (strict: a second new entry for that label fails the step).
+   */
   async enterCode(outbox: OutboxReader, label: string): Promise<void> {
+    const baseline = await outbox.ids();
     await this.button('Email me a code').click();
     await expect(this.page.getByText(/We sent a 6-digit code to your email/)).toBeVisible();
-    const otp = await outbox.nextOtp(label, new Set());
+    const otp = await outbox.newOtp(label, baseline);
     await this.page.getByLabel('6-digit code').fill(otp.code);
     await this.button('Continue').click();
     await expect(this.heading('Your age')).toBeVisible();
