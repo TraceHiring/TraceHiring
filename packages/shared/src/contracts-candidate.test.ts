@@ -1059,3 +1059,46 @@ describe('every candidate schema export (F6)', () => {
     expect(allObjectsStrict(schema)).toBe(true);
   });
 });
+
+// R2 security review #2: Postgres jsonb refuses U+0000 and lone surrogates, so such a text would make the mirror
+// fail on every attempt (a candidate could keep their own session out of every result). Candidate text is refused
+// at the contract instead: the edit event, the rebuilt final answer and the session view.
+describe('candidate text is storable (no NUL, no lone surrogate)', () => {
+  const BAD = ['a\u0000b', '\ud83d', 'x\udc00', '\udc00\ud83d'];
+  const GOOD = ['plain', 'नमस्ते 👋', '😀', '', 'tab\tnew\nline'];
+
+  it.each(GOOD)('isStorableText accepts %j', (s) => {
+    expect(Candidate.isStorableText(s)).toBe(true);
+  });
+  it.each(BAD)('isStorableText refuses %j', (s) => {
+    expect(Candidate.isStorableText(s)).toBe(false);
+  });
+
+  it('an answer.text edit event with such text is refused', () => {
+    const event = (i: string) => ({ seq: 1, t: 0, kind: 'answer.text', item: 1, p: 0, d: 0, i });
+    expect(Candidate.ClientEvent.safeParse(event('ok')).success).toBe(true);
+    for (const s of BAD) expect(Candidate.ClientEvent.safeParse(event(s)).success).toBe(false);
+  });
+
+  it('a final.json text answer with such text is refused', () => {
+    const final = (text: string) => ({
+      v: 1,
+      sessionId: '6c1f2e3d-4b5a-4c6d-8e7f-9a0b1c2d3e4f',
+      answers: [{ position: 1, kind: 'text', text, sha256: 'a'.repeat(64), finalSeq: 3 }],
+    });
+    expect(FinalAnswers.safeParse(final('ok')).success).toBe(true);
+    for (const s of BAD) expect(FinalAnswers.safeParse(final(s)).success).toBe(false);
+  });
+
+  it('the refusal message never echoes the text', () => {
+    const r = FinalAnswers.safeParse({
+      v: 1,
+      sessionId: '6c1f2e3d-4b5a-4c6d-8e7f-9a0b1c2d3e4f',
+      answers: [
+        { position: 1, kind: 'text', text: 'secret\u0000x', sha256: 'a'.repeat(64), finalSeq: 3 },
+      ],
+    });
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).not.toContain('secret');
+  });
+});

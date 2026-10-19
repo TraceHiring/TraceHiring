@@ -107,6 +107,18 @@ const McqOptions = z
   .min(2)
   .max(6);
 
+/**
+ * Text Postgres can store in jsonb: no U+0000 and no lone UTF-16 surrogate (R2 security review #2). Such text
+ * would make the mirror fail on every attempt, so a candidate could keep their own session out of every result.
+ */
+export const isStorableText = (s: string): boolean =>
+  !s.includes('\u0000') &&
+  !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
+
+/** A bounded candidate text that is storable; the refusal message never echoes the text. */
+const StorableText = (max: number) =>
+  z.string().max(max).refine(isStorableText, { message: 'unstorable_text' });
+
 /** One served item. `options` iff mcq; `maxChars` only on written items. No answer key exists in this schema. */
 export const ServedItem = z
   .strictObject({
@@ -158,7 +170,7 @@ export const SessionView = z.strictObject({
   answers: z
     .array(
       z.union([
-        z.strictObject({ position: Position, text: z.string().max(100000) }),
+        z.strictObject({ position: Position, text: StorableText(100000) }),
         z.strictObject({ position: Position, choice: OptionId }),
       ]),
     )
@@ -236,7 +248,7 @@ export const ClientEvent = z.discriminatedUnion('kind', [
     item: Position,
     p: z.int().min(0),
     d: z.int().min(0),
-    i: z.string().max(10000),
+    i: StorableText(10000),
     len: z.int().min(0).optional(),
   }),
   z.strictObject({
@@ -284,7 +296,7 @@ export const FinalAnswers = z
           z.strictObject({
             position: Position,
             kind: z.literal('text'),
-            text: z.string().max(10000),
+            text: StorableText(10000),
             sha256: Sha256Hex,
             finalSeq: z.int().min(0),
           }),
