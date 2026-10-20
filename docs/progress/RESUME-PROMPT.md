@@ -165,11 +165,14 @@ revisions 4k-4l; scripts/ops/README.md "First staging deploy"). Founder gate par
 on staging. Do HANDOFF "Next step" in order: the MT-9 hosted allow-list (tests first, Opus security + database review),
 full verify, CI; re-dispatch from d1/integration with run_e2e=false, smoke; then ask me for part (b) (private key
 secret, staging-worker-secrets.mjs, the two smoke users); dispatch with E2E; e2e-staging green; DC-D8; record
-results; tag cp/d1-10. Do not ask me to delete anything else on staging. The task is done when cp/d1-10 is pushed; then wrap up and print the prompt for
-the next chat in SESSION-PLAN.md. Every reviewer brief says: read other revisions with git show / git diff only, never checkout. Ask me before the first staging deploy (I must widen the Cloudflare
-token with R2 + Queues Edit and set CANDIDATE_TOKEN_KID, CANDIDATE_TOKEN_PUBLIC_JWK and API_STAGING_ORIGIN, per
-scripts/ops/README.md). M0a and M0b are built and reviewed but NOT closed; merging into main needs my explicit
-go-ahead. This machine is short of RAM: run pnpm verify / verify:fast with npm_config_workspace_concurrency=1.
+results; tag cp/d1-10. Do not ask me to delete anything else on staging. The task is done when cp/d1-10 is pushed;
+then wrap up and print the prompt for the next chat in SESSION-PLAN.md. Every reviewer brief says: read other
+revisions with git show / git diff only, never checkout. Founder gate part (a) is DONE (2026-10-20: Cloudflare token
+widened with R2 + Queues; CANDIDATE_TOKEN_KID, CANDIDATE_TOKEN_PUBLIC_JWK, API_STAGING_ORIGIN set; check them by name
+only), so staging dispatches from d1/integration are approved; ask me only for part (b), per HANDOFF and
+scripts/ops/README.md. Production stays forbidden. M0a and M0b are built and reviewed but NOT closed; merging into
+main needs my explicit go-ahead. This machine is short of RAM: run pnpm verify / verify:fast with
+npm_config_workspace_concurrency=1.
 
 Safety rules (never break these): never commit on or move main; never force-push; never delete or move branches,
 tags (cp/*) or worktrees (.claude/worktrees/agent-* hold earlier work); never rewrite pushed history; never deploy
