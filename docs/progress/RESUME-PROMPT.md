@@ -161,10 +161,11 @@ stop and tell me what differs.
 
 We are on Claude Max: ONE CHAT = ONE BIG TASK (docs/progress/SESSION-PLAN.md, AUTOPILOT §6 first bullet). This chat's
 task is the one HANDOFF names under "Next chat" (Chat E2: the staging half of Chat E; spec specs/d1-demo-slice.md §7,
-revisions 4k-4l; scripts/ops/README.md "First staging deploy"). Do HANDOFF "Next step" in order: check CI, ask me for
-founder gate part (a), run the first workflow_dispatch from d1/integration with run_e2e=false, smoke; then ask me for
-part (b) (private key secret, staging-worker-secrets.mjs, the two smoke users); dispatch with E2E; e2e-staging green;
-DC-D8; record results; tag cp/d1-10. The task is done when cp/d1-10 is pushed; then wrap up and print the prompt for
+revisions 4k-4l; scripts/ops/README.md "First staging deploy"). Founder gate part (a) is done and the 11 migrations are
+on staging. Do HANDOFF "Next step" in order: the MT-9 hosted allow-list (tests first, Opus security + database review),
+full verify, CI; re-dispatch from d1/integration with run_e2e=false, smoke; then ask me for part (b) (private key
+secret, staging-worker-secrets.mjs, the two smoke users); dispatch with E2E; e2e-staging green; DC-D8; record
+results; tag cp/d1-10. Do not ask me to delete anything else on staging. The task is done when cp/d1-10 is pushed; then wrap up and print the prompt for
 the next chat in SESSION-PLAN.md. Every reviewer brief says: read other revisions with git show / git diff only, never checkout. Ask me before the first staging deploy (I must widen the Cloudflare
 token with R2 + Queues Edit and set CANDIDATE_TOKEN_KID, CANDIDATE_TOKEN_PUBLIC_JWK and API_STAGING_ORIGIN, per
 scripts/ops/README.md). M0a and M0b are built and reviewed but NOT closed; merging into main needs my explicit
