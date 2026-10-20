@@ -24,6 +24,7 @@ import {
   AUTH_TEST_ARGS,
   CONCURRENCY_TEST_ARGS,
   STAGING_ROLES_TEST_ARGS,
+  CATALOG_HOSTED_TEST_ARGS,
   JOBS_DB_TEST_ARGS,
   EXCLUDED_SERVICES,
   FLOORS,
@@ -233,6 +234,7 @@ describe('§8.3 step 2: the shared lock', () => {
       'auth',
       'concurrency',
       'stagingroles',
+      'cataloghosted',
       'jobsdb',
       'gen',
     ]);
@@ -552,6 +554,37 @@ describe('m0b M0B-DB-5: the two-connection owner-demotion test runs after AT-B8'
   });
 });
 
+describe('d1 revision 4m: the MT-9 hosted allow-list runs for real after the staging login-role test', () => {
+  it('runs node scripts/test-catalog-hosted-local.mjs from the root after the staging login-role test', async () => {
+    const h = harness();
+    expect(await h.go()).toBe(0);
+    const keys = h.stub.keys();
+    expect(keys.indexOf('cataloghosted')).toBe(keys.indexOf('stagingroles') + 1);
+    const call = h.stub.calls.find((c) => c.key === 'cataloghosted');
+    expect(call.line).toBe(`node ${CATALOG_HOSTED_TEST_ARGS.join(' ')}`);
+    expect(CATALOG_HOSTED_TEST_ARGS).toEqual(['scripts/test-catalog-hosted-local.mjs']);
+    expect(call.opts.cwd).toBe(h.root);
+  });
+
+  it('fails the run when it fails, printing only its own stdout lines', async () => {
+    const h = harness({
+      responses: {
+        cataloghosted: {
+          status: 1,
+          stdout:
+            'test-catalog-hosted-local: hosted_clean FAILED (hosted_clean:mt9_clean)\nnoise\n',
+          stderr: fakeDbUrl(),
+        },
+      },
+    });
+    expect(await h.go()).toBe(1);
+    expect(h.out.all()).toMatch(/test-catalog-hosted-local: hosted_clean FAILED/);
+    expect(h.out.all()).toMatch(/revision 4m/);
+    expect(h.out.all()).not.toContain('noise');
+    expect(h.out.all()).not.toContain('postgresql://');
+  });
+});
+
 describe('d1 chat e SR-E-5: the staging login-role SQL runs on the local stack after the concurrency test', () => {
   it('runs node scripts/test-staging-roles-local.mjs from the root after the concurrency test', async () => {
     const h = harness();
@@ -629,6 +662,7 @@ describe('§8.3 steps 3–4: start and reset', () => {
       'auth',
       'concurrency',
       'stagingroles',
+      'cataloghosted',
       'jobsdb',
       'gen',
     ]);
@@ -941,7 +975,7 @@ describe('§8.3 step 6: db-types drift', () => {
       '--schema',
       'public',
     ]);
-    expect(h.stub.calls[8].line).toBe(`pnpm ${GEN_TYPES_ARGS.join(' ')}`);
+    expect(h.stub.calls[9].line).toBe(`pnpm ${GEN_TYPES_ARGS.join(' ')}`);
     expect(DB_TYPES_FILE).toBe('packages/db-types/src/database.ts');
   });
 
@@ -1016,6 +1050,7 @@ describe('§8.3 step 6: db-types drift', () => {
       'auth',
       'concurrency',
       'stagingroles',
+      'cataloghosted',
       'jobsdb',
       'gen',
     ]);
@@ -1045,11 +1080,12 @@ describe('--stop (CI)', () => {
       'auth',
       'concurrency',
       'stagingroles',
+      'cataloghosted',
       'jobsdb',
       'gen',
       'stop',
     ]);
-    expect(h.stub.calls[9].line).toBe(`pnpm ${STOP_ARGS.join(' ')}`);
+    expect(h.stub.calls[10].line).toBe(`pnpm ${STOP_ARGS.join(' ')}`);
     expect(heldDuringStop).toBe(true);
     expect(existsSync(h.lockFile)).toBe(false);
   });

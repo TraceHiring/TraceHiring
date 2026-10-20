@@ -113,7 +113,8 @@
         "handmade_in_system_schema",
         "handmade_nonadmin_owner",
         "extension_owner",
-        "extension_added_member"
+        "extension_added_member",
+        "extension_other_member"
       ]
     },
     {

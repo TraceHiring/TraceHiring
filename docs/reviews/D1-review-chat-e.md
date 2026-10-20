@@ -111,3 +111,19 @@ A Sonnet pre-flight found the missing pieces: no `e2e-staging` job, no `local`/`
 | Spec, W5 + W6 | W5 PASS WITH FIXES, W6 PASS | SR-R5-1 Medium AT-D17 timer; SR-R5-2 Medium rule 7 not asserted; SR-R5-4, 5, 7 Low; SR-W6-1 Low step timeout: sent to the writers. SR-R5-6 and SR-R5-8 become spec rev 4l text. **SR-R5-3 (AT-D2: record mode writes one video per context; which file is the 5-minute deliverable) is carried to D1 REVIEW (Chat F).** Rev 4l also takes the spec review's sentence list 1-12 (artifact contents, secret map, dispatch `if` and concurrency, layout, steps 1-4 and 10 wording, manifest fields, `e2e:record`, reviewer smoke user `smoke-reviewer+staging@example.com`) |
 
 e2e-local run 1 of a trial merge (W5 `2bdf802` + W6 `62615c1`, scratch branch `d1/r5-trial`, local only): slice steps 1-3 passed on the real stack (UI sign-in with TOTP enrolment, default cutoff, reviewer assignment); step 4 failed on the label-matched outbox (SEC-W5-2); every other spec passed (20 passed, 1 skipped).
+
+## Chat E2 — MT-9 hosted allow-list (lead, `f5cd5da` + fix round)
+
+Staging dispatch 4 (run 39376946373) failed MT-9 only on hosted platform objects: `extension_owner` for
+`pg_stat_statements`, `uuid-ossp`, `pgcrypto` (owned by `postgres`) and `handmade_in_system_schema` for the CLI index
+`supabase_migrations.schema_migrations_idempotency_key_key`. First version `f5cd5da` (allow-list + `extension_added_member`
+on members owned by roles `postgres` is a member of). Spec revision 4m.
+
+| Review | Verdict | Findings and disposition |
+| --- | --- | --- |
+| Database (Opus), `f5cd5da` | APPROVE WITH FIXES | DB-1 Major: hosted members are probably `postgres`-owned (init scripts run as `postgres` while superuser), so `extension_added_member` would fire ~55 rows on staging → fixed: `hosted_member` trusts members by what they are (C function from `$libdir/<extname>`, no SECURITY DEFINER/SET; the two `pg_stat_statements` views with rule deps only on themselves and the extension's functions; their row/array types). DB-2 Minor spec/README not updated, wrong revision cite → fixed (m0-foundations MT-9 row, README "Hosted facts", test header). DB-3 Minor index entry matched any relkind → fixed (`relkind` column). DB-4 Note other member classes → fixed with SEC-2. DB-5 Note pgmq → recorded in README. |
+| Security (Opus), `f5cd5da` | PASS WITH NOTES | SEC-1 Medium same as DB-1, and never exempt members by name (a `CREATE OR REPLACE` of a member would hide) → fixed as DB-1; replaced, SECURITY DEFINER and SET functions and a replaced view are proven flagged. SEC-2 Low members of other catalogs → fixed: new branch `extension_other_member` (fixture: text search configuration added to `lo`). SEC-3 Low owner test relied on the membership graph → fixed: owner not in `supabase_owner`. SEC-4 Low relkind → fixed with DB-3. SEC-5 Low skip never executed → fixed: `scripts/test-catalog-hosted-local.mjs` (`test:rls` step 5e), nine rolled-back scenarios on a local stack made to look hosted; it fails `hosted_clean`, `other_member` and `index_name_table` against `f5cd5da` and passes after the fix. |
+
+Residual (accepted for D1): a replaced `pg_stat_statements` view that calls only pinned built-in functions records no
+new dependency; the owners of the hosted members are still unobserved (the next staging catalog run shows them).
+

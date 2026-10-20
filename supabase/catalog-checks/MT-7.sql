@@ -55,25 +55,26 @@ supabase_owner as (
   )
     and not pg_has_role('postgres', r.oid, 'MEMBER')
 ),
-supabase_object (kind, schema_name, object_name, owner_name) as (
+supabase_object (kind, schema_name, object_name, relkind, owner_name) as (
   -- Supabase's own non-member objects whose owner postgres is or can become (postgres itself, and
   -- supabase_functions_admin, of which postgres is a member), from the day-one check on the local stack
   -- (2026-10-11), plus the Supabase CLI's idempotency index seen on hosted Supabase (staging, 2026-10-20). A relation
-  -- by relname (indexes and sequences too), a function by name and identity arguments.
+  -- by relname and relkind (indexes and sequences too, so a table cannot take an index name), a function by name and
+  -- identity arguments (relkind '').
   values
-    ('relation'::text, 'supabase_migrations'::name, 'schema_migrations'::text, 'postgres'::name),
-    ('relation', 'supabase_migrations', 'schema_migrations_pkey', 'postgres'),
-    ('relation', 'supabase_migrations', 'schema_migrations_idempotency_key_key', 'postgres'),
-    ('relation', 'supabase_migrations', 'seed_files', 'postgres'),
-    ('relation', 'supabase_migrations', 'seed_files_pkey', 'postgres'),
-    ('relation', 'supabase_functions', 'hooks', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'hooks_pkey', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'hooks_id_seq', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'supabase_functions_hooks_h_table_id_h_name_idx', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'supabase_functions_hooks_request_id_idx', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'migrations', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'migrations_pkey', 'supabase_functions_admin'),
-    ('function', 'supabase_functions', 'http_request()', 'supabase_functions_admin')
+    ('relation'::text, 'supabase_migrations'::name, 'schema_migrations'::text, 'r'::text, 'postgres'::name),
+    ('relation', 'supabase_migrations', 'schema_migrations_pkey', 'i', 'postgres'),
+    ('relation', 'supabase_migrations', 'schema_migrations_idempotency_key_key', 'i', 'postgres'),
+    ('relation', 'supabase_migrations', 'seed_files', 'r', 'postgres'),
+    ('relation', 'supabase_migrations', 'seed_files_pkey', 'i', 'postgres'),
+    ('relation', 'supabase_functions', 'hooks', 'r', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'hooks_pkey', 'i', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'hooks_id_seq', 'S', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'supabase_functions_hooks_h_table_id_h_name_idx', 'i', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'supabase_functions_hooks_request_id_idx', 'i', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'migrations', 'r', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'migrations_pkey', 'i', 'supabase_functions_admin'),
+    ('function', 'supabase_functions', 'http_request()', '', 'supabase_functions_admin')
 ),
 outside_definer as (
   select

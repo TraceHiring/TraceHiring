@@ -29,6 +29,9 @@
 //   5d. `node scripts/test-staging-roles-local.mjs` (d1 Chat E spec review SR-E-5): the real staging
 //      login-role SQL of scripts/ops/staging-worker-secrets.mjs, run in one rolled-back transaction.
 //      Only its `test-staging-roles-local: ` stdout lines are printed on failure; its stderr never is.
+//   5e. `node scripts/test-catalog-hosted-local.mjs` (d1 revision 4m, MT-9 hosted allow-list): the local stack made
+//      to look like hosted Supabase in rolled-back superuser transactions, then MT-9 and MT-7 run as postgres.
+//      Only its `test-catalog-hosted-local: ` stdout lines are printed on failure; its stderr never is.
 //   6. db-types drift: `supabase gen types typescript --local --schema public` goes to a temp
 //      file, compared byte for byte with packages/db-types/src/database.ts (never overwritten;
 //      `pnpm db:types` regenerates it on purpose).
@@ -90,6 +93,8 @@ export const AUTH_TEST_ARGS = Object.freeze(['scripts/test-auth-local.mjs']);
 export const CONCURRENCY_TEST_ARGS = Object.freeze(['scripts/test-concurrency-local.mjs']);
 /** d1 SR-E-5: the staging login-role SQL against the local stack, rolled back, run with node after M0B-DB-5. */
 export const STAGING_ROLES_TEST_ARGS = Object.freeze(['scripts/test-staging-roles-local.mjs']);
+/** d1 revision 4m: MT-9's hosted allow-list on a local stack made to look hosted, run with node after SR-E-5. */
+export const CATALOG_HOSTED_TEST_ARGS = Object.freeze(['scripts/test-catalog-hosted-local.mjs']);
 /** d1 AT-D16 (stream R2): the jobs stages against the real schema, grants and card guard (Node, local DB). */
 export const JOBS_DB_TEST_ARGS = Object.freeze([
   '--filter',
@@ -770,6 +775,19 @@ export async function main(options) {
         .map((l) => `  | ${redact(l)}`);
       problems.push(
         `the staging login-role SQL test failed (d1 SR-E-5${roles.error ? `, ${roles.error.code ?? 'error'}` : ''})`,
+        ...lines,
+      );
+    }
+    // d1 revision 4m: its stdout holds only fixed messages; stderr is never printed.
+    log('test-rls: running the MT-9 hosted allow-list test (d1 revision 4m)');
+    const hosted = await run('node', CATALOG_HOSTED_TEST_ARGS, { cwd: root });
+    if (hosted.status !== 0) {
+      const lines = toText(hosted.stdout)
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('test-catalog-hosted-local: '))
+        .map((l) => `  | ${redact(l)}`);
+      problems.push(
+        `the MT-9 hosted allow-list test failed (d1 revision 4m${hosted.error ? `, ${hosted.error.code ?? 'error'}` : ''})`,
         ...lines,
       );
     }
