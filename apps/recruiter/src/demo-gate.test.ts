@@ -19,7 +19,9 @@ async function tablePaths(
   return paths(routes);
 }
 
-describe('the demo outbox gate', () => {
+// Each case re-imports the whole route table after vi.resetModules(); under a full parallel run on a slow
+// machine one cold import took over the 5 s default (2026-10-21), so the cases get 30 s. Assertions unchanged.
+describe('the demo outbox gate', { timeout: 30_000 }, () => {
   beforeEach(() => vi.unstubAllEnvs());
   afterEach(() => vi.unstubAllEnvs());
 
