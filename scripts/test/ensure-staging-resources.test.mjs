@@ -281,6 +281,36 @@ describe('ensureResources', () => {
     expect(violations.join('\n')).not.toMatch(/99999|Authentication error|token=abc/);
   });
 
+  // Staging dispatch 6 (run 39489428243): wrangler colours its output in CI, so `[ERROR]` arrives as
+  // `[\x1b[41;97mERROR\x1b[41;31m]`; the error block, the exists answer and the codes must survive that.
+  it('reads a colour-coded error block: exists answers are confirmed and codes are reported', () => {
+    const red = (t) =>
+      `\x1b[31m✘ \x1b[41;31m[\x1b[41;97mERROR\x1b[41;31m]\x1b[0m \x1b[1m${t}\x1b[0m`;
+    const queueExists = recorder((args) =>
+      args[2] === 'queues' && verbOf(args) === 'create'
+        ? {
+            status: 1,
+            stdout: '',
+            stderr: `${red('A request to the Cloudflare API (/accounts/x/queues) failed.')}\n  \x1b[1mQueue name already taken [code: 11009]\x1b[0m\n`,
+          }
+        : existing()(args),
+    );
+    expect(ensureResources({ run: queueExists.run }).violations).toEqual([]);
+    const denied = recorder((args) =>
+      args[2] === 'r2' && verbOf(args) === 'create'
+        ? {
+            status: 1,
+            stdout: '',
+            stderr: `${red('A request to the Cloudflare API (/accounts/x/r2/buckets) failed.')}\n  \x1b[1mAuthentication error [code: 10000]\x1b[0m\n`,
+          }
+        : existing()(args),
+    );
+    const { violations } = ensureResources({ run: denied.run });
+    expect(violations).toHaveLength(2);
+    expect(violations[0]).toMatch(/; Cloudflare codes 10000$/);
+    expect(violations.join('\n')).not.toContain('\x1b');
+  });
+
   it('accepts the queue "exists" answer by code 11009 and by wording', () => {
     expect(ensureResources({ run: recorder(existing()).run }).violations).toEqual([]);
     const worded = recorder((args) =>

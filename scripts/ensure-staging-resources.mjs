@@ -33,9 +33,13 @@ const EXISTS_RE = Object.freeze({
   queue: /already exists|\[code: 11009\]/i,
 });
 
-/** stderr from wrangler's first `[ERROR]` line to the end, or '' when there is none. */
+/** ANSI colour sequences: wrangler colours its output in CI, which splits `[ERROR]` (run 39489428243). */
+const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[A-Za-z]`, 'g');
+const plain = (text) => String(text ?? '').replace(ANSI_RE, '');
+
+/** stderr (colours removed) from wrangler's first `[ERROR]` line to the end, or '' when there is none. */
 const errorBlock = (result) => {
-  const lines = String(result.stderr ?? '').split(/\r?\n/);
+  const lines = plain(result.stderr).split(/\r?\n/);
   const at = lines.findIndex((l) => /\[ERROR\]/.test(l));
   return at < 0 ? '' : lines.slice(at).join('\n');
 };
@@ -83,9 +87,9 @@ function confirm(run, kind, name) {
   return '';
 }
 
-/** First non-empty line of stderr (else stdout), cut to 200 characters. */
+/** First non-empty line of stderr (else stdout), colours removed, cut to 200 characters. */
 const firstLine = (result) => {
-  const text = `${result.stderr ?? ''}\n${result.stdout ?? ''}`;
+  const text = `${plain(result.stderr)}\n${plain(result.stdout)}`;
   const line = text.split(/\r?\n/).find((l) => l.trim() !== '') ?? '';
   return line.length > 200 ? `${line.slice(0, 200)}…` : line;
 };
