@@ -261,6 +261,26 @@ describe('ensureResources', () => {
     expect(ensureResources({ run: w.run }).violations).toHaveLength(2);
   });
 
+  // Staging dispatch 5 (run 39486961836): the first line ("A request to the Cloudflare API (…) failed.") hid the
+  // reason; the Cloudflare error codes are on later lines of the error block. Codes only, never other text.
+  it('reports the Cloudflare error codes of a failed create, from the error block only', () => {
+    const w = recorder((args) =>
+      args[2] === 'r2' && verbOf(args) === 'create'
+        ? {
+            status: 1,
+            stdout: '[code: 99999]\n',
+            stderr:
+              '✘ [ERROR] A request to the Cloudflare API (/accounts/x/r2/buckets) failed.\n' +
+              '  Authentication error [code: 10000]\n  token=abc [code: 10042]\n',
+          }
+        : existing()(args),
+    );
+    const { violations } = ensureResources({ run: w.run });
+    expect(violations).toHaveLength(2);
+    expect(violations[0]).toMatch(/create failed \(exit 1\): .*; Cloudflare codes 10000, 10042$/);
+    expect(violations.join('\n')).not.toMatch(/99999|Authentication error|token=abc/);
+  });
+
   it('accepts the queue "exists" answer by code 11009 and by wording', () => {
     expect(ensureResources({ run: recorder(existing()).run }).violations).toEqual([]);
     const worded = recorder((args) =>

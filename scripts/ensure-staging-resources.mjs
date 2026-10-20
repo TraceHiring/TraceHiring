@@ -105,7 +105,14 @@ function create(run, kind, name, args) {
       ? `signal ${result.signal ?? 'unknown'}`
       : `exit ${result.status}`;
   const detail = result.error ? '' : firstLine(result);
-  return { violation: `${kind} ${name}: create failed (${why})${detail ? `: ${detail}` : ''}` };
+  // The first line rarely says why (run 39486961836); the Cloudflare codes in the error block do. Codes only.
+  const codes = [
+    ...new Set([...errorBlock(result).matchAll(/\[code: (\d{1,6})\]/g)].map((m) => m[1])),
+  ];
+  const tail = codes.length > 0 ? `; Cloudflare codes ${codes.join(', ')}` : '';
+  return {
+    violation: `${kind} ${name}: create failed (${why})${detail ? `: ${detail}` : ''}${tail}`,
+  };
 }
 
 /** Runs every create. `run(args)` returns a spawnSync-shaped result; it never gets a delete verb. */
