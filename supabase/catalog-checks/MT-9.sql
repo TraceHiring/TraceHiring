@@ -11,7 +11,13 @@
 -- wrong_owner. extension_owner is an extension, in any schema, whose owner postgres is a member of (INHERIT, SET or
 -- ADMIN): its owner can ALTER EXTENSION … ADD objects it owns, and every check skips extension members (the
 -- hand-made branches skip any member). Supabase's extensions are owned by supabase_admin, but a trusted extension
--- that is not on the supautils privileged list (such as lo) is owned by postgres.
+-- that is not on the supautils privileged list (such as lo) is owned by postgres. Hosted Supabase pre-installs
+-- pg_stat_statements, uuid-ossp and pgcrypto in extensions owned by postgres (staging, 2026-10-20), so
+-- extension_owner skips exactly those three names when the schema and the owner match too (hosted_extension).
+-- extension_added_member closes what that allows: a relation, function or type that is a member of any extension
+-- and is owned by postgres or a role postgres is a member of. CREATE EXTENSION of a trusted or supautils-privileged
+-- extension makes its members owned by the bootstrap superuser (supabase_admin), so such a member comes from
+-- ALTER EXTENSION … ADD, which needs ownership of the object (the first staging run confirms the hosted members).
 with recursive scope_schema as (
   select n.oid
   from pg_namespace as n
@@ -57,10 +63,12 @@ supabase_owner as (
 supabase_object (kind, schema_name, object_name, owner_name) as (
   -- Supabase's own non-member objects whose owner postgres is or can become (postgres itself, and
   -- supabase_functions_admin, of which postgres is a member), from the day-one check on the local stack
-  -- (2026-10-11). A relation by relname (indexes and sequences too), a function by name and identity arguments.
+  -- (2026-10-11), plus the Supabase CLI's idempotency index seen on hosted Supabase (staging, 2026-10-20). A relation
+  -- by relname (indexes and sequences too), a function by name and identity arguments.
   values
     ('relation'::text, 'supabase_migrations'::name, 'schema_migrations'::text, 'postgres'::name),
     ('relation', 'supabase_migrations', 'schema_migrations_pkey', 'postgres'),
+    ('relation', 'supabase_migrations', 'schema_migrations_idempotency_key_key', 'postgres'),
     ('relation', 'supabase_migrations', 'seed_files', 'postgres'),
     ('relation', 'supabase_migrations', 'seed_files_pkey', 'postgres'),
     ('relation', 'supabase_functions', 'hooks', 'supabase_functions_admin'),
@@ -71,6 +79,54 @@ supabase_object (kind, schema_name, object_name, owner_name) as (
     ('relation', 'supabase_functions', 'migrations', 'supabase_functions_admin'),
     ('relation', 'supabase_functions', 'migrations_pkey', 'supabase_functions_admin'),
     ('function', 'supabase_functions', 'http_request()', 'supabase_functions_admin')
+),
+hosted_extension (extname, schema_name, owner_name) as (
+  -- Extensions hosted Supabase pre-installs owned by postgres (staging catalog run, 2026-10-20). Names only, with
+  -- the schema and the owner pinned. Any other extension postgres controls still fails extension_owner.
+  values
+    ('pg_stat_statements'::name, 'extensions'::name, 'postgres'::name),
+    ('uuid-ossp', 'extensions', 'postgres'),
+    ('pgcrypto', 'extensions', 'postgres')
+),
+extension_member as (
+  select
+    format('%I.%I', n.nspname, c.relname) as qualified_name,
+    format('relation (relkind %s)', c.relkind) as what,
+    e.extname,
+    c.relowner as owner_oid
+  from pg_depend as d
+  join pg_extension as e on e.oid = d.refobjid
+  join pg_class as c on c.oid = d.objid
+  join pg_namespace as n on n.oid = c.relnamespace
+  where d.classid = 'pg_class'::regclass
+    and d.refclassid = 'pg_extension'::regclass
+    and d.deptype = 'e'
+  union all
+  select
+    format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)),
+    'function',
+    e.extname,
+    p.proowner
+  from pg_depend as d
+  join pg_extension as e on e.oid = d.refobjid
+  join pg_proc as p on p.oid = d.objid
+  join pg_namespace as n on n.oid = p.pronamespace
+  where d.classid = 'pg_proc'::regclass
+    and d.refclassid = 'pg_extension'::regclass
+    and d.deptype = 'e'
+  union all
+  select
+    format('%I.%I', n.nspname, t.typname),
+    format('type (typtype %s)', t.typtype),
+    e.extname,
+    t.typowner
+  from pg_depend as d
+  join pg_extension as e on e.oid = d.refobjid
+  join pg_type as t on t.oid = d.objid
+  join pg_namespace as n on n.oid = t.typnamespace
+  where d.classid = 'pg_type'::regclass
+    and d.refclassid = 'pg_extension'::regclass
+    and d.deptype = 'e'
 ),
 system_object as (
   select
@@ -183,7 +239,27 @@ select
     pg_get_userbyid(e.extowner)
   )::text
 from pg_extension as e
+join pg_namespace as n on n.oid = e.extnamespace
 where pg_has_role('postgres', e.extowner, 'MEMBER')
+  and not exists (
+    select 1
+    from hosted_extension as h
+    where h.extname = e.extname
+      and h.schema_name = n.nspname
+      and h.owner_name = pg_get_userbyid(e.extowner)
+  )
+union all
+select
+  'extension_added_member'::text,
+  em.qualified_name::text,
+  format(
+    '%s, a member of extension %s, owned by %s (postgres or a role it is a member of)',
+    em.what,
+    em.extname,
+    pg_get_userbyid(em.owner_oid)
+  )::text
+from extension_member as em
+where pg_has_role('postgres', em.owner_oid, 'MEMBER')
 union all
 select
   case

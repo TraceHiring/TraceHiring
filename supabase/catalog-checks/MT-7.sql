@@ -58,10 +58,12 @@ supabase_owner as (
 supabase_object (kind, schema_name, object_name, owner_name) as (
   -- Supabase's own non-member objects whose owner postgres is or can become (postgres itself, and
   -- supabase_functions_admin, of which postgres is a member), from the day-one check on the local stack
-  -- (2026-10-11). A relation by relname (indexes and sequences too), a function by name and identity arguments.
+  -- (2026-10-11), plus the Supabase CLI's idempotency index seen on hosted Supabase (staging, 2026-10-20). A relation
+  -- by relname (indexes and sequences too), a function by name and identity arguments.
   values
     ('relation'::text, 'supabase_migrations'::name, 'schema_migrations'::text, 'postgres'::name),
     ('relation', 'supabase_migrations', 'schema_migrations_pkey', 'postgres'),
+    ('relation', 'supabase_migrations', 'schema_migrations_idempotency_key_key', 'postgres'),
     ('relation', 'supabase_migrations', 'seed_files', 'postgres'),
     ('relation', 'supabase_migrations', 'seed_files_pkey', 'postgres'),
     ('relation', 'supabase_functions', 'hooks', 'supabase_functions_admin'),
