@@ -23,15 +23,15 @@ import { amrOf, claimsOf, signInWithTotp } from '../support/auth.js';
 import { sha256Hex } from '../support/candidate.js';
 import {
   cameraRecord,
-  instrumentCamera,
+  CandidateUi,
   isPhotoPut,
   secondsOf,
+  typeQuietly,
   waitUntil,
-  watchNetwork,
   type MediaRecord,
   type PhotoPut,
 } from '../support/candidate-ui.js';
-import { env } from '../support/http.js';
+import { env, requireLocalHosts } from '../support/http.js';
 import { headerMarkers, isMetadataMarker } from '../support/jpeg.js';
 import { outboxReader } from '../support/outbox.js';
 import {
@@ -71,6 +71,15 @@ const setup: {
 // ---- The spec ---------------------------------------------------------------------------------------------------
 
 test.describe('the candidate UI against the local stack (spec §4.1, §4.5, §4.7, §7.2 steps 5, 6, 10)', () => {
+  // Security review SEC-E4 (D1-SEC-2): this spec writes to the database and signs users in; local stack only.
+  test.beforeAll(() => {
+    requireLocalHosts({
+      E2E_API_URL: API,
+      E2E_EDGE_URL: EDGE,
+      E2E_SUPABASE_URL: env('E2E_SUPABASE_URL'),
+    });
+  });
+
   test('a recruiter publishes a test and invites one 18+ candidate', async ({ request }) => {
     test.setTimeout(180_000);
     const orgId = env('E2E_ORG_ID');
@@ -132,21 +141,16 @@ test.describe('the candidate UI against the local stack (spec §4.1, §4.5, §4.
     if (token === null) throw new Error('the invitation has no link');
     const outbox = outboxReader(request, { api: API, orgId: ctx.orgId, jwt: ctx.jwt });
 
-    await instrumentCamera(page);
-    const net = watchNetwork(page);
+    const ui = await CandidateUi.on(page, CANDIDATE_ORIGIN);
+    const net = ui.net;
     const heading = (name: string) => page.getByRole('heading', { level: 1, name, exact: true });
     const button = (name: string) => page.getByRole('button', { name, exact: true });
 
     await test.step(
       'opens the link: the test is named and the fragment is gone from the address',
       async () => {
-        await page.goto(`${CANDIDATE}/i#${token}`);
-        await expect(heading('Confirm it is you')).toBeVisible();
-        await expect(page.getByText(published.name)).toBeVisible();
-        const href = await page.evaluate(() => location.href);
-        // Booleans only: a failure must not print the link.
-        expect(href.includes('#')).toBe(false);
-        expect(href.includes(token)).toBe(false);
+        // SEC-W5-3: openLink never puts the token in a navigation URL (call logs and the HTML report print those).
+        await ui.openLink(token, published.name);
         expect(await page.evaluate(() => location.hash)).toBe('');
       },
       { timeout: STEP_MS },
@@ -160,7 +164,8 @@ test.describe('the candidate UI against the local stack (spec §4.1, §4.5, §4.
         await button('Email me a code').click();
         await expect(page.getByText(/We sent a 6-digit code to your email/)).toBeVisible();
         const otp = await outbox.newOtp(invitation.label, baseline);
-        await page.getByLabel('6-digit code').fill(otp.code);
+        // SEC-W5-4: a fill step's title is the typed text, so the code goes in without one.
+        await typeQuietly(page.getByLabel('6-digit code'), otp.code);
         await button('Continue').click();
         await expect(heading('Your age')).toBeVisible();
       },
