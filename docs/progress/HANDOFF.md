@@ -9,8 +9,8 @@ Reason for stopping: task done (D1 FIX code findings fixed and re-reviewed) and 
 ## Where we are (verified this chat)
 - **`d1/integration`** code tip `fd9b31c` docs(reviews): d1 fix complete and its re-review; then this handoff commit. Pushed to `trace` (`fd9b31c`).
 - **Full `pnpm verify` green on `fd9b31c`** (15:15-15:30 IST), in two runs because of RAM: run 1 typecheck + lint (prettier, check-boundaries, check-workflows, gen-catalog-tests 126, check-migrations "OK against main", gitleaks "no leaks found"), its tests OOM'd (see Gotchas); run 2 with `--workspace-concurrency=1`: config 502, band-engine 139, db-types 3, shared 1180, ui 67, vendors 110, workers-http 43, candidate 246, recruiter 381, api 403, edge 417, jobs 240, scripts 2602 + 1 skipped (K4); `test:rls` "rls_* 2633 (floor 2633), catalog_* 144"; `pnpm build` exit 0 (bundle, headers, no-demo-outbox, scan-dist OK).
-- CI on PR #4, run 39578472076 on `da5f01e`: e2e-local, rls, migrations, security pass (static was pending when last read). **CI on `fd9b31c`: not yet read** — check first (Verify first).
-- **`cp/d1-11`: NOT tagged yet** — tag `fd9b31c` once CI on it is green (Next step 1).
+- **CI on PR #4 green**: run 39578472076 on `da5f01e` (all five jobs); run 39580542022 on `8f424ca` (= `fd9b31c` + handoff docs) green after re-running two failed jobs once: `static` scripts `gitleaks-config.test.mjs` "finds an api_key value starting with true" (a random victim value real gitleaks did not flag; same class as SEC-GL-1; new flake, carried to M1 with D1-LEAD-1) and `e2e-local` workerd start-up `SQLITE_BUSY: database is locked` (infra). Both passed on `da5f01e` and on the re-run; no code changed between.
+- **`cp/d1-11` = `fd9b31c`** (tagged and pushed after the green CI).
 - Tag **`staging-applied-39566827826`** on `5306928` (pushed): freezes the five D1 migrations in `check-migrations` (D1-DB-3).
 
 ## Done this chat (verified; one commit per finding; docs/reviews/D1.md "FIX" + "Re-review of the FIX")
@@ -25,7 +25,7 @@ Reason for stopping: task done (D1 FIX code findings fixed and re-reviewed) and 
 - Open questions for Chat E3 (check, do not guess): one Hyperdrive config per login role (four logins, MT-14) and the Free-plan config limit; origin = session pooler or direct host (IPv6); `set local role` / `set_config(…, true)` under Hyperdrive transaction pooling; local dev and `e2e-local` (`localConnectionString`); fail fast instead of the reconnect loop.
 
 ## Next step (in order)
-1. **Verify-first**, then read CI on PR #4 for `fd9b31c` (and the handoff commit). If green: `git tag cp/d1-11 fd9b31c` and `git push trace cp/d1-11`; record in LOG. If red: fix Linux CI first.
+1. **Verify-first** (CI on PR #4 for the handoff tip; tag `cp/d1-11` exists on `fd9b31c`).
 2. **Chat E3 — Workers-to-Postgres via Hyperdrive, then the staging e2e** (on `d1/integration`; one chat writing it at a time):
    - ADR-031 amendment, spec revision 4o, Hyperdrive bindings (api + jobs, dev/staging), `staging-worker-secrets.mjs` creates/updates the Hyperdrive configs instead of the DB URL secrets, `check-staging-secrets` + wrangler-bindings tests, a test that a TLS/connect failure fails fast (no reconnect loop), a retry for the recruiter per-deployment Pages smoke. Tests first; Opus security + database review.
    - Founder steps (FOUNDER-QUEUE row 2026-10-21): download the Supabase CA (public), upload it, create the configs (exact commands from Chat E3).
@@ -33,7 +33,7 @@ Reason for stopping: task done (D1 FIX code findings fixed and re-reviewed) and 
 3. **CLOSE** (D1 summary, merge into `main`, `d1-reviewed`, M0a/M0b CLOSE) only with the founder's explicit go-ahead.
 
 ## Carried (beyond D1 FIX; owners in `docs/reviews/D1.md`)
-- **M1:** N-1, D1-SEC-3 (c, d), D1-LEAD-1, the concurrency group, `candidate-store` `newOtp`, FR-1 (+ new helpers).
+- **M1:** N-1, D1-SEC-3 (c, d), D1-LEAD-1 (+ the new `gitleaks-config` random-victim flake, run 39580542022), the concurrency group, `candidate-store` `newOtp`, FR-1 (+ new helpers).
 - **M3a:** D1-DB-2, SEC-W1-1, DB-6, DB-12, C2 SEC-3, the token re-mint cap, `MIRROR_TRANSPORT`, earlier M3a carries.
 - **M3b:** C2 SEC-6. **M4:** C2 SEC-5. **M5:** DB-7. **M7:** M0B-DB-1 (+ D1 tables), deletion.
 
