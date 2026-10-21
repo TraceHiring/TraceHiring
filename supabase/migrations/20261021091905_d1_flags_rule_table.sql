@@ -13,7 +13,7 @@
 -- Error contract (as migration 3):
 --   no validated rule with this id in the session's rule table   42501 'TRACE_GUARD: a flag needs a validated rule ...'
 --   the rule exists, but a field differs                         42501 'TRACE_GUARD: the flag does not match its rule'
---   untrusted / raw_media on a T1/T2 row                         left to the T3-only CHECK (23514)
+--   untrusted / raw_media on a T1/T2 row                         23514 'TRACE_GUARD: untrusted or raw_media needs a T3 ...'
 -- The rule-table check runs first; the card-final, quality-card and not_used checks of migration 3 follow unchanged.
 -- Tests: supabase/tests/rls_d1_cards.test.sql section "D1-DB-1".
 
@@ -31,9 +31,9 @@ begin
   if tg_op <> 'INSERT' then
     raise exception 'TRACE_GUARD: flags are immutable in D1' using errcode = '42501';
   end if;
-  -- A row the T3-only CHECK refuses is left to it (23514), so that refusal keeps its own code.
+  -- The T3-only rule is refused here with the CHECK's own code (23514), so it never depends on the CHECK staying.
   if (new.untrusted or new.raw_media) and new.tier is distinct from 'T3' then
-    return new;
+    raise exception 'TRACE_GUARD: untrusted or raw_media needs a T3 flag (rule 3)' using errcode = '23514';
   end if;
   -- D1-DB-1 (rule 3): the flag is a validated rule of the session's own pinned rule table, field for field.
   select r into v_rule

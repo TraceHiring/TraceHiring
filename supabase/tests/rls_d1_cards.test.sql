@@ -22,7 +22,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(172);
+select plan(175);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -55,7 +55,7 @@ insert into public.orgs (id, kind, name, slug) values
 insert into integrity.band_rule_versions (org_id, version_no, families, coverage_floor_permille, coverage_photo_missing_factor_permille, rules, content_sha256) values
   ('a1000000-0000-4000-8000-000000000001', 2, array['paste', 'input_origin', 'focus'], 700, 750,
    (select b.rules from integrity.band_rule_versions b where b.org_id = 'a1000000-0000-4000-8000-000000000001' and b.version_no = 1)
-     || '[{"id": "X-SOFT-FOCUS", "kinds": ["tab_hidden"], "family": "focus", "tier": "T3", "severity": "soft", "validated": true}, {"id": "X-SOFT-PASTE", "kinds": ["drop"], "family": "paste", "tier": "T3", "severity": "soft", "validated": true}]'::jsonb,
+     || '[{"id": "X-SOFT-FOCUS", "kinds": ["tab_hidden"], "family": "focus", "tier": "T3", "severity": "soft", "validated": true}, {"id": "X-SOFT-PASTE", "kinds": ["drop"], "family": "paste", "tier": "T3", "severity": "soft", "validated": true}, {"id": "X-RAW-PASTE", "kinds": ["paste"], "family": "paste", "tier": "T3", "severity": "soft", "validated": true, "rawMedia": true}]'::jsonb,
    repeat('f', 64));
 insert into public.workspaces (id, org_id, name, kind, is_default) values
   ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'Default', 'default', true),
@@ -601,6 +601,17 @@ select matches(pg_temp.try($$insert into integrity.flags (id, org_id, session_id
 select matches(pg_temp.try($$insert into integrity.flags (id, org_id, session_id, rule_id, family, tier, severity, untrusted, raw_media, count, first_offset_ms, state, signal_seqs) values ('a7000000-0000-4000-8000-00000000002b', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000012', 'D1-UNTRUSTED-INPUT', 'input_origin', 'T3', 'hard', false, false, 1, 1000, 'pending', '{1}')$$), '^42501 TRACE_GUARD: the flag does not match its rule', 'D1-DB-1 flags I: a flag that drops its rule''s untrusted marker is refused');
 select matches(pg_temp.try($$insert into integrity.flags (id, org_id, session_id, rule_id, family, tier, severity, untrusted, raw_media, count, first_offset_ms, state, signal_seqs) values ('a7000000-0000-4000-8000-00000000002c', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000012', 'X-SOFT-PASTE', 'paste', 'T3', 'soft', false, false, 1, 1000, 'pending', '{1}')$$), '^OK 1', 'D1-DB-1 flags I: a flag that matches a validated rule of the pinned table v2 lands');
 select is((select count(*)::int from integrity.flags where session_id = 'a4000000-0000-4000-8000-000000000012'), 2, 'D1-DB-1: C12 holds only the two matching flags after the refusals');
+select matches(pg_temp.try($$insert into integrity.flags (id, org_id, session_id, rule_id, family, tier, severity, untrusted, raw_media, count, first_offset_ms, state, signal_seqs) values ('a7000000-0000-4000-8000-00000000002e', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000012', 'X-RAW-PASTE', 'paste', 'T3', 'soft', false, true, 1, 1000, 'pending', '{1}')$$), '^OK 1', 'D1-DB-1 flags I: a raw_media flag lands when its rule has rawMedia (the T3 raw-media path stays open)');
+select matches(pg_temp.try($$insert into integrity.flags (id, org_id, session_id, rule_id, family, tier, severity, untrusted, raw_media, count, first_offset_ms, state, signal_seqs) values ('a7000000-0000-4000-8000-00000000002f', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000012', 'X-SOFT-PASTE', 'paste', 'T1', 'soft', true, false, 1, 1000, 'pending', '{1}')$$), '^23514 TRACE_GUARD: untrusted or raw_media needs a T3', 'D1-DB-1 flags I: the guard itself refuses untrusted on a T1 row with the CHECK''s code (23514)');
+reset role;
+reset trace.job_org_id;
+-- Version scoping inside one org: a newer rule table (v3) does not reach a session pinned to v2.
+insert into integrity.band_rule_versions (org_id, version_no, families, coverage_floor_permille, coverage_photo_missing_factor_permille, rules, content_sha256) values
+  ('a1000000-0000-4000-8000-000000000001', 3, array['paste', 'input_origin', 'focus'], 700, 750,
+   '[{"id": "X-V3-ONLY", "kinds": ["paste"], "family": "paste", "tier": "T3", "severity": "medium", "validated": true}]'::jsonb, repeat('a', 64));
+set local role trace_integrity_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select matches(pg_temp.try($$insert into integrity.flags (id, org_id, session_id, rule_id, family, tier, severity, untrusted, raw_media, count, first_offset_ms, state, signal_seqs) values ('a7000000-0000-4000-8000-000000000030', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000012', 'X-V3-ONLY', 'paste', 'T3', 'medium', false, false, 1, 1000, 'pending', '{1}')$$), '^42501 TRACE_GUARD: a flag needs a validated rule', 'D1-DB-1 flags I: only the session''s pinned rule table counts, not a newer table of the same org');
 reset role;
 reset trace.job_org_id;
 -- Org B's sessions pin the seeded d1-v1 table, which has no X-SOFT-PASTE rule: the same row is refused there.
