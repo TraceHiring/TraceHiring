@@ -590,6 +590,9 @@ importers:
       eslint:
         specifier: 'catalog:'
         version: 9.39.5(jiti@2.6.1)(supports-color@10.2.2)
+      postgres:
+        specifier: 'catalog:'
+        version: 3.4.9
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
