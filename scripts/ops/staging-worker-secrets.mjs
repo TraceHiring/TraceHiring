@@ -1,16 +1,28 @@
 #!/usr/bin/env node
-// Operator script: the four staging database login roles and the staging Worker secrets that hold them
-// (specs/d1-demo-slice.md §3 "Roles", §7.1 secrets and the check-staging-secrets allow-list, §8 DC-D7; ADR-031).
-//   TRACE_OPERATOR_DB_URL=... node scripts/ops/staging-worker-secrets.mjs --env staging [--dry-run | --yes]
-// Run by the founder, once, on their own computer, AFTER the first staging deploy (the Workers must exist) and
-// before the D1 staging smoke. A re-run rotates: new passwords, then new secrets.
-//   1. Checks: --env staging only; TRACE_OPERATOR_DB_URL is the staging project's Supabase session pooler
+// Operator script: the four staging database login roles, the four staging Hyperdrive configs that hold them, and
+// the one database-free api secret (specs/d1-demo-slice.md §3 "Roles", §7.1 secrets and the check-staging-secrets
+// allow-list, §8 DC-D7; ADR-031 amendment 1, d1 revision 4o; scripts/lib/hyperdrive.mjs).
+//   TRACE_OPERATOR_DB_URL=... node scripts/ops/staging-worker-secrets.mjs --env staging \
+//     --ca-certificate-id <id> [--sslmode verify-full|verify-ca] [--dry-run | --yes]
+// Why Hyperdrive: a Worker's own TLS client trusts only public roots, and Supabase Postgres presents a certificate
+// under its private "Supabase Root 2021 CA", so a direct connection never completes (postgres.js reconnect-loops).
+// Hyperdrive connects to Postgres for the Worker and verifies that CA, which the founder uploads once with
+// `wrangler cert upload certificate-authority`; its id (not a secret) is --ca-certificate-id. One config per login
+// role (MT-14), caching disabled (a cached read would cross role and org scoping). The *_DB_URL secrets are retired
+// on staging; local dev keeps them (local hosts only).
+// Run by the founder on their own computer, AFTER the first staging deploy (the Workers must exist), with wrangler
+// logged in (OAuth `wrangler login`, or CLOUDFLARE_API_TOKEN). A re-run rotates: new passwords, then the same four
+// configs updated in place.
+//   1. Checks, before anything changes: --env staging only; --ca-certificate-id is a UUID; --sslmode is verify-full
+//      (default) or verify-ca, never require; TRACE_OPERATOR_DB_URL is the staging project's Supabase session pooler
 //      (postgres.<ref> @ aws-N-<region>.pooler.supabase.com:5432) or direct host (postgres @ db.<ref>.supabase.co),
 //      with ?sslmode=require (or verify-ca / verify-full); its ref is the pinned STAGING_PROJECT_REF (and equals
-//      SUPABASE_STAGING_PROJECT_REF when that is set); psql exists;
-//      and (with --yes) `wrangler secret list` works for trace-api-staging and trace-jobs-staging. wrangler 4.149's
-//      `secret put` with piped input creates an empty draft Worker when the Worker is missing (createDraftWorker,
-//      fallback "yes" in a non-interactive context), so a missing Worker stops the run here, before the database.
+//      SUPABASE_STAGING_PROJECT_REF when that is set); psql exists. The plan is printed; a dry run stops here.
+//      With --yes: `wrangler secret list` works for trace-api-staging and trace-jobs-staging (wrangler 4.149's
+//      `secret put` with piped input creates an empty draft Worker when the Worker is missing: createDraftWorker,
+//      fallback "yes" in a non-interactive context), and the names it lists are kept for step 6; the Cloudflare
+//      token comes from `wrangler auth token --json` (stdout, never printed or put on a command line); then the
+//      account's Hyperdrive configs are listed, which proves the token, the account and Hyperdrive access.
 //   2. Generates four 32-byte hex passwords and a 32-byte hex media-link HMAC key (services/api importHmacKey takes
 //      the string, at least 32 characters), in memory only.
 //   3. One psql transaction as postgres, SQL on stdin, ON_ERROR_STOP=1 (lib.mjs runSql): refuses (TR001) if a
@@ -18,23 +30,37 @@
 //      password; grants exactly its one trace_* role `with inherit false, set true`; then refuses (TR002) any other
 //      membership or attribute. Never drops or revokes. The password reaches Postgres as a SCRAM-SHA-256 verifier
 //      only, so the plain text is never in a server log.
-//   4. `pnpm exec wrangler secret put <NAME> --env staging` in services/api (API_DB_URL, MEDIA_LINK_HMAC_KEY) and
-//      workers/jobs (JOBS_MIRROR_DB_URL, JOBS_QUALITY_DB_URL, JOBS_INTEGRITY_DB_URL), each value on stdin only.
+//   4. Per HYPERDRIVE_PLAN entry, in order: PUT (full update) the config of that exact name, or POST (create) it.
+//      The password travels only in the JSON body over HTTPS to api.cloudflare.com. Hyperdrive opens a test
+//      connection to the origin on create and update, so a wrong CA, sslmode or host fails here.
+//   5. `pnpm exec wrangler secret put MEDIA_LINK_HMAC_KEY --env staging` in services/api, the value on stdin only.
 //      Never CANDIDATE_TOKEN_PRIVATE_JWK (candidate-token-key.mjs runbook) and never the edge Worker (no secret).
+//   6. `pnpm exec wrangler secret delete <NAME> --env staging` for each retired *_DB_URL secret step 1 listed on
+//      that Worker (check-staging-secrets fails on a leftover one).
+//   7. Prints each config id (not a secret) and the env.staging `hyperdrive` lines for the two wrangler.jsonc files.
 // No value is printed, logged, written to disk or put on a command line: not the operator URL, not a password,
-// not the key. Errors name a variable, a secret or a SQLSTATE, never a value. Child output is not echoed.
+// not the key, not the token. Errors name a variable, a secret, a config, a SQLSTATE, an HTTP status or a
+// Cloudflare error code, never a value. Child output and Cloudflare error messages are not echoed.
 // Exit codes: 0 done (or a clean dry run), 1 a step failed, 2 bad arguments or a refusal (nothing changed).
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ALLOW_LIST, WORKER_DIRS } from '../check-staging-secrets.mjs';
+import { ALLOW_LIST, WORKER_DIRS, parseSecretList } from '../check-staging-secrets.mjs';
 import { isEntryPoint } from '../lib/cli.mjs';
 import { LOGIN_ROLES, isLoginPassword } from '../lib/e2e-local-secrets.mjs';
+import {
+  CLOUDFLARE_ACCOUNT_ID,
+  HYPERDRIVE_ID_RE,
+  HYPERDRIVE_PLAN,
+  HYPERDRIVE_SSLMODES,
+  ORIGIN_CONNECTION_LIMIT,
+} from '../lib/hyperdrive.mjs';
 import {
   DB_URL_ENV,
   childEnvOf,
   describeFailure,
+  isUuid,
   line,
   parseFlags,
   pgEnvOf,
@@ -49,79 +75,127 @@ const TAG = 'staging-worker-secrets';
  */
 export const STAGING_PROJECT_REF = 'vsugnnxeahjtgzmgmyfu';
 export const REF_ENV = 'SUPABASE_STAGING_PROJECT_REF';
+/** The Hyperdrive configs of the pinned staging account (scripts/lib/hyperdrive.mjs); the only API this calls. */
+export const HYPERDRIVE_CONFIGS_URL = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/hyperdrive/configs`;
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OPTIONS = {
   env: { type: 'string' },
   'dry-run': { type: 'boolean' },
   yes: { type: 'boolean' },
+  'ca-certificate-id': { type: 'string' },
+  sslmode: { type: 'string' },
 };
+const DEFAULT_SSLMODE = 'verify-full';
+const CF_TIMEOUT_MS = 60_000;
 
 /**
- * What goes where. `login` names the database login whose URL is the value; null is the media-link HMAC key.
- * `workerName` is `env.staging.name` of the folder's wrangler.jsonc (a test pins it).
+ * The Workers this script touches and the secrets it sets. `login` is always null now: the database logins live in
+ * Hyperdrive configs (HYPERDRIVE_PLAN), so the only secret is the media-link HMAC key. jobs is listed for the
+ * "Worker exists" check and the retired-secret deletes. `workerName` is `env.staging.name` of the folder's
+ * wrangler.jsonc (a test pins it).
  */
 export const PLAN = Object.freeze([
   Object.freeze({
     worker: 'api',
     dir: WORKER_DIRS.api,
     workerName: 'trace-api-staging',
-    secrets: Object.freeze([
-      Object.freeze({ name: 'API_DB_URL', login: 'api_login' }),
-      Object.freeze({ name: 'MEDIA_LINK_HMAC_KEY', login: null }),
-    ]),
+    secrets: Object.freeze([Object.freeze({ name: 'MEDIA_LINK_HMAC_KEY', login: null })]),
   }),
   Object.freeze({
     worker: 'jobs',
     dir: WORKER_DIRS.jobs,
     workerName: 'trace-jobs-staging',
-    secrets: Object.freeze([
-      Object.freeze({ name: 'JOBS_MIRROR_DB_URL', login: 'jobs_mirror_login' }),
-      Object.freeze({ name: 'JOBS_QUALITY_DB_URL', login: 'jobs_quality_login' }),
-      Object.freeze({ name: 'JOBS_INTEGRITY_DB_URL', login: 'jobs_integrity_login' }),
-    ]),
+    secrets: Object.freeze([]),
   }),
 ]);
 
-// Fail at load if the plan ever leaves the allow-list, reaches edge, or misses a login.
+/**
+ * The database URL secrets retired on staging (ADR-031 amendment 1, d1 revision 4o): step 6 deletes each one the
+ * Worker still holds, because check-staging-secrets refuses them.
+ */
+export const RETIRED_SECRETS = Object.freeze({
+  api: Object.freeze(['API_DB_URL']),
+  jobs: Object.freeze(['JOBS_MIRROR_DB_URL', 'JOBS_QUALITY_DB_URL', 'JOBS_INTEGRITY_DB_URL']),
+});
+
+// Fail at load if the plan ever leaves the allow-list, reaches edge, keeps a retired name or misses a login.
 for (const w of PLAN) {
   if (w.worker === 'edge') throw new Error(`${TAG}: the edge Worker holds no secret`);
   for (const s of w.secrets) {
     if (!ALLOW_LIST[w.worker]?.includes(s.name)) {
       throw new Error(`${TAG}: ${s.name} is not on the ${w.worker} allow-list`);
     }
+    if (s.login !== null) throw new Error(`${TAG}: ${s.name} must not hold a database login`);
+  }
+}
+for (const [worker, names] of Object.entries(RETIRED_SECRETS)) {
+  if (!PLAN.some((w) => w.worker === worker)) throw new Error(`${TAG}: ${worker} is not planned`);
+  for (const name of names) {
+    if (ALLOW_LIST[worker]?.includes(name)) {
+      throw new Error(`${TAG}: the retired ${name} is still on the ${worker} allow-list`);
+    }
   }
 }
 {
-  const planned = PLAN.flatMap((w) => w.secrets.map((s) => s.login)).filter(Boolean);
+  const planned = HYPERDRIVE_PLAN.map((p) => p.login).sort();
   if (
-    planned.sort().join() !==
+    planned.join() !==
     LOGIN_ROLES.map((r) => r.login)
       .sort()
       .join()
   ) {
-    throw new Error(`${TAG}: the plan must give each login role exactly one secret`);
+    throw new Error(`${TAG}: the plan must give each login role exactly one Hyperdrive config`);
+  }
+  for (const p of HYPERDRIVE_PLAN) {
+    if (!PLAN.some((w) => w.worker === p.worker)) {
+      throw new Error(`${TAG}: the Hyperdrive config ${p.config} is on an unplanned Worker`);
+    }
   }
 }
 
 // --- arguments ------------------------------------------------------------------------------------
 
-/** `--env staging` plus at most one of `--dry-run` / `--yes`. Messages never echo a value. */
+const USAGE =
+  'use --env staging --ca-certificate-id <id> [--sslmode verify-full|verify-ca] [--dry-run | --yes]';
+
+/**
+ * `--env staging`, at most one of `--dry-run` / `--yes`, `--ca-certificate-id <uuid>` (required with either; the
+ * id `wrangler cert upload certificate-authority` printed, lower-cased) and `--sslmode verify-full|verify-ca`
+ * (default verify-full). Messages never echo a value.
+ */
 export function parseCli(argv) {
   let flags;
   try {
     flags = parseFlags(argv, OPTIONS);
   } catch {
-    return {
-      ok: false,
-      why: 'unknown or malformed argument (use --env staging [--dry-run | --yes])',
-    };
+    return { ok: false, why: `unknown or malformed argument (${USAGE})` };
   }
   if (flags.env === undefined) return { ok: false, why: '--env staging is required' };
   if (flags.env !== 'staging') return { ok: false, why: 'only --env staging is allowed' };
   const dryRun = flags['dry-run'] === true;
   const yes = flags.yes === true;
   if (dryRun && yes) return { ok: false, why: 'use --dry-run or --yes, not both' };
-  return { ok: true, dryRun, yes };
+  const rawCa = flags['ca-certificate-id'];
+  if (rawCa === undefined && (dryRun || yes)) {
+    return {
+      ok: false,
+      why: '--ca-certificate-id is required with --dry-run or --yes (the ID `wrangler cert upload certificate-authority` printed)',
+    };
+  }
+  if (rawCa !== undefined && !isUuid(rawCa)) {
+    return {
+      ok: false,
+      why: '--ca-certificate-id must be the UUID `wrangler cert upload certificate-authority` printed',
+    };
+  }
+  const sslmode = flags.sslmode ?? DEFAULT_SSLMODE;
+  if (!HYPERDRIVE_SSLMODES.includes(sslmode)) {
+    return {
+      ok: false,
+      why: `--sslmode must be ${HYPERDRIVE_SSLMODES.join(' or ')} (Hyperdrive must verify the Supabase CA; require is never allowed)`,
+    };
+  }
+  return { ok: true, dryRun, yes, caId: rawCa === undefined ? null : rawCa.toLowerCase(), sslmode };
 }
 
 // --- the operator URL -----------------------------------------------------------------------------
@@ -327,31 +401,201 @@ export function stagingLoginRolesSql({ passwords, salts }) {
   return out.join('\n');
 }
 
+// --- Hyperdrive -----------------------------------------------------------------------------------
+
 /**
- * A login's connection URL for the Workers. Pooler: user `<login>.<ref>` on the operator's pooler host (Supavisor
- * finds the project from the suffix); direct: `<login>` on db.<ref>.supabase.co. Always port 5432 (session mode,
- * ADR-031), database postgres and `sslmode=require`, which apiDbSsl and jobsDbSsl turn into TLS `require`.
+ * The create (POST) and full-update (PUT) body of one login's Hyperdrive config. Origin: the operator's host
+ * (pooler: user `<login>.<ref>`, Supavisor finds the project from the suffix; direct: `<login>` on
+ * db.<ref>.supabase.co), port 5432 (session mode, ADR-031), database postgres. Caching is disabled: a cached read
+ * would be served across role and org scoping. mtls verifies the origin against the uploaded Supabase CA; `require`
+ * (no verification) is refused. Throws, naming the config only, never a value.
  */
-export function workerDbUrl(target, login, password) {
-  if (!LOGIN_ROLES.some((r) => r.login === login)) throw new Error(`${TAG}: unknown login role`);
-  if (!isLoginPassword(password)) {
-    throw new Error(`${TAG}: the password for ${login} is not lower-case hex`);
+export function hyperdriveBody(target, entry, password, { caId, sslmode = DEFAULT_SSLMODE } = {}) {
+  const planned = HYPERDRIVE_PLAN.find((p) => p.config === entry?.config);
+  if (!planned || planned.login !== entry.login) {
+    throw new Error(`${TAG}: unknown Hyperdrive config`);
   }
-  const user = target.kind === 'pooler' ? `${login}.${target.ref}` : login;
-  return `postgresql://${user}:${password}@${target.host}:5432/postgres?sslmode=require`;
+  if (!isLoginPassword(password) || password.length < PASSWORD_BYTES * 2) {
+    throw new Error(
+      `${TAG}: the password for ${planned.config} is not 64-128 lower-case hex characters`,
+    );
+  }
+  if (typeof caId !== 'string' || !isUuid(caId)) {
+    throw new Error(`${TAG}: ${planned.config} needs the CA certificate id (a UUID)`);
+  }
+  if (!HYPERDRIVE_SSLMODES.includes(sslmode)) {
+    throw new Error(`${TAG}: ${planned.config} needs sslmode verify-full or verify-ca`);
+  }
+  if (target?.kind !== 'pooler' && target?.kind !== 'direct') {
+    throw new Error(`${TAG}: ${planned.config} has no checked database host`);
+  }
+  return {
+    name: planned.config,
+    origin: {
+      scheme: 'postgresql',
+      host: target.host,
+      port: 5432,
+      database: 'postgres',
+      user: target.kind === 'pooler' ? `${planned.login}.${target.ref}` : planned.login,
+      password,
+    },
+    caching: { disabled: true },
+    mtls: { ca_certificate_id: caId, sslmode },
+    origin_connection_limit: ORIGIN_CONNECTION_LIMIT,
+  };
 }
 
-/** NAME -> value for every secret in PLAN. */
-export function secretValues(target, values) {
-  const out = {};
-  for (const w of PLAN) {
-    for (const s of w.secrets) {
-      out[s.name] = s.login
-        ? workerDbUrl(target, s.login, values.passwords[s.login])
-        : values.hmacKey;
+const TOKEN_TYPES = new Set(['oauth', 'api_token']);
+
+/**
+ * The output of `wrangler auth token --json` (wrangler 4.149 authTokenCommand: `{ type, token }` for an OAuth login
+ * or CLOUDFLARE_API_TOKEN; `{ type: 'api_key', key, email }` for a global API key, which is refused). Returns
+ * `{ ok: true, type, token }` or `{ ok: false }`; never a value on failure.
+ */
+export function parseAuthToken(stdout) {
+  const text = typeof stdout === 'string' ? stdout : '';
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start < 0 || end <= start) return { ok: false };
+    try {
+      parsed = JSON.parse(text.slice(start, end + 1));
+    } catch {
+      return { ok: false };
     }
   }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false };
+  const { type, token } = parsed;
+  if (!TOKEN_TYPES.has(type)) return { ok: false };
+  // printable ASCII only: it goes into an HTTP header
+  if (typeof token !== 'string' || !/^[\x21-\x7e]+$/.test(token)) return { ok: false };
+  return { ok: true, type, token };
+}
+
+/**
+ * The `hyperdrive` line to paste under env.staging of each Worker's wrangler.jsonc, from binding -> config id.
+ * Ids are not secrets (a config id works only inside the account that owns it).
+ */
+export function wranglerSnippets(ids) {
+  const out = [];
+  for (const w of PLAN) {
+    const entries = HYPERDRIVE_PLAN.filter((p) => p.worker === w.worker);
+    if (entries.length === 0) continue;
+    const parts = entries.map((p) => {
+      const id = ids?.[p.binding];
+      if (typeof id !== 'string' || !HYPERDRIVE_ID_RE.test(id)) {
+        throw new Error(`${TAG}: no well-formed Hyperdrive id for ${p.binding}`);
+      }
+      return `{ "binding": "${p.binding}", "id": "${id}" }`;
+    });
+    out.push({
+      worker: w.worker,
+      file: `${w.dir}/wrangler.jsonc`,
+      line: `"hyperdrive": [${parts.join(', ')}]`,
+    });
+  }
   return out;
+}
+
+/**
+ * One Cloudflare API call through `deps.fetch`: Bearer token, JSON, no redirect (the token must not follow one),
+ * a timeout. Success needs HTTP 2xx and `success === true`. A failure carries only the HTTP status (null when no
+ * response came) and the numeric `errors[].code` values; never a message or the body.
+ */
+async function cloudflare(deps, token, method, url, body) {
+  const init = {
+    method,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    redirect: 'error',
+    signal: AbortSignal.timeout(CF_TIMEOUT_MS),
+  };
+  if (body !== undefined) init.body = JSON.stringify(body);
+  let res;
+  try {
+    res = await deps.fetch(url, init);
+  } catch {
+    return { ok: false, status: null, codes: [] };
+  }
+  const status = Number.isInteger(res?.status) ? res.status : null;
+  let json = null;
+  try {
+    json = JSON.parse(await res.text());
+  } catch {
+    json = null;
+  }
+  const codes = Array.isArray(json?.errors)
+    ? json.errors
+        .map((e) => e?.code)
+        .filter((c) => Number.isInteger(c))
+        .slice(0, 10)
+    : [];
+  if (status === null || status < 200 || status > 299 || json?.success !== true) {
+    return { ok: false, status, codes };
+  }
+  return { ok: true, status, json };
+}
+
+/** "HTTP 403, Cloudflare error codes 10000, 9109" (or a no-response note); never a message. */
+function cfDetail(r) {
+  if (r.status === null) return 'no HTTP response (network error or timeout)';
+  const codes =
+    r.codes.length > 0
+      ? `Cloudflare error code${r.codes.length > 1 ? 's' : ''} ${r.codes.join(', ')}`
+      : 'no Cloudflare error code';
+  return `HTTP ${r.status}, ${codes}`;
+}
+
+/**
+ * The account's configs (GET list, one page) matched to the plan by exact name. `{ ok: true, existing }` (config
+ * name -> id) or `{ ok: false, code, why }`.
+ */
+async function listConfigs(deps, token) {
+  const r = await cloudflare(deps, token, 'GET', HYPERDRIVE_CONFIGS_URL);
+  if (!r.ok || !Array.isArray(r.json.result)) {
+    return {
+      ok: false,
+      code: 2,
+      why: `listing the Hyperdrive configs of the staging account failed (${r.ok ? 'the result is not a list' : cfDetail(r)}); check that \`pnpm exec wrangler whoami\` shows the Trace account and that your login may manage Hyperdrive. Nothing was changed`,
+    };
+  }
+  const list = r.json.result;
+  const info = r.json.result_info ?? {};
+  if (
+    (Number.isInteger(info.total_pages) && info.total_pages > 1) ||
+    (Number.isInteger(info.total_count) && info.total_count > list.length)
+  ) {
+    return {
+      ok: false,
+      code: 1,
+      why: 'the staging account has more Hyperdrive configs than one page holds, so this script cannot tell whether a planned config exists; delete unused configs in the Cloudflare dashboard and retry. Nothing was changed',
+    };
+  }
+  const existing = {};
+  for (const { config } of HYPERDRIVE_PLAN) {
+    const matches = list.filter((c) => c !== null && typeof c === 'object' && c.name === config);
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        code: 1,
+        why: `the staging account has ${matches.length} Hyperdrive configs named ${config}; delete the extra ones in the Cloudflare dashboard and retry. Nothing was changed`,
+      };
+    }
+    if (matches.length === 1) {
+      const { id } = matches[0];
+      if (typeof id !== 'string' || !HYPERDRIVE_ID_RE.test(id)) {
+        return {
+          ok: false,
+          code: 1,
+          why: `the Hyperdrive config ${config} has an id that is not 32 lower-case hex characters. Nothing was changed`,
+        };
+      }
+      existing[config] = id;
+    }
+  }
+  return { ok: true, existing };
 }
 
 // --- wrangler -------------------------------------------------------------------------------------
@@ -359,7 +603,7 @@ export function secretValues(target, values) {
 /**
  * Runs `pnpm exec wrangler <args>` in a Worker folder with the value (if any) on stdin. pnpm is a .cmd shim on
  * Windows, which Node starts only through a shell; the command line is built from constants (secret names from the
- * frozen PLAN), never from a value. Output is captured and dropped by the caller.
+ * frozen PLAN and RETIRED_SECRETS), never from a value. Output is captured; only the token call reads it.
  */
 function wrangler(deps, dir, args, input) {
   const cwd = join(deps.repoRoot ?? REPO_ROOT, dir);
@@ -392,8 +636,10 @@ const failed = (r) => !r || r.error || r.status !== 0;
 
 // --- main -----------------------------------------------------------------------------------------
 
-function planLines(target) {
+function planLines(target, cli) {
   const via = target.kind === 'pooler' ? 'the Supabase session pooler' : 'the direct database host';
+  const ca = cli.caId ?? '(not given: --ca-certificate-id is required with --dry-run or --yes)';
+  const workerOf = (worker) => PLAN.find((w) => w.worker === worker);
   return [
     `${TAG}: plan for staging (database reached through ${via}, TLS)`,
     '  1. Database, one transaction as postgres (nothing is dropped or revoked):',
@@ -401,16 +647,23 @@ function planLines(target) {
       ({ login, role }) =>
         `       ${login} -> ${role} (inherit false, set true): create if missing, else set a new password`,
     ),
-    '  2. Worker secrets (pnpm exec wrangler secret put <NAME> --env staging, value on stdin):',
-    ...PLAN.map(
-      (w) =>
-        `       ${w.workerName} (${w.dir}): ${w.secrets
-          .map((s) => (s.login ? `${s.name} (${s.login})` : s.name))
-          .join(', ')}`,
+    `  2. Hyperdrive configs in Cloudflare account ${CLOUDFLARE_ACCOUNT_ID} (created if missing, else updated; Hyperdrive tests the connection):`,
+    ...HYPERDRIVE_PLAN.map(
+      (p) =>
+        `       ${p.config}: binding ${p.binding} on ${workerOf(p.worker).workerName}, login ${p.login} via ${via}, sslmode ${cli.sslmode}, CA ${ca}, caching disabled, origin connection limit ${ORIGIN_CONNECTION_LIMIT}`,
     ),
-    '  Not touched: CANDIDATE_TOKEN_PRIVATE_JWK (scripts/ops/candidate-token-key.mjs) and trace-edge-staging (no secret).',
-    '  A re-run makes new passwords and replaces these secrets; between steps 1 and 2 the Workers hold the old',
-    '  passwords for tens of seconds (five secret puts in a row, each deploys a new Worker version).',
+    '  3. Worker secret (pnpm exec wrangler secret put <NAME> --env staging, value on stdin):',
+    ...PLAN.filter((w) => w.secrets.length > 0).map(
+      (w) => `       ${w.workerName} (${w.dir}): ${w.secrets.map((s) => s.name).join(', ')}`,
+    ),
+    '  4. Retired database URL secrets, deleted where present (pnpm exec wrangler secret delete <NAME> --env staging):',
+    ...Object.entries(RETIRED_SECRETS).map(
+      ([worker, names]) =>
+        `       ${workerOf(worker).workerName} (${workerOf(worker).dir}): ${names.join(', ')}`,
+    ),
+    '  Not touched: CANDIDATE_TOKEN_PRIVATE_JWK and trace-edge-staging (no secret).',
+    '  A re-run makes new passwords and updates the same four configs; between steps 1 and 2 the configs hold the',
+    '  old passwords for tens of seconds (four config updates in a row, each one tests the database connection).',
   ];
 }
 
@@ -447,10 +700,10 @@ export async function main({ argv, deps = realScriptDeps() }) {
     return fail(2, 'psql is required on PATH (the PostgreSQL client); nothing was changed');
   }
 
-  for (const text of planLines(target)) say(text);
+  for (const text of planLines(target, cli)) say(text);
   if (cli.dryRun) {
     say(
-      `${TAG}: dry run: the arguments, ${DB_URL_ENV} and psql are fine; nothing was changed (the Workers are checked only with --yes)`,
+      `${TAG}: dry run: the arguments, ${DB_URL_ENV} and psql are fine; nothing was changed (the Workers, wrangler's login and Hyperdrive are checked only with --yes)`,
     );
     return 0;
   }
@@ -459,7 +712,9 @@ export async function main({ argv, deps = realScriptDeps() }) {
     return 2;
   }
 
-  // 2. Both Workers must exist: `secret put` would otherwise create an empty draft Worker without asking.
+  // Both Workers must exist: `secret put` would otherwise create an empty draft Worker without asking. The names
+  // listed here decide which retired secrets step 6 deletes.
+  const held = {};
   for (const w of PLAN) {
     const r = wrangler(deps, w.dir, ['secret', 'list', '--env', 'staging', '--format', 'json']);
     if (failed(r)) {
@@ -471,18 +726,42 @@ export async function main({ argv, deps = realScriptDeps() }) {
           : `wrangler cannot list the secrets of ${w.workerName}; check \`pnpm exec wrangler whoami\` (or run \`pnpm exec wrangler login\`) and retry. Nothing was changed`,
       );
     }
+    const parsed = parseSecretList(r.stdout);
+    if (parsed.error) {
+      return fail(
+        2,
+        `cannot read the secret list of ${w.workerName} (${parsed.error}). Nothing was changed`,
+      );
+    }
+    held[w.worker] = new Set(parsed.names);
   }
 
-  // 3. New values and the database transaction.
+  // The Cloudflare token, from wrangler's own login, for the Hyperdrive API. It stays in memory: never printed,
+  // never in a child's argv or environment.
+  const tokenRun = wrangler(deps, WORKER_DIRS.api, ['auth', 'token', '--json']);
+  const auth = failed(tokenRun) ? { ok: false } : parseAuthToken(tokenRun.stdout);
+  if (!auth.ok) {
+    return fail(
+      2,
+      'wrangler is not logged in with a token (an OAuth login or CLOUDFLARE_API_TOKEN; a global API key is not supported); run `pnpm exec wrangler login` and retry. Nothing was changed',
+    );
+  }
+
+  // Listing the configs proves the token, the account and Hyperdrive access before anything changes.
+  const listed = await listConfigs(deps, auth.token);
+  if (!listed.ok) return fail(listed.code, listed.why);
+
+  // 2. New values. 3. The database transaction.
   const values = generateValues(deps.randomBytes ?? randomBytes);
   let sql;
-  let secrets;
+  let bodies;
   try {
     sql = stagingLoginRolesSql(values);
-    secrets = secretValues(target, values);
+    bodies = HYPERDRIVE_PLAN.map((p) => hyperdriveBody(target, p, values.passwords[p.login], cli));
   } catch {
-    return fail(1, 'building the role SQL or the Worker URLs failed; nothing was changed');
+    return fail(1, 'building the role SQL or the Hyperdrive configs failed; nothing was changed');
   }
+  const configs = HYPERDRIVE_PLAN.map((p) => p.config);
   const db = runSql({ url: operatorUrl, sql, vars: {} }, deps);
   if (!db.ok) {
     if (db.sqlstate === 'TR001') {
@@ -499,31 +778,82 @@ export async function main({ argv, deps = realScriptDeps() }) {
     }
     if (db.sqlstate === null) {
       // No SQLSTATE: the connection dropped, psql was killed or timed out. The commit may or may not have run.
-      const all = PLAN.flatMap((w) => w.secrets.map((s) => s.name));
       return fail(
         1,
-        `the database call ended without a SQL error (connection lost, psql exit or timeout), so the outcome is unknown: the login passwords may have changed, and then all five secrets are stale: ${all.join(', ')}. Re-run with --yes (it sets new passwords and every secret again)`,
+        `the database call ended without a SQL error (connection lost, psql exit or timeout), so the outcome is unknown: the login passwords may have changed, and then the four Hyperdrive configs (${configs.join(', ')}) are stale and MEDIA_LINK_HMAC_KEY is not set yet. Re-run with --yes (it sets new passwords and updates every config and the secret again)`,
       );
     }
     return fail(1, `${describeFailure(db)}; the transaction rolled back, nothing was changed`);
   }
   say(`${TAG}: database: ${LOGIN_ROLES.length} login roles have new passwords and their one grant`);
 
-  // 4. The secrets, in PLAN order. A failure leaves the rest stale until a re-run.
-  const order = PLAN.flatMap((w) => w.secrets.map((s) => ({ w, s })));
-  for (const [i, { w, s }] of order.entries()) {
-    const r = wrangler(deps, w.dir, ['secret', 'put', s.name, '--env', 'staging'], secrets[s.name]);
-    if (failed(r)) {
-      const stale = order.slice(i).map((x) => x.s.name);
+  // 4. The Hyperdrive configs, in plan order. A failure leaves this and the later ones on old passwords.
+  const ids = {};
+  for (const [i, p] of HYPERDRIVE_PLAN.entries()) {
+    const id = listed.existing[p.config];
+    const r =
+      id === undefined
+        ? await cloudflare(deps, auth.token, 'POST', HYPERDRIVE_CONFIGS_URL, bodies[i])
+        : await cloudflare(deps, auth.token, 'PUT', `${HYPERDRIVE_CONFIGS_URL}/${id}`, bodies[i]);
+    const newId = id ?? r.json?.result?.id;
+    if (!r.ok || typeof newId !== 'string' || !HYPERDRIVE_ID_RE.test(newId)) {
+      const stale = configs.slice(i);
       return fail(
         1,
-        `setting ${s.name} on ${w.workerName} failed. The database passwords already changed, so these secrets are stale: ${stale.join(', ')}. Fix the cause (wrangler whoami; a Worker whose latest version is not deployed) and re-run with --yes`,
+        `${id === undefined ? 'creating' : 'updating'} the Hyperdrive config ${p.config} failed (${r.ok ? 'the created config has no 32-character hex id' : cfDetail(r)}). Hyperdrive tests the database connection on create and update, so the CA, the sslmode or the host may be wrong: check --ca-certificate-id, or try --sslmode verify-ca. The database passwords already changed, so these configs hold old passwords or do not exist yet: ${stale.join(', ')}. Fix the cause and re-run with --yes`,
       );
     }
-    say(`${TAG}: set ${s.name} on ${w.workerName}`);
+    ids[p.binding] = newId;
+    say(`${TAG}: ${id === undefined ? 'created' : 'updated'} the Hyperdrive config ${p.config}`);
+  }
+
+  // 5. The api secret, value on stdin.
+  for (const w of PLAN) {
+    for (const s of w.secrets) {
+      const r = wrangler(
+        deps,
+        w.dir,
+        ['secret', 'put', s.name, '--env', 'staging'],
+        values.hmacKey,
+      );
+      if (failed(r)) {
+        return fail(
+          1,
+          `setting ${s.name} on ${w.workerName} failed (the four Hyperdrive configs are done). Fix the cause (wrangler whoami; a Worker whose latest version is not deployed) and re-run with --yes`,
+        );
+      }
+      say(`${TAG}: set ${s.name} on ${w.workerName}`);
+    }
+  }
+
+  // 6. Retired secrets the Workers still hold. stdin is empty, so wrangler's "Are you sure" confirm takes its
+  // non-interactive fallback "yes" (wrangler 4.149 cli.js confirm2 + isNonInteractiveOrCI ~139587; the
+  // `secret delete` handler ~310832).
+  for (const w of PLAN) {
+    for (const name of RETIRED_SECRETS[w.worker] ?? []) {
+      if (!held[w.worker].has(name)) continue;
+      const r = wrangler(deps, w.dir, ['secret', 'delete', name, '--env', 'staging']);
+      if (failed(r)) {
+        return fail(
+          1,
+          `deleting the retired secret ${name} on ${w.workerName} failed; check-staging-secrets fails the deploy until it is gone. Re-run with --yes, or run \`pnpm exec wrangler secret delete ${name} --env staging\` in ${w.dir}`,
+        );
+      }
+      say(`${TAG}: deleted the retired secret ${name} on ${w.workerName}`);
+    }
+  }
+
+  // 7. The ids (not secrets) and what to commit.
+  for (const p of HYPERDRIVE_PLAN) {
+    say(`${TAG}: hyperdrive ${p.binding} (${p.worker}) id=${ids[p.binding]}`);
+  }
+  say(`${TAG}: paste under env.staging of each wrangler.jsonc:`);
+  for (const s of wranglerSnippets(ids)) {
+    say(`  ${s.file}:`);
+    say(`    ${s.line}`);
   }
   say(
-    `${TAG}: done. The staging deploy's check-staging-secrets step lists these names; the values are only in Cloudflare.`,
+    `${TAG}: done. send these ids to the lead; the next staging dispatch needs them committed. Its check-staging-secrets step lists the secret names; the values are only in Cloudflare.`,
   );
   return 0;
 }
@@ -533,6 +863,7 @@ function realScriptDeps() {
   return {
     env: process.env,
     spawnSync,
+    fetch: globalThis.fetch,
     randomBytes,
     platform: process.platform,
     stdout: process.stdout,
