@@ -61,3 +61,6 @@ prompt for the next chat. This file is the roadmap; HANDOFF.md says which chat i
   Running the slice on the real stack early caught an org-wide outbox assumption no review would have proven.
 - Weekly limits matter more on Max than the 5-hour window: check `get_usage` after each agent result and record the
   weekly figure in the LOG row.
+- Chat E2 part 1 (MT-9 hosted allow-list + 3 staging dispatches): 3 Opus reviews, 1 Opus re-review, one full verify; the
+  account showed plan **Pro**: 11% → ~91% of one 5-hour window, then 7% → ~20% of the next; weekly 37% → ~51%; context
+  ~38%. Blocked on the CI token's R2 permission (founder); Chat F started in parallel by founder permission (2026-10-21).
