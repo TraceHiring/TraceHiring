@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./pg-socket": "./src/pg-socket.ts"
+    "./pg-socket": "./src/pg-socket.ts",
+    "./pg-socket-node": "./src/pg-socket-node.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",

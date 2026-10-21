@@ -64,7 +64,7 @@ export const runCandidateMethod = async <M extends CandidateMethod>(
 
 /** Builds the deps from the Worker env. A missing binding fails closed with `unavailable` at first use. */
 export const depsFromEnv = (env: Env): CandidateCall => {
-  const handle = openApiDb(env.API_DB_URL);
+  const handle = openApiDb(env);
   if (handle === null) return fail('unavailable');
   const privateJwk = env.CANDIDATE_TOKEN_PRIVATE_JWK;
   const publicJwk = env.CANDIDATE_TOKEN_PUBLIC_JWK;

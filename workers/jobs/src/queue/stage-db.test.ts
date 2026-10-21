@@ -3,7 +3,14 @@
 // NOLOGIN worker role, binds `trace.job_org_id` (read by private.job_org_id()) and a server-generated
 // `trace.request_id`, runs the stage, then COMMIT; a stage result counts only after the COMMIT.
 import { describe, expect, it } from 'vitest';
-import { STAGE_DB, createStageDb, jobsDbSsl, type BeginTx, type StageDbName } from './stage-db.js';
+import {
+  STAGE_DB,
+  STAGE_DB_UNAVAILABLE,
+  createStageDb,
+  withStageConnection,
+  type BeginTx,
+  type StageDbName,
+} from './stage-db.js';
 
 const ORG = '3f2b8c1e-9a47-4d6b-8e15-7c0a2d94b02a';
 const REQ = '9b1c2d3e-4f5a-4b6c-8d7e-0f1a2b3c4d5e';
@@ -34,12 +41,20 @@ const fakeBegin = (rec: Recorded, fail?: (text: string) => boolean): BeginTx => 
 const fresh = (): Recorded => ({ statements: [], committed: false, rolledBack: false });
 
 describe('STAGE_DB: one login secret and one worker role per stage (MT-14, L-29)', () => {
-  it('maps each stage to its own secret and NOLOGIN role; the sweep runs as trace_worker', () => {
+  it('maps each stage to its own login (binding and local secret) and NOLOGIN role; the sweep runs as trace_worker', () => {
     expect(STAGE_DB).toEqual({
-      mirror: { secret: 'JOBS_MIRROR_DB_URL', role: 'trace_worker' },
-      quality: { secret: 'JOBS_QUALITY_DB_URL', role: 'trace_quality_worker' },
-      integrity: { secret: 'JOBS_INTEGRITY_DB_URL', role: 'trace_integrity_worker' },
-      sweep: { secret: 'JOBS_MIRROR_DB_URL', role: 'trace_worker' },
+      mirror: { binding: 'JOBS_MIRROR_DB', secret: 'JOBS_MIRROR_DB_URL', role: 'trace_worker' },
+      quality: {
+        binding: 'JOBS_QUALITY_DB',
+        secret: 'JOBS_QUALITY_DB_URL',
+        role: 'trace_quality_worker',
+      },
+      integrity: {
+        binding: 'JOBS_INTEGRITY_DB',
+        secret: 'JOBS_INTEGRITY_DB_URL',
+        role: 'trace_integrity_worker',
+      },
+      sweep: { binding: 'JOBS_MIRROR_DB', secret: 'JOBS_MIRROR_DB_URL', role: 'trace_worker' },
     });
     const roles = new Set(
       (['mirror', 'quality', 'integrity'] as const).map((s) => STAGE_DB[s].role),
@@ -109,29 +124,54 @@ describe('createStageDb', () => {
   });
 });
 
-describe('jobsDbSsl: TLS for the jobs logins (security review R3 #1 rule, ADR-031)', () => {
-  const url = (host: string, q = ''): string => `postgres://u:p@${host}:5432/postgres${q}`;
-  it('requires TLS for a remote host and allows verify-full', () => {
-    expect(jobsDbSsl(url('db.example.test'))).toBe('require');
-    expect(jobsDbSsl(url('db.example.test', '?sslmode=require'))).toBe('require');
-    expect(jobsDbSsl(url('db.example.test', '?sslmode=verify-full'))).toBe('verify-full');
+// ADR-031 amendment 1 (d1 revision 4o): a Worker never opens TLS to Postgres itself. On staging each stage reaches its
+// login through its own Hyperdrive binding; a URL secret is for the local stack only; one TCP connection per stage, so a
+// connect failure fails the stage at once (a retry, then the DLQ) instead of a reconnect loop.
+describe('withStageConnection: where each stage connects', () => {
+  const url = (host: string, q = '', port = 5432): string =>
+    `${['postgres', 'ql'].join('')}://${'u'}:${'p'.repeat(8)}@${host}:${port}/postgres${q}`;
+  const hyperdrive = (connectionString: unknown) => ({ connectionString }) as unknown as Hyperdrive;
+  const run = (env: Partial<Env>, stage: StageDbName = 'mirror') =>
+    withStageConnection(env as Env, stage, stage === 'sweep' ? null : ORG, async () => 'ran');
+
+  it('maps each stage to its own Hyperdrive binding (MT-14: one login per stage)', () => {
+    expect(STAGE_DB.mirror.binding).toBe('JOBS_MIRROR_DB');
+    expect(STAGE_DB.quality.binding).toBe('JOBS_QUALITY_DB');
+    expect(STAGE_DB.integrity.binding).toBe('JOBS_INTEGRITY_DB');
+    expect(STAGE_DB.sweep.binding).toBe('JOBS_MIRROR_DB');
   });
-  it('refuses weak or unknown modes, repeated modes and other parameters', () => {
-    for (const q of [
-      '?sslmode=disable',
-      '?sslmode=prefer',
-      '?sslmode=allow',
-      '?sslmode=verify-ca',
-      '?sslmode=require&sslmode=require',
-      '?options=x',
+
+  it.each(['', '?sslmode=require', '?sslmode=verify-full'])(
+    'a remote URL secret is refused before any connection (%s)',
+    async (q) => {
+      await expect(run({ JOBS_MIRROR_DB_URL: url('db.example.test', q) })).rejects.toThrow(
+        STAGE_DB_UNAVAILABLE,
+      );
+    },
+  );
+
+  it('nothing bound, or a binding without a connection string, is unavailable', async () => {
+    await expect(run({})).rejects.toThrow(STAGE_DB_UNAVAILABLE);
+    await expect(run({ JOBS_QUALITY_DB: hyperdrive('') }, 'quality')).rejects.toThrow(
+      STAGE_DB_UNAVAILABLE,
+    );
+  });
+
+  it('a stage never uses the binding of another stage', async () => {
+    await expect(
+      run({ JOBS_MIRROR_DB: hyperdrive(url('127.0.0.1', '', 1)) }, 'integrity'),
+    ).rejects.toThrow(STAGE_DB_UNAVAILABLE);
+  });
+
+  it('a refused connection fails the stage at once (no reconnect loop)', async () => {
+    // Port 1 on the loopback: nothing listens there. Through the binding path and the URL path.
+    for (const env of [
+      { JOBS_MIRROR_DB: hyperdrive(url('127.0.0.1', '', 1)) },
+      { JOBS_MIRROR_DB_URL: url('127.0.0.1', '', 1) },
     ]) {
-      expect(jobsDbSsl(url('db.example.test', q))).toBeNull();
+      const started = Date.now();
+      await expect(run(env)).rejects.toThrow();
+      expect(Date.now() - started).toBeLessThan(3_000);
     }
-    expect(jobsDbSsl('mysql://h/db')).toBeNull();
-    expect(jobsDbSsl('not a url')).toBeNull();
-  });
-  it('the local stack may run without TLS', () => {
-    expect(jobsDbSsl(url('127.0.0.1'))).toBe(false);
-    expect(jobsDbSsl(url('localhost'))).toBe(false);
   });
 });

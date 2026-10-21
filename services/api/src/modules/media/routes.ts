@@ -58,7 +58,7 @@ export const mediaFromEnv = async (env: Env): Promise<MediaCall | null> => {
   } catch {
     return null;
   }
-  const handle = openApiDb(env.API_DB_URL);
+  const handle = openApiDb(env);
   if (handle === null) return null;
   return {
     deps: {

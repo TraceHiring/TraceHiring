@@ -56,7 +56,8 @@ export function dropLoginRolesSql() {
 
 /**
  * The connection URL of a login role on the local stack: the stack's own URL (`supabase status` DB_URL) with the
- * user and password swapped. No query parameter is added: a local host runs without TLS (apiDbSsl, jobsDbSsl).
+ * user and password swapped. No query parameter is added: the Workers take a URL secret only on a loopback host with no
+ * query (localDbUrlAllowed, ADR-031 amendment 1) and connect over plain TCP.
  */
 export function loginUrl(stackDbUrl, login, password) {
   let u;

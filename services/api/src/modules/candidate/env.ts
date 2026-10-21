@@ -5,7 +5,12 @@ export {};
 
 declare global {
   interface Env {
-    /** Login role api_login; every use runs `SET LOCAL ROLE trace_api` in a transaction (ADR-031). */
+    /**
+     * Staging: the Hyperdrive binding of the login role api_login (a binding, set in wrangler.jsonc env.staging; ADR-031
+     * amendment 1). Every use runs `SET LOCAL ROLE trace_api` in a transaction. Wins over API_DB_URL.
+     */
+    API_DB?: Hyperdrive;
+    /** The local stack only (wrangler dev, e2e-local): api_login's URL on a loopback host; refused anywhere else. */
     API_DB_URL?: string;
     /** The ES256 private JWK; tokens are signed under its own `kid` (security review wave0-rest S4). */
     CANDIDATE_TOKEN_PRIVATE_JWK?: string;

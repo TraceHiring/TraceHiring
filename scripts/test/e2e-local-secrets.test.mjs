@@ -97,8 +97,8 @@ describe('loginUrl', () => {
     expect(u.pathname).toBe('/postgres');
     expect(u.username).toBe('api_login');
     expect(u.password).toBe(pw);
-    // No sslmode or other query parameter: the api and jobs clients refuse any but sslmode, and a local host runs
-    // without TLS (apiDbSsl, jobsDbSsl).
+    // No sslmode or other query parameter: the api and jobs clients take a local URL only without a query, and run it
+    // over plain TCP (localDbUrlAllowed, ADR-031 amendment 1).
     expect(u.search).toBe('');
   });
 

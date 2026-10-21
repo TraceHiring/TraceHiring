@@ -2,58 +2,19 @@
 // version the Workers pin) over a Node TCP socket wrapped into the cloudflare:sockets shape, against tiny local TCP
 // servers that model the staging failure: the peer accepts and then closes before the startup exchange ends (what a
 // failed TLS upgrade looked like on staging). No database, no network beyond 127.0.0.1, no credential.
-import { createServer, Socket as NodeSocket, type Server } from 'node:net';
+import { createServer, type Server } from 'node:net';
 import postgres from 'postgres';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DB_CONNECT_REFUSED,
   cappedSocket,
   cappedSocketOption,
+  localDbUrlAllowed,
+  pgConnectionString,
   type ConnectFn,
   type RawSocket,
 } from './pg-socket.js';
-
-/** A Node socket in the cloudflare:sockets `Socket` shape (opened, closed, readable, writable, close). */
-const nodeConnect: ConnectFn = ({ hostname, port }) => {
-  const s = new NodeSocket();
-  const opened = new Promise<void>((resolve, reject) => {
-    s.once('connect', () => resolve());
-    s.once('error', reject);
-  });
-  const closed = new Promise<void>((resolve, reject) => {
-    s.once('close', (hadError) => (hadError ? reject(new Error('socket error')) : resolve()));
-  });
-  s.on('error', () => {});
-  s.connect(port, hostname);
-  // A peer that closes ends the stream cleanly (as cloudflare:sockets does), so postgres.js sees a close, not an error.
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      s.on('data', (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
-      s.once('close', () => {
-        try {
-          controller.close();
-        } catch {
-          // already closed
-        }
-      });
-    },
-  });
-  const writable = new WritableStream<Uint8Array>({
-    write: (chunk) =>
-      new Promise<void>((resolve, reject) => {
-        s.write(chunk, (err) => (err ? reject(err) : resolve()));
-      }),
-  });
-  return {
-    opened,
-    closed,
-    readable,
-    writable,
-    close: async () => {
-      s.destroy();
-    },
-  };
-};
+import { nodeConnect } from './pg-socket-node.js';
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -259,6 +220,29 @@ describe('the socket shape postgres.js expects (the cf polyfill contract)', () =
     expect(g.closeCalls()).toBe(1);
   });
 
+  it('once fires once, removeListener and removeAllListeners detach (the calls postgres.js makes)', async () => {
+    const f = fakeRaw();
+    const socket = await cappedSocket(() => f.raw)(OPTS);
+    const seen: string[] = [];
+    const kept = () => seen.push('kept');
+    const dropped = () => seen.push('dropped');
+    socket.once('data', () => seen.push('once'));
+    socket.on('data', kept);
+    socket.on('data', dropped);
+    socket.removeListener('data', dropped);
+    f.push(new Uint8Array([1]));
+    f.push(new Uint8Array([2]));
+    await tick();
+    expect(seen).toEqual(['once', 'kept', 'kept']);
+    socket.removeAllListeners('data');
+    socket.on('close', () => seen.push('close'));
+    socket.removeAllListeners();
+    f.push(new Uint8Array([3]));
+    f.peerEnds();
+    await tick();
+    expect(seen).toEqual(['once', 'kept', 'kept']);
+  });
+
   it('a failed open rejects the factory call (postgres.js then fails the query)', async () => {
     const f = fakeRaw();
     const opening = { ...f.raw, opened: Promise.reject(new Error('refused')) };
@@ -274,5 +258,52 @@ describe('the socket shape postgres.js expects (the cf polyfill contract)', () =
     await factory(OPTS);
     await expect(factory(OPTS)).rejects.toThrow(DB_CONNECT_REFUSED);
     expect(calls).toBe(1);
+  });
+});
+
+describe('pgConnectionString: Hyperdrive for remote databases, a URL only for the local stack', () => {
+  const cs = (host: string, query = '') =>
+    `${['postgres', 'ql'].join('')}://${'login'}:${'x'.repeat(8)}@${host}:5432/postgres${query}`;
+
+  it('takes the binding when it is bound, and ignores the URL then', () => {
+    const binding = { connectionString: cs('abc.hyperdrive.local') };
+    expect(pgConnectionString(binding, cs('db.example.test'))).toBe(cs('abc.hyperdrive.local'));
+    expect(pgConnectionString(binding, undefined)).toBe(cs('abc.hyperdrive.local'));
+  });
+
+  it.each([undefined, '', 7, null])(
+    'a bound binding without a string (%s) is null, never the URL',
+    (v) => {
+      expect(pgConnectionString({ connectionString: v }, cs('127.0.0.1'))).toBeNull();
+    },
+  );
+
+  it.each(['127.0.0.1', 'localhost', 'LOCALHOST', '[::1]'])('a URL on %s is allowed', (host) => {
+    expect(localDbUrlAllowed(cs(host))).toBe(true);
+    expect(pgConnectionString(undefined, cs(host))).toBe(cs(host));
+  });
+
+  it.each([
+    'db.example.test',
+    '10.0.0.1',
+    '127.0.0.1.example.test',
+    'aws-0-ap-south-1.pooler.supabase.com',
+  ])('a URL on %s is refused (remote means Hyperdrive)', (host) => {
+    expect(localDbUrlAllowed(cs(host))).toBe(false);
+    expect(pgConnectionString(undefined, cs(host))).toBeNull();
+  });
+
+  it.each(['?sslmode=require', '?sslmode=disable', '?host=db.example.test', '#x'])(
+    'a local URL with a query or fragment (%s) is refused',
+    (q) => {
+      expect(localDbUrlAllowed(cs('127.0.0.1', q))).toBe(false);
+    },
+  );
+
+  it('an unparsable, non-postgres or empty URL is refused', () => {
+    expect(localDbUrlAllowed('not a url')).toBe(false);
+    expect(localDbUrlAllowed('https://127.0.0.1/')).toBe(false);
+    expect(pgConnectionString(undefined, '')).toBeNull();
+    expect(pgConnectionString(undefined, undefined)).toBeNull();
   });
 });

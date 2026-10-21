@@ -5,6 +5,14 @@ export {};
 
 declare global {
   interface Env {
+    // Staging: one Hyperdrive binding per login role (wrangler.jsonc env.staging; ADR-031 amendment 1). Each wins
+    // over the URL secret of the same login, which is for the local stack only (a loopback host; refused elsewhere).
+    /** jobs_mirror_login through Hyperdrive (mirror stage and sweep). */
+    JOBS_MIRROR_DB?: Hyperdrive;
+    /** jobs_quality_login through Hyperdrive. */
+    JOBS_QUALITY_DB?: Hyperdrive;
+    /** jobs_integrity_login through Hyperdrive. */
+    JOBS_INTEGRITY_DB?: Hyperdrive;
     /** Login role jobs_mirror_login; every use runs `SET LOCAL ROLE trace_worker` (mirror stage and sweep). */
     JOBS_MIRROR_DB_URL?: string;
     /** Login role jobs_quality_login; every use runs `SET LOCAL ROLE trace_quality_worker`. */

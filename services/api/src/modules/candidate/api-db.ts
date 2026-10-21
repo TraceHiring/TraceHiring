@@ -1,8 +1,17 @@
 // The api's own database path (spec §3.3, §4.2, §6.2 path 2; ADR-031; security review m4 R3-2). Login role
-// api_login over API_DB_URL; every unit of work is one transaction that first runs `set local role trace_api`, then
+// api_login, through the API_DB Hyperdrive binding on staging or API_DB_URL on the local stack (ADR-031 amendment 1);
+// every unit of work is one transaction that first runs `set local role trace_api`, then
 // sets `trace.api_org_id` (the org the api resolved from the token-hash lookup, a verified token or a checked path)
 // and a server-generated `trace.request_id`, then the statements, then COMMIT. A caller gets a result only after the
 // COMMIT succeeded. SQL text is constant; values are bound parameters only.
+import {
+  cappedSocketOption,
+  localDbUrlAllowed,
+  pgConnectionString,
+  type ConnectFn,
+  type HyperdriveLike,
+} from '@trace/workers-http/pg-socket';
+import { connect as cfConnect } from 'cloudflare:sockets';
 import postgres from 'postgres';
 
 export type SqlParam = string | number | boolean | null;
@@ -57,48 +66,37 @@ export interface ApiDbHandle {
   close(): Promise<void>;
 }
 
-const LOCAL_DB_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
-const STRONG_SSLMODES = new Set(['require', 'verify-full']);
+/** What openApiDb reads from the env: the Hyperdrive binding (staging) or the local stack's URL secret. */
+export interface ApiDbEnv {
+  readonly API_DB?: HyperdriveLike | undefined;
+  readonly API_DB_URL?: string | undefined;
+}
 
 /**
- * The TLS mode for the trace_api connection (security review R3 #1, ADR-031; the rule of scripts/ops/lib.mjs
- * pgEnvOf, B0-SEC1). A non-local host gets `require` unless the URL asks for `verify-full`; a weak or unknown
- * sslmode (disable, allow, prefer, verify-ca, which postgres.js does not verify), a repeated one or any other query
- * parameter is refused (null). The local stack may run without TLS. The URL itself never leaves this function.
+ * Whether API_DB_URL may be used: the local stack only (ADR-031 amendment 1, d1 revision 4o). A Worker never opens
+ * TLS to Postgres itself; a remote database is reached through the API_DB Hyperdrive binding, which verifies the
+ * origin with the uploaded Supabase CA. The URL itself never leaves this function.
  */
-export const apiDbSsl = (url: string): 'require' | 'verify-full' | false | null => {
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return null;
-  }
-  if ((u.protocol !== 'postgres:' && u.protocol !== 'postgresql:') || u.hostname === '')
-    return null;
-  const keys = [...u.searchParams.keys()];
-  if (keys.some((k) => k !== 'sslmode') || u.searchParams.getAll('sslmode').length > 1) return null;
-  const sslmode = u.searchParams.get('sslmode');
-  if (LOCAL_DB_HOSTS.has(u.hostname.toLowerCase())) return false;
-  if (sslmode === null) return 'require';
-  return STRONG_SSLMODES.has(sslmode) ? (sslmode as 'require' | 'verify-full') : null;
-};
+export const apiDbUrlAllowed = (url: string): boolean => localDbUrlAllowed(url);
 
 /**
- * Opens the trace_api connection, or null when API_DB_URL is not bound or its TLS mode is refused (the caller answers
- * 503 `unavailable`). `ssl` is always passed explicitly, so the URL's sslmode cannot weaken it.
+ * Opens the trace_api connection, or null when neither the API_DB binding nor an allowed API_DB_URL is there (the
+ * caller answers 503 `unavailable`). Plain TCP to Hyperdrive or the local stack (`ssl: false` wins over any sslmode
+ * in the string), one TCP connection per handle (cappedSocket): a connect failure fails the unit of work at once
+ * instead of postgres.js reconnecting until the invocation runs out of subrequests.
  */
-export const openApiDb = (url: string | undefined): ApiDbHandle | null => {
-  if (url === undefined || url === '') return null;
-  const ssl = apiDbSsl(url);
-  if (ssl === null) return null;
-  const sql = postgres(url, {
-    ssl,
+export const openApiDb = (env: ApiDbEnv, connect: ConnectFn = cfConnect): ApiDbHandle | null => {
+  const target = pgConnectionString(env.API_DB, env.API_DB_URL);
+  if (target === null) return null;
+  const sql = postgres(target, {
+    ssl: false,
     fetch_types: false,
     max: 1,
     prepare: false,
     connect_timeout: 10,
     idle_timeout: 5,
     onnotice: () => {},
+    ...cappedSocketOption(connect),
   });
   const begin: BeginTx = async (cb) =>
     (await sql.begin((t) =>

@@ -68,7 +68,7 @@ export const deliveryFromEnv = (env: Env): InvitationDelivery | null => {
   const outbox = createDemoOutbox(env, outboxNamespace(env));
   const origin = env.CANDIDATE_APP_ORIGIN;
   if (outbox === null || origin === undefined || !ORIGIN.test(origin)) return null;
-  const handle = openApiDb(env.API_DB_URL);
+  const handle = openApiDb(env);
   if (handle === null) return null;
   const store = createSqlCandidateStore(handle.db);
   return {
