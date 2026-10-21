@@ -16,11 +16,14 @@ import { isEntryPoint } from './lib/cli.mjs';
 /**
  * Secret names each staging Worker may hold (m0 §7.2 step 6; d1 §7.1). Changing it is a spec change.
  * The Supabase URL and publishable key, SENTRY_DSN_WORKERS and VITE_SENTRY_DSN are public vars (L-10).
+ * On staging the database logins live in Hyperdrive configs reached through Hyperdrive bindings (ADR-031
+ * amendment 1, d1 revision 4o), so API_DB_URL and the three JOBS_*_DB_URL secrets are retired there; a leftover
+ * one is a stale credential and fails this check (scripts/ops/staging-worker-secrets.mjs deletes them).
  */
 export const ALLOW_LIST = Object.freeze({
   edge: Object.freeze([]),
-  jobs: Object.freeze(['JOBS_MIRROR_DB_URL', 'JOBS_QUALITY_DB_URL', 'JOBS_INTEGRITY_DB_URL']),
-  api: Object.freeze(['API_DB_URL', 'CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY']),
+  jobs: Object.freeze([]),
+  api: Object.freeze(['CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY']),
 });
 
 /** Where each Worker's wrangler.jsonc lives, in check order. */
