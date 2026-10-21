@@ -1,59 +1,45 @@
-# HANDOFF — 2026-10-21 15:40 IST (Chat G part 2: D1 FIX done)
-Reason for stopping: task done (D1 FIX code findings fixed and re-reviewed) and the usage guard (Pro 5-hour window 86%). Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`**. The repo wins over this file and over any memory.
+# HANDOFF — 2026-10-21 22:45 IST (Chat E3 part 1: Hyperdrive code, lead half done)
+Reason for stopping: usage guard (Pro 5-hour window 93% at 22:40 IST, resets ~01:40 IST). Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`**. The repo wins over this file and over any memory.
 
 ## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M13; 17 milestones)
-- Closed: **0 of 17** (`main` still `fe77a87`). M0a and M0b are built, reviewed and fixed, but **not CLOSED** (founder gates).
-- **D1 ≈ 98%**: code merged and **D1 FIX complete** (every code finding fixed or dispositioned, two Opus re-reviews CONFIRMED WITH NOTES, notes applied). Left: the Workers-to-Postgres TLS fix and the green staging e2e (Chat E3, `cp/d1-10`), then CLOSE (founder go-ahead).
-- **Current phase: D1 FIX done** → next is Chat E3 (staging), then CLOSE.
+- Closed: **0 of 17** (`main` still `fe77a87`). M0a and M0b built, reviewed, fixed, **not CLOSED** (founder gates).
+- **D1 ≈ 98%**: code merged, D1 FIX complete (`cp/d1-11` = `fd9b31c`). Left: Chat E3 (Hyperdrive, staging e2e, `cp/d1-10`), then CLOSE (founder go-ahead).
 
 ## Where we are (verified this chat)
-- **`d1/integration`** code tip `fd9b31c` docs(reviews): d1 fix complete and its re-review; then this handoff commit. Pushed to `trace` (`fd9b31c`).
-- **Full `pnpm verify` green on `fd9b31c`** (15:15-15:30 IST), in two runs because of RAM: run 1 typecheck + lint (prettier, check-boundaries, check-workflows, gen-catalog-tests 126, check-migrations "OK against main", gitleaks "no leaks found"), its tests OOM'd (see Gotchas); run 2 with `--workspace-concurrency=1`: config 502, band-engine 139, db-types 3, shared 1180, ui 67, vendors 110, workers-http 43, candidate 246, recruiter 381, api 403, edge 417, jobs 240, scripts 2602 + 1 skipped (K4); `test:rls` "rls_* 2633 (floor 2633), catalog_* 144"; `pnpm build` exit 0 (bundle, headers, no-demo-outbox, scan-dist OK).
-- **CI on PR #4 green**: run 39578472076 on `da5f01e` (all five jobs); run 39580542022 on `8f424ca` (= `fd9b31c` + handoff docs) green after re-running two failed jobs once: `static` scripts `gitleaks-config.test.mjs` "finds an api_key value starting with true" (a random victim value real gitleaks did not flag; same class as SEC-GL-1; new flake, carried to M1 with D1-LEAD-1) and `e2e-local` workerd start-up `SQLITE_BUSY: database is locked` (infra). Both passed on `da5f01e` and on the re-run; no code changed between.
-- **`cp/d1-11` = `fd9b31c`** (tagged and pushed after the green CI).
-- Tag **`staging-applied-39566827826`** on `5306928` (pushed): freezes the five D1 migrations in `check-migrations` (D1-DB-3).
-
-## Done this chat (verified; one commit per finding; docs/reviews/D1.md "FIX" + "Re-review of the FIX")
-- D1-DB-1 (Medium): forward migration `supabase/migrations/20261021091905_d1_flags_rule_table.sql` — `6b428de`, re-review notes `8d37232` (guard raises 23514 itself; v3 scoping and raw-media cases). Tests: `rls_d1_cards` section "D1-DB-1" (17 assertions, operator test rule table v2), 11 red first. **Not on staging** (not dispatched).
-- D1-SPEC-2 (Medium): AT-D2 = one OS-level capture of headed `pnpm e2e:record`; manifest `recordedMs`; `e2e:record` exits 1 outside 270 000-330 000 — `2f0e249`; `scripts/test/e2e-staging-preflight.test.mjs` (5 red first).
-- Lows: D1-SPEC-4 `22a791b`, D1-DB-3 `f6f4793`, D1-SPEC-5 `7a32247`, README step 2/6 `bab2544`, flag-family sync `285a6da`, never-build single-token words `1a73ce7`; Sonnet writer merged `da5f01e`: D1-SEC-1 `9b5e80d`, D1-SEC-2 `a0a1d53`, D1-SEC-3 (a, b) `cd2cffe`, D1-SPEC-3 **false positive** pinned `d65d2f9`.
-- Spec `specs/d1-demo-slice.md` **revision 4n** (DB-1, SPEC-5, DB-3, SPEC-2, AT-D21 row).
-- Re-reviews: Opus database-reviewer (DB-1) and Opus spec-reviewer (c8a4911 + whole FIX range): both **CONFIRMED WITH NOTES**, all notes applied or accepted (D1.md).
-
-## Staging finding (unchanged; blocks e2e-staging; root cause proven in Chat G part 1)
-- Workers cannot open TLS to Supabase Postgres: Cloudflare `connect()`/`startTls()` validates against public roots; Supabase presents the private "Supabase Root 2021 CA". `postgres` 3.4.9 reconnect-loops (jobs: "Too many subrequests"); `pg` fails the same way. Fix = **Cloudflare Hyperdrive** with the CA uploaded (`wrangler cert upload certificate-authority`, `hyperdrive create … --ca-certificate-id … --sslmode verify-full --caching-disabled`).
-- Open questions for Chat E3 (check, do not guess): one Hyperdrive config per login role (four logins, MT-14) and the Free-plan config limit; origin = session pooler or direct host (IPv6); `set local role` / `set_config(…, true)` under Hyperdrive transaction pooling; local dev and `e2e-local` (`localConnectionString`); fail fast instead of the reconnect loop.
+- Verify-first at start: tip `c6c65df`, clean, CI on PR #4 green (run 39630421356). Local: typecheck, lint, scripts 2602+1 skipped, every package suite green except worker start-up failures under RAM pressure (candidate forks, api ECONNRESET); re-runs: candidate 246, recruiter 381, edge 417, jobs 240, api 337 of its files (rest did not start). No assertion failed.
+- **`d1/integration` HEAD = `fe67309`** (+ this handoff commit). Five commits this chat, each with its tests green locally (package-level runs, not full `pnpm verify`):
+  - `069391e` feat(ops): `scripts/lib/hyperdrive.mjs` — HYPERDRIVE_PLAN (api `API_DB`; jobs `JOBS_MIRROR_DB`, `JOBS_QUALITY_DB`, `JOBS_INTEGRITY_DB`; configs `trace-staging-<login>`), pinned account `94fef930c2ecd2e37fbd5dc3151d99ba`, sslmodes verify-full|verify-ca, origin limit 5, `hyperdriveProblems`/`allHyperdriveProblems`. Test `scripts/test/hyperdrive-plan.test.mjs` (12).
+  - `059fee3` feat(workers-http): `packages/workers-http/src/pg-socket.ts` `cappedSocket`/`cappedSocketOption` — the postgres.js `socket` option, one TCP connection per client, second attempt throws `db_connect_refused` (root cause: postgres.js cf `closed()` → `if (initial) return reconnect()` with no limit). `postgres` added as devDependency of workers-http (lockfile). Test `pg-socket.test.ts`: control proves the bare driver loops (>5 connects/s), capped = 1 connect and fails < 2 s.
+  - `62fed49` feat(db): api `openApiDb(env)` and jobs `withStageConnection` use `pgConnectionString(binding, url)`: Hyperdrive binding wins; URL secret only on a loopback host with no query (`localDbUrlAllowed`); `ssl: false` always (Worker never does TLS itself); capped transport. `apiDbSsl`/`jobsDbSsl` removed. Env types: `services/api/src/modules/candidate/env.ts`, `workers/jobs/src/queue/env.ts`. Tests: `api-db-tls.test.ts` (21 with api-db, incl. a real refused connect in workerd < 3 s), `stage-db.test.ts` (77 in src/queue), `workers/jobs/db-test/transport.db.test.ts` (real local DB through the capped transport, 1 connection, 2 transactions). `pg-socket-node.ts` = Node test helper (export `./pg-socket-node`).
+  - `bbbb2b5` fix(ci): `scripts/smoke-staging.mjs` `DEFAULTS.deploymentAttempts` 48 (4 min) for per-deployment Pages URLs (dispatch 8 failure). `smoke-staging.test.mjs` 39.
+  - `fe67309` feat(ci): `check-deploy-vars.mjs` also requires the staging Hyperdrive bindings (`loadWranglerConfigs`, `requireStaging: true`) — **it fails on the repo today by design** until the ids are committed. `wrangler-bindings.test.mjs` allows `hyperdrive` in env.staging only (`requireStaging: false` until the ids land). wrangler.jsonc header comments updated.
+- **Writer branch `d1/e3-ops-hyperdrive` @ `46511ae`** (worktree `.claude/worktrees/agent-ad44684bc48434f44`, Opus writer, from `069391e`): `5239daf` allow-list (api: CANDIDATE_TOKEN_PRIVATE_JWK, MEDIA_LINK_HMAC_KEY; jobs: none), `e496b3b` `staging-worker-secrets.mjs` creates/updates the four Hyperdrive configs via the Cloudflare API (token from `wrangler auth token --json`, password never on a command line), sets MEDIA_LINK_HMAC_KEY, deletes the retired `*_DB_URL` secrets, prints the ids; `46511ae` README founder runbook. **Not reviewed, not merged; its final report did not arrive before the stop — check its tests yourself.** Its brief is the spec of record for that half (scripts/ops/README.md on that branch).
 
 ## Next step (in order)
-1. **Verify-first** (CI on PR #4 for the handoff tip; tag `cp/d1-11` exists on `fd9b31c`).
-2. **Chat E3 — Workers-to-Postgres via Hyperdrive, then the staging e2e** (on `d1/integration`; one chat writing it at a time):
-   - ADR-031 amendment, spec revision 4o, Hyperdrive bindings (api + jobs, dev/staging), `staging-worker-secrets.mjs` creates/updates the Hyperdrive configs instead of the DB URL secrets, `check-staging-secrets` + wrangler-bindings tests, a test that a TLS/connect failure fails fast (no reconnect loop), a retry for the recruiter per-deployment Pages smoke. Tests first; Opus security + database review.
-   - Founder steps (FOUNDER-QUEUE row 2026-10-21): download the Supabase CA (public), upload it, create the configs (exact commands from Chat E3).
-   - Then dispatch with e2e (this also applies `20261021091905` to staging: **tag that commit `staging-applied-<run id>` and push it**, scripts/ops/README.md): `e2e-staging` green (AT-D1), DC-D8, the AT-D2 capture per spec 4n §7.3 (`e2e:record` must exit 0); record, tag **`cp/d1-10`**, push. Then the founder deletes the private key file in `trace-keys`.
-3. **CLOSE** (D1 summary, merge into `main`, `d1-reviewed`, M0a/M0b CLOSE) only with the founder's explicit go-ahead.
+1. Verify-first (below). Then on the writer branch: `npx vitest run --root scripts test/staging-worker-secrets.test.mjs test/check-staging-secrets.test.mjs`; read the diff `git diff 069391e..d1/e3-ops-hyperdrive`.
+2. Merge `d1/e3-ops-hyperdrive` into `d1/integration` with `--no-ff` (the writer owned files the lead did not touch).
+3. Docs (lead): **ADR-031 amendment 1** (Hyperdrive on staging, one config per login, CA verify-full/verify-ca, caching disabled, limit 5, URL secrets local-only, plain TCP, capped transport, `prepare: false` kept because every query is inside one explicit transaction — confirm on the staging e2e; Free plan 10 configs/account), **spec revision 4o** (L-10, §3 Roles/Secrets, §4.2 table, §5, §7.1 allow-list + runbook, §8 DC-D7), FOUNDER-QUEUE row.
+4. Opus security-reviewer + database-reviewer on `c6c65df..HEAD` (incl. the merged writer branch); fix findings test first; re-review.
+5. Full `pnpm verify` (tests with `pnpm -r --workspace-concurrency=1 --if-present test && npx vitest run --root scripts`, then `pnpm test:rls`, `pnpm build`), push, Linux CI on PR #4 (e2e-local proves the capped transport in workerd).
+6. Ask the founder for the Hyperdrive steps (README on the writer branch): download the Supabase CA (Dashboard → Project Settings → Database → SSL Configuration), `cd services/api; pnpm exec wrangler cert upload certificate-authority --ca-cert <file> --name trace-supabase-staging-ca`, then `node scripts/ops/staging-worker-secrets.mjs --env staging --ca-certificate-id <ID> --dry-run` and `--yes` (fallback `--sslmode verify-ca`); founder sends the four printed ids.
+7. Commit the ids into env.staging of both wrangler.jsonc and switch `wrangler-bindings.test.mjs` to `requireStaging: true` in the same commit; verify:fast; push.
+8. Dispatch with e2e: e2e-staging green (AT-D1), DC-D8, AT-D2 capture per spec 4n §7.3 (`e2e:record` exit 0); tag the dispatched commit `staging-applied-<run id>` (applies `20261021091905`), push; record; tag **`cp/d1-10`**; push. CLOSE only with the founder's go-ahead.
 
-## Carried (beyond D1 FIX; owners in `docs/reviews/D1.md`)
-- **M1:** N-1, D1-SEC-3 (c, d), D1-LEAD-1 (+ the new `gitleaks-config` random-victim flake, run 39580542022), the concurrency group, `candidate-store` `newOtp`, FR-1 (+ new helpers).
-- **M3a:** D1-DB-2, SEC-W1-1, DB-6, DB-12, C2 SEC-3, the token re-mint cap, `MIRROR_TRANSPORT`, earlier M3a carries.
-- **M3b:** C2 SEC-6. **M4:** C2 SEC-5. **M5:** DB-7. **M7:** M0B-DB-1 (+ D1 tables), deletion.
+## Decisions made this chat (to record in ADR-031 amendment 1 / spec 4o — step 3)
+- Remote Postgres only through Hyperdrive; URL secrets local-only (loopback, no query); no Worker-side TLS at all.
+- Fail fast by construction: capped transport (one TCP connection per client) instead of a timeout race.
+- Hyperdrive ids are committed in wrangler.jsonc (public); the deploy refuses missing ids (check-deploy-vars).
+- Ops script talks to the Cloudflare API directly so the origin password never reaches a command line.
+- Retired staging secrets are deleted by the ops script (founder runs it).
 
-## Decisions made this chat
-- D1-DB-1 guard order: rule-table check first, then card-final, quality card, not_used (migration header); T1/T2 untrusted/raw_media → 23514 from the guard.
-- D1-DB-3: `staging-applied-<run id>` tags (not a file) mark applied migrations; frozen set = `m*-reviewed` + `staging-applied-*`.
-- D1-SPEC-3 recorded as a false positive (both re-reviewers agree); D1-SPEC-5 resolved by dropping the reference.
-- Writer use: one Sonnet writer for the e2e-side Lows (owned `e2e/**`, one recruiter test, two new scripts tests), merged `--no-ff`.
-
-## Founder items (`docs/progress/FOUNDER-QUEUE.md`)
-- No new item. Next: the Hyperdrive steps when Chat E3 asks, then the go-ahead for CLOSE. Decisions still open (none blocks D1): review recs 1-5, the rule-9 correction question, H11.
+## Founder items
+- None asked yet; step 6 is the next founder action. Decisions still open (none blocks D1): review recs 1-5, the rule-9 correction question, H11.
 
 ## Gotchas
-- **pnpm 12.11.2 ignores `npm_config_workspace_concurrency`**: `pnpm verify` / `verify:fast` ran the Workers test pools in parallel and OOM'd (workerd "JavaScript heap out of memory", ~2.5 GB free of 16 GB). Run the test step as `pnpm -r --workspace-concurrency=1 --if-present test && npx vitest run --root scripts`, then `pnpm test:rls`, `pnpm build` (or try `pnpm_config_workspace_concurrency=1`; unverified).
-- The worktree guard refuses shell commands that mix variables, loops or `cd $VAR` with git/docker; use literal paths and split commands.
-- pgTAP one file locally: `sed '0,/^begin;/s//begin;\ncreate extension if not exists pgtap;/' <file> > <tmp>` then `docker exec -i supabase_db_trace psql -U postgres -X -q -At -v ON_ERROR_STOP=1 < <tmp>`.
-- The D1 migrations 1-5 (`…065417` to `…175327`) are frozen (tag `staging-applied-39566827826`); `20261021091905` is **not** applied to staging yet and not frozen until its dispatch is tagged.
-- Reviewers share the lead's worktree: "git show / git diff only; never checkout". Never run `test:rls` while a database reviewer probes.
-- The staging test users' passwords and TOTP secrets live only in the founder's password manager and GitHub secrets; never ask for them in chat.
-- Windows: `wrangler dev` state under the long scratchpad path fails with SQLITE_CANTOPEN; use a short `--persist-to`.
+- pnpm 12 ignores `npm_config_workspace_concurrency`; run tests with `--workspace-concurrency=1`. Workers pools may fail to start under RAM pressure (ECONNRESET / fork timeout): re-run that package alone.
+- The worktree guard refuses shell commands that mix git with heredocs/python text containing the word "git"; use the Edit tool or plain commands.
+- Root `scripts/` are not in the eslint run; running eslint on them directly shows two old errors (smoke-staging.mjs:30, its test:31).
+- `20261021091905` not on staging yet; frozen set = `m*-reviewed` + `staging-applied-*`.
 
 ## Verify first
-- `git -c credential.helper= -c "credential.helper=!gh auth git-credential" fetch trace` · `git log --oneline -3 d1/integration` (tip = this handoff, parent `fd9b31c`) · `git status` (clean) · `git tag --list "cp/d1-1*" "staging-applied-*"` · `gh pr checks 4 --repo TraceHiring/TraceHiring` (head = this handoff) · tests per Gotchas with `--workspace-concurrency=1`
+`git fetch trace` · `git log --oneline -3 d1/integration` (this handoff, parent `fe67309`) · `git status` · `git log --oneline -4 d1/e3-ops-hyperdrive` (`46511ae`) · `gh pr checks 4 --repo TraceHiring/TraceHiring` · `npx vitest run --root packages/workers-http` (73)
