@@ -192,7 +192,9 @@ const run: {
   /** Access tokens of the GoTrue sessions this run created (memory only; logged out in afterAll). */
   sessionTokens: string[];
   t0: number;
-} = { outputDir: '', orgId: '', cands: {}, sessionTokens: [], t0: Date.now() };
+  /** When the first recorded context opened (AT-D2 `recordedMs`, D1-SPEC-2); null until then. */
+  recordStart: number | null;
+} = { outputDir: '', orgId: '', cands: {}, sessionTokens: [], t0: Date.now(), recordStart: null };
 
 const must = <T>(value: T | undefined | null, what: string): T => {
   if (value === undefined || value === null)
@@ -233,12 +235,14 @@ const step = async <T>(
 const newContext = (
   browser: Browser,
   options: { baseURL?: string; permissions?: string[] } = {},
-): Promise<BrowserContext> =>
-  browser.newContext({
+): Promise<BrowserContext> => {
+  run.recordStart ??= Date.now();
+  return browser.newContext({
     ...options,
     viewport: VIEWPORT,
     recordVideo: { dir: path.join(run.outputDir, 'd1-videos'), size: VIEWPORT },
   });
+};
 
 const ctxOf = async (): Promise<RecruiterCtx> => ({
   api: envOf().api,
@@ -414,6 +418,8 @@ test.afterAll(async () => {
   ];
   for (const context of contexts) await context?.close().catch(() => undefined);
   if (run.manifest !== undefined && run.outputDir !== '') {
+    // AT-D2 (D1-SPEC-2): the recorded span ends when the last recorded context has closed.
+    run.manifest.recordedMs = run.recordStart === null ? null : Date.now() - run.recordStart;
     run.manifest.durationMs = Date.now() - run.t0;
     writeManifest(run.outputDir, run.manifest);
   }

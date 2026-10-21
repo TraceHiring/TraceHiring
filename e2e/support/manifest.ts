@@ -1,6 +1,6 @@
 // The D1 slice manifest (specs/d1-demo-slice.md §7.2 "Recorded measurements", AT-D2, AT-D17):
 // `e2e/test-results/d1-manifest.json` with the commit SHA, the run id, the project, per-step milliseconds, the whole
-// duration, `time_to_ready_ms` per candidate and the CI run id. Nothing secret goes in: no email, password, token, link, code or id
+// duration, the recorded span (`recordedMs`, AT-D2), `time_to_ready_ms` per candidate and the CI run id. Nothing secret goes in: no email, password, token, link, code or id
 // of a person, only step names and numbers.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -20,6 +20,12 @@ export interface Manifest {
   record: boolean;
   startedAt: string;
   durationMs: number | null;
+  /**
+   * AT-D2 (§7.3, D1-SPEC-2): ms from the first recorded browser context opened to the last context closed, the span
+   * the OS-level screen capture covers; null when no recorded context was opened. `pnpm e2e:record` requires
+   * 270 000-330 000.
+   */
+  recordedMs: number | null;
   steps: StepTiming[];
   /** AT-D17, named as in spec §7.2: ms from each candidate's own submit until both of its cards were ready. */
   time_to_ready_ms: Record<string, number>;
@@ -54,6 +60,7 @@ export const newManifest = (project: string, runId: string, record: boolean): Ma
   record,
   startedAt: new Date().toISOString(),
   durationMs: null,
+  recordedMs: null,
   steps: [],
   time_to_ready_ms: {},
   ciRunId: ciRunId(),

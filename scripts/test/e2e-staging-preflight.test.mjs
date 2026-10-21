@@ -14,10 +14,14 @@ import {
 import {
   CONTRACT,
   CREDENTIALS,
+  MANIFEST_FILE,
   PLAYWRIGHT_CLI,
+  RECORDED_MS_MAX,
+  RECORDED_MS_MIN,
   SLICE_SPEC,
   STAGING_ORIGINS,
   checkContract,
+  checkRecordedManifest,
   checkStack,
   main,
 } from '../e2e-staging-preflight.mjs';
@@ -78,6 +82,29 @@ function fakeFetch({ sha = SHA, over = {} } = {}) {
   };
   return { fetch, calls };
 }
+
+/** The launch clock main reads, and a fresh record-mode manifest written after it (AT-D2, D1-SPEC-2). */
+const LAUNCH_MS = Date.parse('2026-10-21T10:00:00.000Z');
+const now = () => LAUNCH_MS;
+const manifestOf = (over = {}) => ({
+  spec: 'd1-slice',
+  project: 'staging',
+  sha: SHA,
+  runId: 'run-1',
+  record: true,
+  startedAt: '2026-10-21T10:00:05.000Z',
+  durationMs: 360_000,
+  recordedMs: 300_000,
+  steps: [],
+  time_to_ready_ms: {},
+  ciRunId: null,
+  ...over,
+});
+/** A manifest reader that records the path it was asked for. */
+const reader = (manifest) => {
+  const paths = [];
+  return { paths, readManifest: (file) => (paths.push(file), manifest) };
+};
 
 function io() {
   const out = [];
@@ -333,6 +360,8 @@ describe('main --record (pnpm e2e:record, d1 §7.3)', () => {
       env: env(credentials()),
       fetch: fakeFetch().fetch,
       spawn: s.spawn,
+      readManifest: reader(manifestOf({ project: 'staging' })).readManifest,
+      now,
       root: REPO,
       ...o,
     });
@@ -402,6 +431,8 @@ describe('main --record (pnpm e2e:record, d1 §7.3)', () => {
       env: { E2E_LOCAL: '1', E2E_STAGING: '1', E2E_RECRUITER_URL: 'http://localhost:5174' },
       fetch: f.fetch,
       spawn: s.spawn,
+      readManifest: reader(manifestOf({ project: 'local' })).readManifest,
+      now,
       root: REPO,
       ...io(),
     });
@@ -410,5 +441,80 @@ describe('main --record (pnpm e2e:record, d1 §7.3)', () => {
     expect(s.calls[0].args.slice(-2)).toEqual(['--project', 'local']);
     expect(s.calls[0].opts.env.E2E_RECORD).toBe('1');
     expect(s.calls[0].opts.env.E2E_STAGING).toBeUndefined();
+  });
+});
+
+describe('main --record: the AT-D2 recorded span (d1 §7.3, D1-SPEC-2)', () => {
+  const record = async (manifest, { code = 0, envOver = {} } = {}) => {
+    const o = io();
+    const r = reader(manifest);
+    const calls = [];
+    const exit = await main({
+      argv: ['--record'],
+      env: { ...env(credentials()), ...envOver },
+      fetch: fakeFetch().fetch,
+      spawn: async (...args) => (calls.push(args), code),
+      readManifest: r.readManifest,
+      now,
+      root: REPO,
+      ...o,
+    });
+    return { exit, o, paths: r.paths, calls };
+  };
+
+  it('pins the window at 270 000-330 000 ms and the manifest path Playwright writes', () => {
+    expect([RECORDED_MS_MIN, RECORDED_MS_MAX]).toEqual([270_000, 330_000]);
+    expect(MANIFEST_FILE).toBe('e2e/test-results/d1-manifest.json');
+  });
+
+  it('exits 0 and prints recordedMs when the recorded span is inside the window (both bounds included)', async () => {
+    for (const recordedMs of [270_000, 300_000, 330_000]) {
+      const { exit, o, paths } = await record(manifestOf({ recordedMs }));
+      expect(exit).toBe(0);
+      expect(paths).toEqual([path.join(REPO, MANIFEST_FILE)]);
+      expect(o.stdout()).toContain(`recordedMs ${recordedMs}`);
+    }
+  });
+
+  it('exits 1 when recordedMs is outside the window, null, missing or not an integer', async () => {
+    for (const recordedMs of [269_999, 330_001, 0, null, undefined, 300_000.5, '300000']) {
+      const m = manifestOf({ recordedMs });
+      if (recordedMs === undefined) delete m.recordedMs;
+      const { exit, o } = await record(m);
+      expect(exit, String(recordedMs)).toBe(1);
+      expect(o.stderr()).toMatch(/recordedMs/);
+    }
+  });
+
+  it('exits 1 when the manifest is missing, stale, not a record run or of another project', async () => {
+    for (const [m, why] of [
+      [null, /d1-manifest\.json: missing or not JSON/],
+      [manifestOf({ startedAt: '2026-10-21T09:59:59.000Z' }), /older than this run/],
+      [manifestOf({ startedAt: 'not a date' }), /older than this run/],
+      [manifestOf({ record: false }), /not a record-mode run/],
+      [manifestOf({ project: 'local' }), /project/],
+    ]) {
+      const { exit, o } = await record(m);
+      expect(exit).toBe(1);
+      expect(o.stderr()).toMatch(why);
+    }
+  });
+
+  it('passes on a failed Playwright exit code without reading the manifest', async () => {
+    const { exit, paths } = await record(manifestOf(), { code: 2 });
+    expect(exit).toBe(2);
+    expect(paths).toHaveLength(0);
+  });
+
+  it('checkRecordedManifest names each problem and never echoes a value other than recordedMs', () => {
+    expect(
+      checkRecordedManifest(manifestOf(), { project: 'staging', launchedAtMs: LAUNCH_MS }),
+    ).toEqual([]);
+    const problems = checkRecordedManifest(
+      manifestOf({ recordedMs: 400_000, record: false, project: 'local' }),
+      { project: 'staging', launchedAtMs: LAUNCH_MS },
+    );
+    expect(problems).toHaveLength(3);
+    expect(problems.join(' ')).not.toContain(SHA);
   });
 });

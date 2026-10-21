@@ -19,7 +19,12 @@
 // anything else means project `staging` with E2E_STAGING=1, after this preflight and a check that the
 // six credentials are set (names only). The credentials reach Playwright through its environment
 // only, never an argument or an output line. It never turns traces on.
+// After Playwright passes, --record reads the run's manifest (e2e/test-results/d1-manifest.json) and exits 1
+// unless it is this run's record-mode manifest for the project and its recordedMs (first recorded context
+// opened to last context closed) is within 270 000-330 000 ms: the span the one OS-level screen capture
+// that is the AT-D2 deliverable must cover (§7.3, D1-SPEC-2).
 import { spawn as realSpawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AppVersionFile, HealthResponse } from '../packages/shared/src/contracts.ts';
@@ -55,6 +60,12 @@ export const CREDENTIALS = Object.freeze([
 export const SLICE_SPEC = 'tests/d1-slice.spec.ts';
 /** Playwright's CLI, as scripts/e2e-local.mjs runs it (relative to the repository root). */
 export const PLAYWRIGHT_CLI = 'e2e/node_modules/@playwright/test/cli.js';
+
+/** AT-D2 (§7.3, D1-SPEC-2): the recorded span of a record-mode run, in ms, both bounds included. */
+export const RECORDED_MS_MIN = 270_000;
+export const RECORDED_MS_MAX = 330_000;
+/** Where the slice writes its manifest (the Playwright outputDir), relative to the repository root. */
+export const MANIFEST_FILE = 'e2e/test-results/d1-manifest.json';
 
 const SUPABASE_URL_RE = /^https:\/\/[a-z0-9]{20}\.supabase\.co\/?$/;
 const PUBLISHABLE_KEY_RE = /^sb_publishable_[A-Za-z0-9_-]{20,}$/;
@@ -190,6 +201,41 @@ export async function checkStack({ env, fetch }) {
   return out;
 }
 
+/**
+ * Problems with a record-mode manifest (§7.3, D1-SPEC-2): it must be this run's (started at or after
+ * `launchedAtMs`), a record-mode run of `project`, and its integer recordedMs within the window. Names
+ * the field and the rule; the only value it repeats is recordedMs (a duration).
+ */
+export function checkRecordedManifest(manifest, { project, launchedAtMs }) {
+  if (manifest === null || typeof manifest !== 'object')
+    return [`${MANIFEST_FILE}: missing or not JSON`];
+  const out = [];
+  const started = typeof manifest.startedAt === 'string' ? Date.parse(manifest.startedAt) : NaN;
+  if (!(started >= launchedAtMs))
+    out.push(`${MANIFEST_FILE}: startedAt is older than this run (a stale manifest)`);
+  if (manifest.record !== true)
+    out.push(`${MANIFEST_FILE}: not a record-mode run (record must be true)`);
+  if (manifest.project !== project) out.push(`${MANIFEST_FILE}: project must be ${project}`);
+  const ms = manifest.recordedMs;
+  if (!Number.isInteger(ms)) {
+    out.push(`${MANIFEST_FILE}: recordedMs must be an integer number of ms`);
+  } else if (ms < RECORDED_MS_MIN || ms > RECORDED_MS_MAX) {
+    out.push(
+      `${MANIFEST_FILE}: recordedMs ${ms} is outside ${RECORDED_MS_MIN}-${RECORDED_MS_MAX} (AT-D2: 4:30 to 5:30)`,
+    );
+  }
+  return out;
+}
+
+/** Reads and parses a JSON file; null when it is missing or not JSON. */
+function readJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 /** Runs a child with inherited stdio; resolves to its exit code (1 on a signal or spawn error). */
 function spawnInherit(cmd, args, opts) {
   return new Promise((resolve) => {
@@ -205,6 +251,8 @@ export async function main({
   env = process.env,
   fetch = globalThis.fetch,
   spawn = spawnInherit,
+  readManifest = readJson,
+  now = Date.now,
   root = REPO_ROOT,
   out = console.log,
   err = console.error,
@@ -236,11 +284,24 @@ export async function main({
   else childEnv.E2E_STAGING = '1';
   delete childEnv.E2E_TRACE;
   out(`${TAG}: recording ${SLICE_SPEC} against ${project}`);
-  return spawn(
+  const launchedAtMs = now();
+  const code = await spawn(
     process.execPath,
     [path.join(root, PLAYWRIGHT_CLI), 'test', SLICE_SPEC, '--project', project],
     { cwd: path.join(root, 'e2e'), env: childEnv },
   );
+  if (code !== 0) return code;
+  const manifest = readManifest(path.join(root, MANIFEST_FILE));
+  const problems = checkRecordedManifest(manifest, { project, launchedAtMs });
+  for (const p of problems) err(`${TAG}: ${p}`);
+  if (problems.length > 0) {
+    err(`${TAG}: the recording does not meet AT-D2 (d1 §7.3); record again`);
+    return 1;
+  }
+  out(
+    `${TAG}: OK recordedMs ${manifest.recordedMs} (AT-D2 window ${RECORDED_MS_MIN}-${RECORDED_MS_MAX})`,
+  );
+  return 0;
 }
 
 if (isEntryPoint(import.meta.url)) {
