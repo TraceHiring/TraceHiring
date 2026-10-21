@@ -5,7 +5,13 @@
 // one shape the key script writes and the api/edge parsers accept), has a key without `kid`, or has a
 // key with a private member (`d`). All values here are synthetic; no violation may echo a value.
 import { describe, expect, it } from 'vitest';
-import { REQUIRED_VARS, checkDeployVars, main, parseJwkSet } from '../check-deploy-vars.mjs';
+import {
+  REQUIRED_VARS,
+  checkDeployVars,
+  loadWranglerConfigs,
+  main,
+  parseJwkSet,
+} from '../check-deploy-vars.mjs';
 
 const PUBLIC_KEY = {
   kty: 'EC',
@@ -19,6 +25,25 @@ const key = (kid, extra = {}) => ({ ...PUBLIC_KEY, kid, ...extra });
 const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
 // Built at run time so no JWT-shaped literal sits in the repository.
 const jwt = (payload) => [b64url({ alg: 'HS256' }), b64url(payload), 'c2lnbmF0dXJl'].join('.');
+
+// Synthetic Hyperdrive ids (ADR-031 amendment 1): the staging blocks of the three wrangler files as the deploy needs them.
+const hid = (n) => n.toString(16).padStart(2, '0').repeat(16);
+const GOOD_CONFIGS = () => ({
+  edge: { env: { dev: {}, staging: {} } },
+  api: { env: { dev: {}, staging: { hyperdrive: [{ binding: 'API_DB', id: hid(1) }] } } },
+  jobs: {
+    env: {
+      dev: {},
+      staging: {
+        hyperdrive: [
+          { binding: 'JOBS_MIRROR_DB', id: hid(2) },
+          { binding: 'JOBS_QUALITY_DB', id: hid(3) },
+          { binding: 'JOBS_INTEGRITY_DB', id: hid(4) },
+        ],
+      },
+    },
+  },
+});
 
 const GOOD = () => ({
   CANDIDATE_TOKEN_KID: 'd1-2026-10',
@@ -295,7 +320,9 @@ describe('checkDeployVars', () => {
 describe('main', () => {
   it('exits 0 and says OK for good values', () => {
     const lines = [];
-    expect(main({ env: GOOD(), out: (l) => lines.push(l), err: () => {} })).toBe(0);
+    expect(
+      main({ env: GOOD(), configs: GOOD_CONFIGS(), out: (l) => lines.push(l), err: () => {} }),
+    ).toBe(0);
     expect(lines.join('\n')).toMatch(/OK/);
   });
 
@@ -307,5 +334,34 @@ describe('main', () => {
     expect(main({ env, out: (l) => outs.push(l), err: (l) => errs.push(l) })).toBe(1);
     expect(errs.join('\n')).toMatch(/private member "d"/);
     expect(outs.join('\n')).not.toMatch(/OK/);
+  });
+
+  // ADR-031 amendment 1 (d1 revision 4o): the Workers reach staging Postgres only through their Hyperdrive bindings,
+  // so a deploy without the four committed config ids fails here, before any migration or Worker deploy.
+  it('exits 1 before anything is deployed when the staging Hyperdrive bindings are missing', () => {
+    const configs = GOOD_CONFIGS();
+    delete configs.jobs.env.staging.hyperdrive;
+    const errs = [];
+    expect(main({ env: GOOD(), configs, out: () => {}, err: (l) => errs.push(l) })).toBe(1);
+    expect(errs.join('\n')).toMatch(
+      /jobs: env.staging has no hyperdrive bindings \(JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB\)/,
+    );
+  });
+
+  it('exits 1 on a malformed or shared Hyperdrive id, naming the binding only', () => {
+    const configs = GOOD_CONFIGS();
+    configs.api.env.staging.hyperdrive[0].id = 'not-an-id';
+    configs.jobs.env.staging.hyperdrive[1].id = hid(2);
+    const errs = [];
+    expect(main({ env: GOOD(), configs, out: () => {}, err: (l) => errs.push(l) })).toBe(1);
+    expect(errs.join('\n')).toMatch(/api: hyperdrive API_DB has no 32-character lower-case hex id/);
+    expect(errs.join('\n')).toMatch(/jobs: hyperdrive JOBS_QUALITY_DB reuses another binding/);
+    expect(errs.join('\n')).not.toMatch(/not-an-id/);
+  });
+
+  it('reads the three wrangler.jsonc files of the repository when no configs are given', () => {
+    const configs = loadWranglerConfigs();
+    expect(Object.keys(configs).sort()).toEqual(['api', 'edge', 'jobs']);
+    expect(configs.api.env.staging.name).toBe('trace-api-staging');
   });
 });

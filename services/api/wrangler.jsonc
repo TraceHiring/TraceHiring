@@ -1,7 +1,10 @@
 // Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
 // D1 bindings (specs/d1-demo-slice.md §4.2, §7.1): Durable Objects and R2, repeated in each env block
-// (bindings and vars are not inherited). Secrets (set by an operator, never in git): the database
-// login URL, the candidate-token private key and the media-link HMAC key (check-staging-secrets).
+// (bindings and vars are not inherited). Secrets (set by an operator, never in git): the candidate-token
+// private key and the media-link HMAC key (check-staging-secrets). The database login api_login is the
+// API_DB Hyperdrive binding in env.staging (ADR-031 amendment 1; its config id, not a secret, is added once the
+// founder has created the config with scripts/ops/staging-worker-secrets.mjs); the local stack instead gets the
+// API_DB_URL secret on a loopback host (scripts/e2e-local.mjs). env.dev has no Hyperdrive binding.
 // The Supabase URL and publishable key are public vars (L-10); empty here, the deploy sets them.
 // Deploy order: services/api first (the edge service binding targets it).
 {

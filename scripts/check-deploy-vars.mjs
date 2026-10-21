@@ -15,9 +15,31 @@
 // Security review S3/S8 (docs/reviews/D1-security-review-wave0-rest.md): every key is allow-listed
 // (only kty, crv, x, y, kid, alg, use; an ES256 P-256 signing key; kid d1-YYYY-MM), and
 // CANDIDATE_TOKEN_KID must be exactly d1-YYYY-MM with no surrounding whitespace (--var deploys it as is).
+// ADR-031 amendment 1 (d1 revision 4o): it also reads the three wrangler.jsonc files and fails unless the staging
+// blocks carry exactly the Hyperdrive bindings of scripts/lib/hyperdrive.mjs with well-formed, distinct config ids
+// (the Workers reach staging Postgres only through them; the ids are committed after the founder creates the
+// configs), so a dispatch without them stops before any migration or deploy.
 // A violation names the variable and the problem and never prints a value (a value that fails here
-// may be a secret). It holds no secret itself and calls nothing: it only reads process.env.
+// may be a secret). It holds no secret itself and calls nothing: it only reads process.env and the wrangler files.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseJsonc } from './check-boundaries.mjs';
+import { WORKER_DIRS } from './check-staging-secrets.mjs';
 import { isEntryPoint } from './lib/cli.mjs';
+import { allHyperdriveProblems } from './lib/hyperdrive.mjs';
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+/** The parsed wrangler.jsonc of each Worker ({ edge, api, jobs }), from the repository. */
+export function loadWranglerConfigs(root = REPO) {
+  return Object.fromEntries(
+    Object.entries(WORKER_DIRS).map(([worker, dir]) => [
+      worker,
+      parseJsonc(readFileSync(path.join(root, dir, 'wrangler.jsonc'), 'utf8')),
+    ]),
+  );
+}
 
 /** The values the deploy cannot work without (D1 §7.1: wrangler placeholders are empty in git). */
 export const REQUIRED_VARS = Object.freeze([
@@ -184,9 +206,17 @@ function jwtRole(token) {
   }
 }
 
-/** CLI body; returns the exit code. */
-export function main({ env = process.env, out = console.log, err = console.error } = {}) {
-  const violations = checkDeployVars(env);
+/** CLI body; returns the exit code. `configs` defaults to the repository's wrangler files. */
+export function main({
+  env = process.env,
+  configs = loadWranglerConfigs(),
+  out = console.log,
+  err = console.error,
+} = {}) {
+  const violations = [
+    ...checkDeployVars(env),
+    ...allHyperdriveProblems(configs, { requireStaging: true }),
+  ];
   for (const line of violations) err(`check-deploy-vars: ${line}`);
   if (violations.length > 0) {
     err(`check-deploy-vars: ${violations.length} problem(s); nothing was deployed (spec §7.1)`);

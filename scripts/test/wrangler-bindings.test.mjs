@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { WORKERS_OBSERVABILITY, parseJsonc } from '../check-boundaries.mjs';
+import { hyperdriveProblems } from '../lib/hyperdrive.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const load = (dir) => parseJsonc(readFileSync(path.join(REPO, dir, 'wrangler.jsonc'), 'utf8'));
@@ -154,10 +155,20 @@ describe.each(Object.keys(EXPECTED))('%s wrangler.jsonc (spec §4.2)', (worker) 
         'services',
         'triggers',
         'ratelimits',
+        // ADR-031 amendment 1: the database logins, staging only (checked below).
+        ...(env === 'staging' ? ['hyperdrive'] : []),
       ]);
       for (const key of Object.keys(cfg()))
         expect(allowed.has(key), `env.${env}.${key}`).toBe(true);
     });
+  });
+
+  // ADR-031 amendment 1 (revision 4o): staging reaches Postgres only through one Hyperdrive binding per login role;
+  // dev and the top level have none (the local stack uses the loopback URL secrets). Until the founder has created
+  // the configs and their ids are committed, staging may have no hyperdrive key yet; check-deploy-vars refuses that
+  // at deploy time. Whatever is present must be exact.
+  it('carries exactly the Hyperdrive bindings of scripts/lib/hyperdrive.mjs, staging only', () => {
+    expect(hyperdriveProblems(worker, CONFIGS[worker], { requireStaging: false })).toEqual([]);
   });
 
   it('keeps observability exactly as rule 8 requires, with no env override', () => {

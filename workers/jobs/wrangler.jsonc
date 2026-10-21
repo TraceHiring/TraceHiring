@@ -1,8 +1,10 @@
 // Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
 // D1 bindings (specs/d1-demo-slice.md §4.2, §7.1): the mirror Queue consumer and producer, R2 evidence
 // (read) and the every-minute sweep cron, repeated in each env block (bindings and vars are not
-// inherited). Secrets (set by an operator, never in git): the three jobs database logins
-// (check-staging-secrets). Deploy order: services/api, then workers/jobs, then workers/edge.
+// inherited). No secret on staging: the three jobs database logins are the JOBS_MIRROR_DB, JOBS_QUALITY_DB and
+// JOBS_INTEGRITY_DB Hyperdrive bindings in env.staging (ADR-031 amendment 1; their config ids, not secrets, are
+// added once the founder has created the configs); the local stack instead gets the three loopback URL secrets
+// (scripts/e2e-local.mjs). Deploy order: services/api, then workers/jobs, then workers/edge.
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "trace-jobs",
