@@ -148,7 +148,7 @@ The day-one facts above are from the local stack. The first catalog run against 
   (locally `supabase_admin`). The image's init scripts create extensions as `postgres` while it is still a
   superuser, so their members are probably owned by `postgres` too; this account cannot see them. MT-9 skips
   exactly these three in `extension_owner` (`hosted_extension`: name, schema and owner pinned) and trusts only
-  members `postgres` cannot have made or changed (`hosted_member`: C functions loaded from the extension's own
+  members whose code `postgres` cannot have made or replaced (`hosted_member`: C functions loaded from the extension's own
   library without SECURITY DEFINER or SET, the two `pg_stat_statements` views whose rules depend only on the
   extension's functions, and their row and array types). Every other member not owned by a Supabase service role
   fails `extension_added_member`; a member of any other catalog of an extension `postgres` controls fails

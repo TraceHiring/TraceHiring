@@ -65,7 +65,7 @@ function confirm(run, kind, name) {
       : ['exec', 'wrangler', 'queues', 'info', name];
   const result = call(run, args);
   if (result.error || result.status !== 0) return 'its info call failed';
-  const stdout = String(result.stdout ?? '');
+  const stdout = plain(result.stdout);
   if (kind === 'queue') {
     const lines = stdout.split(/\r?\n/).map((l) => l.trim());
     return lines.includes(`Queue Name: ${name}`) ? '' : 'its info names another queue';

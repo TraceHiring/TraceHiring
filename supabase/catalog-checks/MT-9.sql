@@ -15,8 +15,8 @@
 -- pg_stat_statements, uuid-ossp and pgcrypto in extensions owned by postgres (staging, 2026-10-20), so
 -- extension_owner skips exactly those three names when the schema and the owner match too (hosted_extension).
 -- extension_added_member closes what that allows: a relation, function or type that is a member of any extension
--- and is not owned by a Supabase service role, unless it is a hosted_member (a member of a hosted extension that
--- postgres cannot have made or changed: see that CTE). Their members may be owned by postgres on hosted Supabase
+-- and is not owned by a Supabase service role, unless it is a hosted_member (a member of a hosted extension whose
+-- code postgres cannot have made or replaced: see that CTE). Their members may be owned by postgres on hosted Supabase
 -- (the image's init scripts ran as postgres while it was a superuser), so they are told apart by what they are, not
 -- by owner or name. extension_other_member is a member, of any other catalog (operators, casts, text search
 -- objects, schemas …), of an extension postgres controls: no check reads those catalogs, so nothing may be added
@@ -137,11 +137,12 @@ hosted_view as (
     )
 ),
 hosted_member (classid, objid) as (
-  -- Members of a hosted extension that postgres cannot have made or changed, whoever owns them (the hosted members
+  -- Members of a hosted extension whose code postgres cannot have made or replaced, whoever owns them (the hosted members
   -- may be owned by postgres): a C function loaded from the extension's own library, without SECURITY DEFINER or SET
   -- (C is an untrusted language, so postgres can neither create nor replace one, and changing the language makes it a
   -- non-C function), in the extension's schema. Plus the two pg_stat_statements views above, their row types and the
-  -- array types of those.
+  -- array types of those. Not pinned (re-review N-1, carried to D1 REVIEW): an owner may still RENAME such a function
+  -- or change its volatility or strictness, which stays clean here. No Trace code calls them.
   select 'pg_proc'::regclass::oid, p.oid
   from hosted_extension_oid as he
   join pg_depend as d

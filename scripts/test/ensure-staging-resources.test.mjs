@@ -311,6 +311,24 @@ describe('ensureResources', () => {
     expect(violations.join('\n')).not.toContain('\x1b');
   });
 
+  // Re-review N-2: the info output is read with its colours removed too.
+  it('confirms an existing queue whose info output is colour-coded', () => {
+    const w = recorder((args) => {
+      if (args[2] === 'queues' && verbOf(args) === 'create') {
+        return { status: 1, stdout: '', stderr: '✘ [ERROR] Request failed.\n  [code: 11009]\n' };
+      }
+      if (args[2] === 'queues' && verbOf(args) === 'info') {
+        return {
+          status: 0,
+          stdout: `\x1b[1mQueue Name:\x1b[0m ${args[4]}\nQueue ID: q-id\n`,
+          stderr: '',
+        };
+      }
+      return existing()(args);
+    });
+    expect(ensureResources({ run: w.run }).violations).toEqual([]);
+  });
+
   it('accepts the queue "exists" answer by code 11009 and by wording', () => {
     expect(ensureResources({ run: recorder(existing()).run }).violations).toEqual([]);
     const worded = recorder((args) =>
