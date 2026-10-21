@@ -259,6 +259,15 @@ describe('cross-Worker wiring', () => {
     for (const env of ENVS) expect(block('api', env).vars.DEMO_OUTBOX).toBe('1');
   });
 
+  it('every Worker has exactly the dev and staging env blocks and no top-level DEMO_OUTBOX (D1-SPEC-4)', () => {
+    // A production block (or a top-level var, which a block without its own vars would inherit) could carry
+    // DEMO_OUTBOX into production; the runtime guards stay, but the config must not offer it.
+    for (const worker of ['edge', 'api', 'jobs']) {
+      expect(Object.keys(CONFIGS[worker].env ?? {}).sort(), worker).toEqual(ENVS);
+      expect(CONFIGS[worker].vars?.DEMO_OUTBOX, worker).toBeUndefined();
+    }
+  });
+
   it('the staging deploy order in specs is api, jobs, edge (service target first)', () => {
     // The deploy job is lead-owned (§7.1); this pins the dependency the order exists for: edge
     // names the api service, so api must exist first. No order list lives in wrangler config.
