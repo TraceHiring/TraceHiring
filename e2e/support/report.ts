@@ -105,7 +105,8 @@ export const REJECT_WORDS = /reject|decision|decide|confirm|overturn|appeal|noti
 export const BLENDED_WORD = /\b(overall|combined|total|trust|honesty|composite)\b/i;
 
 /** Rule 7 on screen: no gaze, no IP address, no ASN, anywhere in a report's visible text. */
-export const NEVER_BUILD_TEXT = /\bgaze\b|IP address|\bASN\b/i;
+export const NEVER_BUILD_TEXT =
+  /\b(?:gaze|ASN|IPv?[46]?)\b|\bIP[\s _-]*address(?:es)?\b|\b(?:\d{1,3}\.){3}\d{1,3}\b/i;
 const NEVER_BUILD_WORDS: ReadonlySet<string> = new Set(['ip', 'asn', 'gaze']);
 /** A key's words (camelCase and snake_case split, lower case): `ipAddress` is ip+address, `description` is one word. */
 export const keyWords = (key: string): string[] =>

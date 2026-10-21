@@ -54,8 +54,13 @@ const CONTROL_WORDS =
 const ANYWHERE_WORDS =
   /\b(?:reject\w*|decline\w*|shortlist\w*|overturn\w*|appeal\w*|confirm\w*)\b/i;
 const COMBINED = /\b(?:overall|combined|total|trust|honesty|composite)\b/i;
-const NEVER_BUILD =
-  /\bgaze\b|\bemotion|face.?match|\bASN\b|\bIP address\b|\bdevice\b|\bpersonality\b|voiceprint|biometric|likeness/i;
+/** Gaze, ASN and IP wording or an IPv4 literal (D1-SEC-1); the same source as e2e/support/report.ts NEVER_BUILD_TEXT. */
+const GAZE_ASN_IP =
+  /\b(?:gaze|ASN|IPv?[46]?)\b|\bIP[\s _-]*address(?:es)?\b|\b(?:\d{1,3}\.){3}\d{1,3}\b/i;
+const NEVER_BUILD = new RegExp(
+  `${GAZE_ASN_IP.source}|\\bemotion|face.?match|\\bdevice\\b|\\bpersonality\\b|voiceprint|biometric|likeness`,
+  'i',
+);
 const SELECTION = /type="checkbox"|role="checkbox"|aria-selected|role="option"|select all/i;
 const EXPORT = /\bexport\w*|\bdownload\w*|\.csv\b|\.pdf\b/i;
 /** Every band label (Clear, Review suggested, Strong concern, Insufficient evidence) and the word "band". */
@@ -595,5 +600,32 @@ describe('D1 screens never show what the product never builds (AT-D13)', () => {
     expect('The band is set by rules').toMatch(BAND_WORDS);
     expect('Clearing the cache').not.toMatch(BAND_WORDS);
     expect('Gaze direction').toMatch(NEVER_BUILD);
+  });
+});
+
+describe('the rule 7 text pattern (D1-SEC-1)', () => {
+  it.each([
+    'IP: 203.0.113.7',
+    'IP-address',
+    'IP address',
+    'IP addresses',
+    'ip_address',
+    'Client IPv4',
+    'Client IPv6',
+    'Gaze direction',
+    'ASN 64500',
+    'seen from 203.0.113.7 today',
+  ])('matches %j', (sample) => {
+    expect(sample).toMatch(NEVER_BUILD);
+  });
+
+  it.each([
+    'The leadership addressed the outage',
+    'The gazette was printed',
+    'zip address',
+    'Skip the tip',
+    'Version 1.2 of 3 items',
+  ])('does not match %j', (sample) => {
+    expect(sample).not.toMatch(NEVER_BUILD);
   });
 });

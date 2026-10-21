@@ -1329,6 +1329,8 @@ test.describe('the D1 slice (spec §7.2 steps 1-10)', () => {
           invitationId: cand('B').invitation.invitationId,
           sessionId: b.view.sessionId,
         };
+        // B's streamId (refused 400 by A's own object) is sent from A's own flow, while A is still running: after the
+        // submit A's object answers `closed` to any events batch before it looks at the stream id (D1-SPEC-3).
         const attached = await jsonOf<{
           view: { sessionId: string; streamId: string; state: string; receipt?: ReceiptAnswer };
         }>(
