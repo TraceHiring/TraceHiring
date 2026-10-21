@@ -65,6 +65,30 @@ describe('e2e/tests/candidate-ui.spec.ts keeps secrets out of the call log', () 
   });
 });
 
+// D1-SPEC-3 (AT-D11(b), spec §7.2 step 10): with A's token, B's stream id is refused 400 by A's own object. That
+// check must run while A's session is still running: once A has submitted, A's object answers `closed` (410) to any
+// events batch before it looks at the stream id (workers/edge/src/session-core.ts `events`), so a request after the
+// submit would prove nothing about the stream id. The slice spec therefore sends it from A's own flow, before submit.
+describe('e2e/tests/d1-slice.spec.ts sends B’s stream id with A’s token (D1-SPEC-3)', () => {
+  const source = readFileSync(path.join(REPO, 'e2e/tests/d1-slice.spec.ts'), 'utf8');
+  const refusal =
+    /expectRefusal\(\s*await edge\.sessionPost\(\s*`\/v1\/session\/events[^`]*`,\s*a\.sessionToken,\s*\{\s*streamId: b\.view\.streamId,[\s\S]*?\),\s*400,\s*'bad_request',/;
+
+  it('posts events with A’s token and B’s streamId and expects 400 bad_request', () => {
+    expect(source).toMatch(refusal);
+  });
+
+  it('does so in a candidate flow step that runs before that candidate submits (a submitted session answers 410)', () => {
+    // The request sits in an `extra` step, which the flow runs after the reload and before 'submits and sees the receipt only'.
+    expect(source).toMatch(
+      /extra: \{\s*\/\/[^\n]*\n\s*name: [^\n]*stream id[^\n]*\n\s*body: async \(\) => \{[\s\S]*?streamId: b\.view\.streamId/,
+    );
+    const runs = source.indexOf('await cstep(key, extra.name');
+    expect(runs).toBeGreaterThan(-1);
+    expect(source.indexOf("'submits and sees the receipt only'", runs)).toBeGreaterThan(runs);
+  });
+});
+
 // D1-SEC-3 (a): the staging run reaches only the five pinned origins (SEC-W5-6), so it can never touch production.
 describe('readSliceEnv under E2E_STAGING=1 (the five-origin pin, D1-SEC-3)', () => {
   const enc = (s) => Buffer.from(s).toString('base64url');
