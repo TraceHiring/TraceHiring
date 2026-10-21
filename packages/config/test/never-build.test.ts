@@ -34,6 +34,15 @@ const FORBIDDEN_WORDS: readonly (readonly string[])[] = [
   ['face', 'recognition'],
   ['ai', 'likeness'],
   ['asn'],
+  // Single-token spellings the word split cannot separate (spec re-review of the D1 FIX, note 3).
+  ['facematch'],
+  ['facematches'],
+  ['facematching'],
+  ['facematcher'],
+  ['faceprint'],
+  ['faceprints'],
+  ['face', 'print'],
+  ['ailikeness'],
 ];
 
 /** Face matching / face recognition / emotion or affect inference packages (rule 7; the opt-in identity add-on is not built in D1). */
@@ -181,6 +190,15 @@ describe('AT-D21: the never-build list (rule 7)', () => {
       ['asn', true],
       ['clientASN', true],
       ['ASN_LOOKUP', true],
+      // single-token spellings (spec re-review of the D1 FIX, note 3)
+      ['facematch', true],
+      ['Facematch', true],
+      ['facematchScore', true],
+      ['facematching', true],
+      ['facematcher', true],
+      ['faceprint', true],
+      ['ailikeness', true],
+      ['aiLikenessScore', true],
       // ordinary words that contain the letters but not the word
       ['gazette', false],
       ['async', false],
