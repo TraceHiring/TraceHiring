@@ -28,15 +28,17 @@ dispatch runs without them, because nothing on staging is ready for them yet.
    gh workflow run ci.yml --ref <branch> -f run_e2e=false
    ```
 
-   Wait until `deploy-staging` is green. It applies the migrations and creates `trace-api-staging`,
-   `trace-jobs-staging` and `trace-edge-staging`. If only the "org sign-in" smoke step fails because a smoke
-   user is missing, carry on; step 5 fixes it.
+   Wait until `deploy-staging` is green through its "Smoke test" step. It applies the migrations and creates
+   `trace-api-staging`, `trace-jobs-staging` and `trace-edge-staging`. The later "Smoke test, org sign-in" step
+   may stay red until step 5 creates the smoke users (H9); carry on.
 3. The api secret `CANDIDATE_TOKEN_PRIVATE_JWK` (`wrangler secret put`, from `services/api`), then delete the
    private file: see the key pair section below.
 4. The login roles and the other api and jobs secrets: `staging-worker-secrets.mjs --yes` (section below).
 5. The staging smoke users (recruiter and reviewer, `enrol-smoke-user.mjs`) and their GitHub secrets: see
    "Staging smoke users" below.
-6. Dispatch again with e2e (`run_e2e` defaults to `true`):
+6. Dispatch again with e2e (`run_e2e` defaults to `true`). This needs step 5 first: `e2e-staging` runs only
+   after `deploy-staging` is fully green (`needs: deploy-staging`), and its "org sign-in" smoke needs the H9
+   smoke users:
 
    ```
    gh workflow run ci.yml --ref <branch>
