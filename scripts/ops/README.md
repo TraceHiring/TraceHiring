@@ -44,6 +44,15 @@ dispatch runs without them, because nothing on staging is ready for them yet.
 
    Its "Check Worker secrets" step confirms that both Workers hold only allowed secret names.
 
+**After every dispatch whose "Apply migrations" step passed** (any step above or later), tag the dispatched
+commit and push the tag, so `check-migrations` treats its migrations as frozen (spec d1 R-17, D1-DB-3; fix
+forward only from then on):
+
+```
+git tag staging-applied-<run id> <dispatched commit>
+git push trace staging-applied-<run id>
+```
+
 ## Staging smoke users (`enrol-smoke-user.mjs`)
 
 Two synthetic users sign in to staging from CI, each with a password and TOTP. Both live in the `smoke-staging`

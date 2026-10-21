@@ -214,6 +214,20 @@ describe('frozen set (check 5)', () => {
     expect(messages(r)).toMatch(/frozen.*m0a-reviewed/);
   });
 
+  it('rejects an edit to a branch migration frozen by a staging-applied-* tag (D1-DB-3, spec R-17)', () => {
+    // A d1/** branch dispatched to staging: the migration is not on main yet, so check 4 counts it as new;
+    // only the staging-applied tag on the dispatched commit freezes it.
+    const repo = repoWithBaseline();
+    writeFiles(repo, { [mig(M2)]: sql(2) });
+    commitAll(repo, 'branch adds m2');
+    git(repo, 'tag', 'staging-applied-39566827826');
+    writeFiles(repo, { [mig(M2)]: sql(2) + '-- edited after the staging dispatch\n' });
+    commitAll(repo, 'edit m2 in place');
+    const r = run(repo);
+    expect(r.ok).toBe(false);
+    expect(messages(r)).toMatch(/frozen.*staging-applied-39566827826/);
+  });
+
   it('ignores reviewed tags that are not ancestors of HEAD', () => {
     const repo = repoWithBaseline();
     git(repo, 'checkout', '-q', '-b', 'side', 'main');

@@ -8,8 +8,9 @@
 // 3. versions are unique
 // 4. against `git merge-base <base> HEAD` and the working tree (plus untracked files): no existing
 //    migration is modified or deleted, and every new version is newer than the newest at the base tip
-// 5. frozen set: migrations at the base tip and at every m*-reviewed tag that is an ancestor of HEAD
-//    are byte-identical in the working tree
+// 5. frozen set: migrations at the base tip and at every m*-reviewed or staging-applied-* tag that is an
+//    ancestor of HEAD are byte-identical in the working tree (a staging-applied-<run id> tag marks a commit
+//    whose migrations a staging dispatch applied: spec d1 R-17, D1-DB-3)
 // A base that does not resolve, or a missing merge-base, fails (exit 1); the script never passes vacuously.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -19,6 +20,8 @@ import { fileURLToPath } from 'node:url';
 export const MIGRATIONS_DIR = 'supabase/migrations';
 export const NAME_RE = /^(\d{14})_(?:m\d{1,2}[ab]?|d1)_[a-z0-9_]+\.sql$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Tags whose migrations are frozen (check 5): reviewed milestones and commits a staging dispatch applied. */
+export const FROZEN_TAG_PATTERNS = Object.freeze(['m*-reviewed', 'staging-applied-*']);
 
 const violation = (p, message) => ({ path: p, message });
 const rel = (name) => `${MIGRATIONS_DIR}/${name}`;
@@ -226,7 +229,7 @@ export function checkMigrations({ root, base, now = new Date() }) {
   // Check 5: frozen set.
   const frozen = new Map(); // name → { sha, source }
   for (const [name, sha] of atTip) frozen.set(name, { sha, source: `base tip ${base}` });
-  const tags = mustGit(root, ['tag', '--list', 'm*-reviewed'])
+  const tags = mustGit(root, ['tag', '--list', ...FROZEN_TAG_PATTERNS])
     .split('\n')
     .map((t) => t.trim())
     .filter(Boolean)
