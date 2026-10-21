@@ -32,7 +32,7 @@ prompt for the next chat. This file is the roadmap; HANDOFF.md says which chat i
 | **D** | **Wave 2b: C2 candidate app** (camera, blur, CSP, S12) + lead wiring + `e2e-local` with the real flow (closes r3a #1, the real trace_api SQL) | C2 merged, e2e-local green on Linux CI, `cp/d1-09` |
 | **E** | **Staging readiness:** OPEN-13 (edge volumetric limit), carried items due before staging, then the founder gates (Cloudflare token R2 + Queues Edit, key script, `staging` vars) → first `workflow_dispatch`, smoke, DC-D8; R5 e2e on staging | staging deployed and smoked; AT-D1/D2 E2E green, `cp/d1-10` |
 | **E2** | **Staging half of E** (Chat E part 1 merged the lead work and R5 on 2026-10-19 and stopped at the founder gates): founder gates (a) → first dispatch `run_e2e=false` → founder gates (b) (private key, `staging-worker-secrets.mjs`, smoke users) → dispatch with E2E → DC-D8 | staging deployed and smoked; AT-D1 E2E green on staging, DC-D8 recorded, `cp/d1-10` |
-| **F** | **D1 REVIEW** (fresh chat, `trace-milestone-review`) | `docs/reviews/D1.md` with a verdict |
+| **F** | **D1 REVIEW** (fresh chat, `trace-milestone-review`); **done 2026-10-21**: BLOCK (1 High, 2 Medium) + INCOMPLETE (staging, founder-gated) | `docs/reviews/D1.md` with a verdict |
 | **G** | **D1 FIX + CLOSE** of M0a, M0b, D1 (each merge into `main` only with the founder's explicit go-ahead) | `m0a-reviewed`, `m0b-reviewed`, `d1-reviewed` tags, summaries |
 
 ## After D1: the pattern for every milestone (build-order.md)
@@ -64,3 +64,6 @@ prompt for the next chat. This file is the roadmap; HANDOFF.md says which chat i
 - Chat E2 part 1 (MT-9 hosted allow-list + 3 staging dispatches): 3 Opus reviews, 1 Opus re-review, one full verify; the
   account showed plan **Pro**: 11% → ~91% of one 5-hour window, then 7% → ~20% of the next; weekly 37% → ~51%; context
   ~38%. Blocked on the CI token's R2 permission (founder); Chat F started in parallel by founder permission (2026-10-21).
+- Chat F (D1 REVIEW): 3 Opus read-only reviewers (spec, security, database), one full verify plus re-runs; plan **Pro**:
+  5-hour 20% to ~80%, weekly 52% to ~60%, context ~29%. Running `test:rls` before the database reviewer avoided a DB reset
+  under its probes; gitleaks-driven script tests time out on this laptop while agents run.
