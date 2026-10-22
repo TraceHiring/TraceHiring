@@ -68,8 +68,19 @@ describe('@trace/db-types', () => {
       | 'integrity_cards'
       | 'integrity_timeline_entries'
       | 'reports'
+      // M1 migration M1-a (specs/m1-test-authoring.md §3.2)
+      | 'skill_taxonomy'
+      | 'items'
+      | 'item_variants'
+      | 'item_variant_keys'
+      | 'item_exposure_events'
+      | 'pools'
+      | 'pool_items'
+      | 'library_copy_requests'
     >();
-    expectTypeOf<keyof Database['public']['Views']>().toEqualTypeOf<never>();
+    expectTypeOf<keyof Database['public']['Views']>().toEqualTypeOf<
+      'v_item_exposure' | 'v_item_bank_quant_share'
+    >();
     expectTypeOf<keyof Database['public']['Functions']>().toEqualTypeOf<never>();
   });
 
@@ -79,6 +90,7 @@ describe('@trace/db-types', () => {
         'actor_kind',
         'data_residency',
         'invitation_status',
+        'item_status',
         'membership_status',
         'org_kind',
         'org_role',
