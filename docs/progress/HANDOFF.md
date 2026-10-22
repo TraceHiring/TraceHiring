@@ -1,120 +1,55 @@
-# HANDOFF — 2026-10-12 01:45 IST
-Reason for stopping: usage guard (the founder's 95% rule; wrap-up started at about 85–90% of the 5-hour window after the founder said "finish the open work, then wrap up").
-The next session may be a new Claude Code on another account connected to this folder: start from
-`docs/progress/RESUME-PROMPT.md` on `m0a/integration` (its §4 paste prompt).
+# HANDOFF — 2026-10-13 20:25 IST
+Reason for stopping: phase done. **M0b FIX is complete** and AUTOPILOT §2 allows one phase per session. Usage at stop: about 80% of the 5-hour window (Pro plan, resets about 23:20 IST); weekly about 66%.
+The next session may be a new Claude Code on another account. Start from `docs/progress/RESUME-PROMPT.md` on **`m0b/integration`** (its §4 paste prompt).
 
-## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M8 = closed beta → M9 … M13 = paid pilots)
-- Milestones closed: **0 of 17** (no `m*-reviewed` tag).
-- Checkpoints: `cp/m0a-04` = `a45505d` (S2 + S3a merged); **`cp/m0a-05` = `f165fe0`** (S3b merged, full verify + Linux CI green).
-- **M0a: ~95% of BUILD.** S1, S2, S3a and S3b are all written, reviewed and fixed. What is left before the REVIEW phase:
-  - AT-1a-local re-run and AT-1b on the final tip;
-  - the `check-workflows` export gap (below);
-  - finishing the summary draft.
-- Rough estimate: ~6% of the way to closed beta (M8). An estimate, not a measurement.
+## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M8 = closed beta → M9 … M13)
+- Milestones closed: **0 of 17** (no `m*-reviewed` tag). Rough share of the whole build done: about 10%.
+- **M0a:** REVIEW and FIX are done; it stopped before CLOSE (founder gate). `milestone/m0a` @ `7dc8c0d` = `cp/m0a-06`.
+- **M0b:** BUILD, REVIEW and **FIX are done**. The code verdict is **PASS WITH CONDITIONS with no open Medium** (`docs/reviews/M0b.md`, sections "FIX" and "Re-review of the FIX"). The milestone stays INCOMPLETE until CLOSE, because the staging run (AT-B9, AT-B10) and `m0a-reviewed` are founder gates.
 
 ## Where we are
-- Milestone **M0a**, phase **BUILD**. Integration **`m0a/integration`** (checked out in `.claude/worktrees/trace-autopilot-resume-4ece3a`; enter it with `EnterWorktree` path).
-- Spec **revision 16** (S2/S3a/S3b review follow-ups; `specs/m0-foundations.md:3-12`).
-- `milestone/m0a` @ `f165fe0` (`cp/m0a-05`), pushed. `main` unchanged (`fe77a87`).
-- **Evidence this session:**
-  - Full `pnpm verify` green on `a45505d`: scripts 1142 passed + 1 skipped (K4 Windows symlink case), `test:rls` 112/112, candidate 72.4 kB gzip, headers OK, `scan-dist` clean on 5 `dist/`.
-  - Linux CI green on `146d465` (run 38167417262: static, rls, security, migrations).
-  - **AT-1a-local PASSED on `a45505d`:** clean clone in the `node:22.23.3` container, scripts 1143 passed **0 skipped**, host `test:rls` 112/112.
-- **S3b is merged:** `f165fe0` `chore(ci): merge w-s3b …`, after the re-review PASS.
-  - Full `pnpm verify` is green on `f165fe0`: scripts 1229 passed + 1 skipped (K4), `test:rls` 112/112, candidate 72.4 kB, headers and `scan-dist` OK.
-  - Linux CI run 38169130226 on `f165fe0`: `static`, `security` and `migrations` passed; `deploy-staging` was skipped (PR event, as designed).
-  - `rls` failed once on a **runner Docker port-binding error** ("failed to set up container networking … supabase_db_trace", 47 s). That is not a code fault; the job passed on the previous run. The lead re-ran it; the result is in the next bullet.
-  - The `rls` re-run passed (2m46s), so the run is fully green.
+- **`m0b/integration`** (worktree `.claude/worktrees/m0b-integration`; enter it with `EnterWorktree` path). Its tip is this handoff commit, on top of `01b177c` docs(reviews): record the m0b fix re-review and gates.
+- **`milestone/m0b` @ `01b177c` = `cp/m0b-04`**: fast-forwarded this session from `4cb6775` (`cp/m0b-02`). **Stray tag:** `cp/m0b-03` also points at `4cb6775` (= `cp/m0b-02`). A failed fetch refspec in a chained command created it. It is local only: it is deliberately not pushed, and the wrap-up pushed tags by name. The tag rules forbid deleting it, so the founder may delete it locally (`git tag -d cp/m0b-03`), or leave it. The FIX checkpoint is `cp/m0b-04`.
+- Draft PR **TraceHiring/TraceHiring#3** (`m0b/integration` → `main`) is for CI only and is never merged.
+- Stream branches are all merged and kept: `m0b/b0-db` `dc4731a`, `m0b/b2-recruiter-auth` `91092ac`, `m0b/b2-fixes` `8f47fff`, `m0b/b4-smoke-auth` `04013ea`, plus the older `b0-rls-tests`, `b3-token-spike`, `b4-ops-scripts` and `b5-*`. This session created no stream branches.
+- Unchanged: `milestone/m0a` @ `7dc8c0d`, `m0a/integration` @ `c619525`, `main` @ `fe77a87`.
+- The local stack runs db, auth, kong, rest and mailpit (left up by `pnpm test:rls`).
 
-## Done this session (all on `m0a/integration`; reports in `docs/reviews/`)
-- **W-S3a Workers** (`/health`, 404/500 JSON, reporter wiring):
-  - Opus review PASS WITH FINDINGS (S3A-1 Medium: a thrown non-Error escaped Hono `onError`).
-  - Fixed on `m0a/s3a-fixes` (`1205dcc`, `621c545`); re-review PASS.
-  - Merged `c4f0646`.
-- **W-S2 UI + apps** (tokens, contrast, shells, CSP):
-  - Opus review PASS WITH FINDINGS (S2-1..4 Low), fixed on `m0a/s2-fixes` (`ca75411`).
-  - Re-review PASS WITH FINDINGS (S2-R1, S2-R2); the lead fixed both in `bee2364` (the bundle scan now uses the production build).
-  - Merged `e2133bf`.
-- **W-S3b deploy-staging job** (`m0a/s3b-deploy` @ `91622ee`, Opus writer):
-  - It adds `scripts/smoke-staging.mjs` and `scripts/staging-catalog-checks.mjs`, with tests.
-  - Q2: URLs come from wrangler's ND-JSON output file. Q7: `--yes` and `-q`.
-  - Opus review PASS WITH FINDINGS (S3B-1 and S3B-2 Medium, S3B-3..7 Low).
-  - Fixed on `m0a/s3b-fixes` @ `ba3ac88` (scripts 1214 passed + 1 skipped).
-  - Re-review PASS. Merged `f165fe0`.
-  - S3B-5 (unordered staging deploys) is an accepted residual, owner M8.
-- **Lead:**
-  - `57be0cc` Workers `types:gen --strict-vars=false`.
-  - `497cba7` `verify:fast` maps `docs/design/tokens.json` to `@trace/ui`.
-  - `cf4b139` `check-boundaries` rule 7: no reporter or Sentry in candidate or edge source.
-  - `146d465` `@trace/ui` `tokens`/`tokens:check` scripts, with `lint` running the check.
-  - Spec revision 16.
-  - Founder queue: the staging DB URL needs `sslmode=require`.
-  - Build-notes row: W-S3b's `scripts/` grant.
-  - Summary draft updated.
-
-## Branches
-| Branch @ tip | State |
-| --- | --- |
-| `m0a/integration` @ newest `chore(progress)` | all lead work; pushed; draft PR 1 runs CI |
-| `milestone/m0a` @ `f165fe0` (`cp/m0a-05`) | pushed |
-| `m0a/s3b-fixes` @ `ba3ac88` (on `m0a/s3b-deploy` @ `91622ee`) | W-S3b + fixes; re-review PASS; merged `f165fe0` |
-| `m0a/s2-fixes` @ `ca75411`, `m0a/s3a-fixes` @ `621c545` | merged |
-| `m0a/s2-ui` @ `54620e6`, `m0a/s3-workers` @ `e04446e` | merged via their `-fixes` branches |
-| `worktree-agent-*` | writer scratch; do not use |
+## Done this session (verified)
+- Resume check: the repo matched the handoff (`b3f8809` = remote; `milestone/m0b` = `cp/m0b-02` = `4cb6775`). `verify:fast` exit 0 (212 s).
+- FIX, one commit per finding, tests first:
+  - `1cc45e0` M0B-DB-2 (Medium): MT-11 now uses a caller-helper allow-list, plus the new branches `or_arm_without_caller` and `caller_only_null_tested`. 3 fixtures were seen failing; 2 negative controls added.
+  - `8c36e48` M0B-SP-1: the spike requires `42501`; re-run 27/0/0.
+  - `66c8459` B0-SP3: 2 audit cases and a spec §2.5 sentence.
+  - `c4db45c` B0-DB7: migration `20261013133323_m0b_staff_grant_checks.sql`; 3 staff cases seen failing.
+  - `545e1c2` B0-SP7: 6 cheap matrix cases.
+  - `ccb584a` M0B-DB-5: `scripts/test-concurrency-local.mjs` (two psql sessions, run by `test:rls`) **proved** that both owner demotions committed under REPEATABLE READ. Migration `20261013133832_m0b_owner_change_isolation.sql` adds `memberships_isolation_guard`.
+  - `0080700`: record and spec revision 8.
+- Re-review: one fresh Sonnet database-reviewer returned PASS WITH FINDINGS (3 Lows). FR-2 and FR-3 were fixed in `45bb351` (`is_operator` added to the allow-list; comment). FR-1 goes to **M1**. Recorded in `01b177c`.
+- Gates on `45bb351`, no agent running: full `pnpm verify` exit 0 (scripts 1559 + 1 skipped K4; catalog **138**, rls **697**; AT-B8 and the concurrency test OK). The first run failed the known redactor 50 ms timing at 50.2 ms; the re-run was green. Linux CI was green on `ccb584a` (38407442501) and on `01b177c` (38415375246).
+- Not fixed, with owners: **M0B-DB-1 → M7** (DR runbook) and **B0-SP7 rest → M1**. All other Lows keep the owners in `docs/reviews/M0b.md`.
 
 ## Next step (in order)
-1. **Done:** `cp/m0a-05` = `f165fe0`.
-   - CI run 38169130226 is fully green after the `rls` re-run (rls 2m46s, static, security, migrations; deploy-staging skipped on the PR).
-   - `milestone/m0a` is fast-forwarded to `f165fe0` and pushed.
-2. **`check-workflows` gap (S3b review, lead-only):** `run:` text can `export` names that `ENV_DENY_REASONS` denies (for example `NODE_OPTIONS`). Add a rule test-first, or record it as a residual.
-3. **AT-1a-local re-run** (`node scripts/verify-clean-clone.mjs --linux`, ~20 min) and **AT-1b** (`node scripts/verify-clean-clone.mjs`) on the final tip. Record both in `docs/progress/M0a-summary-draft.md` §4.1.
-4. Finish the summary draft:
-   - the S3b row;
-   - residuals S3B-5, the `--no-bundle` first-run risk, Q8 Pages headers;
-   - deferred CSP origins.
+1. **M0b cannot CLOSE until the founder gates are met:** `m0a-reviewed` (M0a CLOSE needs the GitHub plan, FOUNDER-QUEUE row 15) and the staging run of AT-B9 and AT-B10 (rows 20–21: H3–H5, H8–H11). Do not merge into `main` and do not tag `m*-reviewed` without the founder.
+2. **No unblocked autopilot phase is left without a founder answer.** D1 starts "right after `m0b-reviewed`, before M1" (`docs/build-order.md:36-38`, founder 2026-10-11), and Sentry (H6) must land before D1. The next session should ask the founder once (FOUNDER-QUEUE row added this session): may D1 SPEC start before `m0b-reviewed`, as M0b did before `m0a-reviewed`? If the answer is yes, run D1 SPEC in a fresh session on a new `d1/integration` cut from `milestone/m0b` (`cp/m0b-04`). If not, work the founder rows for CLOSE.
+3. Carry FR-1 (MT-11 caller calls that bind no row) into the M1 spec, before M1 adds tables.
 
-   Then **stop BUILD.** The REVIEW phase (`trace-milestone-review` skill) runs in a fresh session that did not write the code (AUTOPILOT §2). Do not start M0b.
-
-## Decisions made this session
-- **Founder, in chat:** work until 95%, use many agents, and finish the open work before wrapping up. Applied within AUTOPILOT §2 (at most 3 writers at once, disjoint files).
-- **W-S3b:** started before the S2/S3a merges, and given a `scripts/` grant for its new files only (`docs/build-notes.md`, last row).
-- **Q2:** wrangler output file, so §7.3 is unchanged.
-- **S3B-5:** accepted as a residual.
-- **Stream fixes go on new `<stream>-fixes` branches:** a pinned agent cannot enter another agent's worktree.
-- **Workers `observability: { enabled: false }`:** no Workers Logs until ADR-027 records it.
+## Decisions made this session (HOW-level, AUTOPILOT §4)
+- `private.valid_roles` was left off the MT-11 allow-list, because it is immutable and caller-independent. `private.caller_roles` was added, and `private.is_operator` was added after the re-review.
+- M0B-DB-5 was fixed by refusing owner or status changes outside READ COMMITTED (`0A000`, a separate trigger, fix-forward migration). No current path uses another isolation level; the reviewer verified the role and database defaults.
+- M0B-DB-1 goes to M7 rather than M0b FIX (the review allows either); B0-SP7 rest goes to M1.
+- Fix-forward migrations, not edits to the reviewed ones.
 
 ## Open questions for the founder (`docs/progress/FOUNDER-QUEUE.md`)
-- **URGENT (unchanged):**
-  - roll the Cloudflare token pasted as a secret *name*;
-  - set `CLOUDFLARE_API_TOKEN`;
-  - set `SUPABASE_STAGING_DB_URL`, now **with `?sslmode=require`**;
-  - the `workers.dev` subdomain (H4);
-  - GitHub rules on `main`, `milestone/*` and tags.
-- **Unchanged:**
-  - staging-gate evidence before `m0a-reviewed`;
-  - the staging Postgres major version (H5);
-  - H6 Sentry (before D1).
+- **New:** may D1 SPEC start before `m0b-reviewed`? Options (a) start D1 SPEC now, (b) wait and work the CLOSE rows, (c) start M1 SPEC.
+- Unchanged: the GitHub plan (row 15, blocks M0a CLOSE); H8–H11 (row 20) and the H8 reminder (row 21); the URGENT Cloudflare token roll, `CLOUDFLARE_API_TOKEN`, `SUPABASE_STAGING_DB_URL`, H4, H5, H6 Sentry; B2-SEC-5 FYI (row 22); the session time-box FYI.
 
 ## Gotchas / do not touch
-- **Who runs the stack:** only the lead runs `supabase start/stop`, `db reset`, `test db`, `gen types`, `pnpm verify` and `pnpm test:rls`.
-- **Timing tests flake under load:** a full `pnpm verify` counts only when no writer is running.
-- **Deny rules:** they block any Bash text containing `wrangler deploy `, `supabase db push` and similar (even in grep). Use the Grep tool.
-- **Worktree guard:**
-  - it refuses `git -C`, `cd <other worktree> && git`, `$(…)`, and Python or heredoc commands that also run git: split such commands up;
-  - it refuses a heredoc whose text mentions some git-like words: use the Edit tool.
-- **Agents:**
-  - writer worktrees start at `main`: tell each writer to `git switch <branch>` after confirming it has no commits of its own;
-  - give each writer a new branch, since an agent cannot enter another agent's worktree.
-- **Commits:**
-  - merge commits use `chore(<scope>): merge …`;
-  - write messages to a file and commit with `git commit -F`.
-- **Push:** `git -c credential.helper= -c "credential.helper=!gh auth git-credential" push trace <refs>`. Never force.
-- **Usage this session:** one Opus review cost about 6–8%, an Opus writer about 10%, a Sonnet fix writer about 4–6%.
+- Only the lead runs `supabase start/stop`, `db reset`, `test db`, `gen types`, `pnpm verify` and `pnpm test:rls`. Run the full verify **with no agent running**. The redactor 50 ms timing test can fail at about 50.2 ms under load; re-run before suspecting code.
+- Running a single pgTAP file by hand: pgTAP is absent outside `supabase test db`. Insert `create extension if not exists pgtap with schema extensions;` after the file's `begin;` (it rolls back with the file).
+- In node `String.replace`, `$$` in a replacement string becomes `$`: use the Edit tool for SQL with `$$`.
+- Worktree guard: no `git -C`, no `$(…)`, no heredocs containing backticks with git in the same command, and no pipes around git. commitlint body lines must be at most 100 characters.
+- Push and fetch: `git -c credential.helper= -c "credential.helper=!gh auth git-credential" push trace <refs>`.
 
 ## Verify first
-- `git fetch trace`
-- `git log --oneline -5 m0a/integration`
-- `git status`
-- `docker ps` (expect `supabase_db_trace`)
-- `pnpm -s verify:fast`
-- `git log --oneline -1 m0a/s3b-fixes milestone/m0a`
+- `git fetch` (with the `-c` pair) · `git log --oneline -3 m0b/integration` · `git status` · `docker ps` · `pnpm -s verify:fast` · PR #3 checks

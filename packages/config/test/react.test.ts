@@ -1,5 +1,5 @@
 // React hooks and jsx-a11y recommended rules run on apps/**/*.tsx and packages/ui/**/*.tsx (spec §10.1).
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { lint } from './helpers.js';
 
 const hooksCode = `import { useState } from 'react';
@@ -26,6 +26,12 @@ export function Counter() {
 
 const ruleIds = (file: string, code: string): (string | null)[] =>
   lint(file, code).map((m) => m.ruleId);
+
+// The first lint loads the config and every plugin (seconds on a busy machine); pay that here, not
+// inside the first test's 5 s budget.
+beforeAll(() => {
+  lint('apps/candidate/src/Warm.tsx', cleanCode);
+}, 60_000);
 
 describe.each(['apps/candidate/src', 'apps/recruiter/src', 'packages/ui/src'])(
   '%s/**/*.tsx',

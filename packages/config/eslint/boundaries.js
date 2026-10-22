@@ -18,6 +18,7 @@ export const workspacePackages = {
   '@trace/ui': 'packages/ui',
   '@trace/vendors': 'packages/vendors',
   '@trace/db-types': 'packages/db-types',
+  '@trace/workers-http': 'packages/workers-http',
   '@trace/edge': 'workers/edge',
   '@trace/jobs': 'workers/jobs',
   '@trace/api': 'services/api',
@@ -34,6 +35,8 @@ const elements = [
   { type: 'shared', pattern: 'packages/shared' },
   { type: 'vendors', pattern: 'packages/vendors' },
   { type: 'db-types', pattern: 'packages/db-types' },
+  // Workers-only HTTP helpers (specs/m0b-tenancy.md §1.1 item 9b): never imported by an app or a package.
+  { type: 'workers-http', pattern: 'packages/workers-http' },
   { type: 'config', pattern: 'packages/config' },
   { type: 'edge', pattern: 'workers/edge' },
   { type: 'jobs', pattern: 'workers/jobs' },
@@ -93,8 +96,9 @@ const policies = [
   { from: element('apps'), allow: { to: element(['ui', 'shared', 'db-types']) } },
   {
     from: element(['edge', 'jobs', 'api']),
-    allow: { to: element(['shared', 'vendors', 'db-types']) },
+    allow: { to: element(['shared', 'vendors', 'db-types', 'workers-http']) },
   },
+  { from: element('workers-http'), allow: { to: element('shared') } },
   { from: element('ui'), allow: { to: element('shared') } },
   { from: element('vendors'), allow: { to: element('shared') } },
   // shared, db-types, config, scripts and supabase import no other element.

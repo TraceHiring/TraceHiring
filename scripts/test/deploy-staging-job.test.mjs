@@ -32,6 +32,7 @@ function stateOf(step) {
   if (/\bnode scripts\/check-staging-secrets\.mjs\b/.test(r)) return 'secrets_checked';
   if (/\bwrangler pages deploy\b/.test(r)) return 'pages_deployed';
   if (/\bnode scripts\/smoke-staging\.mjs\b/.test(r)) return 'smoke_passed';
+  if (/^node scripts\/smoke-staging-auth\.mjs$/.test(r.trim())) return 'org_signin_smoked';
   return null;
 }
 const stepIn = (state) => STEPS.find((s) => stateOf(s) === state);
@@ -75,7 +76,7 @@ describe('deploy-staging: gate (§7.2)', () => {
 });
 
 describe('deploy-staging: steps in §15.1 order', () => {
-  it('checkout → setup → built → output_scanned → migrated → catalog_checked → workers_deployed → secrets_checked → pages_deployed → smoke_passed', () => {
+  it('checkout → setup → built → output_scanned → migrated → catalog_checked → workers_deployed → secrets_checked → pages_deployed → smoke_passed → org_signin_smoked (m0b AT-B9)', () => {
     expect(STEPS.map(stateOf)).toEqual([
       'checkout',
       'setup',
@@ -87,6 +88,7 @@ describe('deploy-staging: steps in §15.1 order', () => {
       'secrets_checked',
       'pages_deployed',
       'smoke_passed',
+      'org_signin_smoked',
     ]);
   });
 
@@ -116,6 +118,11 @@ describe('deploy-staging: step-scoped secrets (§7.2, §7.3)', () => {
     secrets_checked: ['CLOUDFLARE_API_TOKEN'],
     pages_deployed: ['CLOUDFLARE_API_TOKEN'],
     smoke_passed: [],
+    org_signin_smoked: [
+      'STAGING_SMOKE_EMAIL',
+      'STAGING_SMOKE_PASSWORD',
+      'STAGING_SMOKE_TOTP_SECRET',
+    ],
   };
 
   it('each step holds exactly the secrets it uses, and only in env:', () => {
@@ -165,7 +172,11 @@ describe('deploy-staging: commands', () => {
   it('builds the staging Worker bundles with no secret, before the scan (S3B-1)', () => {
     const built = stepIn('built');
     expect(secretRefs(built)).toEqual([]);
-    expect(built.env).toBeUndefined();
+    // m0b §2.7: only the two public build variables, from vars (check-workflows BUILD_ONLY_ENV).
+    expect(built.env).toEqual({
+      VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
+      VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+    });
     const r = run(built);
     expect(r.split('\n')[0]).toBe('set -euo pipefail');
     expect(r).toContain(`for dir in ${WORKER_DIRS}; do`);

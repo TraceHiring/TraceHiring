@@ -12,5 +12,7 @@ supabase/.temp/
 # Prose and imported design files are not reformatted (build-notes "Autopilot changes", 2026-10-11):
 # the plan, specs and ADRs are sources of truth, and a mechanical rewrite would bury their history.
 *.md
-docs/
+docs/*
+# Spikes are code, so they are formatted like scripts/ (specs/m0b-tenancy.md §8).
+!docs/spikes/
 specs/

@@ -12,10 +12,17 @@
 //   7. an error reporter or Sentry name in non-test source of apps/candidate/ or workers/edge/
 //      (spec §9.2: only the recruiter app, workers/jobs and services/api report errors; S3a review
 //      S3A-3, plan risk 9)
+//   8. a Worker's wrangler.jsonc (workers/*/, services/*/) whose top-level `observability` is not exactly
+//      WORKERS_OBSERVABILITY, or an env block that overrides it (specs/m0b-tenancy.md §1.1 item 9 (c):
+//      Workers Logs on, invocation logs and traces off, query strings redacted)
+//   9. supabase/config.toml Auth settings other than REQUIRED_AUTH_CONFIG, or a magic-link template
+//      without the {{ .Token }} code (specs/m0b-tenancy.md §4.1; checked only when config.toml exists)
+//  10. an @supabase/* import in apps/candidate/, workers/edge/ or packages/shared/ (specs/m0b-tenancy.md §4.3)
 // Prints only paths and rule names, never file contents.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 export const CREDENTIAL_NAMES = [
@@ -48,7 +55,8 @@ export const CREDENTIAL_SCOPES = ['apps/', 'packages/', 'workers/edge/'];
 
 /** Words a VITE_* name may not contain (rule 3); VITE_* values are public once bundled. */
 export const FORBIDDEN_VITE_WORDS = ['SECRET', 'TOKEN', 'PASSWORD', 'PRIVATE', 'JWT', 'DB', 'KEY'];
-export const ALLOWED_VITE_NAMES = ['VITE_SENTRY_DSN'];
+/** VITE_SUPABASE_PUBLISHABLE_KEY is the public `sb_publishable_…` key (specs/m0b-tenancy.md §2.7). */
+export const ALLOWED_VITE_NAMES = ['VITE_SENTRY_DSN', 'VITE_SUPABASE_PUBLISHABLE_KEY'];
 
 /** Schemas that must never be reachable through PostgREST (rule 4, spec §8.1). */
 export const PRIVATE_SCHEMAS = ['private', 'quality', 'integrity'];
@@ -165,6 +173,25 @@ export function checkSupabaseConfig({ configToml, migrationsDirExists }) {
       : [];
   }
   const out = [];
+  for (const { fullKey, value } of readTomlEntries(configToml)) {
+    const inApi = fullKey === 'api' || fullKey.startsWith('api.');
+    if (!inApi) continue;
+    const exposed = PRIVATE_SCHEMAS.filter((s) => new RegExp(`["']\\s*${s}\\s*["']`).test(value));
+    if (exposed.length > 0) {
+      out.push(
+        violation(4, where, `${fullKey} exposes ${exposed.join(', ')} through the API (spec §8.1)`),
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * Every `key = value` of a TOML text as `{ fullKey, value }` (table path + dotted key, raw value
+ * text with comments stripped; a multi-line array is joined onto one line).
+ */
+export function readTomlEntries(configToml) {
+  const entries = [];
   const lines = configToml.split(/\r?\n/).map(stripTomlComment);
   let table = '';
   for (let i = 0; i < lines.length; i++) {
@@ -196,12 +223,66 @@ export function checkSupabaseConfig({ configToml, migrationsDirExists }) {
         count(lines[i]);
       }
     }
-    const inApi = fullKey === 'api' || fullKey.startsWith('api.');
-    if (!inApi) continue;
-    const exposed = PRIVATE_SCHEMAS.filter((s) => new RegExp(`["']\\s*${s}\\s*["']`).test(value));
-    if (exposed.length > 0) {
+    entries.push({ fullKey, value: value.trim() });
+  }
+  return entries;
+}
+
+// ---------- rule 9 ----------
+/**
+ * Supabase Auth settings M0b requires (specs/m0b-tenancy.md §4.1), as raw TOML values. Staging
+ * mirrors them by hand (H8); this pins the local copy against drift.
+ */
+export const REQUIRED_AUTH_CONFIG = Object.freeze({
+  'auth.enable_signup': 'false',
+  'auth.enable_anonymous_sign_ins': 'false',
+  'auth.minimum_password_length': '12',
+  'auth.password_requirements': '"letters_digits"',
+  'auth.email.enable_signup': 'true', // the email provider switch on the CLI; sign-ups stay off via auth.enable_signup
+  'auth.email.otp_length': '6',
+  'auth.email.otp_expiry': '600',
+  'auth.email.template.magic_link.content_path': '"./supabase/templates/magic_link.html"',
+  'auth.mfa.totp.enroll_enabled': 'true',
+  'auth.mfa.totp.verify_enabled': 'true',
+});
+
+/** @param {{ configToml: string, magicLinkTemplate: string | null }} input */
+export function checkAuthConfig({ configToml, magicLinkTemplate }) {
+  const where = 'supabase/config.toml';
+  const values = new Map(readTomlEntries(configToml).map((e) => [e.fullKey, e.value]));
+  const out = [];
+  for (const [key, expected] of Object.entries(REQUIRED_AUTH_CONFIG)) {
+    if (values.get(key) !== expected) {
+      out.push(violation(9, where, `${key} must be ${expected} (specs/m0b-tenancy.md §4.1)`));
+    }
+  }
+  if (magicLinkTemplate == null || !/\{\{\s*\.Token\s*\}\}/.test(magicLinkTemplate)) {
+    out.push(
+      violation(
+        9,
+        'supabase/templates/magic_link.html',
+        'the sign-in email must carry the code {{ .Token }} (specs/m0b-tenancy.md §4.1)',
+      ),
+    );
+  }
+  return out;
+}
+
+// ---------- rule 10 ----------
+/** Where @supabase/* may never be imported: candidates never call Supabase (Q6), nor does edge or shared. */
+export const SUPABASE_JS_FORBIDDEN_SCOPES = [
+  'apps/candidate/',
+  'workers/edge/',
+  'packages/shared/',
+];
+
+export function checkSupabaseJsScope(files) {
+  const out = [];
+  for (const { path: p, content } of files) {
+    if (!inScope(p, SUPABASE_JS_FORBIDDEN_SCOPES) || isMarkdown(p)) continue;
+    if (content.includes('@supabase/')) {
       out.push(
-        violation(4, where, `${fullKey} exposes ${exposed.join(', ')} through the API (spec §8.1)`),
+        violation(10, p, 'imports @supabase/* outside apps/recruiter (specs/m0b-tenancy.md §4.3)'),
       );
     }
   }
@@ -277,6 +358,94 @@ export function checkNoErrorReporter(files) {
   return out;
 }
 
+// ---------- rule 8 ----------
+/**
+ * Workers Logs settings every Worker must deploy with (specs/m0b-tenancy.md §1.1 item 9 (c), DC-7:
+ * keys checked against wrangler 4.149.0's config-schema.json). Only the redacting logger's lines
+ * are stored: no invocation logs (request URL, headers, client IP), no traces.
+ */
+export const WORKERS_OBSERVABILITY = Object.freeze({
+  enabled: true,
+  head_sampling_rate: 1,
+  redact_query_string: true,
+  logs: Object.freeze({ invocation_logs: false }),
+  traces: Object.freeze({ enabled: false }),
+});
+const WORKER_WRANGLER = /^(?:workers|services)\/[^/]+\/wrangler\.jsonc$/;
+
+/**
+ * Parses JSONC as wrangler reads it: line and block comments and trailing commas are allowed.
+ * Comment markers inside strings are kept. Throws on anything JSON.parse rejects afterwards.
+ * @param {string} text
+ */
+export function parseJsonc(text) {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+    } else if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end === -1) throw new Error('unterminated block comment');
+      i = end + 2;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  // Trailing commas: a comma followed only by whitespace before } or ] (strings are intact here, so
+  // drop them outside strings only).
+  let clean = '';
+  for (let k = 0; k < out.length; k++) {
+    const c = out[k];
+    if (c === '"') {
+      let j = k + 1;
+      while (j < out.length && out[j] !== '"') j += out[j] === '\\' ? 2 : 1;
+      clean += out.slice(k, j + 1);
+      k = j;
+    } else if (c === ',' && /^\s*[}\]]/.test(out.slice(k + 1))) {
+      continue;
+    } else {
+      clean += c;
+    }
+  }
+  return JSON.parse(clean);
+}
+
+/** @param {{path: string, content: string}[]} files repo-relative POSIX paths */
+export function checkWorkersObservability(files) {
+  const out = [];
+  for (const { path: p, content } of files) {
+    if (!WORKER_WRANGLER.test(p)) continue;
+    let config;
+    try {
+      config = parseJsonc(content);
+    } catch {
+      out.push(
+        violation(8, p, 'cannot be parsed as JSONC, so its Workers Logs settings are unknown'),
+      );
+      continue;
+    }
+    const problems = [];
+    if (!isDeepStrictEqual(config?.observability, WORKERS_OBSERVABILITY)) {
+      problems.push('observability is not exactly the M0b Workers Logs block (spec §1.1 9c)');
+    }
+    for (const [name, env] of Object.entries(config?.env ?? {})) {
+      if (env !== null && typeof env === 'object' && 'observability' in env) {
+        problems.push(`env.${name} overrides observability`);
+      }
+    }
+    if (problems.length > 0) out.push(violation(8, p, problems.join('; ')));
+  }
+  return out;
+}
+
 // ---------- repo walk ----------
 function gitOut(root, args) {
   const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
@@ -323,6 +492,14 @@ export function runChecks(root) {
     ...checkCrlf(gitOut(root, ['ls-files', '--eol', '-z'])),
     ...checkEslintDisables(files),
     ...checkNoErrorReporter(files),
+    ...checkWorkersObservability(files),
+    ...(existsSync(configPath)
+      ? checkAuthConfig({
+          configToml: readFileSync(configPath, 'utf8'),
+          magicLinkTemplate: readText(path.join(root, 'supabase', 'templates', 'magic_link.html')),
+        })
+      : []),
+    ...checkSupabaseJsScope(files),
   ];
 }
 

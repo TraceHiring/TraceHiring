@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./log": "./src/log/index.ts",
     "./health": "./src/health.ts",
-    "./contracts": "./src/contracts.ts"
+    "./contracts": "./src/contracts.ts",
+    "./contracts/tenancy": "./src/contracts-tenancy.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",

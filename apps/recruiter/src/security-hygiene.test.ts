@@ -1,9 +1,9 @@
 // Browser-security hygiene for the recruiter app (spec m0-foundations §10.3, AT-22-local).
 // The CSP is `script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'`, so the app
 // may have no inline script or style, no `style=` attribute, no eval, and no external font or
-// stylesheet. These tests read the app's own files (public/_headers, index.html, src/) as text.
+// stylesheet. These tests read the app's own files (_headers.template, index.html, src/) as text.
 // The exact header values stay with `scripts/check-headers.mjs`, which checks the built dist/.
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -38,8 +38,10 @@ const rulesOf = (text: string): string[] =>
     .filter((line) => line.trim() !== '' && !line.trim().startsWith('#') && !/^\s/.test(line))
     .map((line) => line.trim());
 
-describe(`${APP} public/_headers`, () => {
-  const text = read('public', '_headers');
+// dist/_headers is written from _headers.template by the headers-template Vite plugin, which puts the
+// Supabase origin of VITE_SUPABASE_URL in place of the token (specs/m0b-tenancy.md §2.7).
+describe(`${APP} _headers.template`, () => {
+  const text = read('_headers.template');
   const csp = /^\s+Content-Security-Policy:\s*(.+)$/im.exec(text)?.[1] ?? '';
   const directives = new Map(
     csp
@@ -67,9 +69,14 @@ describe(`${APP} public/_headers`, () => {
       }
   });
 
-  it("limits connect-src to 'self' until the Supabase origin is added (M0b)", () => {
-    expect(directives.get('connect-src')).toEqual(["'self'"]);
-    expect(text).toContain('TODO(M0b)');
+  it("limits connect-src to 'self' plus the one Supabase origin token (M0b)", () => {
+    expect(directives.get('connect-src')).toEqual(["'self'", '__SUPABASE_ORIGIN__']);
+    expect(text.split('__SUPABASE_ORIGIN__')).toHaveLength(2);
+  });
+
+  it('is the only headers source: public/_headers would be copied over the generated file', () => {
+    expect(existsSync(path.join(appDir, 'public', '_headers'))).toBe(false);
+    expect(existsSync(path.join(appDir, 'public', '_headers.template'))).toBe(false);
   });
 });
 

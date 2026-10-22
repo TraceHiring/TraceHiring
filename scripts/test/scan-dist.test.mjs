@@ -497,6 +497,24 @@ describe('scanDist (real gitleaks)', () => {
     expect(r.problems.join('\n')).not.toContain(key);
   });
 
+  // M0b §2.7: the recruiter build carries the public sb_publishable_ key, which must pass, while an sb_secret_
+  // key in the same place fails.
+  it('passes a recruiter bundle with an sb_publishable_ key and fails the same bundle with sb_secret_', () => {
+    const tail = [...randomBytes(40)].map((b) => ALNUM[b % ALNUM.length]).join('');
+    const bundle = (key) =>
+      `const c = createClient("https://abcdefghijklmnopqrst.supabase.co", "${key}");\n`;
+    const publishable = repoWithConfig({
+      'apps/recruiter/dist/assets/index.js': bundle(['sb', 'publishable', tail].join('_')),
+    });
+    expect(scanDist({ root: publishable }).problems).toEqual([]);
+    const secret = repoWithConfig({
+      'apps/recruiter/dist/assets/index.js': bundle(['sb', 'secret', tail].join('_')),
+    });
+    const r = scanDist({ root: secret });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join('\n')).toMatch(/apps\/recruiter\/dist: gitleaks found a secret/);
+  });
+
   // S1.4 N10-N13 security re-review: gitleaks' default global allowlist regex `(?i)^true|false|null$`
   // hid any secret that starts with "true", contains "false" or ends in "null". The repository config
   // and the fallback config extend a vendored default in which it is anchored.

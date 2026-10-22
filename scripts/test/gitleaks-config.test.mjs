@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   REPO_ROOT,
   extendPath,
+  genericApiKeyStopwords,
   randomAlnum,
   tokenWith,
   upstreamAllowlistVictims,
@@ -114,5 +115,25 @@ describe('real gitleaks with the repository config (run at the repository root)'
     expect(r.out).not.toMatch(/Failed to load config/);
     expect(r.out).toMatch(/leaks found: 1/);
     expect(r.status).toBe(1);
+  });
+});
+
+describe('upstreamAllowlistVictims (test-data hygiene)', () => {
+  // generic-api-key drops a match whose secret contains one of its stopwords (case-insensitive), so a
+  // random value that happens to contain "ajax", "akka", "amqp"... made the scan-dist case flaky.
+  it('reads the generic-api-key stopwords from the vendored config', () => {
+    const words = genericApiKeyStopwords();
+    expect(words.length).toBeGreaterThan(1000);
+    expect(words).toEqual(expect.arrayContaining(['ajax', 'akka', 'amqp']));
+  });
+
+  it('never builds an api_key victim that contains a stopword', () => {
+    const words = genericApiKeyStopwords();
+    for (let i = 0; i < 500; i += 1) {
+      const v = upstreamAllowlistVictims().find((x) => x.label.startsWith('an api_key value'));
+      const lower = v.secret.toLowerCase();
+      expect(words.find((w) => lower.includes(w))).toBeUndefined();
+      expect(v.secret.startsWith('true')).toBe(true);
+    }
   });
 });

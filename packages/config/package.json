@@ -7,7 +7,8 @@
     "./tsconfig.base.json": "./tsconfig.base.json",
     "./eslint": "./eslint/index.js",
     "./vitest": "./vitest/index.js",
-    "./vite": "./vite/forbid-server-imports.js"
+    "./vite": "./vite/forbid-server-imports.js",
+    "./vite/headers": "./vite/headers-template.js"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",

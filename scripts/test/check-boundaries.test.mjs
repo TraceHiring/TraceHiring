@@ -1,10 +1,14 @@
 // AT-14 (script part): scripts/check-boundaries.mjs over fixture trees (spec §10.2).
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CREDENTIAL_NAMES,
   CREDENTIAL_PATTERN_EXEMPTIONS,
+  REQUIRED_AUTH_CONFIG,
+  SUPABASE_JS_FORBIDDEN_SCOPES,
+  checkAuthConfig,
+  checkSupabaseJsScope,
   checkCredentialNames,
   checkCrlf,
   checkEslintDisables,
@@ -13,6 +17,9 @@ import {
   checkSupabaseConfig,
   checkTrackedEnvFiles,
   checkViteNames,
+  checkWorkersObservability,
+  parseJsonc,
+  WORKERS_OBSERVABILITY,
   runChecks,
 } from '../check-boundaries.mjs';
 import {
@@ -194,6 +201,94 @@ describe('rule 3: forbidden VITE_* names', () => {
     const v = checkViteNames([f('packages/ui/src/a.ts', 'import.meta.env.VITE_API_KEY')]);
     expect(v).toHaveLength(1);
   });
+
+  it('allows exactly VITE_SUPABASE_PUBLISHABLE_KEY and no other KEY name (M0b §2.7)', () => {
+    expect(
+      checkViteNames([
+        f('apps/recruiter/src/a.ts', 'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY'),
+      ]),
+    ).toEqual([]);
+    for (const name of [
+      'VITE_SUPABASE_ANON_KEY',
+      'VITE_SUPABASE_SECRET_KEY',
+      'VITE_SUPABASE_PUBLISHABLE_KEY_2',
+      'VITE_SUPABASE_SERVICE_ROLE_KEY',
+      'VITE_PUBLISHABLE_KEY',
+    ]) {
+      const v = checkViteNames([f('apps/recruiter/src/a.ts', `import.meta.env.${name}`)]);
+      expect(v, name).toHaveLength(1);
+    }
+  });
+});
+
+describe('rule 9: Supabase Auth settings in supabase/config.toml (M0b §4.1)', () => {
+  const realConfig = readFileSync(
+    path.join(import.meta.dirname, '..', '..', 'supabase', 'config.toml'),
+    'utf8',
+  );
+  const realTemplate = readFileSync(
+    path.join(import.meta.dirname, '..', '..', 'supabase', 'templates', 'magic_link.html'),
+    'utf8',
+  );
+
+  it('passes the committed config and template', () => {
+    expect(checkAuthConfig({ configToml: realConfig, magicLinkTemplate: realTemplate })).toEqual(
+      [],
+    );
+  });
+
+  it.each(Object.keys(REQUIRED_AUTH_CONFIG))('fails when %s drifts', (key) => {
+    const [table, name] = [key.slice(0, key.lastIndexOf('.')), key.slice(key.lastIndexOf('.') + 1)];
+    const toml = `[${table}]\n${name} = "drifted"\n`;
+    const v = checkAuthConfig({ configToml: toml, magicLinkTemplate: realTemplate });
+    expect(v.map((x) => x.message).join('\n')).toContain(key);
+    expect(v.every((x) => x.rule === 9)).toBe(true);
+  });
+
+  it('keeps the email provider on and turns sign-ups off globally (AT-B8 finding)', () => {
+    // On the CLI, [auth.email] enable_signup is the email provider switch: false made GoTrue
+    // answer every email sign-in with 422 email_provider_disabled. [auth] enable_signup = false
+    // is what disables sign-ups.
+    expect(REQUIRED_AUTH_CONFIG['auth.email.enable_signup']).toBe('true');
+    expect(REQUIRED_AUTH_CONFIG['auth.enable_signup']).toBe('false');
+  });
+
+  it('fails when a required key is missing', () => {
+    const v = checkAuthConfig({ configToml: '[auth]\n', magicLinkTemplate: realTemplate });
+    expect(v.length).toBe(Object.keys(REQUIRED_AUTH_CONFIG).length);
+  });
+
+  it('fails when the magic-link template carries no {{ .Token }} code, or is missing', () => {
+    const noCode = checkAuthConfig({
+      configToml: realConfig,
+      magicLinkTemplate: '<a href="{{ .ConfirmationURL }}">Sign in</a>',
+    });
+    expect(noCode.map((x) => x.rule)).toEqual([9]);
+    const missing = checkAuthConfig({ configToml: realConfig, magicLinkTemplate: null });
+    expect(missing.map((x) => x.rule)).toEqual([9]);
+  });
+});
+
+describe('rule 10: supabase-js only in the recruiter app (M0b §4.3)', () => {
+  it.each(SUPABASE_JS_FORBIDDEN_SCOPES)('flags an import under %s', (scope) => {
+    const v = checkSupabaseJsScope([
+      f(`${scope}src/a.ts`, "import { createClient } from '@supabase/supabase-js';"),
+    ]);
+    expect(v).toHaveLength(1);
+    expect(v[0].rule).toBe(10);
+  });
+
+  it('allows the recruiter app and ignores markdown', () => {
+    expect(
+      checkSupabaseJsScope([
+        f(
+          'apps/recruiter/src/supabase.ts',
+          "import { createClient } from '@supabase/supabase-js';",
+        ),
+        f('packages/shared/README.md', '@supabase/supabase-js is used by the recruiter app'),
+      ]),
+    ).toEqual([]);
+  });
 });
 
 describe('rule 4: supabase/config.toml exposure', () => {
@@ -346,11 +441,116 @@ describe('rule 7: no error reporter or Sentry in the candidate app or the edge W
   });
 });
 
+/** The observability block of specs/m0b-tenancy.md §1.1 item 9 (c), as wrangler.jsonc text. */
+const OBS_JSONC = `"observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "redact_query_string": true,
+    "logs": { "invocation_logs": false },
+    "traces": { "enabled": false },
+  },`;
+
+const wrangler = (observability = OBS_JSONC, env = '') => `// A Worker config.
+{
+  "name": "trace-x", // trailing comment
+  "main": "src/index.ts",
+  /* block
+     comment */
+  ${observability}
+  "vars": { "VERSION": "dev", "URL": "https://example.test/a//b" },
+  "env": { ${env} },
+}
+`;
+
+describe('rule 8: Workers Logs settings in every Worker wrangler.jsonc (M0b §1.1 9c)', () => {
+  const at = (p, content) => checkWorkersObservability([f(p, content)]);
+
+  it('pins exactly the spec values', () => {
+    expect(WORKERS_OBSERVABILITY).toEqual({
+      enabled: true,
+      head_sampling_rate: 1,
+      redact_query_string: true,
+      logs: { invocation_logs: false },
+      traces: { enabled: false },
+    });
+  });
+
+  it.each([
+    'workers/edge/wrangler.jsonc',
+    'workers/jobs/wrangler.jsonc',
+    'services/api/wrangler.jsonc',
+  ])('passes %s with the exact block (comments and trailing commas allowed)', (p) => {
+    expect(at(p, wrangler())).toEqual([]);
+  });
+
+  it('ignores files that are not a Worker wrangler.jsonc', () => {
+    expect(at('workers/edge/src/app.ts', 'observability = false')).toEqual([]);
+    expect(at('apps/recruiter/wrangler.jsonc', '{}')).toEqual([]);
+  });
+
+  it.each([
+    ['missing', ''],
+    ['off', '"observability": { "enabled": false },'],
+    [
+      'invocation logs on',
+      OBS_JSONC.replace('"invocation_logs": false', '"invocation_logs": true'),
+    ],
+    ['invocation logs unset', OBS_JSONC.replace('{ "invocation_logs": false }', '{}')],
+    [
+      'traces on',
+      OBS_JSONC.replace('"traces": { "enabled": false }', '"traces": { "enabled": true }'),
+    ],
+    ['traces unset', OBS_JSONC.replace('"traces": { "enabled": false },', '')],
+    [
+      'query strings kept',
+      OBS_JSONC.replace('"redact_query_string": true', '"redact_query_string": false'),
+    ],
+    ['sampled', OBS_JSONC.replace('"head_sampling_rate": 1', '"head_sampling_rate": 0.5')],
+    ['an extra key', OBS_JSONC.replace('"logs": {', '"logs": { "destinations": ["x"],')],
+  ])('fails when observability is %s', (_label, block) => {
+    const v = at('workers/edge/wrangler.jsonc', wrangler(block));
+    expect(v).toHaveLength(1);
+    expect(v[0].rule).toBe(8);
+    expect(v[0].path).toBe('workers/edge/wrangler.jsonc');
+  });
+
+  it('fails when an env block overrides observability', () => {
+    const env = '"staging": { "observability": { "enabled": false } },';
+    const v = at('workers/jobs/wrangler.jsonc', wrangler(OBS_JSONC, env));
+    expect(v).toHaveLength(1);
+    expect(v[0].message).toMatch(/env\.staging/);
+  });
+
+  it('fails closed on a file it cannot parse', () => {
+    const v = at('services/api/wrangler.jsonc', '{ "observability": ');
+    expect(v).toHaveLength(1);
+    expect(v[0].rule).toBe(8);
+  });
+});
+
+describe('parseJsonc', () => {
+  it('keeps // and /* inside strings and drops real comments and trailing commas', () => {
+    expect(parseJsonc('{ "a": "x//y", "b": "/*z*/", /* c */ "c": [1, 2,], // d\n }')).toEqual({
+      a: 'x//y',
+      b: '/*z*/',
+      c: [1, 2],
+    });
+  });
+
+  it('handles escaped quotes in strings', () => {
+    expect(parseJsonc('{ "a": "q\\"//still string" }')).toEqual({ a: 'q"//still string' });
+  });
+
+  it('throws on invalid input', () => {
+    expect(() => parseJsonc('{ "a": }')).toThrow();
+  });
+});
+
 describe('runChecks over a fixture repository', () => {
   const cleanTree = {
     'env.example': 'SUPABASE_SERVICE_ROLE_KEY=\n',
     'apps/candidate/src/main.tsx': 'export const name = "Trace";\n',
-    'workers/edge/wrangler.jsonc': '{ "name": "trace-edge" }\n',
+    'workers/edge/wrangler.jsonc': wrangler(),
     'workers/jobs/src/index.ts': '// server worker\n',
     'docs/plan.md': 'service_role is server-only\n',
   };
@@ -372,6 +572,7 @@ describe('runChecks over a fixture repository', () => {
       'supabase/migrations/.keep': '',
       'apps/recruiter/src/crlf.ts': 'const a = 1;\r\nconst b = 2;\r\n',
       'services/api/src/c.ts': '/* eslint-disable */\n',
+      'workers/jobs/wrangler.jsonc': '{ "observability": { "enabled": false } }\n',
     });
     commitAll(repo);
     // Untracked (but not ignored) files are checked too, so a new file can't slip through before `git add`.
@@ -386,6 +587,7 @@ describe('runChecks over a fixture repository', () => {
         '4:supabase/config.toml',
         '5:apps/recruiter/src/crlf.ts',
         '6:services/api/src/c.ts',
+        '8:workers/jobs/wrangler.jsonc',
       ].sort(),
     );
   });

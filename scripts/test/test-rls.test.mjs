@@ -21,6 +21,8 @@ import { FLOOR_FILES } from '../gen-catalog-tests.mjs';
 import {
   DB_TYPES_FILE,
   DOCKER_MESSAGE,
+  AUTH_TEST_ARGS,
+  CONCURRENCY_TEST_ARGS,
   EXCLUDED_SERVICES,
   FLOORS,
   GEN_TYPES_ARGS,
@@ -221,7 +223,15 @@ describe('§8.3 step 2: the shared lock', () => {
     expect(h.clock.elapsed()).toBeLessThan(LOCK_TIMEOUT_MS);
     expect(h.out.all()).toMatch(/PID 777/);
     expect(h.out.all()).toContain('/work/other worktree');
-    expect(h.stub.keys()).toEqual(['docker', 'start', 'reset', 'test', 'gen']);
+    expect(h.stub.keys()).toEqual([
+      'docker',
+      'start',
+      'reset',
+      'test',
+      'auth',
+      'concurrency',
+      'gen',
+    ]);
     expect(existsSync(h.lockFile)).toBe(false);
   });
 
@@ -480,15 +490,85 @@ describe('§8.3 step 2: the shared lock', () => {
   });
 });
 
+describe('m0b AT-B8: the local org sign-in test runs after pgTAP', () => {
+  it('runs node scripts/test-auth-local.mjs from the root after the tests and before gen types', async () => {
+    const h = harness();
+    expect(await h.go()).toBe(0);
+    const auth = h.stub.calls.find((c) => c.key === 'auth');
+    expect(auth.line).toBe(`node ${AUTH_TEST_ARGS.join(' ')}`);
+    expect(AUTH_TEST_ARGS).toEqual(['scripts/test-auth-local.mjs']);
+    expect(auth.opts.cwd).toBe(h.root);
+  });
+
+  it('fails the run when the auth test fails, printing only its own stdout lines', async () => {
+    const h = harness({
+      responses: {
+        auth: {
+          status: 1,
+          stdout: 'test-auth-local: password sign-in failed (HTTP 400)\n',
+          stderr: 'postgresql://u:p@h/db',
+        },
+      },
+    });
+    expect(await h.go()).toBe(1);
+    expect(h.out.all()).toMatch(/test-auth-local: password sign-in failed \(HTTP 400\)/);
+    expect(h.out.all()).toMatch(/AT-B8/);
+    expect(h.out.all()).not.toContain('postgresql://');
+    expect(h.stub.keys()).toContain('gen');
+  });
+});
+
+describe('m0b M0B-DB-5: the two-connection owner-demotion test runs after AT-B8', () => {
+  it('runs node scripts/test-concurrency-local.mjs from the root after the auth test and before gen types', async () => {
+    const h = harness();
+    expect(await h.go()).toBe(0);
+    const conc = h.stub.calls.find((c) => c.key === 'concurrency');
+    expect(conc.line).toBe(`node ${CONCURRENCY_TEST_ARGS.join(' ')}`);
+    expect(CONCURRENCY_TEST_ARGS).toEqual(['scripts/test-concurrency-local.mjs']);
+    expect(conc.opts.cwd).toBe(h.root);
+  });
+
+  it('fails the run when the concurrency test fails, printing only its own stdout lines', async () => {
+    const h = harness({
+      responses: {
+        concurrency: {
+          status: 1,
+          stdout:
+            'test-concurrency-local: repeatable read: FAILED: the second demotion was not refused\nnoise\n',
+          stderr: fakeDbUrl(),
+        },
+      },
+    });
+    expect(await h.go()).toBe(1);
+    expect(h.out.all()).toMatch(/test-concurrency-local: repeatable read: FAILED/);
+    expect(h.out.all()).toMatch(/M0B-DB-5/);
+    expect(h.out.all()).not.toContain('noise');
+    expect(h.out.all()).not.toContain('postgresql://');
+    expect(h.stub.keys()).toContain('gen');
+  });
+});
+
 describe('§8.3 steps 3–4: start and reset', () => {
   it('starts the stack without the services M0a does not need (auth stays on), then resets it', async () => {
     const h = harness();
     expect(await h.go()).toBe(0);
-    expect(h.stub.keys()).toEqual(['docker', 'start', 'reset', 'test', 'gen']);
+    expect(h.stub.keys()).toEqual([
+      'docker',
+      'start',
+      'reset',
+      'test',
+      'auth',
+      'concurrency',
+      'gen',
+    ]);
     const [, start, reset] = h.stub.calls;
     expect(start.line).toBe(`pnpm ${START_ARGS.join(' ')}`);
     expect(START_ARGS).toEqual(['exec', 'supabase', 'start', '-x', EXCLUDED_SERVICES.join(',')]);
     expect(EXCLUDED_SERVICES).not.toContain('gotrue');
+    // m0b AT-B8 [S3]: the org sign-in test needs the API gateway, PostgREST and the mail catcher.
+    for (const kept of ['kong', 'postgrest', 'mailpit'])
+      expect(EXCLUDED_SERVICES).not.toContain(kept);
+    expect(EXCLUDED_SERVICES.length).toBe(SUPABASE_CONTAINERS.length - 4);
     for (const name of EXCLUDED_SERVICES) expect(SUPABASE_CONTAINERS).toContain(name);
     expect(new Set(EXCLUDED_SERVICES).size).toBe(EXCLUDED_SERVICES.length);
     expect(reset.line).toBe(`pnpm ${RESET_ARGS.join(' ')}`);
@@ -790,7 +870,7 @@ describe('§8.3 step 6: db-types drift', () => {
       '--schema',
       'public',
     ]);
-    expect(h.stub.calls[4].line).toBe(`pnpm ${GEN_TYPES_ARGS.join(' ')}`);
+    expect(h.stub.calls[6].line).toBe(`pnpm ${GEN_TYPES_ARGS.join(' ')}`);
     expect(DB_TYPES_FILE).toBe('packages/db-types/src/database.ts');
   });
 
@@ -857,7 +937,15 @@ describe('§8.3 step 6: db-types drift', () => {
     const root = fakeRepo({ dbTypes: 'stale\n' });
     const h = harness({ root, responses: { test: { status: 1, stdout: '' } } });
     expect(await h.go()).toBe(1);
-    expect(h.stub.keys()).toEqual(['docker', 'start', 'reset', 'test', 'gen']);
+    expect(h.stub.keys()).toEqual([
+      'docker',
+      'start',
+      'reset',
+      'test',
+      'auth',
+      'concurrency',
+      'gen',
+    ]);
     expect(h.out.all()).toMatch(/supabase test db exited 1/);
     expect(h.out.all()).toMatch(/database\.ts: differs/);
   });
@@ -876,8 +964,17 @@ describe('--stop (CI)', () => {
       },
     });
     expect(await h.go()).toBe(0);
-    expect(h.stub.keys()).toEqual(['docker', 'start', 'reset', 'test', 'gen', 'stop']);
-    expect(h.stub.calls[5].line).toBe(`pnpm ${STOP_ARGS.join(' ')}`);
+    expect(h.stub.keys()).toEqual([
+      'docker',
+      'start',
+      'reset',
+      'test',
+      'auth',
+      'concurrency',
+      'gen',
+      'stop',
+    ]);
+    expect(h.stub.calls[7].line).toBe(`pnpm ${STOP_ARGS.join(' ')}`);
     expect(heldDuringStop).toBe(true);
     expect(existsSync(h.lockFile)).toBe(false);
   });

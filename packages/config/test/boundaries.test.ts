@@ -28,6 +28,15 @@ const allowed: Case[] = [
   ['services/api/src/index.ts', '@trace/shared'],
   ['services/api/src/index.ts', '@trace/vendors'],
   ['services/api/src/index.ts', '@trace/db-types'],
+  // edge, jobs, api → workers-http; workers-http → shared (specs/m0b-tenancy.md §1.1 item 9b)
+  ['workers/edge/src/app.ts', '@trace/workers-http'],
+  ['workers/jobs/src/app.ts', '@trace/workers-http'],
+  ['services/api/src/app.ts', '@trace/workers-http'],
+  ['packages/workers-http/src/index.ts', '@trace/shared'],
+  ['packages/workers-http/src/index.ts', '@trace/shared/log'],
+  ['packages/workers-http/src/index.ts', 'hono'],
+  ['packages/workers-http/src/index.ts', './errors'],
+  ['packages/workers-http/vitest.config.ts', '@trace/config/vitest'],
   // ui → shared; vendors → shared
   ['packages/ui/src/index.ts', '@trace/shared'],
   ['packages/vendors/src/index.ts', '@trace/shared'],
@@ -94,6 +103,20 @@ const denied: Case[] = [
   ['packages/shared/src/index.ts', '@trace/db-types'],
   ['packages/shared/src/index.ts', '../../ui/src/index'],
   ['packages/db-types/src/index.ts', '@trace/shared'],
+  // workers-http is for Workers only: apps and packages may not import it, and it imports only shared
+  ['apps/recruiter/src/main.tsx', '@trace/workers-http'],
+  ['apps/candidate/src/main.tsx', '@trace/workers-http'],
+  ['packages/shared/src/index.ts', '@trace/workers-http'],
+  ['packages/ui/src/index.ts', '@trace/workers-http'],
+  ['packages/vendors/src/index.ts', '@trace/workers-http'],
+  ['packages/db-types/src/index.ts', '@trace/workers-http'],
+  ['packages/workers-http/src/index.ts', '@trace/vendors'],
+  ['packages/workers-http/src/index.ts', '@trace/db-types'],
+  ['packages/workers-http/src/index.ts', '@trace/ui'],
+  ['packages/workers-http/src/index.ts', '@trace/edge'],
+  ['packages/workers-http/src/index.ts', '@trace/api'],
+  ['packages/workers-http/src/index.ts', '../../../workers/edge/src/app'],
+  ['packages/workers-http/src/index.ts', '@trace/config/vitest'],
   // config imports no other workspace
   ['packages/config/eslint/index.js', '@trace/shared'],
   // only tooling files may import config

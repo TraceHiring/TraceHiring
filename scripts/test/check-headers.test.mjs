@@ -180,6 +180,12 @@ describe('checkCsp', () => {
     );
   });
 
+  it('fails when connect-src names two origins for one allow-list entry (m0b AT-B12)', () => {
+    const two = 'https://abcdefghijklmnopqrst.supabase.co https://bcdefghijklmnopqrstu.supabase.co';
+    const csp = base.replace("connect-src 'self'", `connect-src 'self' ${two}`);
+    expect(joined(checkCsp('recruiter', csp))).toMatch(/at most one connect-src origin/);
+  });
+
   it("fails when connect-src drops 'self'", () => {
     expect(
       joined(checkCsp('recruiter', base.replace("connect-src 'self'", 'connect-src'))),

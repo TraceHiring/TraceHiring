@@ -539,11 +539,29 @@ export const ALLOWED_TRIGGERS = ['pull_request', 'push'];
 export const FULL_HISTORY_JOBS = ['static', 'security', 'migrations'];
 export const MIGRATIONS_BASE = 'origin/main';
 
+/** The org sign-in smoke step's entire run text (m0b AT-B9). */
+const SMOKE_AUTH_RUN = /^\s*node scripts\/smoke-staging-auth\.mjs\s*$/;
+
 /** §7.3 staging secrets and the commands a step must run to be allowed to hold each one (§7.2). */
 export const STAGING_SECRET_USERS = {
   SUPABASE_STAGING_DB_URL: [/\bsupabase\s+db\s+push\b/, /\bpsql\b/],
   CLOUDFLARE_API_TOKEN: [/\bwrangler\b/, /\bcheck-staging-secrets\b/],
+  // specs/m0b-tenancy.md AT-B9, AT-B10 [R5]: the org sign-in smoke step only, whose whole run text
+  // is that one command (no other line, comment or argument can read the secrets; B4-SEC-2).
+  STAGING_SMOKE_EMAIL: [SMOKE_AUTH_RUN],
+  STAGING_SMOKE_PASSWORD: [SMOKE_AUTH_RUN],
+  STAGING_SMOKE_TOTP_SECRET: [SMOKE_AUTH_RUN],
 };
+
+/**
+ * Build variables the recruiter bundle reads (specs/m0b-tenancy.md §2.7): set only on the
+ * deploy-staging build step, and only from these public staging variables (never a secret), so
+ * every other build (local, CI static) has none and the app shows "not configured".
+ */
+export const BUILD_ONLY_ENV = Object.freeze({
+  VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
+  VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+});
 
 const INSTALL_RE = /\b(?:pnpm|npm|yarn)\s+(?:install|i|ci|add)\b/;
 const BUILD_RE = /\bpnpm\s+(?:(?:-r|--recursive|--filter\s+\S+)\s+)*(?:run\s+)?build\b/;
@@ -693,6 +711,16 @@ export const ENV_ALLOW_LIST = Object.freeze([
   // specs/m0-foundations.md §7.3 variables row, line 432 (a public staging variable; used by the
   // wrangler steps 5-7 per docs/infra/environments.md).
   'CLOUDFLARE_ACCOUNT_ID',
+  // specs/m0b-tenancy.md §2.7: the deploy-staging build step only (BUILD_ONLY_ENV).
+  'VITE_SUPABASE_URL',
+  'VITE_SUPABASE_PUBLISHABLE_KEY',
+  // specs/m0b-tenancy.md AT-B9 [R5]: the org sign-in smoke step (public variables, then the three
+  // smoke secrets bound by STAGING_SECRET_USERS).
+  'SUPABASE_STAGING_URL',
+  'SUPABASE_STAGING_PUBLISHABLE_KEY',
+  'STAGING_SMOKE_EMAIL',
+  'STAGING_SMOKE_PASSWORD',
+  'STAGING_SMOKE_TOTP_SECRET',
 ]);
 export const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 const ENV_ALLOWED = new Set(ENV_ALLOW_LIST);
@@ -728,6 +756,12 @@ const ENV_DENY_REASONS = [
   ],
   [/^path$/i, /^PATH$/, 'it decides which program every command runs'],
   [/^(?:actions|github|runner)_/i, /^(?:ACTIONS|GITHUB|RUNNER)_/, 'the runner reads it'],
+  // m0b §2.7, B4-SEC-2: BUILD_ONLY_ENV values come only from env: on the deploy build step.
+  [
+    /^vite_supabase_/i,
+    /^VITE_SUPABASE_/,
+    'it is set only through env: on the deploy build step (m0b §2.7)',
+  ],
 ];
 
 /** null when an env: key may be set, else the reason it may not. */
@@ -1191,7 +1225,45 @@ export function checkWorkflow(doc, file, ctx = {}) {
       );
     }
   }
+  checkBuildOnlyEnv(doc, file, out);
   return out;
+}
+
+/**
+ * BUILD_ONLY_ENV names (specs/m0b-tenancy.md §2.7): set only in the env: of a deploy-staging step
+ * that builds, and only to their listed public variables. Anywhere else (workflow or job env, any
+ * other step) they would put staging values into a build that is not the staging one.
+ */
+function checkBuildOnlyEnv(doc, file, out) {
+  const names = Object.keys(BUILD_ONLY_ENV);
+  const misplaced = (env, where) => {
+    if (!isObj(env)) return;
+    for (const n of names) {
+      if (Object.hasOwn(env, n))
+        out.push(v(file, where, `${n} may be set only on the ${DEPLOY_JOB} build step (§2.7)`));
+    }
+  };
+  misplaced(doc.env, 'env');
+  for (const [name, job] of Object.entries(isObj(doc.jobs) ? doc.jobs : {})) {
+    if (!isObj(job)) continue;
+    const where = `jobs.${name}`;
+    misplaced(job.env, where);
+    (Array.isArray(job.steps) ? job.steps : []).forEach((step, i) => {
+      if (!isObj(step) || !isObj(step.env)) return;
+      const sw = `${where}.steps[${i}]`;
+      const run = typeof step.run === 'string' ? step.run : '';
+      if (name !== DEPLOY_JOB || !BUILD_RE.test(run)) {
+        misplaced(step.env, sw);
+        return;
+      }
+      for (const n of names) {
+        if (Object.hasOwn(step.env, n) && normExpr(step.env[n]) !== normExpr(BUILD_ONLY_ENV[n]))
+          out.push(
+            v(file, sw, `${n} must be exactly ${BUILD_ONLY_ENV[n]} (a public variable, §2.7)`),
+          );
+      }
+    });
+  }
 }
 
 /** Checks a local action's action.yml. Only composite actions are allowed. */
@@ -1204,7 +1276,20 @@ export function checkAction(doc, file, ctx = {}) {
   checkKeyCase(doc, file, '', out);
   checkKeyCase(doc.runs, file, 'runs', out);
   const steps = Array.isArray(doc.runs.steps) ? doc.runs.steps : [];
-  steps.forEach((s, i) => checkStepCommon(s, file, `runs.steps[${i}]`, out, ctx));
+  steps.forEach((s, i) => {
+    checkStepCommon(s, file, `runs.steps[${i}]`, out, ctx);
+    if (!isObj(s) || !isObj(s.env)) return;
+    for (const n of Object.keys(BUILD_ONLY_ENV)) {
+      if (Object.hasOwn(s.env, n))
+        out.push(
+          v(
+            file,
+            `runs.steps[${i}]`,
+            `${n} may be set only on the ${DEPLOY_JOB} build step (§2.7)`,
+          ),
+        );
+    }
+  });
   return out;
 }
 
