@@ -20,7 +20,7 @@ Reason for stopping: the chat's task is done. Usage at stop: 5-hour window ~95% 
 - **CI on PR #4 (`a395c24`):** run 39804677965 green: static, rls, security, migrations, e2e-local (deploy-staging and e2e-staging skipped: no dispatch).
 
 ## Next step (one precise action)
-1. Founder answers: **(a) AT-D2 capture** and **(b) Workers Paid** (OPEN-8a). For (a): dispatch staging from `d1/integration` with `run_e2e=true` on the final tip (re-checks AT-D1/AT-D17 after `1d36151`), then the founder runs `pnpm e2e:record` (spec 4p §7.3) with an OS-level screen capture; record file name, SHA-256, `recordedMs`, run id.
+1. **Workers Paid answered (2026-10-22 21:20): "not yet"**; OPEN-8a stays a founder gate and D1 can close without it. Remaining founder item: **AT-D2 capture**. For it: dispatch staging from `d1/integration` with `run_e2e=true` on the final tip (re-checks AT-D1/AT-D17 after `1d36151`), then the founder runs `pnpm e2e:record` (spec 4p §7.3) with an OS-level screen capture; record file name, SHA-256, `recordedMs`, run id.
 2. Then `docs/milestones/D1-summary.md`, tag the next free `cp/d1-*` number (after `cp/d1-11`, `cp/d1-10`) on the verified tip, and **D1 CLOSE by PR to `main`** only with the founder's go-ahead (AUTOPILOT §2, §6). At the merge the founder adds `e2e-local` back to ruleset 25633431's required checks.
 
 ## Decisions made this chat
@@ -31,7 +31,7 @@ Reason for stopping: the chat's task is done. Usage at stop: 5-hour window ~95% 
 
 ## Founder items
 - AT-D2 screen capture (`pnpm e2e:record`, spec 4p §7.3).
-- Workers Paid (OPEN-8a): DC-D8 shows the Free 10 ms limit exceeded (all invocations still `ok`).
+- Workers Paid (OPEN-8a): DC-D8 shows the Free 10 ms limit exceeded (all invocations still `ok`). Founder 2026-10-22: "not yet"; D1 closes without it; decide before any load test (M3a).
 - Dependabot PRs #7-#12: do not merge blind (unchanged).
 - After D1 merges: `e2e-local` back on the ruleset's required checks.
 
