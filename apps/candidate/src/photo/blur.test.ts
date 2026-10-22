@@ -117,6 +117,9 @@ describe('blurOutsideOval (AT-D9)', () => {
       let inside = 0;
       let blurred = 0;
       let worst = 0;
+      // Counted, then asserted once: one expect per outside pixel (~180k) made this test slower than vitest's 5 s
+      // limit on the GitHub runners (CI runs 39760204704 and 39761464844, 2026-10-22). Every pixel is still checked.
+      let notOpaque = 0;
       for (let y = 0; y < H; y += 1)
         for (let x = 0; x < W; x += 1) {
           const o = (y * W + x) * 4;
@@ -132,8 +135,9 @@ describe('blurOutsideOval (AT-D9)', () => {
           blurred += 1;
           const d = neighbourDiff(out, x, y, outside);
           if (d !== null) worst = Math.max(worst, d);
-          expect(out.data[o + 3]).toBe(255);
+          if (out.data[o + 3] !== 255) notOpaque += 1;
         }
+      expect(notOpaque).toBe(0);
       expect(worst).toBeLessThan(limit);
       // Both regions are large: the oval is 0.3 * 0.42 * pi of the frame, about 40%.
       expect(inside / (W * H)).toBeGreaterThan(0.38);
