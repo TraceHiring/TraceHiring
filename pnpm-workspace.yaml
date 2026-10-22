@@ -26,7 +26,7 @@ catalog:
   '@types/react-dom': 19.3.0
   react-router: 8.4.0
   hono: 4.13.13
-  zod: 4.6.5
+  zod: 4.6.7
   '@supabase/supabase-js': 2.117.2
   supabase: 2.120.0
   lefthook: 2.2.1
