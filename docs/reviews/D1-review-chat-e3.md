@@ -42,3 +42,15 @@ The fixes in `2cc718a..b1b6935` are confirmed. For L-1, the reviewer copied the 
 | 3   | Info     | `scripts/lib/e2e-local-secrets.mjs` and `scripts/ops/lib.mjs` still accept `[::1]`. A DB URL there would be refused later by the Worker guard, so it fails closed.     | **Kept**: those sets also check HTTP URLs, where `[::1]` works.                                                                 |
 | 4   | Info     | M5: `quality/written.ts` calls the grader inside the stage transaction. A real LLM call longer than `idle_in_transaction_session_timeout` (30s) would end the session. | **Carried to M5**: move the grader call out of the transaction, or set the timeout for that stage, when the real adapter lands. |
 | 5   | Info     | `idle_in_transaction_session_timeout` is also the backstop if Hyperdrive does not roll back the origin on a client disconnect.                                         | **Noted**: watch on staging.                                                                                                    |
+
+## Staging run of the ops script (2026-10-22)
+- **What happened:** An earlier `--yes` run created all four configs with `verify-full` and the CA (`25874502-5895-4d21-b525-f91de4f07a37`). It also set `MEDIA_LINK_HMAC_KEY` and deleted the retired URL secrets. Two later runs rotated the passwords again and then failed on the config update with HTTP 400, Cloudflare code **2013** (invalid credentials).
+- **What was ruled out:** The SCRAM verifier is correct. A throwaway local login accepts the right password and refuses a wrong one (28P01).
+- **Cause:** The Supabase Shared Pooler caches credentials briefly after a password change. Hyperdrive tested the new password seconds after the rotation, while the pooler still had the old one.
+- **Fix:** `5fb9a28`, tests first. The script waits 20 s after the database step, then retries 2013 only, after 30, 45 and 60 s, at most 8 retries per run. A final 2013 says to wait 5 minutes and re-run once.
+- **Ids:** The four config ids were read from `wrangler hyperdrive list` and committed in `16a6aa1`. The bindings test now uses `requireStaging: true`.
+- **Re-check:** Sonnet security, CONFIRMED WITH NOTES (two Lows):
+  - (a) A POST retried after a 2013 could create a duplicate if Hyperdrive ever persisted a config and still answered 2013. Not reachable now, because all four configs exist and are updated by id. If the final 2013 message ever names a config being created, check the dashboard for duplicate `trace-staging-*` names before re-running.
+  - (b) The worst-case wait is about 8.5 minutes, which is accepted.
+- **Zero-downtime rotation** (a new role per rotation, Supabase's recommendation) is carried to M8 production ops.
+- **CI on `16a6aa1`** (run 39751749485): no job started, because GitHub Actions billing is blocked (FOUNDER-QUEUE 2026-10-22). Local `verify:fast` is green on `16a6aa1`.
