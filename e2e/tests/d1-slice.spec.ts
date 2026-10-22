@@ -119,9 +119,15 @@ const T = {
   negative: 60_000,
 } as const;
 const HOOK_BEFORE_MS = 30_000;
-const HOOK_AFTER_MS = 60_000;
-if (Object.values(T).reduce((a, b) => a + b, 0) > 20 * 60_000) {
+// Run 39787385654: on staging the cleanup (logouts to Mumbai, eight contexts finishing their videos) took ~55 s.
+const HOOK_AFTER_MS = 90_000;
+const TESTS_MS = Object.values(T).reduce((a, b) => a + b, 0);
+if (TESTS_MS > 20 * 60_000) {
   throw new Error('the slice test timeouts exceed 20 minutes');
+}
+// The tests and both hooks fit the CI Playwright step (22 minutes, check-workflows.test.mjs).
+if (TESTS_MS + HOOK_BEFORE_MS + HOOK_AFTER_MS > 22 * 60_000) {
+  throw new Error('the slice test and hook timeouts exceed 22 minutes');
 }
 const VIEWPORT = { width: 1280, height: 720 };
 const ITEMS = 4;
@@ -407,16 +413,19 @@ test.afterAll(async () => {
       const current = await accessToken(signed.page).catch(() => null);
       if (current !== null) run.sessionTokens.push(current);
     }
-    for (const token of new Set(run.sessionTokens)) {
-      await logoutSession(env.supabaseUrl, env.publishableKey, token);
-    }
+    await Promise.all(
+      [...new Set(run.sessionTokens)].map((token) =>
+        logoutSession(env.supabaseUrl, env.publishableKey, token),
+      ),
+    );
   }
   const contexts = [
     run.recruiter?.context,
     run.reviewer?.context,
     ...Object.values(run.cands).map((c) => c.context),
   ];
-  for (const context of contexts) await context?.close().catch(() => undefined);
+  // In parallel: each close waits for that context's video to be written.
+  await Promise.all(contexts.map((context) => context?.close().catch(() => undefined)));
   if (run.manifest !== undefined && run.outputDir !== '') {
     // AT-D2 (D1-SPEC-2): the recorded span ends when the last recorded context has closed.
     run.manifest.recordedMs = run.recordStart === null ? null : Date.now() - run.recordStart;
