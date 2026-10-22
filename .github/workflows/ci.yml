@@ -1,0 +1,204 @@
+# Trace CI (spec specs/m0-foundations.md §7.1). One workflow, so there is no `workflow_run`
+# trigger to abuse. The last job, deploy-staging (§7.2), runs only on a push to main in this
+# repository, after the four required jobs pass; pull requests never reach it or its secrets.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'milestone/**'
+
+# Read-only token for every job. A job that needs more must ask for it explicitly.
+permissions:
+  contents: read
+
+env:
+  # No telemetry from CI (security review).
+  DO_NOT_TRACK: '1'
+  WRANGLER_SEND_METRICS: 'false'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Required check. typecheck -> lint -> test -> build (build includes the bundle budget,
+  # header checks and the dist/ secret scan).
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # A PR checkout has no local `main` (§8.4).
+      MIGRATIONS_BASE: origin/main
+    steps:
+      - name: Check out (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up toolchain and install
+        uses: ./.github/actions/setup
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Lint
+        run: pnpm lint
+      - name: Test
+        run: pnpm test
+      - name: Build
+        run: pnpm build
+
+  # Required check. Runs the local Supabase stack, pgTAP tests and the db-types drift check
+  # (§8.3). `--stop` stops the stack at the end of the job.
+  rls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up toolchain and install
+        uses: ./.github/actions/setup
+      - name: RLS and catalog tests
+        run: pnpm test:rls --stop
+
+  # Required check. Full-history secret scan, dependency audit and OSV scan.
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up toolchain and install
+        uses: ./.github/actions/setup
+      - name: gitleaks over full history
+        run: gitleaks git --redact --no-banner
+      - name: pnpm audit (production dependencies)
+        run: pnpm audit --prod --audit-level=high
+      # osv-scanner is not on npm. The SHA-256 is the osv-scanner_linux_amd64 line of
+      # osv-scanner_SHA256SUMS from the v2.6.0 GitHub release; the binary is checked before it runs.
+      # `scan` defaults to the `source` subcommand; v2.6.0 reads every document of pnpm 12's
+      # multi-document pnpm-lock.yaml.
+      - name: osv-scanner
+        env:
+          OSV_SCANNER_VERSION: v2.6.0
+          OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/osv-scanner"
+          mkdir -p "$dir"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$dir/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  $dir/osv-scanner" | sha256sum --check --strict -
+          chmod +x "$dir/osv-scanner"
+          "$dir/osv-scanner" scan -r .
+
+  # Required check. Migration naming, ordering and frozen-set rules against origin/main (§8.4).
+  migrations:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up toolchain and install
+        uses: ./.github/actions/setup
+      - name: Check migrations
+        run: node scripts/check-migrations.mjs --base origin/main
+
+  # Not a required check. Deploys main to staging (§7.2). The steps follow the §15.1 states:
+  # built -> output_scanned -> migrated -> catalog_checked -> workers_deployed -> secrets_checked
+  # -> pages_deployed -> smoke_passed. Any failure stops the job; nothing is rolled back, migrations
+  # are forward-only and a re-run is idempotent. Each secret is set only on the steps that use it
+  # (never at job level, never on or before install/build); CLOUDFLARE_ACCOUNT_ID is a public
+  # environment variable. The wrangler steps append to one output file in RUNNER_TEMP, which the
+  # smoke step reads for the deployed URLs.
+  deploy-staging:
+    needs: [static, rls, security, migrations]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: staging
+    concurrency: deploy-staging
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up toolchain and install
+        uses: ./.github/actions/setup
+      # Includes the bundle budget, header checks and the dist/ secret scan. The apps write
+      # dist/version.json from VITE_APP_VERSION (§9.3). The loop then rebuilds each Worker under
+      # --env staging into the same dist/, so the next step scans, and the Workers step deploys,
+      # the staging bytes (an env.staging define or alias cannot ship unscanned). No secret here.
+      - name: Build
+        run: |
+          set -euo pipefail
+          VITE_APP_VERSION="$GITHUB_SHA" pnpm build
+          for dir in workers/edge workers/jobs services/api; do
+            (cd "$dir" && pnpm exec wrangler deploy --dry-run --env staging --outdir dist)
+          done
+      # §7.2 step 2: gitleaks over every app, Worker and service dist/ (AT-16).
+      - name: Scan the build output
+        run: node scripts/scan-dist.mjs
+      # §7.2 step 3. --yes answers the CLI's "push these migrations?" prompt.
+      - name: Apply migrations to staging
+        env:
+          SUPABASE_STAGING_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
+        run: pnpm exec supabase db push --db-url "$SUPABASE_STAGING_DB_URL" --yes
+      # §7.2 step 4: every catalog check, read-only, through psql (AT-18).
+      - name: Catalog checks against staging
+        timeout-minutes: 10
+        env:
+          SUPABASE_STAGING_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql --version
+          node scripts/staging-catalog-checks.mjs
+      # §7.2 step 5 (AT-11).
+      - name: Deploy the Workers (edge, jobs, api)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
+          for dir in workers/edge workers/jobs services/api; do
+            (cd "$dir" && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA")
+          done
+      # §7.2 step 6: the staging Workers' secrets must be a subset of the allow-list (AT-15).
+      - name: Check Worker secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node scripts/check-staging-secrets.mjs
+      # §7.2 step 7. A missing Pages project is created first (production branch main).
+      - name: Deploy Pages (candidate, recruiter)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
+          projects="$(pnpm exec wrangler pages project list --json)"
+          jq -e 'type == "array"' <<<"$projects" >/dev/null
+          for project in trace-candidate-staging trace-recruiter-staging; do
+            if ! jq -e --arg p "$project" 'any(.[]; .["Project Name"] == $p)' <<<"$projects" >/dev/null; then
+              pnpm exec wrangler pages project create "$project" --production-branch main
+            fi
+          done
+          pnpm exec wrangler pages deploy apps/candidate/dist --project-name trace-candidate-staging --branch main
+          pnpm exec wrangler pages deploy apps/recruiter/dist --project-name trace-recruiter-staging --branch main
+      # §7.2 step 8: /health, /version.json and the §10.3 headers at this commit (AT-11, AT-22).
+      - name: Smoke test
+        timeout-minutes: 8
+        run: node scripts/smoke-staging.mjs --wrangler-output "$RUNNER_TEMP/wrangler-output.ndjson" --sha "$GITHUB_SHA"

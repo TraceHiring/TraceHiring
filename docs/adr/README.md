@@ -31,3 +31,4 @@ Generated from plan §14. Each ADR is **Accepted**. Agents must not reopen one u
 | [ADR-025](ADR-025-fraud-rings.md) | Fraud rings | Within-drive only; IP never alone |
 | [ADR-026](ADR-026-thresholds.md) | Thresholds | Rule families public; exact numbers to recruiters, appellants and the instructions for use |
 | [ADR-027](ADR-027-phase0-compute-on-workers.md) | Phase 0 compute | API and jobs on Cloudflare Workers + Queues; AWS only for Bedrock, SES, KMS/Secrets Manager (supersedes plan §8.1 ECS row) |
+| [ADR-028](ADR-028-m0-runtime-libraries.md) | M0 runtime libraries | zod, Hono, React Router (library mode); no ORM |

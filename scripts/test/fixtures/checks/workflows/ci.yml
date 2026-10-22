@@ -1,0 +1,103 @@
+# Synthetic fixture for scripts/test/check-workflows.test.mjs (spec §7.1, §7.2). Not a live
+# workflow: tests copy it into a temp repo as .github/workflows/ci.yml. The SHAs are made up.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'milestone/**'
+
+permissions:
+  contents: read
+
+env:
+  DO_NOT_TRACK: '1'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    env:
+      MIGRATIONS_BASE: origin/main
+    steps:
+      - name: Check out
+        uses: actions/checkout@1111111111111111111111111111111111111111 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+
+  rls:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@1111111111111111111111111111111111111111
+        with: { persist-credentials: false }
+      - uses: ./.github/actions/setup
+      - run: pnpm test:rls
+
+  security:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@1111111111111111111111111111111111111111
+        with:
+          persist-credentials: 'false'
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - run: gitleaks git --redact --no-banner
+      - run: pnpm audit --prod --audit-level=high
+
+  migrations:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@1111111111111111111111111111111111111111
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - run: node scripts/check-migrations.mjs --base origin/main
+
+  deploy-staging:
+    needs: [static, rls, security, migrations]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'
+    runs-on: ubuntu-24.04
+    environment: staging
+    concurrency: deploy-staging
+    steps:
+      - uses: actions/checkout@1111111111111111111111111111111111111111
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm build
+      - name: Scan the build output
+        run: node scripts/scan-dist.mjs
+      - name: Apply migrations
+        env:
+          SUPABASE_STAGING_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
+        run: pnpm exec supabase db push --db-url "$SUPABASE_STAGING_DB_URL"
+      - name: Catalog checks
+        env:
+          SUPABASE_STAGING_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
+        run: |
+          for f in supabase/catalog-checks/MT-*.sql; do
+            psql -X -v ON_ERROR_STOP=1 -At "$SUPABASE_STAGING_DB_URL" -f "$f"
+          done
+      - name: Deploy Workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm --filter @trace/edge exec wrangler deploy --env staging
+      - name: Check Worker secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/check-staging-secrets.mjs

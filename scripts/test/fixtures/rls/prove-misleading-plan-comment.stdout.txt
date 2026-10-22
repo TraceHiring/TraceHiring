@@ -1,0 +1,74 @@
+/work/trace checkout/supabase/tests/catalog_meta.test.sql .. 
+1..67
+ok 1 - MT-1: clean
+ok 2 - MT-1.branch_1: fires
+ok 3 - MT-1.branch_2: fires
+ok 4 - MT-1.branch_3: fires
+ok 5 - MT-2: clean
+ok 6 - MT-2.branch_1: fires
+ok 7 - MT-2.branch_2: fires
+ok 8 - MT-2.branch_3: fires
+ok 9 - MT-3: clean
+ok 10 - MT-3.branch_1: fires
+ok 11 - MT-3.branch_2: fires
+ok 12 - MT-3.branch_3: fires
+ok 13 - MT-4: clean
+ok 14 - MT-4.branch_1: fires
+ok 15 - MT-4.branch_2: fires
+ok 16 - MT-4.branch_3: fires
+ok 17 - MT-5a: clean
+ok 18 - MT-5a.branch_1: fires
+ok 19 - MT-5a.branch_2: fires
+ok 20 - MT-5a.branch_3: fires
+ok 21 - MT-5b: clean
+ok 22 - MT-5b.branch_1: fires
+ok 23 - MT-5b.branch_2: fires
+ok 24 - MT-5b.branch_3: fires
+ok 25 - MT-5c: clean
+ok 26 - MT-5c.branch_1: fires
+ok 27 - MT-5c.branch_2: fires
+ok 28 - MT-5c.branch_3: fires
+ok 29 - MT-5d: clean
+ok 30 - MT-5d.branch_1: fires
+ok 31 - MT-5d.branch_2: fires
+ok 32 - MT-5d.branch_3: fires
+ok 33 - MT-6: clean
+ok 34 - MT-6.branch_1: fires
+ok 35 - MT-6.branch_2: fires
+ok 36 - MT-6.branch_3: fires
+ok 37 - MT-7: clean
+ok 38 - MT-7.branch_1: fires
+ok 39 - MT-7.branch_2: fires
+ok 40 - MT-7.branch_3: fires
+ok 41 - MT-8: clean
+ok 42 - MT-8.branch_1: fires
+ok 43 - MT-8.branch_2: fires
+ok 44 - MT-8.branch_3: fires
+ok 45 - MT-8b: clean
+ok 46 - MT-8b.branch_1: fires
+ok 47 - MT-8b.branch_2: fires
+ok 48 - MT-8b.branch_3: fires
+ok 49 - MT-9: clean
+ok 50 - MT-9.branch_1: fires
+ok 51 - MT-9.branch_2: fires
+ok 52 - MT-9.branch_3: fires
+ok 53 - MT-10: clean
+ok 54 - MT-10.branch_1: fires
+ok 55 - MT-10.branch_2: fires
+ok 56 - MT-10.branch_3: fires
+ok 57 - MT-11: clean
+ok 58 - MT-11.branch_1: fires
+ok 59 - MT-11.branch_2: fires
+ok 60 - MT-11.branch_3: fires
+ok 61 - MT-12: clean
+ok 62 - MT-12.branch_1: fires
+ok 63 - MT-12.branch_2: fires
+ok 64 - MT-12.branch_3: fires
+ok 65 - MT-11.extra_64: fires
+ok 66 - MT-11.extra_65: fires
+ok 67 - MT-11.extra_66: fires
+# Looks like you planned 67 tests but ran 64
+ok
+All tests successful.
+Files=1, Tests=67,  1 wallclock secs ( 0.02 usr  0.01 sys +  0.01 cusr  0.00 csys =  0.04 CPU)
+Result: PASS

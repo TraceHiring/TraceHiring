@@ -1,0 +1,39 @@
+// Placeholder Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
+// No secrets, no credential vars and no Queue, R2, Durable Object or cron bindings in M0a.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "trace-edge",
+  "main": "src/index.ts",
+  // Newest date the test runtime supports: @cloudflare/vitest-pool-workers 0.23.0 runs
+  // workerd 1.20260815.1, so tests and deploys use the same date. From 2026-08-04 on,
+  // nodejs_compat is on by default, which the test pool needs.
+  "compatibility_date": "2026-08-15",
+  // Keep bindings and secrets out of process.env, so only the typed `env` argument sees them
+  // (ADR-027 service-role boundary; S1 security review).
+  "compatibility_flags": ["nodejs_compat_do_not_populate_process_env"],
+  "workers_dev": false,
+  // No per-version preview URLs: an old version must not stay reachable after a redeploy.
+  "preview_urls": false,
+  // No usage telemetry or npm dependency metadata leaves this machine or CI.
+  "send_metrics": false,
+  "dependencies_instrumentation": { "enabled": false },
+  // Workers Logs would store request logs at Cloudflare, a processor outside India that spec §9.2
+  // and ADR-027 do not list. Off explicitly, so the account setting cannot turn it on. wrangler
+  // inherits this key into every env block.
+  "observability": { "enabled": false },
+  // The deployed commit, reported by GET /health (spec §9.3). 'dev' locally; CI overrides it with
+  // `--var VERSION:<40-hex sha>` (spec §7.2). vars are not inherited by env blocks, so each env
+  // repeats it. This is a public build identifier, not a secret.
+  "vars": { "VERSION": "dev" },
+  "env": {
+    "dev": {
+      "name": "trace-edge-dev",
+      "vars": { "VERSION": "dev" },
+    },
+    "staging": {
+      "name": "trace-edge-staging",
+      "workers_dev": true,
+      "vars": { "VERSION": "dev" },
+    },
+  },
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "Trace design token extensions, pending design sign-off (spec m0-foundations section 3, D4). docs/design/tokens.json stays the design source; build-tokens.mjs refuses an extension that redefines one of its tokens.",
+  "color": {
+    "border": {
+      "input": "#8A8F98"
+    },
+    "focus": {
+      "ring": "#1D3F8F"
+    }
+  }
+}

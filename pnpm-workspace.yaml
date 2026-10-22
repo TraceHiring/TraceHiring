@@ -1,0 +1,66 @@
+# pnpm 12 workspace (spec specs/m0-foundations.md §2, §4).
+packages:
+  - apps/*
+  - packages/*
+  - workers/*
+  - services/*
+
+# Shared versions (spec §4). Dependabot groups updates by catalog entry.
+catalog:
+  typescript: 6.0.3
+  typescript-eslint: 8.71.1
+  eslint: 9.39.5
+  '@eslint/js': 9.39.5
+  eslint-plugin-jsx-a11y: 6.10.2
+  eslint-plugin-react-hooks: 7.1.1
+  eslint-plugin-boundaries: 7.2.0
+  prettier: 3.9.10
+  vitest: 4.1.11
+  '@cloudflare/vitest-pool-workers': 0.23.0
+  wrangler: 4.149.0
+  vite: 8.3.4
+  '@vitejs/plugin-react': 6.1.2
+  react: 19.3.0
+  react-dom: 19.3.0
+  '@types/react': 19.3.0
+  '@types/react-dom': 19.3.0
+  react-router: 8.4.0
+  hono: 4.13.13
+  zod: 4.6.5
+  supabase: 2.120.0
+  lefthook: 2.2.1
+  '@commitlint/cli': 21.2.3
+  '@commitlint/config-conventional': 21.2.3
+  '@types/node': 22.20.5
+  globals: 17.13.0
+  fast-check: 4.10.2
+
+# Build-script allow-list (pnpm 12 key, checked in S1.0).
+allowBuilds:
+  lefthook: true
+  esbuild: true
+  workerd: true
+  supabase: true
+
+minimumReleaseAgeExclude:
+  - prettier@3.9.10
+
+# Security overrides (CI `security` job, 2026-10-11), patch releases only. Remove each once no
+# dependency pins the vulnerable version.
+# - handlebars: eslint-plugin-boundaries 7.2.0 pins 4.7.9 (GHSA-8r5x-fm3f-whwj and GHSA-p8wg-vrv2-v86f
+#   critical, GHSA-xw65-4hp5-5hc7 moderate; pnpm audit).
+# - sharp, undici: @cloudflare/vitest-pool-workers 0.23.0 brings its own older miniflare with sharp 0.35.2
+#   (GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w) and undici 7.29.0 (ten advisories; osv-scanner). The
+#   wrangler catalog version already uses sharp 0.35.5 and undici 7.29.1.
+overrides:
+  handlebars: 4.7.10
+  sharp: 0.35.5
+  undici: 7.29.1
+
+# braces <= 3.0.3 (GHSA-vfj7-8cjw-p6xm, high: stack exhaustion on deeply nested brace patterns) has no
+# fixed release. It is reached only through eslint-plugin-boundaries > micromatch at lint time, with
+# patterns from this repository's own eslint config: never untrusted input, never shipped. Ignored until a
+# fix exists, then removed (docs/build-notes.md "Autopilot changes", 2026-10-11).
+auditConfig:
+  ignoreGhsas:
+    - GHSA-vfj7-8cjw-p6xm
