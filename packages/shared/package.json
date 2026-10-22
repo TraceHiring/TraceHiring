@@ -6,9 +6,16 @@
   "exports": {
     ".": "./src/index.ts",
     "./log": "./src/log/index.ts",
+    "./sentry": "./src/log/sentry.ts",
     "./health": "./src/health.ts",
     "./contracts": "./src/contracts.ts",
-    "./contracts/tenancy": "./src/contracts-tenancy.ts"
+    "./contracts/tenancy": "./src/contracts-tenancy.ts",
+    "./contracts/candidate": "./src/contracts-candidate.ts",
+    "./contracts/d1": "./src/contracts-d1.ts",
+    "./canonical-json": "./src/canonical-json.ts",
+    "./signal-catalog": "./src/signal-catalog.ts",
+    "./canonical-notice": "./src/canonical-notice.ts",
+    "./jobs": "./src/jobs.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",

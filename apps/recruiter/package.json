@@ -11,7 +11,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@sentry/react": "catalog:",
     "@supabase/supabase-js": "catalog:",
+    "@trace/band-engine": "workspace:*",
     "@trace/shared": "workspace:*",
     "@trace/ui": "workspace:*",
     "react": "catalog:",

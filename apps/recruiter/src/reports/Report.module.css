@@ -1,0 +1,319 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-20);
+}
+
+.header h2 {
+  margin: 0;
+  font-weight: var(--type-h1-weight);
+  font-size: var(--type-h1-size);
+  line-height: var(--type-h1-line-height);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-16);
+  margin: var(--space-8) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-text-secondary);
+  font-size: var(--type-body-sm-size);
+}
+
+.info {
+  margin: 0;
+  padding: var(--space-12) var(--space-16);
+  border: 1px solid var(--color-accent-default);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-subtle);
+}
+
+/* The two result cards: one grid, two identical cells (rule 1, plan section 5 F). */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+  gap: var(--space-20);
+}
+
+@media (max-width: 48rem) {
+  .cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  min-height: 18rem;
+  padding: var(--space-20);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
+}
+
+.overline {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-weight: var(--type-overline-weight);
+  font-size: var(--type-overline-size);
+  letter-spacing: var(--type-overline-letter-spacing);
+  text-transform: uppercase;
+}
+
+.headline {
+  margin: 0;
+  font-weight: var(--type-score-xl-weight);
+  font-size: var(--type-score-xl-size);
+  line-height: var(--type-score-xl-line-height);
+}
+
+.headlineUnit {
+  color: var(--color-text-secondary);
+  font-size: var(--type-h2-size);
+}
+
+.band {
+  display: inline-block;
+  align-self: flex-start;
+  padding: var(--component-band-pill-padding-y) var(--component-band-pill-padding-x);
+  border-radius: var(--radius-pill);
+  font-weight: var(--type-body-strong-weight);
+  font-size: var(--type-score-xl-size);
+  line-height: var(--type-score-xl-line-height);
+}
+
+.band_clear {
+  background: var(--color-band-clear-bg);
+  color: var(--color-band-clear-fg);
+}
+
+.band_review {
+  background: var(--color-band-review-bg);
+  color: var(--color-band-review-fg);
+}
+
+.band_strong_concern {
+  background: var(--color-band-concern-bg);
+  color: var(--color-band-concern-fg);
+}
+
+.band_insufficient_evidence {
+  background: var(--color-band-insufficient-bg);
+  color: var(--color-band-insufficient-fg);
+}
+
+.note {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--type-body-sm-size);
+}
+
+.sectionRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) 3rem;
+  align-items: center;
+  gap: var(--space-8);
+  margin: 0;
+}
+
+.meter {
+  width: 100%;
+  height: 0.75rem;
+}
+
+.rowValue {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-16);
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--type-body-sm-size);
+}
+
+.reasons {
+  margin: 0;
+  padding-left: var(--space-20);
+}
+
+.disclosure {
+  margin-top: auto;
+  font-size: var(--type-body-sm-size);
+}
+
+.disclosure summary {
+  cursor: pointer;
+  color: var(--color-accent-default);
+}
+
+.panel {
+  padding: var(--space-20);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
+}
+
+.panel h3 {
+  margin: 0 0 var(--space-12);
+  font-weight: var(--type-h2-weight);
+  font-size: var(--type-h2-size);
+  line-height: var(--type-h2-line-height);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: var(--space-8);
+  border-bottom: 1px solid var(--color-border-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+
+.flags {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--space-16);
+}
+
+.flagCard {
+  padding: var(--space-16);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+}
+
+.flagTitle {
+  margin: 0;
+  font-weight: var(--type-h3-weight);
+  font-size: var(--type-h3-size);
+}
+
+.flagStatus {
+  display: inline-block;
+  margin: var(--space-4) 0 var(--space-8);
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  font-size: var(--type-caption-size);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-4) var(--space-12);
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--color-text-secondary);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.muted {
+  color: var(--color-text-tertiary);
+}
+
+.timelineSvg {
+  width: 100%;
+  height: auto;
+}
+
+.laneLabel {
+  fill: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.laneTrack {
+  stroke: var(--color-border-default);
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+
+.markerFlag {
+  fill: var(--color-band-review-fg);
+  stroke: var(--color-bg-surface);
+  stroke-width: 1;
+}
+
+.markerContext {
+  fill: var(--color-bg-surface);
+  stroke: var(--color-text-secondary);
+  stroke-width: 2;
+}
+
+.legend {
+  margin: 0 0 var(--space-8);
+  color: var(--color-text-secondary);
+  font-size: var(--type-caption-size);
+}
+
+.eventScroll {
+  max-height: 14rem;
+  overflow: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.eventList {
+  margin: 0;
+  padding: var(--space-8) var(--space-8) var(--space-8) var(--space-24);
+}
+
+.eventItem {
+  padding: var(--space-4) 0;
+}
+
+.photo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  align-items: flex-start;
+}
+
+.photoImage {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.button {
+  min-height: var(--component-button-min-height);
+  padding: 0 var(--component-button-padding-x);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.alert {
+  margin: 0;
+  color: var(--color-band-concern-fg);
+}

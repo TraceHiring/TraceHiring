@@ -8,6 +8,12 @@ on:
     branches:
       - main
       - 'milestone/**'
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: Run the e2e jobs
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -67,9 +73,37 @@ jobs:
       - uses: ./.github/actions/setup
       - run: node scripts/check-migrations.mjs --base origin/main
 
+  e2e-local:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/') && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@1111111111111111111111111111111111111111
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Cache the Playwright browsers
+        uses: actions/cache@1111111111111111111111111111111111111111
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: pnpm --filter @trace/e2e exec playwright install --with-deps chromium
+      - name: Local E2E stack
+        run: node scripts/e2e-local.mjs --ci
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@1111111111111111111111111111111111111111
+        with:
+          name: e2e-local-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
+
   deploy-staging:
     needs: [static, rls, security, migrations]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/'))) && github.repository == 'TraceHiring/TraceHiring'
     runs-on: ubuntu-24.04
     environment: staging
     concurrency: deploy-staging
@@ -81,9 +115,21 @@ jobs:
       - env:
           VITE_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
-        run: pnpm build
+        run: |
+          pnpm build
+          for dir in workers/edge workers/jobs services/api; do
+            (cd "$dir" && pnpm exec wrangler deploy --dry-run --env staging --outdir dist)
+          done
       - name: Scan the build output
         run: node scripts/scan-dist.mjs
+      - name: Check the public deploy variables
+        env:
+          CANDIDATE_TOKEN_KID: ${{ vars.CANDIDATE_TOKEN_KID }}
+          CANDIDATE_TOKEN_PUBLIC_JWK: ${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}
+          SUPABASE_STAGING_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          API_STAGING_ORIGIN: ${{ vars.API_STAGING_ORIGIN }}
+        run: node scripts/check-deploy-vars.mjs
       - name: Apply migrations
         env:
           SUPABASE_STAGING_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
@@ -95,11 +141,55 @@ jobs:
           for f in supabase/catalog-checks/MT-*.sql; do
             psql -X -v ON_ERROR_STOP=1 -At "$SUPABASE_STAGING_DB_URL" -f "$f"
           done
-      - name: Deploy Workers
+      - name: Create the staging buckets and queues
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: pnpm --filter @trace/edge exec wrangler deploy --env staging
+        run: node scripts/ensure-staging-resources.mjs
+      - name: Deploy the api Worker
+        working-directory: services/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SENTRY_DSN_WORKERS: ${{ vars.SENTRY_DSN_WORKERS }}
+          CANDIDATE_TOKEN_KID: ${{ vars.CANDIDATE_TOKEN_KID }}
+          CANDIDATE_TOKEN_PUBLIC_JWK: ${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}
+          SUPABASE_STAGING_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
+          pnpm exec wrangler deploy dist/index.js --no-bundle --env staging \
+            --var "VERSION:$GITHUB_SHA" \
+            --var "SENTRY_DSN_WORKERS:$SENTRY_DSN_WORKERS" \
+            --var "CANDIDATE_TOKEN_KID:$CANDIDATE_TOKEN_KID" \
+            --var "CANDIDATE_TOKEN_PUBLIC_JWK:$CANDIDATE_TOKEN_PUBLIC_JWK" \
+            --var "SUPABASE_URL:$SUPABASE_STAGING_URL" \
+            --var "SUPABASE_PUBLISHABLE_KEY:$SUPABASE_STAGING_PUBLISHABLE_KEY"
+      - name: Deploy the jobs Worker
+        working-directory: workers/jobs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SENTRY_DSN_WORKERS: ${{ vars.SENTRY_DSN_WORKERS }}
+        run: |
+          set -euo pipefail
+          export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
+          pnpm exec wrangler deploy dist/index.js --no-bundle --env staging \
+            --var "VERSION:$GITHUB_SHA" \
+            --var "SENTRY_DSN_WORKERS:$SENTRY_DSN_WORKERS"
+      - name: Deploy the edge Worker
+        working-directory: workers/edge
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CANDIDATE_TOKEN_PUBLIC_JWK: ${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}
+        run: |
+          set -euo pipefail
+          export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
+          pnpm exec wrangler deploy dist/index.js --no-bundle --env staging \
+            --var "VERSION:$GITHUB_SHA" \
+            --var "CANDIDATE_TOKEN_PUBLIC_JWK:$CANDIDATE_TOKEN_PUBLIC_JWK"
       - name: Check Worker secrets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -112,3 +202,62 @@ jobs:
           STAGING_SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
           STAGING_SMOKE_TOTP_SECRET: ${{ secrets.STAGING_SMOKE_TOTP_SECRET }}
         run: node scripts/smoke-staging-auth.mjs
+
+  e2e-staging:
+    needs: deploy-staging
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/')) && github.repository == 'TraceHiring/TraceHiring'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: staging
+    concurrency: deploy-staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@1111111111111111111111111111111111111111
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Cache the Playwright browsers
+        uses: actions/cache@1111111111111111111111111111111111111111
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: pnpm --filter @trace/e2e exec playwright install --with-deps chromium
+      - name: Preflight
+        env:
+          E2E_CANDIDATE_URL: https://trace-candidate-staging.pages.dev
+          E2E_RECRUITER_URL: https://trace-recruiter-staging.pages.dev
+          E2E_API_URL: https://trace-api-staging.abhayraj.workers.dev
+          E2E_EDGE_URL: https://trace-edge-staging.abhayraj.workers.dev
+          E2E_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          E2E_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          E2E_SHA: ${{ github.sha }}
+        run: pnpm e2e:staging:preflight
+      - name: Playwright against staging
+        timeout-minutes: 22
+        env:
+          E2E_STAGING: '1'
+          E2E_CANDIDATE_URL: https://trace-candidate-staging.pages.dev
+          E2E_RECRUITER_URL: https://trace-recruiter-staging.pages.dev
+          E2E_API_URL: https://trace-api-staging.abhayraj.workers.dev
+          E2E_EDGE_URL: https://trace-edge-staging.abhayraj.workers.dev
+          E2E_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          E2E_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          E2E_SHA: ${{ github.sha }}
+          E2E_RECRUITER_EMAIL: ${{ secrets.STAGING_SMOKE_EMAIL }}
+          E2E_RECRUITER_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
+          E2E_RECRUITER_TOTP_SECRET: ${{ secrets.STAGING_SMOKE_TOTP_SECRET }}
+          E2E_REVIEWER_EMAIL: ${{ secrets.STAGING_REVIEWER_EMAIL }}
+          E2E_REVIEWER_PASSWORD: ${{ secrets.STAGING_REVIEWER_PASSWORD }}
+          E2E_REVIEWER_TOTP_SECRET: ${{ secrets.STAGING_REVIEWER_TOTP_SECRET }}
+        run: pnpm --filter @trace/e2e exec playwright test tests/d1-slice.spec.ts --project staging
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@1111111111111111111111111111111111111111
+        with:
+          name: e2e-staging-results
+          path: |
+            e2e/test-results
+            !e2e/test-results/**/*.zip
+          retention-days: 7

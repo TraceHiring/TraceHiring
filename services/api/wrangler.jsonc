@@ -1,5 +1,12 @@
-// Placeholder Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
-// No secrets, no credential vars and no Queue, R2, Durable Object or cron bindings in M0a.
+// Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
+// D1 bindings (specs/d1-demo-slice.md §4.2, §7.1): Durable Objects and R2, repeated in each env block
+// (bindings and vars are not inherited). Secrets (set by an operator, never in git): the candidate-token
+// private key and the media-link HMAC key (check-staging-secrets). The database login api_login is the
+// API_DB Hyperdrive binding in env.staging (ADR-031 amendment 1; its config id is public, created by the founder
+// with scripts/ops/staging-worker-secrets.mjs on 2026-10-22); the local stack instead gets the
+// API_DB_URL secret on a loopback host (scripts/e2e-local.mjs). env.dev has no Hyperdrive binding.
+// The Supabase URL and publishable key are public vars (L-10); empty here, the deploy sets them.
+// Deploy order: services/api first (the edge service binding targets it).
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "trace-api",
@@ -31,17 +38,68 @@
   },
   // The deployed commit, reported by GET /health (spec §9.3). 'dev' locally; CI overrides it with
   // `--var VERSION:<40-hex sha>` (spec §7.2). vars are not inherited by env blocks, so each env
-  // repeats it. This is a public build identifier, not a secret.
-  "vars": { "VERSION": "dev" },
+  // repeats it. This is a public build identifier, not a secret. SENTRY_DSN_WORKERS (d1 AT-D22) is
+  // empty here, so the Sentry SDK stays off; the staging deploy sets it (a DSN is public, a var).
+  "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "" },
   "env": {
     "dev": {
       "name": "trace-api-dev",
-      "vars": { "VERSION": "dev" },
+      "vars": {
+        "VERSION": "dev",
+        "SENTRY_DSN_WORKERS": "",
+        "CANDIDATE_TOKEN_KID": "",
+        "CANDIDATE_TOKEN_PUBLIC_JWK": "",
+        "CANDIDATE_APP_ORIGIN": "http://localhost:5173",
+        "ALLOWED_ORIGINS": "http://localhost:5174",
+        "TRACE_ENV": "dev",
+        "DEMO_OUTBOX": "1",
+        // The local Supabase API URL (supabase start); the publishable key comes from `supabase status`.
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_PUBLISHABLE_KEY": "",
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "OUTBOX", "class_name": "DemoOutboxDO" },
+          { "name": "MEDIA_LINKS", "class_name": "MediaLinkDO" },
+        ],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DemoOutboxDO", "MediaLinkDO"] }],
+      "r2_buckets": [
+        // PACKAGES is written at publish; EVIDENCE is read for media fetch (spec §4.2).
+        { "binding": "PACKAGES", "bucket_name": "trace-packages-dev" },
+        { "binding": "EVIDENCE", "bucket_name": "trace-evidence-dev" },
+      ],
     },
     "staging": {
       "name": "trace-api-staging",
       "workers_dev": true,
-      "vars": { "VERSION": "dev" },
+      "vars": {
+        "VERSION": "dev",
+        "SENTRY_DSN_WORKERS": "",
+        "CANDIDATE_TOKEN_KID": "",
+        "CANDIDATE_TOKEN_PUBLIC_JWK": "",
+        "CANDIDATE_APP_ORIGIN": "https://trace-candidate-staging.pages.dev",
+        "ALLOWED_ORIGINS": "https://trace-recruiter-staging.pages.dev",
+        "TRACE_ENV": "staging",
+        "DEMO_OUTBOX": "1",
+        // Set by the staging deploy from the SUPABASE_STAGING_URL and SUPABASE_STAGING_PUBLISHABLE_KEY
+        // GitHub variables (both public values).
+        "SUPABASE_URL": "",
+        "SUPABASE_PUBLISHABLE_KEY": "",
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "OUTBOX", "class_name": "DemoOutboxDO" },
+          { "name": "MEDIA_LINKS", "class_name": "MediaLinkDO" },
+        ],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DemoOutboxDO", "MediaLinkDO"] }],
+      "r2_buckets": [
+        { "binding": "PACKAGES", "bucket_name": "trace-packages-staging" },
+        { "binding": "EVIDENCE", "bucket_name": "trace-evidence-staging" },
+      ],
+      // Config trace-staging-api-login (scripts/lib/hyperdrive.mjs); the id is public and works only in this account.
+      "hyperdrive": [{ "binding": "API_DB", "id": "1063006219694669b2a7417f307164fd" }],
     },
   },
 }

@@ -1,6 +1,8 @@
 # Trace CI (spec specs/m0-foundations.md §7.1). One workflow, so there is no `workflow_run`
-# trigger to abuse. The last job, deploy-staging (§7.2), runs only on a push to main in this
-# repository, after the four required jobs pass; pull requests never reach it or its secrets.
+# trigger to abuse. deploy-staging (§7.2) runs only on a push to main, or on a manual
+# workflow_dispatch from a d1/** or milestone/** branch (staging proof before main moves; d1 §7.1,
+# build-notes §0), in this repository, after the four required jobs pass; pull requests never reach
+# it or its secrets. The last job, e2e-staging (d1 §7.1), follows it on such a dispatch only.
 name: ci
 
 on:
@@ -9,6 +11,13 @@ on:
     branches:
       - main
       - 'milestone/**'
+  workflow_dispatch:
+    inputs:
+      # d1 §7.1: the e2e jobs run on a dispatch unless this is turned off.
+      run_e2e:
+        description: Run the e2e jobs
+        type: boolean
+        default: true
 
 # Read-only token for every job. A job that needs more must ask for it explicitly.
 permissions:
@@ -113,16 +122,55 @@ jobs:
       - name: Check migrations
         run: node scripts/check-migrations.mjs --base origin/main
 
-  # Not a required check. Deploys main to staging (§7.2). The steps follow the §15.1 states:
-  # built -> output_scanned -> migrated -> catalog_checked -> workers_deployed -> secrets_checked
-  # -> pages_deployed -> smoke_passed. Any failure stops the job; nothing is rolled back, migrations
-  # are forward-only and a re-run is idempotent. Each secret is set only on the steps that use it
-  # (never at job level, never on or before install/build); CLOUDFLARE_ACCOUNT_ID is a public
-  # environment variable. The wrangler steps append to one output file in RUNNER_TEMP, which the
-  # smoke step reads for the deployed URLs.
+  # Not a required check. DC-D9 and the Linux half of DC-D6 (d1 §7.1, §8): the local stack
+  # (Supabase, the three Workers under wrangler dev, both apps under vite preview) and Playwright
+  # Chromium, inside 25 minutes. Runs on a dispatch with run_e2e, or on a pull request from a d1/**
+  # branch of this repository (the draft PR from d1/integration; a fork's own d1/x branch does not
+  # count), not on every PR, to spare the free minutes. No secret
+  # and no environment: every value is local and synthetic. The Chromium download is approved by
+  # the founder (2026-10-16) and cached by the lockfile hash.
+  e2e-local:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/') && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up toolchain and install
+        uses: ./.github/actions/setup
+      - name: Cache the Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: pnpm --filter @trace/e2e exec playwright install --with-deps chromium
+      - name: Local E2E stack
+        run: node scripts/e2e-local.mjs --ci
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-local-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
+
+  # Not a required check. Deploys main (push) or a d1/** or milestone/** branch (manual
+  # workflow_dispatch) to staging (§7.2; d1 §7.1). The steps follow the §15.1 states:
+  # built -> output_scanned -> vars_checked -> migrated -> catalog_checked -> resources_ready ->
+  # workers_deployed -> secrets_checked -> pages_deployed -> smoke_passed. Any failure stops the job;
+  # nothing is rolled back, migrations are forward-only and a re-run is idempotent. Each secret is
+  # set only on the steps that use it (never at job level, never on or before install/build);
+  # CLOUDFLARE_ACCOUNT_ID and every value passed to a Worker with --var are public GitHub variables
+  # (vars.*, never secrets). The wrangler steps append to one output file in RUNNER_TEMP, which the
+  # smoke step reads for the deployed URLs. scripts/check-workflows.mjs pins the whole chain.
   deploy-staging:
     needs: [static, rls, security, migrations]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/'))) && github.repository == 'TraceHiring/TraceHiring'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: staging
@@ -140,11 +188,21 @@ jobs:
       # dist/version.json from VITE_APP_VERSION (§9.3). The loop then rebuilds each Worker under
       # --env staging into the same dist/, so the next step scans, and the Workers step deploys,
       # the staging bytes (an env.staging define or alias cannot ship unscanned). No secret here:
-      # the recruiter's Supabase URL and publishable key are public staging variables (m0b §2.7, H10).
+      # the recruiter's Supabase URL and publishable key are public staging variables (m0b §2.7, H10),
+      # and so are its Sentry DSN (d1 AT-D22, H6) and the api origin its CSP connect-src names
+      # (https://trace-api-staging.<label>.workers.dev; d1 §7.1 check-headers). VITE_DEMO_OUTBOX=1 makes
+      # the staging recruiter build include the demo outbox (d1 §6.1); every other build omits it (AT-D18).
+      # VITE_EDGE_ORIGIN is the candidate app's edge, the origin its _headers connect-src names (d1 §4.7).
+      # VITE_TRACE_ENV=staging is the flavour the outbox gate allows (only dev or staging; SEC-W2-1).
       - name: Build
         env:
           VITE_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
+          VITE_API_ORIGIN: ${{ vars.API_STAGING_ORIGIN }}
+          VITE_DEMO_OUTBOX: '1'
+          VITE_EDGE_ORIGIN: https://trace-edge-staging.abhayraj.workers.dev
+          VITE_TRACE_ENV: staging
         run: |
           set -euo pipefail
           VITE_APP_VERSION="$GITHUB_SHA" pnpm build
@@ -154,6 +212,19 @@ jobs:
       # §7.2 step 2: gitleaks over every app, Worker and service dist/ (AT-16).
       - name: Scan the build output
         run: node scripts/scan-dist.mjs
+      # d1 §7.1 (security review F4): the public values the Workers get with --var. wrangler.jsonc
+      # ships them as empty placeholders and `wrangler deploy` replaces dashboard vars, so an empty
+      # variable would deploy a Worker that rejects every candidate token. Fails before any migration
+      # or deploy when one is empty, the JWK is not JSON, a key lacks a kid, or a key has a private
+      # member (`d`); it holds no secret and prints no value.
+      - name: Check the public deploy variables
+        env:
+          CANDIDATE_TOKEN_KID: ${{ vars.CANDIDATE_TOKEN_KID }}
+          CANDIDATE_TOKEN_PUBLIC_JWK: ${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}
+          SUPABASE_STAGING_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          API_STAGING_ORIGIN: ${{ vars.API_STAGING_ORIGIN }}
+        run: node scripts/check-deploy-vars.mjs
       # §7.2 step 3. --yes answers the CLI's "push these migrations?" prompt.
       - name: Apply migrations to staging
         env:
@@ -168,17 +239,67 @@ jobs:
           set -euo pipefail
           psql --version
           node scripts/staging-catalog-checks.mjs
-      # §7.2 step 5 (AT-11).
-      - name: Deploy the Workers (edge, jobs, api)
+      # d1 §7.1 (security review F5): the R2 buckets and Queues the Workers bind to, created only if
+      # missing ("already exists" is success; nothing is ever deleted). Before the first deploy, so
+      # the bindings and the jobs queue consumer have their targets.
+      - name: Create the staging buckets and queues
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node scripts/ensure-staging-resources.mjs
+      # §7.2 step 5 (AT-11), d1 §7.1: api -> jobs -> edge, because the edge's service binding targets
+      # api. S3B-1: each step uploads exactly the dist/index.js the Build step wrote and scan-dist
+      # scanned, with --no-bundle (no re-bundle); the env block's bindings, DO migrations, queues and
+      # crons still apply. Each Worker gets exactly its --var set from GitHub variables; wrangler
+      # splits --var at the first ':' only, so the JWK JSON arrives intact (check-workflows and
+      # scripts/test/deploy-staging-job.test.mjs pin all of it).
+      # Sentry DSN: jobs and api only (d1 AT-D22, L-24); edge never (no reporter on the edge Worker,
+      # m0-foundations §9.2). The candidate-token public JWK goes to api and edge, the Supabase URL and
+      # publishable key to api only.
+      - name: Deploy the api Worker
+        working-directory: services/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SENTRY_DSN_WORKERS: ${{ vars.SENTRY_DSN_WORKERS }}
+          CANDIDATE_TOKEN_KID: ${{ vars.CANDIDATE_TOKEN_KID }}
+          CANDIDATE_TOKEN_PUBLIC_JWK: ${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}
+          SUPABASE_STAGING_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
         run: |
           set -euo pipefail
           export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
-          for dir in workers/edge workers/jobs services/api; do
-            (cd "$dir" && pnpm exec wrangler deploy dist/index.js --no-bundle --env staging --var "VERSION:$GITHUB_SHA")
-          done
+          pnpm exec wrangler deploy dist/index.js --no-bundle --env staging \
+            --var "VERSION:$GITHUB_SHA" \
+            --var "SENTRY_DSN_WORKERS:$SENTRY_DSN_WORKERS" \
+            --var "CANDIDATE_TOKEN_KID:$CANDIDATE_TOKEN_KID" \
+            --var "CANDIDATE_TOKEN_PUBLIC_JWK:$CANDIDATE_TOKEN_PUBLIC_JWK" \
+            --var "SUPABASE_URL:$SUPABASE_STAGING_URL" \
+            --var "SUPABASE_PUBLISHABLE_KEY:$SUPABASE_STAGING_PUBLISHABLE_KEY"
+      - name: Deploy the jobs Worker
+        working-directory: workers/jobs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SENTRY_DSN_WORKERS: ${{ vars.SENTRY_DSN_WORKERS }}
+        run: |
+          set -euo pipefail
+          export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
+          pnpm exec wrangler deploy dist/index.js --no-bundle --env staging \
+            --var "VERSION:$GITHUB_SHA" \
+            --var "SENTRY_DSN_WORKERS:$SENTRY_DSN_WORKERS"
+      - name: Deploy the edge Worker
+        working-directory: workers/edge
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CANDIDATE_TOKEN_PUBLIC_JWK: ${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}
+        run: |
+          set -euo pipefail
+          export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"
+          pnpm exec wrangler deploy dist/index.js --no-bundle --env staging \
+            --var "VERSION:$GITHUB_SHA" \
+            --var "CANDIDATE_TOKEN_PUBLIC_JWK:$CANDIDATE_TOKEN_PUBLIC_JWK"
       # §7.2 step 6: the staging Workers' secrets must be a subset of the allow-list (AT-15).
       - name: Check Worker secrets
         env:
@@ -218,3 +339,78 @@ jobs:
           STAGING_SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
           STAGING_SMOKE_TOTP_SECRET: ${{ secrets.STAGING_SMOKE_TOTP_SECRET }}
         run: node scripts/smoke-staging-auth.mjs
+
+  # Not a required check. d1 §7.1, AT-D1 (stream R5): the slice spec (e2e/tests/d1-slice.spec.ts,
+  # project staging) against the staging stack deploy-staging has just deployed and smoked. Only on a
+  # manual dispatch from a d1/** or milestone/** branch of this repository with run_e2e (never a push
+  # or a pull request). The preflight gets the public contract only and checks that every Worker and
+  # app serves this commit; the Playwright step is the only one holding the six E2E credentials (the
+  # H9 recruiter and the D1 reviewer smoke users). The artifact is e2e/test-results (the manifest,
+  # videos, screenshots; synthetic data only) without any .zip (so no trace, SEC-W6-4), kept 7
+  # days, also on failure.
+  # scripts/check-workflows.mjs pins the whole job (E2E_STAGING_*).
+  e2e-staging:
+    needs: deploy-staging
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/')) && github.repository == 'TraceHiring/TraceHiring'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: staging
+    # SEC-W6-1: one group with deploy-staging, so a later dispatch cannot redeploy (or migrate)
+    # staging while this E2E runs; nothing in the group is ever cancelled.
+    concurrency: deploy-staging
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up toolchain and install
+        uses: ./.github/actions/setup
+      - name: Cache the Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: pnpm --filter @trace/e2e exec playwright install --with-deps chromium
+      # Fails fast, printing names only, on a missing or malformed contract value, or when an api or
+      # edge /health or an app /version.json is not this commit.
+      - name: Preflight
+        timeout-minutes: 3
+        env:
+          E2E_CANDIDATE_URL: https://trace-candidate-staging.pages.dev
+          E2E_RECRUITER_URL: https://trace-recruiter-staging.pages.dev
+          E2E_API_URL: https://trace-api-staging.abhayraj.workers.dev
+          E2E_EDGE_URL: https://trace-edge-staging.abhayraj.workers.dev
+          E2E_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          E2E_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          E2E_SHA: ${{ github.sha }}
+        run: pnpm e2e:staging:preflight
+      - name: Slice spec against staging
+        timeout-minutes: 22
+        env:
+          E2E_STAGING: '1'
+          E2E_CANDIDATE_URL: https://trace-candidate-staging.pages.dev
+          E2E_RECRUITER_URL: https://trace-recruiter-staging.pages.dev
+          E2E_API_URL: https://trace-api-staging.abhayraj.workers.dev
+          E2E_EDGE_URL: https://trace-edge-staging.abhayraj.workers.dev
+          E2E_SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          E2E_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
+          E2E_SHA: ${{ github.sha }}
+          E2E_RECRUITER_EMAIL: ${{ secrets.STAGING_SMOKE_EMAIL }}
+          E2E_RECRUITER_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
+          E2E_RECRUITER_TOTP_SECRET: ${{ secrets.STAGING_SMOKE_TOTP_SECRET }}
+          E2E_REVIEWER_EMAIL: ${{ secrets.STAGING_REVIEWER_EMAIL }}
+          E2E_REVIEWER_PASSWORD: ${{ secrets.STAGING_REVIEWER_PASSWORD }}
+          E2E_REVIEWER_TOTP_SECRET: ${{ secrets.STAGING_REVIEWER_TOTP_SECRET }}
+        run: pnpm --filter @trace/e2e exec playwright test tests/d1-slice.spec.ts --project staging
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-staging-results
+          path: |
+            e2e/test-results
+            !e2e/test-results/**/*.zip
+          retention-days: 7

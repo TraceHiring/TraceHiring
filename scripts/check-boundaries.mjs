@@ -9,7 +9,7 @@
 //   5. a text file in the index with CRLF line endings
 //   6. an eslint-disable comment that switches off a boundaries/ or trace/ rule, or names no rule
 //      (S1.4 security review), in apps/, packages/, workers/ or services/ source
-//   7. an error reporter or Sentry name in non-test source of apps/candidate/ or workers/edge/
+//   7. an error reporter or Sentry name (incl. @trace/shared/sentry) in non-test source of apps/candidate/ or workers/edge/
 //      (spec §9.2: only the recruiter app, workers/jobs and services/api report errors; S3a review
 //      S3A-3, plan risk 9)
 //   8. a Worker's wrangler.jsonc (workers/*/, services/*/) whose top-level `observability` is not exactly
@@ -18,6 +18,7 @@
 //   9. supabase/config.toml Auth settings other than REQUIRED_AUTH_CONFIG, or a magic-link template
 //      without the {{ .Token }} code (specs/m0b-tenancy.md §4.1; checked only when config.toml exists)
 //  10. an @supabase/* import in apps/candidate/, workers/edge/ or packages/shared/ (specs/m0b-tenancy.md §4.3)
+//  11. a use of the PACKAGES binding in workers/edge/ source other than .get/.head or a type declaration (d1 §4.2)
 // Prints only paths and rule names, never file contents.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -36,6 +37,9 @@ export const CREDENTIAL_NAMES = [
   'postgresql://',
   'DB_URL',
   'DATABASE_URL',
+  // services/api-only secrets (d1 §4.2): the edge verifies with the public JWK and holds no secret.
+  'PRIVATE_JWK',
+  'HMAC_KEY',
 ];
 
 /**
@@ -67,7 +71,9 @@ const SOURCE_EXT = /\.(?:[cm]?[jt]sx?)$/;
 
 /** Workspaces that must never report errors (rule 7): the candidate app and the edge Worker. */
 export const NO_REPORTER_SCOPES = ['apps/candidate/', 'workers/edge/'];
-const REPORTER_NAMES = /\b(?:reportError|noopErrorReporter|ErrorReporter)\b|@sentry\//;
+// @trace/shared/sentry (the SDK-free adapter, d1 AT-D22) counts too: it has no SDK, but it is a reporter.
+const REPORTER_NAMES =
+  /\b(?:reportError|noopErrorReporter|ErrorReporter|createSentryReporter)\b|@sentry\/|@trace\/shared\/sentry/;
 const isTestFile = (p) => /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(p);
 
 /** Generated files, the same ones ESLint ignores (packages/config/eslint/index.js). */
@@ -289,6 +295,31 @@ export function checkSupabaseJsScope(files) {
   return out;
 }
 
+// ---------- rule 11 ----------
+// The edge may only read the published test packages (d1 §4.2: PACKAGES is read only for the edge; an R2 binding is
+// always writable at the platform level, so the source is the guard; bindings security review F2). Every use of the
+// name in edge source must be a `.get(` / `.head(` call or a type declaration (`PACKAGES: R2Bucket`); a put, delete,
+// list, bracket access, alias or destructuring is flagged.
+const PACKAGES_SCOPES = ['workers/edge/'];
+const PACKAGES_USE = /\bPACKAGES\b/g;
+const PACKAGES_ALLOWED = /^PACKAGES(?:\??\.(?:get|head)\s*\(|\??\s*:)/;
+export function checkPackagesReadOnly(files) {
+  const out = [];
+  for (const { path: p, content } of files) {
+    if (!inScope(p, PACKAGES_SCOPES) || !SOURCE_EXT.test(p)) continue;
+    if (isGenerated(p) || isTestFile(p)) continue;
+    for (const m of content.matchAll(PACKAGES_USE)) {
+      if (!PACKAGES_ALLOWED.test(content.slice(m.index))) {
+        out.push(
+          violation(11, p, 'uses PACKAGES other than get/head (d1 §4.2: read only for the edge)'),
+        );
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 // ---------- rule 5 ----------
 /** @param {string} eolOutput output of `git ls-files --eol -z` */
 export function checkCrlf(eolOutput) {
@@ -500,6 +531,7 @@ export function runChecks(root) {
         })
       : []),
     ...checkSupabaseJsScope(files),
+    ...checkPackagesReadOnly(files),
   ];
 }
 

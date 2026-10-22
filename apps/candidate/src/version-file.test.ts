@@ -158,9 +158,17 @@ const INLINE_STYLE = /<style[\s>]|\sstyle\s*=/i;
 const DATA_FONT = /url\(\s*['"]?data:(?:font|application\/(?:font|x-font|vnd\.ms-fontobject))/i;
 /** An absolute URL in emitted CSS: another origin for a font, image or @import. */
 const ABSOLUTE_URL = /https?:\/\//i;
-/** Media capture and reporting names that must not reach the built candidate bundle (rule 8). */
+/**
+ * Media capture and reporting names that must not reach the built candidate bundle (rule 8). Camera access
+ * (`getUserMedia`, `mediaDevices`) is allowed only in the photo chunk (`PhotoStep-<hash>.js`, the lazy entry that
+ * alone imports src/photo/camera.ts, specs/d1-demo-slice.md §4.7); everything else stays banned in every chunk.
+ */
 const BUNDLE_FORBIDDEN =
   /getUserMedia|getDisplayMedia|mediaDevices|enumerateDevices|MediaRecorder|ImageCapture|sentry|\bcapture\s*=|setAttribute\(\s*['"]capture['"]/i;
+const CAMERA_ACCESS = /getUserMedia|mediaDevices/g;
+const PHOTO_CHUNK = /^assets\/PhotoStep-[\w-]+\.js$/;
+/** A request for the microphone in minified or plain form. */
+const AUDIO_TRUE = /\baudio\s*:\s*(?:true|!0|1\b)/;
 
 describe(`${APP} built output (CSP hygiene, spec §10.3)`, () => {
   let files: BuiltFile[] = [];
@@ -200,7 +208,23 @@ describe(`${APP} built output (CSP hygiene, spec §10.3)`, () => {
   it('contains no media capture, Sentry or capture= in any output chunk (rule 8)', () => {
     const chunks = files.filter((f) => f.type === 'chunk');
     expect(chunks.length).toBeGreaterThan(0);
-    for (const chunk of chunks) expect(chunk.text, chunk.fileName).not.toMatch(BUNDLE_FORBIDDEN);
+    for (const chunk of chunks) {
+      // The photo chunk may name the camera, and nothing else of the banned list.
+      const text = PHOTO_CHUNK.test(chunk.fileName)
+        ? chunk.text.replace(CAMERA_ACCESS, '')
+        : chunk.text;
+      expect(text, chunk.fileName).not.toMatch(BUNDLE_FORBIDDEN);
+      expect(chunk.text, chunk.fileName).not.toMatch(AUDIO_TRUE);
+    }
+  });
+
+  it('names the camera only in the lazy photo chunk, which index.html does not load', () => {
+    const chunks = files.filter((f) => f.type === 'chunk');
+    const withCamera = chunks.filter((c) => /getUserMedia|mediaDevices/.test(c.text));
+    expect(withCamera.map((c) => c.fileName)).toEqual([expect.stringMatching(PHOTO_CHUNK)]);
+    const html = named(/^index\.html$/)[0]?.text ?? '';
+    expect(html).not.toMatch(/PhotoStep-/);
+    expect(withCamera[0]?.text).toMatch(/audio\s*:\s*(?:false|!1)/);
   });
 });
 

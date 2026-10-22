@@ -9,7 +9,7 @@ describe('@trace/db-types', () => {
     expectTypeOf<keyof Database>().toEqualTypeOf<'public'>();
   });
 
-  it('has the eight M0b tables (specs/m0b-tenancy.md §3), no views and no public functions', () => {
+  it('has the eight M0b tables and the nineteen D1 migration-1 to migration-3 tables (specs/d1-demo-slice.md §3.1), no views and no public functions', () => {
     expectTypeOf<
       | 'orgs'
       | 'workspaces'
@@ -19,8 +19,27 @@ describe('@trace/db-types', () => {
       | 'platform_staff'
       | 'staff_access_grants'
       | 'idempotency_keys'
+      | 'tests'
+      | 'rubric_versions'
+      | 'notice_versions'
+      | 'ruleset_versions'
+      | 'test_versions'
+      | 'sections'
+      | 'item_versions'
+      | 'item_answer_keys'
+      | 'assignments'
+      | 'invitations'
+      | 'consents'
+      | 'sessions'
+      | 'session_items'
+      | 'responses'
+      | 'media_objects'
+      | 'quality_cards'
+      | 'integrity_cards'
+      | 'integrity_timeline_entries'
+      | 'reports'
     >().toExtend<PublicTables>();
-    // gen types also lists the audit partitions as tables (DC-10); everything else is one of the eight.
+    // gen types also lists the audit partitions as tables (DC-10); everything else is one of the twenty-seven.
     expectTypeOf<Exclude<PublicTables, `audit_log_${string}`>>().toEqualTypeOf<
       | 'orgs'
       | 'workspaces'
@@ -30,21 +49,43 @@ describe('@trace/db-types', () => {
       | 'platform_staff'
       | 'staff_access_grants'
       | 'idempotency_keys'
+      | 'tests'
+      | 'rubric_versions'
+      | 'notice_versions'
+      | 'ruleset_versions'
+      | 'test_versions'
+      | 'sections'
+      | 'item_versions'
+      | 'item_answer_keys'
+      | 'assignments'
+      | 'invitations'
+      | 'consents'
+      | 'sessions'
+      | 'session_items'
+      | 'responses'
+      | 'media_objects'
+      | 'quality_cards'
+      | 'integrity_cards'
+      | 'integrity_timeline_entries'
+      | 'reports'
     >();
     expectTypeOf<keyof Database['public']['Views']>().toEqualTypeOf<never>();
     expectTypeOf<keyof Database['public']['Functions']>().toEqualTypeOf<never>();
   });
 
-  it('carries the M0b enums', () => {
+  it('carries the M0b enums and the three D1 enums (migrations 1 and 2)', () => {
     expect(Object.keys(Constants.public.Enums).sort()).toEqual(
       [
         'actor_kind',
         'data_residency',
+        'invitation_status',
         'membership_status',
         'org_kind',
         'org_role',
         'org_status',
+        'section_format',
         'staff_grant_scope',
+        'test_version_status',
         'workspace_kind',
       ].sort(),
     );
