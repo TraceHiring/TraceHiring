@@ -410,6 +410,8 @@ help.
 | `unexpected membership or attribute` | someone changed a login role by hand; look at it in the SQL editor, fix it, retry |
 | `the database call failed (SQLSTATE ...)` | nothing changed; check the URL and the password |
 | `ended without a SQL error ... the outcome is unknown` | the connection dropped or `psql` timed out, so the passwords may have changed and all four configs may be stale; re-run with `--yes` |
-| `creating` or `updating the Hyperdrive config ... failed` | check the `--ca-certificate-id` (step 2), or re-run with `--sslmode verify-ca`; the listed configs are stale until a re-run with `--yes` succeeds |
+| `waiting <n> s for the Supabase pooler ...` (error 2013) | nothing to do: the Supabase pooler caches the old password briefly after the rotation, so the script waits and retries on its own (at most 4 tries per config) |
+| `... the Supabase pooler still had the old password ...` (error 2013) | do **not** re-run straight away: each run rotates the passwords again, and repeated bad logins make the pooler block Hyperdrive for a few minutes. Wait 5 minutes, then re-run `--yes` once |
+| `creating` or `updating the Hyperdrive config ... failed` (any other code) | check the `--ca-certificate-id` (step 2), or re-run with `--sslmode verify-ca`; the listed configs are stale until a re-run with `--yes` succeeds |
 | `setting MEDIA_LINK_HMAC_KEY ... failed` | the configs are done; fix the cause and re-run with `--yes` |
 | `deleting the retired secret <NAME> ... failed` | re-run with `--yes`, or run the `wrangler secret delete` command the message shows |

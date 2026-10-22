@@ -21,6 +21,7 @@ import {
   HYPERDRIVE_CONFIGS_URL,
   LOGIN_TIMEOUTS,
   PLAN,
+  POOLER_SETTLE_MS,
   RETIRED_SECRETS,
   STAGING_PROJECT_REF,
   generateValues,
@@ -690,7 +691,12 @@ function harness({
   const err = [];
   let n = 0;
   const generated = [];
+  const sleeps = [];
   const deps = {
+    // Instant and recorded: the pooler-cache waits (step 4) never slow a test.
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
     env: { PATH: '/usr/bin', ...env },
     platform,
     repoRoot: ROOT,
@@ -769,6 +775,7 @@ function harness({
     tokens: of('auth token'),
     writes,
     generated,
+    sleeps,
     out,
     err,
     printed,
@@ -1169,6 +1176,88 @@ describe('main', () => {
     expect(text).toMatch(/re-run with --yes/i);
     expect(text).not.toContain('could not connect');
     for (const v of secretsOf(h)) expect(h.printed()).not.toContain(v);
+  });
+
+  // Staging run 2026-10-22: the Supabase Shared Pooler caches credentials briefly, so right after the rotation it
+  // still checks the old password and Hyperdrive's connection test answers 400 / 2013 (invalid credentials). The
+  // script waits for the cache (a settle delay, then spaced retries on 2013 only) instead of failing at once.
+  describe('the Supabase pooler credential cache (Cloudflare error 2013)', () => {
+    const failTimes = (times, code = 2013, only = null) => {
+      const seen = new Map();
+      return (method, _url, body) => {
+        if (method === 'GET' || (only !== null && body.name !== only)) return undefined;
+        const k = (seen.get(body.name) ?? 0) + 1;
+        seen.set(body.name, k);
+        return k <= times
+          ? cfFail(400, [code], `password authentication failed ${OP_PW}`)
+          : undefined;
+      };
+    };
+    const writesOf = (h, name) => h.writes().filter((f) => f.body.name === name);
+
+    it('waits a settle delay after the database step, before the first config call', async () => {
+      const h = harness();
+      expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+      expect(h.sleeps).toEqual([POOLER_SETTLE_MS]);
+      expect(POOLER_SETTLE_MS).toBe(20_000);
+    });
+
+    it('retries a config on 2013 after a spaced wait, then goes on', async () => {
+      const h = harness({ cf: failTimes(1, 2013, 'trace-staging-api-login') });
+      expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+      expect(writesOf(h, 'trace-staging-api-login')).toHaveLength(2);
+      expect(h.sleeps).toEqual([20_000, 30_000]);
+      expect(h.printed()).toMatch(
+        /waiting 30 s for the Supabase pooler to pick up the new password of api_login \(error 2013, attempt 2 of 4\)/,
+      );
+      // The same password is sent again: the database already holds it.
+      const [a, b] = writesOf(h, 'trace-staging-api-login');
+      expect(a.body.origin.password).toBe(b.body.origin.password);
+      expect(h.puts()).toHaveLength(1);
+      for (const v of secretsOf(h)) expect(h.printed()).not.toContain(v);
+    });
+
+    it('gives up after 4 attempts on one config: wait 5 minutes, then re-run once (exit 1)', async () => {
+      const h = harness({ cf: failTimes(9, 2013, 'trace-staging-api-login') });
+      expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+      expect(writesOf(h, 'trace-staging-api-login')).toHaveLength(4);
+      expect(writesOf(h, 'trace-staging-jobs-mirror-login')).toHaveLength(0);
+      expect(h.sleeps).toEqual([20_000, 30_000, 45_000, 60_000]);
+      const text = h.err.join('');
+      expect(text).toContain('2013');
+      expect(text).toMatch(/wait 5 minutes/i);
+      expect(text).toMatch(/re-run --yes once/i);
+      expect(text).not.toMatch(/--ca-certificate-id/);
+      expect(text).not.toContain('password authentication failed');
+      expect(h.puts()).toHaveLength(0);
+      for (const v of secretsOf(h)) expect(h.printed()).not.toContain(v);
+    });
+
+    it('never retries another error code: 2011 fails after one call, with the CA and sslmode hint', async () => {
+      const h = harness({ cf: failTimes(9, 2011, 'trace-staging-api-login') });
+      expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+      expect(writesOf(h, 'trace-staging-api-login')).toHaveLength(1);
+      expect(h.sleeps).toEqual([20_000]);
+      expect(h.err.join('')).toMatch(/--ca-certificate-id/);
+    });
+
+    it('caps the retries of the whole run at 8, so a real credential problem cannot hammer the pooler', async () => {
+      const h = harness({ cf: failTimes(3) });
+      expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+      expect(h.sleeps.slice(1)).toHaveLength(8);
+      // configs 1 and 2 take 3 retries each and succeed; config 3 fails once more than the 2 retries left
+      expect(writesOf(h, 'trace-staging-api-login')).toHaveLength(4);
+      expect(writesOf(h, 'trace-staging-jobs-mirror-login')).toHaveLength(4);
+      expect(writesOf(h, 'trace-staging-jobs-quality-login')).toHaveLength(3);
+      expect(writesOf(h, 'trace-staging-jobs-integrity-login')).toHaveLength(0);
+      expect(h.err.join('')).toMatch(/wait 5 minutes/i);
+    });
+
+    it('a dry run never waits', async () => {
+      const h = harness();
+      expect(await main({ argv: DRY, deps: h.deps })).toBe(0);
+      expect(h.sleeps).toEqual([]);
+    });
   });
 
   it.each([

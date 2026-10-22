@@ -31,6 +31,7 @@
 //      membership or attribute. Never drops or revokes. The password reaches Postgres as a SCRAM-SHA-256 verifier
 //      only, so the plain text is never in a server log.
 //   4. Per HYPERDRIVE_PLAN entry, in order: PUT (full update) the config of that exact name, or POST (create) it.
+//      The Supabase pooler caches credentials briefly, so it waits 20 s first and retries error 2013 (spaced, capped).
 //      The password travels only in the JSON body over HTTPS to api.cloudflare.com. Hyperdrive opens a test
 //      connection to the origin on create and update, so a wrong CA, sslmode or host fails here.
 //   5. `pnpm exec wrangler secret put MEDIA_LINK_HMAC_KEY --env staging` in services/api, the value on stdin only.
@@ -87,6 +88,19 @@ const OPTIONS = {
 };
 const DEFAULT_SSLMODE = 'verify-full';
 const CF_TIMEOUT_MS = 60_000;
+/** Hyperdrive's "invalid database credentials" (developers.cloudflare.com/hyperdrive/observability/troubleshooting). */
+const CF_INVALID_CREDENTIALS = 2013;
+/**
+ * The Supabase Shared Pooler caches credentials briefly after a password change (Supabase troubleshooting "Supavisor
+ * error: password authentication failed after rotating database password": about 15 s with active pooled
+ * connections). Wait this long after the rotation before the first config call, then retry 2013 after these waits:
+ * at most 4 attempts per config and 8 retries per run, spaced out so the pooler's per-IP circuit breaker (about 2
+ * minutes, extended by more bad logins) is not tripped.
+ */
+export const POOLER_SETTLE_MS = 20_000;
+export const POOLER_RETRY_WAITS_MS = Object.freeze([30_000, 45_000, 60_000]);
+export const POOLER_MAX_RETRIES_PER_RUN = 8;
+const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * The Workers this script touches and the secrets it sets. `login` is always null now: the database logins live in
@@ -802,19 +816,46 @@ export async function main({ argv, deps = realScriptDeps() }) {
   say(`${TAG}: database: ${LOGIN_ROLES.length} login roles have new passwords and their one grant`);
 
   // 4. The Hyperdrive configs, in plan order. A failure leaves this and the later ones on old passwords.
+  // The Supabase Shared Pooler caches credentials briefly, so right after the rotation it may still check the old
+  // password and Hyperdrive's connection test answers 2013 (invalid credentials). Wait a settle delay first, then
+  // retry 2013 only, spaced out and capped per config and per run (a burst of bad logins trips the pooler's per-IP
+  // circuit breaker). Any other failure stops at once.
+  const sleep = deps.sleep ?? realSleep;
+  await sleep(POOLER_SETTLE_MS);
+  let retriesLeft = POOLER_MAX_RETRIES_PER_RUN;
   const ids = {};
   for (const [i, p] of HYPERDRIVE_PLAN.entries()) {
     const id = listed.existing[p.config];
-    const r =
-      id === undefined
-        ? await cloudflare(deps, auth.token, 'POST', HYPERDRIVE_CONFIGS_URL, bodies[i])
-        : await cloudflare(deps, auth.token, 'PUT', `${HYPERDRIVE_CONFIGS_URL}/${id}`, bodies[i]);
+    let r;
+    for (let attempt = 1; ; attempt += 1) {
+      r =
+        id === undefined
+          ? await cloudflare(deps, auth.token, 'POST', HYPERDRIVE_CONFIGS_URL, bodies[i])
+          : await cloudflare(deps, auth.token, 'PUT', `${HYPERDRIVE_CONFIGS_URL}/${id}`, bodies[i]);
+      const stalePassword = !r.ok && r.codes.includes(CF_INVALID_CREDENTIALS);
+      if (!stalePassword || attempt > POOLER_RETRY_WAITS_MS.length || retriesLeft === 0) break;
+      const wait = POOLER_RETRY_WAITS_MS[attempt - 1];
+      retriesLeft -= 1;
+      say(
+        `${TAG}: waiting ${wait / 1000} s for the Supabase pooler to pick up the new password of ${p.login} (error ${CF_INVALID_CREDENTIALS}, attempt ${attempt + 1} of ${POOLER_RETRY_WAITS_MS.length + 1})`,
+      );
+      await sleep(wait);
+    }
     const newId = id ?? r.json?.result?.id;
     if (!r.ok || typeof newId !== 'string' || !HYPERDRIVE_ID_RE.test(newId)) {
       const stale = configs.slice(i);
+      const action = `${id === undefined ? 'creating' : 'updating'} the Hyperdrive config ${p.config} failed`;
+      const why = r.ok ? 'the created config has no 32-character hex id' : cfDetail(r);
+      const after = `The database passwords already changed, so these configs hold old passwords or do not exist yet: ${stale.join(', ')}.`;
+      if (!r.ok && r.codes.includes(CF_INVALID_CREDENTIALS)) {
+        return fail(
+          1,
+          `${action} (${why}): the Supabase pooler still had the old password of ${p.login} after the waits (it caches credentials briefly). ${after} Do not re-run now: every run rotates the passwords again and restarts the cache, and repeated bad logins trip the pooler's circuit breaker. Wait 5 minutes, then re-run --yes once`,
+        );
+      }
       return fail(
         1,
-        `${id === undefined ? 'creating' : 'updating'} the Hyperdrive config ${p.config} failed (${r.ok ? 'the created config has no 32-character hex id' : cfDetail(r)}). Hyperdrive tests the database connection on create and update, so the CA, the sslmode or the host may be wrong: check --ca-certificate-id, or try --sslmode verify-ca. The database passwords already changed, so these configs hold old passwords or do not exist yet: ${stale.join(', ')}. Fix the cause and re-run with --yes`,
+        `${action} (${why}). Hyperdrive tests the database connection on create and update, so the CA, the sslmode or the host may be wrong: check --ca-certificate-id, or try --sslmode verify-ca. ${after} Fix the cause and re-run with --yes`,
       );
     }
     ids[p.binding] = newId;
