@@ -72,16 +72,15 @@ const attempt = async (
   }
 };
 
-const handle = async (raw: Message<unknown>, deps: ConsumerDeps): Promise<void> => {
-  const parsed = SessionMirrorMessage.safeParse(raw.body);
-  if (!parsed.success) {
-    // A malformed message can never become valid: ack so it is not retried forever, and log nothing of it.
-    deps.log.warn('queue.message_invalid');
-    raw.ack();
-    return;
-  }
-  const message = parsed.data;
+/** Sessions handled side by side in one batch; each runs one stage (one connection) at a time, and Workers allow
+ * six open connections per invocation. */
+export const SESSION_CONCURRENCY = 4;
 
+const settle = async (
+  raw: Message<unknown>,
+  message: SessionMirrorMessage,
+  deps: ConsumerDeps,
+): Promise<void> => {
   if (!(await attempt('mirror', message, deps))) {
     raw.retry();
     return;
@@ -92,12 +91,36 @@ const handle = async (raw: Message<unknown>, deps: ConsumerDeps): Promise<void> 
   else raw.retry();
 };
 
-/** Handles a batch one message at a time; one message's failure never affects another's. */
+/**
+ * Handles a batch: different sessions side by side (at most SESSION_CONCURRENCY at once), one session's messages
+ * in arrival order, so a redelivered message never races its own session's stages. One message's failure never
+ * affects another's. (On staging one message takes ~25 s; one at a time put the last of four sessions past the
+ * 90 s AT-D17 limit, e2e-staging run 39791480658.)
+ */
 export const processBatch = async (
   batch: MessageBatch<unknown>,
   deps: ConsumerDeps,
 ): Promise<void> => {
+  const lanes = new Map<string, { raw: Message<unknown>; message: SessionMirrorMessage }[]>();
   for (const raw of batch.messages) {
-    await handle(raw, deps);
+    const parsed = SessionMirrorMessage.safeParse(raw.body);
+    if (!parsed.success) {
+      // A malformed message can never become valid: ack so it is not retried forever, and log nothing of it.
+      deps.log.warn('queue.message_invalid');
+      raw.ack();
+      continue;
+    }
+    const lane = lanes.get(parsed.data.sessionId) ?? [];
+    lane.push({ raw, message: parsed.data });
+    lanes.set(parsed.data.sessionId, lane);
   }
+  const waiting = [...lanes.values()];
+  const runLanes = async (): Promise<void> => {
+    for (let lane = waiting.shift(); lane !== undefined; lane = waiting.shift()) {
+      for (const { raw, message } of lane) await settle(raw, message, deps);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(SESSION_CONCURRENCY, waiting.length) }, runLanes),
+  );
 };

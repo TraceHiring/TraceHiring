@@ -157,6 +157,130 @@ describe('processBatch: ack and retry matrix (spec §5.1)', () => {
   });
 });
 
+// e2e-staging run 39791480658 (AT-D17): one message takes ~25 s on staging, so four sessions handled one after
+// another put the last one's cards past 90 s. Sessions now run side by side; one session's messages stay in order.
+describe('processBatch: concurrency across sessions', () => {
+  const sessionId = (n: number): string =>
+    `3f2b8c1e-9a47-4d6b-8e15-7c0a2d94c${n.toString(16).padStart(3, '0')}`;
+  /** A promise and its resolver, to hold a stage open. */
+  const gate = () => {
+    let open!: () => void;
+    const shut = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { shut, open };
+  };
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  it('runs a second session while the first is still in its mirror stage', async () => {
+    const { deps } = setup();
+    const held = gate();
+    const started: string[] = [];
+    const stages: Stages = {
+      mirror: (m) => {
+        started.push(m.sessionId);
+        return m.sessionId === sessionId(1) ? held.shut : Promise.resolve();
+      },
+      quality: () => Promise.resolve(),
+      integrity: () => Promise.resolve(),
+    };
+    const first = fakeMessage(validMessage({ sessionId: sessionId(1) }), 'a');
+    const second = fakeMessage(validMessage({ sessionId: sessionId(2) }), 'b');
+
+    const done = processBatch(fakeBatch([first, second]), { ...deps, stages });
+    await tick();
+
+    expect(started).toEqual([sessionId(1), sessionId(2)]);
+    expect(second.acked()).toBe(1);
+    expect(first.acked()).toBe(0);
+    held.open();
+    await done;
+    expect(first.acked()).toBe(1);
+  });
+
+  it("keeps one session's messages in order: the second starts after the first has settled", async () => {
+    const { deps } = setup();
+    const held = gate();
+    const calls: string[] = [];
+    const stages: Stages = {
+      mirror: (m) => {
+        calls.push(`mirror:${m.receiptRef}`);
+        return Promise.resolve();
+      },
+      quality: (m) => {
+        calls.push(`quality:${m.receiptRef}`);
+        return m.receiptRef === 'F1RST111' ? held.shut : Promise.resolve();
+      },
+      integrity: (m) => Promise.resolve(void calls.push(`integrity:${m.receiptRef}`)),
+    };
+    const first = fakeMessage(validMessage({ receiptRef: 'F1RST111' }), 'a');
+    const again = fakeMessage(validMessage({ receiptRef: 'AGA1N222' }), 'b');
+
+    const done = processBatch(fakeBatch([first, again]), { ...deps, stages });
+    await tick();
+    expect(calls).toEqual(['mirror:F1RST111', 'quality:F1RST111']);
+
+    held.open();
+    await done;
+    expect(calls).toEqual([
+      'mirror:F1RST111',
+      'quality:F1RST111',
+      'integrity:F1RST111',
+      'mirror:AGA1N222',
+      'quality:AGA1N222',
+      'integrity:AGA1N222',
+    ]);
+    expect(first.acked()).toBe(1);
+    expect(again.acked()).toBe(1);
+  });
+
+  it('runs at most four sessions at once (Workers allow six open connections per invocation)', async () => {
+    const { deps } = setup();
+    const held = gate();
+    let inFlight = 0;
+    let most = 0;
+    const stages: Stages = {
+      mirror: async () => {
+        inFlight += 1;
+        most = Math.max(most, inFlight);
+        await held.shut;
+        inFlight -= 1;
+      },
+      quality: () => Promise.resolve(),
+      integrity: () => Promise.resolve(),
+    };
+    const messages = [1, 2, 3, 4, 5, 6, 7].map((n) =>
+      fakeMessage(validMessage({ sessionId: sessionId(n) }), `m${n}`),
+    );
+
+    const done = processBatch(fakeBatch(messages), { ...deps, stages });
+    await tick();
+    expect(inFlight).toBe(4);
+
+    held.open();
+    await done;
+    expect(most).toBe(4);
+    expect(messages.map((m) => m.acked())).toEqual([1, 1, 1, 1, 1, 1, 1]);
+  });
+
+  it("one session's failure never holds back or settles another session's message", async () => {
+    const { deps } = setup();
+    const stages: Stages = {
+      mirror: (m) =>
+        m.sessionId === sessionId(1) ? Promise.reject(new Error('x')) : Promise.resolve(),
+      quality: () => Promise.resolve(),
+      integrity: () => Promise.resolve(),
+    };
+    const bad = fakeMessage(validMessage({ sessionId: sessionId(1) }), 'a');
+    const good = fakeMessage(validMessage({ sessionId: sessionId(2) }), 'b');
+
+    await processBatch(fakeBatch([bad, good]), { ...deps, stages });
+
+    expect([bad.retried(), bad.acked()]).toEqual([1, 0]);
+    expect([good.retried(), good.acked()]).toEqual([0, 1]);
+  });
+});
+
 describe('processBatch: invalid messages', () => {
   // Built at run time so no PII-shaped literal sits in the repo.
   const email = (): string => ['pat', 'example.test'].join('@');
