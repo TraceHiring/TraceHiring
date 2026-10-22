@@ -1,5 +1,5 @@
-# HANDOFF — 2026-10-23 00:05 IST (M1 SPEC done on `m1/integration`; next: M1 BUILD 1 = Wave 0)
-Reason for stopping: the chat's task (M1 SPEC) is done. Usage at stop: see LOG row. Start from `docs/progress/RESUME-PROMPT.md` on **`m1/integration`** (worktree `.claude/worktrees/m1-integration`). The repo wins over this file and over any memory.
+# HANDOFF — 2026-10-23 01:45 IST (M1 BUILD 1 = Wave 0, part 1 done on `m1/integration`; next: Wave 0 part 2)
+Reason for stopping: context near 60% (chat rule). Wave 0 split at the migration boundary (spec §11.4). Usage at stop: see LOG row. Start from `docs/progress/RESUME-PROMPT.md` on **`m1/integration`** (worktree `.claude/worktrees/m1-integration`). The repo wins over this file and over any memory.
 
 ## Paused: D1 (founder, 2026-10-22 night: paused, not closed)
 D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/worktrees/d1-integration`). Nothing is committed to `d1/integration` or `main` from M1. Copied from the `d1/integration` HANDOFF (`3c2e42a`, tip `1547fd0`):
@@ -9,32 +9,39 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
 - **D1 founder items:** AT-D2 screen capture (`pnpm e2e:record`); Workers Paid (OPEN-8a) "not yet", decide before any load test (M3a); Dependabot PRs #7-#12 not merged blind; after D1 merges, `e2e-local` back on the required checks.
 
 ## Where we are (verified this chat)
-- Milestone **M1 · Test authoring**, phase **SPEC done** (AUTOPILOT §2). Branch **`m1/integration`** cut from `1547fd0` (founder, 2026-10-22). HEAD = this handoff commit; parent chain `d0e67b6` (spec approved) → `1ea5542` → `f225d45` → `25177f9` → `b44847e` → `c523838` → `422dfc8` (merge of `spec/m1-m2` @ `17f3fed`).
-- `d1/integration` = `1547fd0`, `trace/main` = `da5380d`, `cp/d1-10` → `f226950`: unchanged.
-- `pnpm -s verify:fast` green on `1547fd0` (before any M1 commit) (exit 0, 452 s; 2715 passed + 1 skipped); the first run hit the known D1-LEAD-1 commitlint hook timeout under load (passes alone in 1.9 s). Docs-only commits since.
-- No staging dispatch this chat.
+- Milestone **M1 · Test authoring**, phase **BUILD 1 = Wave 0, part 1 of 2 done** (lead only, no writers). Branch `m1/integration`. HEAD = this handoff commit; parents `3db2585` (db-types type test) → `486f41d` (M1-a migration) → `a7a3d94` (pgTAP red first) → `a6ae915` (M1 SPEC handoff).
+- `d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged.
+- `pnpm test:rls` green on `486f41d`'s tree (all files, catalog checks, db-types; `rls_*` 2870 passed = new floor; `catalog_*` floor 144 unchanged). Full `pnpm verify` (`--workspace-concurrency=1`) on `3db2585`: typecheck + lint green; `workers/edge` test hit a V8 heap OOM once (RAM, D1-LEAD-1 class), passed alone (24 files, 417 tests); then `pnpm test`, `pnpm test:rls`, `pnpm build` re-run in sequence: exit 0.
+- No staging dispatch. No reviews run yet on M1-a (see Next step 3).
 
 ## Done this chat (verified)
-- `422dfc8` merge `spec/m1-m2` (M1 + M2 specs revision 4, SPEC-M1-M2.md).
-- `specs/m1-test-authoring.md` **revision 5** (binding rows §1.8 R5-1…R5-46): `c523838`, `25177f9`, `f225d45`, `1ea5542`, approval `d0e67b6`; founder rows `b44847e`. Highlights: R5-1 branch/CLOSE order; R5-2 ADR-033 `fflate`; R5-3 `LlmDrafter` (Q22); R5-5/R5-31 flags guard refuses all-disabled rules; R5-7 band engine reads `signalSettings` (`band-engine-2`); R5-9/R5-20/R5-21/R5-45 candidate session v2, section state machine §4.6, refused events, forward-only from DO serves; R5-19/R5-41/R5-42 pool scoring from the candidate's draw; R5-22 "Send back"/`not_approved`; R5-28 D1 pgTAP supersession list; R5-30 provisional migration timestamps until D1 CLOSE; R5-33 exit-gate scope; §11.3 streams A1–A7, §11.4 BUILD chats.
-- Reviews: Opus spec-reviewer BLOCK (4 High) → fixed → confirming **PASS WITH FINDINGS** → fixed; Opus database-reviewer BLOCK (1 Blocking, 2 High) → fixed → confirming **PASS WITH FINDINGS** → fixed; final Sonnet check PASS WITH FINDINGS → fixed (R5-47); "Spec approved by autopilot reviewers" recorded (`d0e67b6`).
-- `docs/build-notes.md` §0 row "D1 paused, M1 starts"; `FOUNDER-QUEUE.md` Resolved row + open row Q-M1-1…4; `SPEC-M1-M2.md` stale lines marked superseded; `RESUME-PROMPT.md` points at `m1/integration` with the D1 pause line.
+- `a7a3d94` pgTAP written red first: `supabase/tests/rls_m1_bank` (110), `rls_m1_keys` (47), `rls_m1_variants` (34), `rls_m1_pools` (44); sources + drafts in `docs/progress/m1-wave0-drafts/` (README there).
+- `486f41d` migration **M1-a** `supabase/migrations/20261023010000_m1_bank.sql` (provisional timestamp, R5-30): roles `trace_authoring_worker`, `trace_admin_worker`; library org + default workspace; `private.library_org_id()`; `item_status` enum; `skill_taxonomy` (+ seed, moved here from M1-b); `items`; `item_versions` widened + guard v2 (inline rows keep D1's path; bank §4.1 state machine, origin from the write path, approver roles R5-38/R5-40, library expert review); `item_answer_keys` widened + guard v2 (R5-44) + policies recreated with `not library_sourced`; `item_variants`/`item_variant_keys` (±0.10); `item_exposure_events` (append-only) + `v_item_exposure`; `v_item_bank_quant_share` (AT-M1-06 counting view, new); `pools`/`pool_items`; `library_copy_requests` + copy trigger (reuse, rubric copy, 2,000/day cap); `private.library_browse`, `library_exposure` (trace_api); hooks `private.ai_draft_job_running` / `import_job_open` return false until M1-c replaces them.
+- R5-28 edits (add-only): `rls_d1_invariants` role list, login lists, I-12 NOT NULL list minus item_versions/item_answer_keys (inline proof in rls_m1_bank/keys). `rls_roles` R5-32 lists extended + 2 rows for the new roles (plan 67). `packages/db-types` regenerated. build-notes "Autopilot changes" row (R5-1, R3-10, split, seed move).
+- One D1 test caught a regression and it was fixed in the migration (`rls_d1_consents` TRUNCATE CASCADE): `item_exposure_events` keeps its owner TRUNCATE grant (the ALWAYS trigger refuses it).
 
 ## Next step (one precise action)
-**M1 BUILD 1 = Wave 0** (spec §11.2 in full, §11.4 checklist): lead only, no writers. Write the `rls_m1_*` pgTAP files of §10 red first (`.claude/allow-red`), plus the R5-28 supersession edits; then migrations M1-a…d (provisional timestamps after `20261021091905`, R5-30) until green; contracts (`contracts-m1.ts`, candidate v2, mirror union, audit actions); db-types; ADR-033; logins, secrets allow-list, queues, boundaries, `rls_roles` lists, floors; carried items; build-notes "Autopilot changes" rows (R5-1, R3-10). Full `pnpm verify` (`pnpm -r --workspace-concurrency=1`), then open a **draft PR `m1/integration` → `main` for CI only (never merged)**. Then BUILD 2 = Wave 1 (A1, A6, A5).
+**M1 BUILD 1 part 2 (Wave 0b), lead only:**
+1. pgTAP red first for M1-b from `docs/progress/m1-wave0-drafts/m1b_tests.sql.draft` (applied cleanly locally on top of M1-a, untested): `rls_m1_snapshot`, `rls_m1_publish_v2`, `rls_m1_serving`, `rls_m1_settings` (incl. R5-5/R5-31 flags guard, R5-34), `rls_m1_templates_jobs`, `rls_m1_carried` (each replaced function: one D1 case + one M1 case; B0-SP7 rest), `rls_m1_candidate_denied`; then place M1-b, then M1-c (imports, ai drafts; replace the two hooks; ai_draft⇔job CHECK; AT-M1-07/08 ai cases), M1-d (members, R5-35 fences) with `rls_m1_imports`, `rls_m1_ai_drafts`, `rls_m1_members`. Use the generator (`gen.mjs`/`run.mjs`, preamble) in the drafts folder.
+2. Then the rest of §11.2: contracts (`contracts-m1.ts`, candidate v2, mirror v1|v2 union, `refusedSeqs`/`section_closed`, audit actions R5-14/R5-26 — the DB already writes `item.create`, `item.submit`, `item.approve`, `item.not_approved`, `item.retire`, `item.ai_drafted`, `library.copy`, `pool.archive`), ADR-033, logins R5-11, secrets allow-list R5-12 (+ D1 spec 4q row), queues R5-13, boundaries R5-10, `VENDOR_INTERFACES`, carried items (MT-11 FR-1, D1-LEAD-1), floors.
+3. Opus database-reviewer + security-reviewer on M1-a…d, spec-reviewer on contracts; fixes test first; confirming re-review; full `pnpm verify`; draft PR `m1/integration → main` (CI only, never merged); fix Linux CI. If one chat cannot hold it, split again at a migration boundary.
+Then BUILD 2 = Wave 1 (A1, A6, A5).
 
-## Decisions made this chat
-- Founder: D1 paused; M1 starts on `m1/integration`; M1 merges after D1 CLOSE with go-ahead (build-notes §0).
-- Lead: reuse the approved revision 4 (merged with history) and refresh it to revision 5 instead of rewriting; all decisions are rows R5-n in the spec.
-- Lead: M1 builds Q26 one-way written sections (supersedes D1 R-16's deferral for Q26 only, R5-9).
+## Decisions made this chat (all HOW-level, build-notes row 2026-10-23)
+- Wave 0 split (§11.4). Skill taxonomy seed in M1-a. `items.id` and pool/library/copy ids are client-suppliable (uuid, like consents); `item_versions.id` is not (D1 grant kept).
+- Operator path (postgres, no JWT) may name `origin` and the approval columns, as it names `created_by` in D1 (fixtures; AT-M1-08's ai_draft fixture).
+- An `origin` value outside the CHECK is left for the CHECK (23514, rls_d1_tests:487 unchanged); any value inside it is overwritten from the write path (carried n-3).
+- Library copies of written items copy the library rubric into the customer org as `library-<key>` (FK needs a same-org rubric). Library media keys are kept as is (shared library prefix).
+- `v_item_bank_quant_share` view added for AT-M1-06's db-backed case.
 
-## Founder items (new or due)
-- Q-M1-1…Q-M1-4 now FOUNDER-QUEUE rows (defaults built). Staging parts of M1 (DC-M1-5 F-1 secret key, F-8 pepper, DC-M1-6 Hyperdrive configs for the two new logins) wait for a staging go-ahead.
+## Founder items
+- Unchanged: Q-M1-1…Q-M1-4 (FOUNDER-QUEUE, defaults built); staging parts of M1 wait for a staging go-ahead.
 
 ## Gotchas
-- The worktree guard refuses `cd …&&` + git, `$(...)`, heredocs whose text names `.github`, and chained git calls: run plain commands from the worktree; commit messages via `git commit -F <scratchpad file>` (body lines ≤ 100 chars).
-- Timing tests (commitlint, gitleaks-driven) can exceed 60 s under load on this laptop (D1-LEAD-1); re-run alone before suspecting a regression.
-- `ADR-032` is the edge link rate limit; M1's `fflate` ADR is ADR-033.
+- The worktree guard refuses `cd …&&` + git, `$(...)`, shell variables in docker/sed/git commands and chained git calls: run plain commands from the worktree; commit messages via `git commit -F <scratchpad file>`.
+- pgTAP runs as a superuser through `supabase test db`; plain `psql -U postgres` cannot `grant trace_* to postgres`. Run one file: `pnpm exec supabase test db --local supabase/tests/<file>`.
+- Never hand-edit generated `rls_m1_*.test.sql`: edit `docs/progress/m1-wave0-drafts/pgtap/bodies/<name>.sql`, regenerate.
+- `integrity_presets` column is `preset_values` (`values` is reserved).
 
 ## Verify first
 `git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `pnpm -s verify:fast`
