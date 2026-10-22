@@ -67,7 +67,10 @@ Reason for stopping: context ~50% (founder rule) after the first green Hyperdriv
 - osv ignores are time-boxed until vitest 4.1.12 passes the release-age rule (`docs/build-notes.md` Autopilot changes 2026-10-22).
 
 ## Founder items
-- Save the `main` ruleset (Active, default-branch target) and close the 16 false-positive alerts.
+- **Done 2026-10-22 (verified with `gh api`):**
+  - Ruleset 25633431 "trace rule" is active on `~DEFAULT_BRANCH` (`main`): no bypass, deletion and force push blocked, PR required with 0 approvals and merge-only, required checks static/rls/security/migrations (`e2e-local` to be added back after D1 merges).
+  - The 16 false-positive alerts are closed (0 open).
+- Still open for the CLOSE: `[skip ci]` on the merge commits or accept a red deploy; H11 output or accept indirect evidence.
 - Go-ahead for the M0a/M0b CLOSE.
 - AT-D2 screen capture after e2e-staging is green.
 - Optional: Dependency graph and Dependabot alerts on; fork-PR approval for all outside contributors.
