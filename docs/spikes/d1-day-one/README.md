@@ -2,8 +2,8 @@
 
 Throwaway, standalone npm project (not in the pnpm workspace). Run locally on 2026-10-14 for
 `specs/d1-demo-slice.md` section 8. Synthetic data only; keys are generated at run time and never printed.
-DC-D5 and DC-D6 (Windows half) were added on 2026-10-16 (sections at the end). DC-D1, D8 and D9, and the
-Linux CI half of DC-D6, are NOT RUN.
+DC-D5 and DC-D6 (Windows half) were added on 2026-10-16, DC-D8 (staging) on 2026-10-22 (sections at the end). DC-D1 is NOT RUN;
+DC-D9 and the Linux CI half of DC-D6 passed in the `e2e-local` CI job (`cp/d1-03`).
 
 ## How to run
 
@@ -221,3 +221,39 @@ used), `compatibility_date` 2026-08-15 (the same as `workers/edge/wrangler.jsonc
   `@trace/config`, which Vite cannot resolve outside the workspace), and `npm install` needs
   `legacy-peer-deps` with this wrangler/pool set. `@cloudflare/vitest-pool-workers` 0.23.0 prints a
   deprecation notice: it is renamed `@cloudflare/vitest-plugin`; the catalog pin should be reviewed.
+
+## DC-D8 CPU time per invocation on staging (run 2026-10-22)
+
+Measured during dispatch 39787385654 (`d1/integration` @ `f9ba70d`, e2e-staging steps 1-10 all ok): `wrangler tail
+<worker> --format json` on `trace-api-staging`, `trace-edge-staging` and `trace-jobs-staging` while the slice ran,
+then `node scripts/dc-d8-cpu.mjs tail-*.jsonl` (prints aggregates only: no logs, headers, bodies or query strings;
+the tail files stay outside the repo). `cpuTime` is Cloudflare's own per-invocation figure; TLS to Postgres goes
+through Hyperdrive (ADR-031 amendment 1).
+
+| Worker / model / entry point | n | CPU p50 ms | CPU p95 ms | CPU max ms | n > 10 ms |
+| --- | --- | --- | --- | --- | --- |
+| jobs / queue `trace-session-mirror-staging` (batch 2) | 1 | 99 | 99 | 99 | 1 |
+| jobs / queue `trace-session-mirror-staging` (batch 1) | 2 | 50 | 83 | 83 | 2 |
+| jobs / scheduled (sweep, every minute) | 10 | 21 | 42 | 42 | 10 |
+| api / rpc `messagingSend` | 5 | 15 | 30 | 30 | 4 |
+| api / rpc `inviteResolve` | 6 | 13 | 19 | 19 | 5 |
+| api / GET results list | 97 | 5 | 7 | 19 | 2 |
+| api / rpc `consentRecord` | 4 | 16 | 18 | 18 | 4 |
+| api / rpc `sessionGrant` | 4 | 11 | 16 | 16 | 3 |
+| edge / SessionDO rpc `start` | 4 | 8 | 16 | 16 | 2 |
+| api / rpc `lobbyMint` | 5 | 10 | 15 | 15 | 2 |
+| api / rpc `sessionStarted` | 4 | 7 | 14 | 14 | 1 |
+| api / POST start-photo-link | 1 | 14 | 14 | 14 | 1 |
+| api / rpc `noticeGet` | 4 | 11 | 13 | 13 | 3 |
+| edge / SessionDO rpc `submit` | 4 | 7 | 13 | 13 | 1 |
+| api / rpc `ageDeclare` | 5 | 10 | 12 | 12 | 2 |
+| edge / POST `/v1/session/start` | 4 | 7 | 11 | 11 | 1 |
+| every other entry point (44 rows: edge lobby and session routes, report reads, OPTIONS) | | | | ≤ 10 | 0 |
+
+**Result: the Workers Free 10 ms limit is exceeded.** The mirror consumer (which runs the quality and integrity
+stages) takes 50-99 ms, the sweep up to 42 ms and eight api RPC methods 12-30 ms; candidate-facing edge routes stay at
+or under 11 ms. All invocations ended `ok` on this account today except 3 of 5 `messagingSend` calls, which ended
+`canceled` (Cloudflare's outcome when the caller stops waiting; the slice's step 4 still found one demo-outbox link
+per invitation, so the cause is not yet known and is a follow-up). Nothing failed, but the Free limit gives no
+headroom. Per FOUNDER-QUEUE row 2026-10-14 ("Queues and Workers Paid") and OPEN-8a this is the founder's decision:
+**Workers Paid (USD 5/month)**. Queues exist and ran on the current plan (DC-D2 staging half).
