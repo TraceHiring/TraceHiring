@@ -6,6 +6,7 @@ import { createLogger, type ErrorReporter, type SerializedError } from '@trace/s
 import { describe, expect, it } from 'vitest';
 import {
   NOT_IMPLEMENTED,
+  SESSION_CONCURRENCY,
   notImplementedStages,
   processBatch,
   type Stages,
@@ -234,33 +235,68 @@ describe('processBatch: concurrency across sessions', () => {
     expect(again.acked()).toBe(1);
   });
 
-  it('runs at most four sessions at once (Workers allow six open connections per invocation)', async () => {
+  it('runs at most three stages at once across every stage (DB sockets plus R2 reads stay within six)', async () => {
     const { deps } = setup();
     const held = gate();
     let inFlight = 0;
     let most = 0;
-    const stages: Stages = {
-      mirror: async () => {
-        inFlight += 1;
-        most = Math.max(most, inFlight);
-        await held.shut;
-        inFlight -= 1;
-      },
-      quality: () => Promise.resolve(),
-      integrity: () => Promise.resolve(),
+    const counted = async (): Promise<void> => {
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await held.shut;
+      inFlight -= 1;
     };
+    const stages: Stages = { mirror: counted, quality: counted, integrity: counted };
     const messages = [1, 2, 3, 4, 5, 6, 7].map((n) =>
       fakeMessage(validMessage({ sessionId: sessionId(n) }), `m${n}`),
     );
 
     const done = processBatch(fakeBatch(messages), { ...deps, stages });
     await tick();
-    expect(inFlight).toBe(4);
+    expect(SESSION_CONCURRENCY).toBe(3);
+    expect(inFlight).toBe(3);
 
     held.open();
     await done;
-    expect(most).toBe(4);
+    expect(most).toBe(3);
     expect(messages.map((m) => m.acked())).toEqual([1, 1, 1, 1, 1, 1, 1]);
+  });
+
+  it("a failed first message of a session is retried and that session's next message still runs", async () => {
+    const { deps } = setup();
+    const stages: Stages = {
+      mirror: (m) =>
+        m.receiptRef === 'F1RST111' ? Promise.reject(new Error('x')) : Promise.resolve(),
+      quality: () => Promise.resolve(),
+      integrity: () => Promise.resolve(),
+    };
+    const first = fakeMessage(validMessage({ receiptRef: 'F1RST111' }), 'a');
+    const again = fakeMessage(validMessage({ receiptRef: 'AGA1N222' }), 'b');
+
+    await processBatch(fakeBatch([first, again]), { ...deps, stages });
+
+    expect([first.retried(), first.acked()]).toEqual([1, 0]);
+    expect([again.retried(), again.acked()]).toEqual([0, 1]);
+  });
+
+  it('a throw while settling one message retries it and never rejects the batch or stops other sessions', async () => {
+    const { deps } = setup();
+    let retries = 0;
+    const throwing = {
+      ...fakeMessage(validMessage({ sessionId: sessionId(1) }), 'a'),
+      ack: () => {
+        throw new Error('ack failed');
+      },
+      retry: () => {
+        retries += 1;
+      },
+    } as unknown as Message<unknown>;
+    const other = fakeMessage(validMessage({ sessionId: sessionId(2) }), 'b');
+
+    await expect(processBatch(fakeBatch([throwing, other]), deps)).resolves.toBeUndefined();
+
+    expect(retries).toBe(1);
+    expect(other.acked()).toBe(1);
   });
 
   it("one session's failure never holds back or settles another session's message", async () => {

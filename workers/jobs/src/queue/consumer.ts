@@ -72,9 +72,10 @@ const attempt = async (
   }
 };
 
-/** Sessions handled side by side in one batch; each runs one stage (one connection) at a time, and Workers allow
- * six open connections per invocation. */
-export const SESSION_CONCURRENCY = 4;
+/** Sessions handled side by side in one batch. Each runs one stage at a time, which holds one DB socket and may
+ * read R2 meanwhile, so three sessions stay within the six open connections Workers allow per invocation and
+ * within memory (a stage buffers up to ~28 MB of evidence; review of 48f6e8d, M1 and M2). */
+export const SESSION_CONCURRENCY = 3;
 
 const settle = async (
   raw: Message<unknown>,
@@ -117,7 +118,20 @@ export const processBatch = async (
   const waiting = [...lanes.values()];
   const runLanes = async (): Promise<void> => {
     for (let lane = waiting.shift(); lane !== undefined; lane = waiting.shift()) {
-      for (const { raw, message } of lane) await settle(raw, message, deps);
+      for (const { raw, message } of lane) {
+        try {
+          await settle(raw, message, deps);
+        } catch (err) {
+          // A throw from ack/retry or the reporter must not reject the batch while other sessions are mid-stage
+          // (review of 48f6e8d, M3): retry this message; every stage is idempotent under its own key.
+          deps.log.error('queue.settle_failed', { sessionId: message.sessionId }, { err });
+          try {
+            raw.retry();
+          } catch {
+            // Nothing more to do: the platform redelivers an unsettled message.
+          }
+        }
+      }
     }
   };
   await Promise.all(
