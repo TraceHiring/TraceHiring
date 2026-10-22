@@ -355,7 +355,9 @@ same (the configs are updated in place), so nothing needs committing again.
 3. Runs one transaction as `postgres` (SQL on `psql`'s standard input, `ON_ERROR_STOP=1`):
    stops if a `trace_*` role is missing (migrations not applied); for each login, creates it
    (`login noinherit`) or sets its new password; grants its one `trace_*` role `with inherit false, set true`;
-   then stops if any login holds another membership or a powerful attribute. It never drops or revokes
+   sets its server-side timeouts (`statement_timeout` 15s, `lock_timeout` 10s,
+   `idle_in_transaction_session_timeout` 30s, so a stuck transaction cannot hold one of its 5 Hyperdrive
+   connections for long); then stops if any login holds another membership or a powerful attribute. It never drops or revokes
    anything. Postgres receives each password only as a SCRAM-SHA-256 verifier, so the plain password is never
    in a server log. A SQL error rolls the whole transaction back. If the connection drops or `psql` times out
    instead, the script cannot know whether the commit ran, says so, and asks for a re-run with `--yes`.

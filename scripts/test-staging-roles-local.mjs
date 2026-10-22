@@ -20,7 +20,11 @@ import { randomBytes } from 'node:crypto';
 import { isEntryPoint } from './lib/cli.mjs';
 import { LOGIN_ROLES } from './lib/e2e-local-secrets.mjs';
 import { LOCAL_DB_CONTAINER } from './ops/lib.mjs';
-import { generateValues, stagingLoginRolesSql } from './ops/staging-worker-secrets.mjs';
+import {
+  LOGIN_TIMEOUTS,
+  generateValues,
+  stagingLoginRolesSql,
+} from './ops/staging-worker-secrets.mjs';
 
 const TAG = 'test-staging-roles-local';
 const PSQL = Object.freeze([
@@ -85,15 +89,23 @@ export function checksSql(label, verifiers) {
         ` join pg_catalog.pg_roles r on r.oid = m.roleid where l.rolname = '${login}'), false);`,
       `select '${label}:scram:${login}', coalesce((select rolpassword = '${v}'` +
         ` from pg_catalog.pg_authid where rolname = '${login}'), false);`,
+      `select '${label}:settings:${login}', coalesce((select s.setconfig @> array[${settings}]::text[]` +
+        ` from pg_catalog.pg_db_role_setting s join pg_catalog.pg_roles l on l.oid = s.setrole` +
+        ` where l.rolname = '${login}' and s.setdatabase = 0), false);`,
     );
   }
   return out.join('\n');
 }
 
+/** `'name=value', …` for the login timeouts, as pg_db_role_setting stores them. */
+const settings = Object.entries(LOGIN_TIMEOUTS)
+  .map(([k, v]) => `'${k}=${v}'`)
+  .join(', ');
+
 /** The names `checksSql(label, …)` prints, in order. */
 export const checkNames = (label) =>
   LOGIN_ROLES.flatMap(({ login }) =>
-    ['attrs', 'grant', 'scram'].map((k) => `${label}:${k}:${login}`),
+    ['attrs', 'grant', 'scram', 'settings'].map((k) => `${label}:${k}:${login}`),
   );
 
 /** Scenario `apply`: two real runs (create, then alter) in one rolled-back transaction. */
@@ -182,7 +194,7 @@ export function main({ deps = { spawnSync, randomBytes, stdout: process.stdout }
     );
   } else {
     const r = parseChecks(apply.stdout, [...checkNames('create'), ...checkNames('alter')]);
-    if (r.ok) say('apply OK (create path and alter path, 24 checks, rolled back)');
+    if (r.ok) say('apply OK (create path and alter path, 32 checks, rolled back)');
     else {
       failures += 1;
       say(`apply FAILED (${r.failed})`);

@@ -19,6 +19,7 @@ import {
 } from '../lib/hyperdrive.mjs';
 import {
   HYPERDRIVE_CONFIGS_URL,
+  LOGIN_TIMEOUTS,
   PLAN,
   RETIRED_SECRETS,
   STAGING_PROJECT_REF,
@@ -321,6 +322,27 @@ describe('stagingLoginRolesSql', () => {
       expect(sql.match(new RegExp(`grant \\w+ to ${login}\\b`, 'g'))).toHaveLength(1);
     },
   );
+
+  // Database review Minor 1: a stuck transaction must not hold one of a login's 5 Hyperdrive origin slots for long.
+  // SET LOCAL ROLE does not apply the target role's settings, so they sit on the login itself.
+  it.each(LOGIN_ROLES.map((r) => [r.login]))(
+    'gives %s its server-side timeouts, after its grant',
+    (login) => {
+      for (const [name, value] of Object.entries(LOGIN_TIMEOUTS)) {
+        const line = `alter role ${login} set ${name} = '${value}';`;
+        expect(sql).toContain(line);
+        expect(sql.indexOf(line)).toBeGreaterThan(sql.indexOf(`to ${login} with inherit false`));
+      }
+    },
+  );
+
+  it('pins the timeout values', () => {
+    expect(LOGIN_TIMEOUTS).toEqual({
+      statement_timeout: '15s',
+      lock_timeout: '10s',
+      idle_in_transaction_session_timeout: '30s',
+    });
+  });
 
   it('ends with a membership check (TR002) after the grants', () => {
     const check = sql.indexOf("errcode = 'TR002'");

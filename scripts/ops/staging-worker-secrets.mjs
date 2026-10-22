@@ -329,6 +329,17 @@ export function scramSha256Verifier(password, salt, iterations = SCRAM_ITERATION
 const sqlList = (names) => names.map((n) => `'${n}'`).join(', ');
 
 /**
+ * Server-side timeouts on each login (database review Minor 1): a slow query, a lock wait or a transaction left open
+ * by a killed Worker must not hold one of the login's 5 Hyperdrive origin connections for long. They sit on the
+ * login, because SET LOCAL ROLE does not apply the target role's settings. Constants only (they go into SQL text).
+ */
+export const LOGIN_TIMEOUTS = Object.freeze({
+  statement_timeout: '15s',
+  lock_timeout: '10s',
+  idle_in_transaction_session_timeout: '30s',
+});
+
+/**
  * The one transaction run as postgres on staging. Roles are fixed names; each password enters as its SCRAM verifier
  * (base64 only, checked), so no value needs quoting beyond a plain literal. Throws, naming the login only, when a
  * password is not 64-128 lower-case hex characters or a salt is missing.
@@ -371,6 +382,9 @@ export function stagingLoginRolesSql({ passwords, salts }) {
       'end',
       '$trace$;',
       `grant ${role} to ${login} with inherit false, set true;`,
+      ...Object.entries(LOGIN_TIMEOUTS).map(
+        ([name, value]) => `alter role ${login} set ${name} = '${value}';`,
+      ),
     );
   }
   const pairs = LOGIN_ROLES.map(({ login, role }) => `('${login}', '${role}')`).join(', ');
