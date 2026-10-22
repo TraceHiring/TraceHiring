@@ -1,0 +1,291 @@
+-- rls_m1_pools (spec specs/m1-test-authoring.md revision 5 §10 row rls_m1_pools; §3.2 pools, pool_items; §3.5; R2-9, R5-26; E3). RED first: written from the spec before migration M1-a. Personas and items are synthetic.
+begin;
+-- Helpers live in pg_temp (rolled back with the transaction). try() runs one statement as the current role and returns
+-- 'OK <rows>' or '<sqlstate> <message>', so a denial is an assertion, not an abort.
+create function pg_temp.try(p_sql text) returns text language plpgsql as $f$
+declare n bigint;
+begin
+  execute p_sql;
+  get diagnostics n = row_count;
+  return 'OK ' || n;
+exception when others then
+  return sqlstate || ' ' || sqlerrm;
+end
+$f$;
+grant execute on function pg_temp.try(text) to public;
+-- keys() lists the top-level keys of an audit details object, sorted and comma-joined.
+create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
+  select coalesce(string_agg(k, ',' order by k), '') from jsonb_object_keys(p_details) as k
+$f$;
+grant execute on function pg_temp.keys(jsonb) to public;
+-- id(name): a fixture id recorded by the fixture helpers below (readable by every role in this transaction).
+create table pg_temp.ids (k text primary key, v uuid not null);
+grant select on pg_temp.ids to public;
+create function pg_temp.id(p_k text) returns uuid language sql stable as $f$
+  select v from pg_temp.ids where k = p_k
+$f$;
+grant execute on function pg_temp.id(text) to public;
+-- Persona switching. u(name) = an org user (role authenticated plus JWT claims); w(role, org) = a worker role bound to a
+-- job org; api(org) = trace_api bound to an api org; op() = the operator path (postgres, no role, no claims).
+create function pg_temp.u(p_who text) returns void language plpgsql as $f$
+declare v_sub text; v_amr text;
+begin
+  select x.sub, x.amr into v_sub, v_amr from (values
+    ('owner', '00000000-0000-4000-8000-000000000001', 'aal2'),
+    ('admin', '00000000-0000-4000-8000-000000000003', 'aal2'),
+    ('admin_aal1', '00000000-0000-4000-8000-000000000004', 'otp'),
+    ('recruiter', '00000000-0000-4000-8000-000000000005', 'otp'),
+    ('recruiter_pw', '00000000-0000-4000-8000-000000000006', 'pw'),
+    ('reviewer', '00000000-0000-4000-8000-000000000007', 'aal2'),
+    ('reviewer_aal1', '00000000-0000-4000-8000-000000000007', 'otp'),
+    ('hm', '00000000-0000-4000-8000-000000000008', 'otp'),
+    ('ws_recruiter', '00000000-0000-4000-8000-000000000009', 'otp'),
+    ('ws_reviewer', '00000000-0000-4000-8000-00000000000a', 'aal2'),
+    ('b_admin', '00000000-0000-4000-8000-00000000000e', 'aal2'),
+    ('outsider', '00000000-0000-4000-8000-000000000011', 'otp'),
+    ('lib_author', '00000000-0000-4000-8000-000000000020', 'aal2'),
+    ('lib_expert', '00000000-0000-4000-8000-000000000021', 'aal2')
+  ) as x(who, sub, amr) where x.who = p_who;
+  if v_sub is null then
+    raise exception 'unknown persona %', p_who;
+  end if;
+  perform set_config('role', 'authenticated', true);
+  perform set_config('trace.job_org_id', '', true);
+  perform set_config('trace.api_org_id', '', true);
+  perform set_config('request.jwt.claims', case v_amr
+    when 'aal2' then '{"sub": "' || v_sub || '", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}'
+    when 'pw' then '{"sub": "' || v_sub || '", "aal": "aal1", "amr": [{"method": "password", "timestamp": 1760000000}], "role": "authenticated"}'
+    else '{"sub": "' || v_sub || '", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}'
+  end, true);
+end
+$f$;
+grant execute on function pg_temp.u(text) to public;
+create function pg_temp.op() returns void language plpgsql as $f$
+begin
+  perform set_config('role', 'none', true);
+  perform set_config('request.jwt.claims', '', true);
+  perform set_config('trace.job_org_id', '', true);
+  perform set_config('trace.api_org_id', '', true);
+end
+$f$;
+grant execute on function pg_temp.op() to public;
+create function pg_temp.w(p_role text, p_org uuid) returns void language plpgsql as $f$
+begin
+  perform pg_temp.op();
+  perform set_config('role', p_role, true);
+  perform set_config('trace.job_org_id', coalesce(p_org::text, ''), true);
+end
+$f$;
+grant execute on function pg_temp.w(text, uuid) to public;
+create function pg_temp.api(p_org uuid) returns void language plpgsql as $f$
+begin
+  perform pg_temp.op();
+  perform set_config('role', 'trace_api', true);
+  perform set_config('trace.api_org_id', coalesce(p_org::text, ''), true);
+end
+$f$;
+grant execute on function pg_temp.api(uuid) to public;
+grant trace_worker to postgres with inherit false, set true;
+grant trace_quality_worker to postgres with inherit false, set true;
+grant trace_integrity_worker to postgres with inherit false, set true;
+grant trace_api to postgres with inherit false, set true;
+grant trace_candidate to postgres with inherit false, set true;
+grant trace_authoring_worker to postgres with inherit false, set true;
+grant trace_admin_worker to postgres with inherit false, set true;
+grant usage on schema extensions to authenticated, anon, service_role, trace_worker, trace_quality_worker,
+  trace_integrity_worker, trace_api, trace_candidate, trace_authoring_worker, trace_admin_worker;
+
+-- Personas (synthetic, p-<persona>@example.test), orgs A and B (customers) and the library org of migration M1-a.
+insert into auth.users (id, aud, role, email) values
+  ('00000000-0000-4000-8000-000000000001', 'authenticated', 'authenticated', 'p-owner-admin@example.test'),
+  ('00000000-0000-4000-8000-000000000003', 'authenticated', 'authenticated', 'p-admin@example.test'),
+  ('00000000-0000-4000-8000-000000000004', 'authenticated', 'authenticated', 'p-admin-aal1@example.test'),
+  ('00000000-0000-4000-8000-000000000005', 'authenticated', 'authenticated', 'p-recruiter-otp@example.test'),
+  ('00000000-0000-4000-8000-000000000006', 'authenticated', 'authenticated', 'p-recruiter-pw@example.test'),
+  ('00000000-0000-4000-8000-000000000007', 'authenticated', 'authenticated', 'p-reviewer@example.test'),
+  ('00000000-0000-4000-8000-000000000008', 'authenticated', 'authenticated', 'p-hm@example.test'),
+  ('00000000-0000-4000-8000-000000000009', 'authenticated', 'authenticated', 'p-ws-recruiter@example.test'),
+  ('00000000-0000-4000-8000-00000000000a', 'authenticated', 'authenticated', 'p-ws-reviewer@example.test'),
+  ('00000000-0000-4000-8000-00000000000e', 'authenticated', 'authenticated', 'p-b-admin@example.test'),
+  ('00000000-0000-4000-8000-000000000011', 'authenticated', 'authenticated', 'p-outsider@example.test'),
+  ('00000000-0000-4000-8000-000000000020', 'authenticated', 'authenticated', 'p-lib-author@example.test'),
+  ('00000000-0000-4000-8000-000000000021', 'authenticated', 'authenticated', 'p-lib-expert@example.test');
+insert into public.orgs (id, kind, name, slug) values
+  ('a1000000-0000-4000-8000-000000000001', 'customer', 'Org A', 'org-a-m1-test'),
+  ('a1000000-0000-4000-8000-000000000003', 'customer', 'Org B', 'org-b-m1-test');
+insert into public.workspaces (id, org_id, name, kind, is_default) values
+  ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'Default', 'default', true),
+  ('b1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'Client A2', 'client', false),
+  ('b1000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000003', 'Default', 'default', true);
+insert into pg_temp.ids values
+  ('A', 'a1000000-0000-4000-8000-000000000001'), ('B', 'a1000000-0000-4000-8000-000000000003'),
+  ('A1', 'b1000000-0000-4000-8000-000000000001'), ('A2', 'b1000000-0000-4000-8000-000000000002'),
+  ('BW', 'b1000000-0000-4000-8000-000000000004'),
+  ('L', (select id from public.orgs where kind = 'trace_library')),
+  ('LW', (select w.id from public.workspaces as w join public.orgs as o on o.id = w.org_id
+          where o.kind = 'trace_library' and w.is_default)),
+  ('owner', '00000000-0000-4000-8000-000000000001'), ('admin', '00000000-0000-4000-8000-000000000003'),
+  ('recruiter', '00000000-0000-4000-8000-000000000005'), ('reviewer', '00000000-0000-4000-8000-000000000007'),
+  ('ws_recruiter', '00000000-0000-4000-8000-000000000009'), ('b_admin', '00000000-0000-4000-8000-00000000000e'),
+  ('lib_author', '00000000-0000-4000-8000-000000000020'), ('lib_expert', '00000000-0000-4000-8000-000000000021');
+insert into public.memberships (org_id, user_id, roles, workspace_id, display_name, status) values
+  (pg_temp.id('A'), pg_temp.id('owner'), '{org_owner,admin}', null, 'Persona Owner Admin', 'active'),
+  (pg_temp.id('A'), pg_temp.id('admin'), '{admin}', null, 'Persona Admin', 'active'),
+  (pg_temp.id('A'), '00000000-0000-4000-8000-000000000004', '{admin}', null, 'Persona Admin Aal1', 'active'),
+  (pg_temp.id('A'), pg_temp.id('recruiter'), '{recruiter}', null, 'Persona Recruiter', 'active'),
+  (pg_temp.id('A'), '00000000-0000-4000-8000-000000000006', '{recruiter}', null, 'Persona Recruiter Pw', 'active'),
+  (pg_temp.id('A'), pg_temp.id('reviewer'), '{reviewer}', null, 'Persona Reviewer', 'active'),
+  (pg_temp.id('A'), '00000000-0000-4000-8000-000000000008', '{hiring_manager}', null, 'Persona Hm', 'active'),
+  (pg_temp.id('A'), pg_temp.id('ws_recruiter'), '{recruiter}', pg_temp.id('A2'), 'Persona Ws Recruiter', 'active'),
+  (pg_temp.id('A'), '00000000-0000-4000-8000-00000000000a', '{reviewer}', pg_temp.id('A2'), 'Persona Ws Reviewer', 'active'),
+  (pg_temp.id('B'), pg_temp.id('b_admin'), '{org_owner,admin}', null, 'Persona B Admin', 'active'),
+  (pg_temp.id('L'), pg_temp.id('lib_author'), '{org_owner,admin,recruiter}', null, 'Persona Lib Author', 'active'),
+  (pg_temp.id('L'), pg_temp.id('lib_expert'), '{reviewer}', null, 'Persona Lib Expert', 'active');
+
+-- bank(key, org, workspace, format, skill, difficulty, status): a bank item and its version on the operator path, an
+-- answer key for MCQ, then the transitions up to the asked status (approver = the org's owner, or the library expert).
+-- Records ids <key> (version) and <key>_item.
+create function pg_temp.bank(p_key text, p_org uuid, p_ws uuid, p_format text, p_skill text, p_diff numeric,
+  p_status text) returns uuid language plpgsql as $f$
+declare v_item uuid; v_ver uuid; v_lib boolean := p_org = pg_temp.id('L');
+begin
+  insert into public.items (org_id, workspace_id, format, skill_key, created_by)
+    values (p_org, p_ws, p_format::public.section_format, p_skill,
+      case when v_lib then pg_temp.id('lib_author') else pg_temp.id('owner') end)
+    returning id into v_item;
+  insert into public.item_versions (org_id, item_id, format, stem, options, rubric_version_id, skill_key, difficulty,
+      content_sha256, created_by)
+    values (p_org, v_item, p_format::public.section_format, '[synthetic] Bank item ' || p_key,
+      case when p_format = 'mcq' then '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]'::jsonb end,
+      case when p_format = 'written' then (select r.id from public.rubric_versions as r
+                                           where r.org_id = p_org and r.rubric_key = 'default') end,
+      p_skill, p_diff, repeat('c', 64),
+      case when v_lib then pg_temp.id('lib_author') else pg_temp.id('owner') end)
+    returning id into v_ver;
+  if p_format = 'mcq' then
+    insert into public.item_answer_keys (org_id, item_version_id, format, key) values (p_org, v_ver, 'mcq', '{"option_id": "o1"}');
+  end if;
+  if p_status in ('in_review', 'approved', 'retired', 'not_approved') then
+    update public.item_versions set status = 'in_review' where id = v_ver;
+  end if;
+  if p_status = 'not_approved' then
+    update public.item_versions set status = 'not_approved' where id = v_ver;
+  end if;
+  if p_status in ('approved', 'retired') then
+    update public.item_versions set status = 'approved',
+      approved_by = case when v_lib then pg_temp.id('lib_expert') when p_org = pg_temp.id('B') then pg_temp.id('b_admin')
+                         else pg_temp.id('owner') end,
+      reviewed_by = case when v_lib then pg_temp.id('lib_expert') end,
+      key_reviewed_by = case when v_lib then pg_temp.id('lib_expert') end
+    where id = v_ver;
+  end if;
+  if p_status = 'retired' then
+    update public.item_versions set status = 'retired' where id = v_ver;
+  end if;
+  insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
+  return v_ver;
+end
+$f$;
+select plan(44);
+select pg_temp.bank('a1', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'approved');
+select pg_temp.bank('a2', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'approved');
+select pg_temp.bank('aw', pg_temp.id('A'), pg_temp.id('A1'), 'written', 'written_communication', 0.50, 'approved');
+select pg_temp.bank('ad', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'draft');
+select pg_temp.bank('ar', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'in_review');
+select pg_temp.bank('ax', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'retired');
+select pg_temp.bank('b2', pg_temp.id('A'), pg_temp.id('A2'), 'mcq', 'verbal', 0.50, 'approved');
+select pg_temp.bank('bb', pg_temp.id('B'), pg_temp.id('BW'), 'mcq', 'verbal', 0.50, 'approved');
+insert into public.tests (id, org_id, workspace_id, name, created_by) values
+  ('e1000000-0000-4000-8000-000000000001', pg_temp.id('A'), pg_temp.id('A1'), 'Test One', pg_temp.id('owner'));
+insert into public.test_versions (id, org_id, test_id, total_time_seconds, quality_cutoff, created_by) values
+  ('f1000000-0000-4000-8000-000000000001', pg_temp.id('A'), 'e1000000-0000-4000-8000-000000000001', 1800, 40, pg_temp.id('owner'));
+insert into public.sections (id, org_id, test_version_id, position, name, format, weight) values
+  ('51000000-0000-4000-8000-000000000001', pg_temp.id('A'), 'f1000000-0000-4000-8000-000000000001', 1, 'Choices', 'mcq', 1);
+insert into public.item_versions (id, org_id, section_id, format, position, stem, options, content_sha256) values
+  ('61000000-0000-4000-8000-000000000001', pg_temp.id('A'), '51000000-0000-4000-8000-000000000001', 'mcq', 1, '[synthetic] Inline', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', repeat('c', 64));
+
+-- ===== pools: I =====
+select pg_temp.u('owner');
+select is(pg_temp.try($$insert into public.pools (id, org_id, workspace_id, name, format, skill_key) values ('d1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Verbal pool', 'mcq', 'verbal')$$), 'OK 1', 'pools I: owner creates an MCQ pool in workspace A1');
+select matches(pg_temp.try($$insert into public.pools (org_id, workspace_id, name, format, skill_key) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Bad', 'mcq', 'astrology')$$), '^23503 TRACE_GUARD: skill not found', 'pools I: a pool skill comes from the taxonomy');
+select matches(pg_temp.try($$insert into public.pools (org_id, workspace_id, name, format, status) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Bad', 'mcq', 'archived')$$), '^42501 permission denied', 'pools I: status is outside the insert grant (a pool starts active)');
+select pg_temp.u('recruiter');
+select is(pg_temp.try($$insert into public.pools (id, org_id, workspace_id, name, format) values ('d1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Written pool', 'written')$$), 'OK 1', 'pools I: recruiter creates a written pool');
+select pg_temp.u('ws_recruiter');
+select is(pg_temp.try($$insert into public.pools (id, org_id, workspace_id, name, format) values ('d1000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000002', 'A2 pool', 'mcq')$$), 'OK 1', 'pools I: workspace recruiter creates a pool in workspace A2');
+select matches(pg_temp.try($$insert into public.pools (org_id, workspace_id, name, format) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Fence', 'mcq')$$), '^42501', 'pools I: workspace recruiter cannot create a pool in workspace A1');
+select pg_temp.u('reviewer');
+select matches(pg_temp.try($$insert into public.pools (org_id, workspace_id, name, format) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Reviewer', 'mcq')$$), '^42501', 'pools I: reviewer cannot create a pool');
+select pg_temp.u('b_admin');
+select matches(pg_temp.try($$insert into public.pools (org_id, workspace_id, name, format) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Cross', 'mcq')$$), '^42501', 'pools I: org B admin cannot create a pool in org A');
+select pg_temp.u('hm');
+select matches(pg_temp.try($$insert into public.pools (org_id, workspace_id, name, format) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Hm', 'mcq')$$), '^42501', 'pools I: hiring manager cannot create a pool');
+
+-- ===== pools: S =====
+select pg_temp.u('owner');
+select is((select count(*)::int from public.pools), 3, 'pools S: owner sees the three org A pools');
+select pg_temp.u('ws_recruiter');
+select is((select array_agg(name) from public.pools), array['A2 pool'], 'pools S: workspace recruiter sees only the workspace A2 pool');
+select pg_temp.u('reviewer');
+select is((select count(*)::int from public.pools), 0, 'pools S: reviewer sees no pool (matrix OW AD RC)');
+select pg_temp.u('hm');
+select is((select count(*)::int from public.pools), 0, 'pools S: hiring manager sees no pool');
+select pg_temp.u('b_admin');
+select is((select count(*)::int from public.pools where org_id = pg_temp.id('A')), 0, 'pools S: org B admin sees no org A pool');
+
+-- ===== pool_items: I (approved bank items of the pool's format, same workspace) =====
+select pg_temp.u('owner');
+select is(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', %L)$$, pg_temp.id('a1'))), 'OK 1', 'pool_items I: an approved MCQ item joins the MCQ pool');
+select is(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', %L)$$, pg_temp.id('a2'))), 'OK 1', 'pool_items I: a second approved item joins');
+select matches(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', %L)$$, pg_temp.id('ad'))), '^42501 TRACE_GUARD: a pool holds approved bank items of its format', 'pool_items I: a draft cannot join');
+select matches(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', %L)$$, pg_temp.id('ar'))), '^42501 TRACE_GUARD: a pool holds approved bank items of its format', 'pool_items I: an in-review item cannot join');
+select matches(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', %L)$$, pg_temp.id('ax'))), '^42501 TRACE_GUARD: a pool holds approved bank items of its format', 'pool_items I: a retired item cannot join');
+select matches(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', %L)$$, pg_temp.id('aw'))), '^42501 TRACE_GUARD: a pool holds approved bank items of its format', 'pool_items I: a written item cannot join an MCQ pool');
+select matches(pg_temp.try($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000001')$$), '^42501 TRACE_GUARD: a pool holds approved bank items of its format', 'pool_items I: an inline test item cannot join a pool');
+select matches(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', %L)$$, pg_temp.id('b2'))), '^23503', 'pool_items I: a workspace A2 item cannot join a workspace A1 pool (fence-preserving key, R2-9)');
+select matches(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', %L)$$, pg_temp.id('bb'))), '^23503', 'pool_items I: an org B item cannot join an org A pool');
+select is(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000002', %L)$$, pg_temp.id('aw'))), 'OK 1', 'pool_items I: a written item joins the written pool');
+select pg_temp.u('ws_recruiter');
+select matches(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', %L)$$, pg_temp.id('a1'))), '^42501', 'pool_items I: workspace recruiter cannot add to a workspace A1 pool');
+select is(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000003', %L)$$, pg_temp.id('b2'))), 'OK 1', 'pool_items I: workspace recruiter adds a workspace A2 item to the A2 pool');
+select pg_temp.u('reviewer');
+select matches(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', %L)$$, pg_temp.id('a1'))), '^42501', 'pool_items I: reviewer cannot add pool items');
+select pg_temp.op();
+select is((select workspace_id from public.pool_items where pool_id = 'd1000000-0000-4000-8000-000000000003'), pg_temp.id('A2'), 'pool_items I: the workspace comes from the pool');
+
+-- ===== pool_items: S / U / D =====
+select pg_temp.u('ws_recruiter');
+select is((select count(*)::int from public.pool_items), 1, 'pool_items S: workspace recruiter sees only the workspace A2 pool items');
+select pg_temp.u('hm');
+select is((select count(*)::int from public.pool_items), 0, 'pool_items S: hiring manager sees nothing');
+select pg_temp.u('owner');
+select matches(pg_temp.try($$update public.pool_items set item_version_id = item_version_id$$), '^42501 permission denied', 'pool_items U: no update grant');
+select pg_temp.op();
+select matches(pg_temp.try($$update public.pool_items set added_at = now()$$), '^42501 TRACE_GUARD: pool items are added or removed, never changed', 'pool_items U: never changed, even on the operator path');
+select pg_temp.u('reviewer');
+select is(pg_temp.try($$delete from public.pool_items$$), 'OK 0', 'pool_items D: reviewer removes nothing');
+select pg_temp.u('owner');
+select is(pg_temp.try(format($$delete from public.pool_items where item_version_id = %L$$, pg_temp.id('a2'))), 'OK 1', 'pool_items D: owner removes an item from a pool');
+-- E3: an item retired after joining a pool stays in the pool row (the snapshot decides what a test serves).
+select is(pg_temp.try(format($$update public.item_versions set status = 'retired' where id = %L$$, pg_temp.id('a1'))), 'OK 1', 'E3: a pooled item can be retired');
+select is((select count(*)::int from public.pool_items where item_version_id = pg_temp.id('a1')), 1, 'E3: the pool row stays');
+
+-- ===== pools: U (archive, R5-26) =====
+select pg_temp.u('recruiter');
+select is(pg_temp.try($$update public.pools set name = 'Verbal pool renamed' where id = 'd1000000-0000-4000-8000-000000000001'$$), 'OK 1', 'pools U: recruiter renames a pool');
+select matches(pg_temp.try($$update public.pools set format = 'written' where id = 'd1000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'pools U: format is outside the update grant');
+select is(pg_temp.try($$update public.pools set status = 'archived' where id = 'd1000000-0000-4000-8000-000000000001'$$), 'OK 1', 'pools U: recruiter archives a pool');
+select pg_temp.op();
+select is((select pg_temp.keys(details) || '|' || (details ->> 'pool_id') from public.audit_log where action = 'pool.archive' and object_id = 'd1000000-0000-4000-8000-000000000001'), 'pool_id|d1000000-0000-4000-8000-000000000001', 'pools event: pool.archive carries the pool id only');
+select pg_temp.u('owner');
+select matches(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values ('a1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', %L)$$, pg_temp.id('a2'))), '^42501 TRACE_GUARD: an archived pool takes no items', 'pools U: an archived pool takes no items');
+select pg_temp.u('ws_recruiter');
+select is(pg_temp.try($$update public.pools set name = 'x' where id = 'd1000000-0000-4000-8000-000000000002'$$), 'OK 0', 'pools U: workspace recruiter cannot rename a workspace A1 pool');
+select pg_temp.u('owner');
+select matches(pg_temp.try($$delete from public.pools where id = 'd1000000-0000-4000-8000-000000000002'$$), '^42501 permission denied', 'pools D: pools are archived, never deleted');
+select pg_temp.op();
+set local role trace_candidate;
+select matches(pg_temp.try('select * from public.pools'), '^42501 permission denied', 'pools S: trace_candidate has no privilege');
+select pg_temp.op();
+select * from finish();
+rollback;
