@@ -155,11 +155,15 @@ export const cappedSocket = (connect: ConnectFn, maxConnects = 1) => {
   };
 };
 
-const LOCAL_DB_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+// No IPv6 form: postgres.js splits the host on ":", so `[::1]` could never be dialled (security review I-1).
+const LOCAL_DB_HOSTS = new Set(['127.0.0.1', 'localhost']);
 
 /**
  * Whether a database URL secret may be used: a postgres(ql) URL on the local stack's loopback host with no query
  * parameter (so no sslmode, host or options override). Every remote database goes through Hyperdrive instead.
+ * The authority must hold at most one "@" and no ",": the WHATWG parser takes the host after the last "@", while
+ * postgres.js 3.4.9 takes everything after the first "@" as a ","-separated host list and the capped transport
+ * dials its first entry, so `u@remote:5432,x@127.0.0.1` would pass a host-only check (security review L-1).
  */
 export const localDbUrlAllowed = (url: string): boolean => {
   let u: URL;
@@ -170,6 +174,9 @@ export const localDbUrlAllowed = (url: string): boolean => {
   }
   if (u.protocol !== 'postgres:' && u.protocol !== 'postgresql:') return false;
   if (u.search !== '' || u.hash !== '') return false;
+  const rest = url.slice(url.indexOf('://') + 3);
+  const authority = rest.split(/[/?#]/, 1)[0] ?? '';
+  if (authority.split('@').length > 2 || authority.includes(',')) return false;
   return LOCAL_DB_HOSTS.has(u.hostname.toLowerCase());
 };
 

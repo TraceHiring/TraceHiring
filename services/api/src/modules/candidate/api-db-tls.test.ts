@@ -13,13 +13,16 @@ const url = (host: string, query = '', port = 6543) =>
 const hyperdrive = (connectionString: unknown) => ({ connectionString }) as unknown as Hyperdrive;
 
 describe('API_DB_URL: the local stack only (ADR-031 amendment 1)', () => {
-  it.each(['127.0.0.1', 'localhost', '[::1]'])(
-    'the local stack on %s is allowed, plain TCP',
-    (host) => {
-      expect(apiDbUrlAllowed(url(host))).toBe(true);
-      expect(openApiDb({ API_DB_URL: url(host) })).not.toBeNull();
-    },
-  );
+  it.each(['127.0.0.1', 'localhost'])('the local stack on %s is allowed, plain TCP', (host) => {
+    expect(apiDbUrlAllowed(url(host))).toBe(true);
+    expect(openApiDb({ API_DB_URL: url(host) })).not.toBeNull();
+  });
+
+  it('a remote first host hidden behind a second "@" is refused (security review L-1)', () => {
+    const hidden = `${['postgres', 'ql'].join('')}://u:${'x'.repeat(8)}@db.example.test:5432,x@127.0.0.1/postgres`;
+    expect(apiDbUrlAllowed(hidden)).toBe(false);
+    expect(openApiDb({ API_DB_URL: hidden })).toBeNull();
+  });
 
   it.each(['', '?sslmode=require', '?sslmode=verify-full', '?sslmode=disable'])(
     'a remote host is refused whatever its sslmode (%s): remote means Hyperdrive',

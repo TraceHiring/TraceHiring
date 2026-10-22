@@ -115,7 +115,106 @@ describe('cappedSocket: one TCP connection per client, then fail fast', () => {
     expect(() => cappedSocket(nodeConnect, 0)).toThrow();
     expect(() => cappedSocket(nodeConnect, 1.5)).toThrow();
   });
+
+  // Database review Minor 3: the connection drops after BEGIN, inside the transaction. The unit of work must reject
+  // quickly on its one connection, and COMMIT must never be sent, so nothing commits partially (the queue retries).
+  // Known driver quirk, pinned here: after the drop, sql.begin's ROLLBACK is queued on the closed connection, and
+  // postgres.js 3.4.9 (connection.js nextWrite, `socket` already null) throws an uncaught TypeError from a timer. The
+  // unit of work has already rejected by then; on Workers this shows as an uncaught exception in the invocation log.
+  it('a connection lost inside a transaction rejects within 2 s, on one connection, without a COMMIT', async () => {
+    const { port, accepted, received } = await fakePostgresThatDiesAfterBegin();
+    const saved = process.listeners('uncaughtException');
+    const stray: unknown[] = [];
+    process.removeAllListeners('uncaughtException');
+    process.on('uncaughtException', (e) => stray.push(e));
+    try {
+      const sql = postgres(urlFor(port), { ...OPTIONS, ...cappedSocketOption(nodeConnect) });
+      const started = Date.now();
+      await expect(
+        sql.begin(async (tx) => {
+          await tx`select 1`;
+        }),
+      ).rejects.toThrow();
+      expect(Date.now() - started).toBeLessThan(2_000);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(accepted()).toBe(1);
+      expect(received().toLowerCase()).toContain('begin');
+      expect(received().toLowerCase()).not.toContain('commit');
+      await sql.end({ timeout: 0 });
+    } finally {
+      process.removeAllListeners('uncaughtException');
+      for (const l of saved) process.on('uncaughtException', l);
+    }
+    for (const e of stray) expect(String(e)).toMatch(/reading 'write'/);
+  });
 });
+
+/**
+ * A minimal Postgres wire peer: answers the startup with AuthenticationOk + ReadyForQuery, answers the simple-query
+ * BEGIN with CommandComplete + ReadyForQuery (in transaction), then closes on the next message. Records every byte
+ * the client sent (as latin1 text) and counts connections.
+ */
+const fakePostgresThatDiesAfterBegin = async (): Promise<{
+  port: number;
+  accepted: () => number;
+  received: () => string;
+}> => {
+  let n = 0;
+  let text = '';
+  const msg = (type: string, body: Buffer) => {
+    const head = Buffer.alloc(5);
+    head.write(type, 0, 'latin1');
+    head.writeInt32BE(body.length + 4, 1);
+    return Buffer.concat([head, body]);
+  };
+  const int32 = (v: number) => {
+    const b = Buffer.alloc(4);
+    b.writeInt32BE(v);
+    return b;
+  };
+  const server = createServer((c) => {
+    n += 1;
+    c.on('error', () => {});
+    let buf = Buffer.alloc(0);
+    let started = false;
+    let afterBegin = false;
+    c.on('data', (chunk: Buffer) => {
+      text += chunk.toString('latin1');
+      buf = Buffer.concat([buf, chunk]);
+      for (;;) {
+        if (!started) {
+          if (buf.length < 4) return;
+          const len = buf.readInt32BE(0);
+          if (buf.length < len) return;
+          buf = buf.subarray(len);
+          started = true;
+          c.write(Buffer.concat([msg('R', int32(0)), msg('Z', Buffer.from('I'))]));
+          continue;
+        }
+        if (buf.length < 5) return;
+        const type = String.fromCharCode(buf[0] ?? 0);
+        const len = buf.readInt32BE(1);
+        if (buf.length < len + 1) return;
+        const body = buf.subarray(5, len + 1).toString('latin1');
+        buf = buf.subarray(len + 1);
+        if (!afterBegin && type === 'Q' && body.toLowerCase().startsWith('begin')) {
+          afterBegin = true;
+          c.write(
+            Buffer.concat([msg('C', Buffer.from('BEGIN\0', 'latin1')), msg('Z', Buffer.from('T'))]),
+          );
+          continue;
+        }
+        c.destroy();
+        return;
+      }
+    });
+  });
+  servers.push(server);
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('no port');
+  return { port: address.port, accepted: () => n, received: () => text };
+};
 
 /** A scripted raw socket: what the adapter writes, and controls for what the peer does. */
 const fakeRaw = () => {
@@ -278,10 +377,48 @@ describe('pgConnectionString: Hyperdrive for remote databases, a URL only for th
     },
   );
 
-  it.each(['127.0.0.1', 'localhost', 'LOCALHOST', '[::1]'])('a URL on %s is allowed', (host) => {
+  it.each(['127.0.0.1', 'localhost', 'LOCALHOST'])('a URL on %s is allowed', (host) => {
     expect(localDbUrlAllowed(cs(host))).toBe(true);
     expect(pgConnectionString(undefined, cs(host))).toBe(cs(host));
   });
+
+  it('[::1] is refused: postgres.js splits the host on ":" and could never reach it (security review I-1)', () => {
+    expect(localDbUrlAllowed(cs('[::1]'))).toBe(false);
+  });
+
+  // Security review L-1: the WHATWG parser takes the host after the LAST "@", postgres.js 3.4.9 parseUrl takes
+  // everything after the FIRST "@" and splits it on "," into hosts, and the capped transport dials host[0].
+  const scheme = ['postgres', 'ql'].join('');
+  const pw = 'x'.repeat(8);
+  it.each([
+    [
+      'a second "@" hides a remote first host',
+      `${scheme}://u:${pw}@db.example.test:5432,x@127.0.0.1/postgres`,
+    ],
+    ['an empty second host after ","', `${scheme}://u@db.example.test,@127.0.0.1/postgres`],
+    ['two local hosts', `${scheme}://u:${pw}@127.0.0.1:5432,127.0.0.1:5433/postgres`],
+    ['a "," in the host', `${scheme}://u:${pw}@127.0.0.1,localhost/postgres`],
+  ])('a multi-host or multi-"@" authority is refused (%s)', (_name, u) => {
+    expect(localDbUrlAllowed(u)).toBe(false);
+    expect(pgConnectionString(undefined, u)).toBeNull();
+  });
+
+  it.each(['127.0.0.1', 'localhost'])(
+    'for an allowed URL on %s, the host postgres.js dials is that loopback host',
+    async (host) => {
+      const u = cs(host);
+      expect(localDbUrlAllowed(u)).toBe(true);
+      const dialled: string[] = [];
+      const connect: ConnectFn = ({ hostname }) => {
+        dialled.push(hostname);
+        throw new Error('no network in this test');
+      };
+      const sql = postgres(u, { ...OPTIONS, ...cappedSocketOption(connect) });
+      await sql`select 1`.catch(() => undefined);
+      await sql.end({ timeout: 0 });
+      expect(dialled).toEqual([host.toLowerCase()]);
+    },
+  );
 
   it.each([
     'db.example.test',
