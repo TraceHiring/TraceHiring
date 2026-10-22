@@ -49,7 +49,11 @@ export const HYPERDRIVE_ID_RE = /^[0-9a-f]{32}$/;
  */
 export const HYPERDRIVE_SSLMODES = Object.freeze(['verify-full', 'verify-ca']);
 
-/** Each Hyperdrive config's origin connection cap (the minimum Cloudflare accepts; 4 x 5 stays far below Supabase's). */
+/**
+ * Each Hyperdrive config's origin connection cap. To confirm on staging (database review Minor 4): that Cloudflare
+ * accepts 5 (the create call fails otherwise), and that 4 x 5 stays within the Supabase session pooler's limits
+ * (believed per user and database). The staging e2e run records both.
+ */
 export const ORIGIN_CONNECTION_LIMIT = 5;
 
 {

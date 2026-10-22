@@ -22,8 +22,8 @@ const localUrl = (user: string, password: string): string => {
   const scheme = ['postgres', 'ql'].join('');
   return `${scheme}://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:54322/postgres`;
 };
-/** The hosts the harness may connect to (the set of LOCAL_DB_HOSTS in src/queue/stage-db.ts). */
-const LOCAL_DB_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+/** The hosts the harness may connect to (LOCAL_DB_HOSTS of @trace/workers-http/pg-socket). */
+const LOCAL_DB_HOSTS = new Set(['127.0.0.1', 'localhost']);
 const NOT_LOCAL = 'db-test: JOBS_TEST_DB_URL must name a local database';
 
 /**
@@ -106,6 +106,8 @@ export interface Harness {
     fn: (tx: SqlTx) => Promise<T>,
     iso?: Isolation,
   ): Promise<T>;
+  /** The local URL of this run's temporary login for `role` (to drive production code such as withStageConnection). */
+  loginUrl(role: WorkerRole): string;
   close(): Promise<void>;
 }
 
@@ -174,6 +176,10 @@ export const openHarness = async (): Promise<Harness> => {
     stage: (role, org, fn, iso = 'read committed') => run(conn('a', role), role, org, fn, iso),
     stageOn: (key, role, org, fn, iso = 'read committed') =>
       run(conn(key, role), role, org, fn, iso),
+    loginUrl: (role) => {
+      const l = logins.get(role)!;
+      return withUser(base, l.name, l.password);
+    },
     close: async () => {
       for (const c of conns.values()) await c.end({ timeout: 2 });
       for (const role of ROLES) {
