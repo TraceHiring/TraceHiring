@@ -12,6 +12,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import type { SqlParam, SqlTx } from '@trace/shared/jobs';
+import { localDbUrlAllowed } from '@trace/workers-http/pg-socket';
 
 export type WorkerRole =
   'trace_worker' | 'trace_quality_worker' | 'trace_integrity_worker' | 'trace_api';
@@ -22,8 +23,6 @@ const localUrl = (user: string, password: string): string => {
   const scheme = ['postgres', 'ql'].join('');
   return `${scheme}://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:54322/postgres`;
 };
-/** The hosts the harness may connect to (LOCAL_DB_HOSTS of @trace/workers-http/pg-socket). */
-const LOCAL_DB_HOSTS = new Set(['127.0.0.1', 'localhost']);
 const NOT_LOCAL = 'db-test: JOBS_TEST_DB_URL must name a local database';
 
 /**
@@ -38,13 +37,8 @@ export const operatorUrl = (
     const word = ['post', 'gres'].join('');
     return localUrl(word, word);
   }
-  let host: string;
-  try {
-    host = new URL(override).hostname.toLowerCase();
-  } catch {
-    throw new Error(NOT_LOCAL);
-  }
-  if (!LOCAL_DB_HOSTS.has(host)) throw new Error(NOT_LOCAL);
+  // The Workers' own guard (one loopback host, one "@", no "," and no query; Chat E3 re-review finding 2).
+  if (!localDbUrlAllowed(override)) throw new Error(NOT_LOCAL);
   return override;
 };
 const withUser = (url: string, user: string, password: string): string => {

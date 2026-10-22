@@ -13,7 +13,7 @@ describe('operatorUrl (local database only)', () => {
     expect(new URL(operatorUrl({ JOBS_TEST_DB_URL: '' })).host).toBe('127.0.0.1:54322');
   });
 
-  it.each(['127.0.0.1:54322', 'localhost:5432', 'LOCALHOST:5432', '[::1]:54322'])(
+  it.each(['127.0.0.1:54322', 'localhost:5432', 'LOCALHOST:5432'])(
     'accepts the local host %s',
     (host) => {
       expect(operatorUrl({ JOBS_TEST_DB_URL: urlOn(host) })).toBe(urlOn(host));
@@ -27,6 +27,10 @@ describe('operatorUrl (local database only)', () => {
     '127.0.0.2:5432',
     'localhost.example.com:5432',
     '[::2]:5432',
+    // postgres.js could never dial it (it splits the host on ":"); the guard is @trace/workers-http's (I-1).
+    '[::1]:54322',
+    // Chat E3 re-review finding 2 (the L-1 shape): postgres.js would dial the first, remote host.
+    'db.example.test:5432,x@127.0.0.1:54322',
   ])('refuses the non-local host %s before connecting', (host) => {
     expect(() => operatorUrl({ JOBS_TEST_DB_URL: urlOn(host) })).toThrow(
       /^db-test: JOBS_TEST_DB_URL must name a local database$/,
