@@ -6,3 +6,17 @@
 id = "GHSA-vfj7-8cjw-p6xm"
 ignoreUntil = 2027-01-11T00:00:00Z
 reason = "braces <= 3.0.3 has no fixed release. Reached only via eslint-plugin-boundaries > micromatch at lint time, with patterns from this repository's own eslint config; never untrusted input, never shipped."
+
+# @vitest/mocker 4.1.11 (published 2026-10-21, medium). The fix is vitest 4.1.12 (released 2026-10-15), which passes
+# the two-week release-age rule on 2026-10-29; bump the vitest catalog then and delete both entries. Dev and test
+# tooling only, never shipped. No vitest browser mode, @vitest/browser* or @vitest/ui is installed, so neither the mock
+# registration endpoint nor the browser redirect allow-list is served; runs are local CLI and CI only.
+[[IgnoredVulns]]
+id = "GHSA-qxg6-89mg-rqv8"
+ignoreUntil = 2026-11-05T00:00:00Z
+reason = "@vitest/mocker 4.1.11 dev only, no browser mode or UI server; fix vitest 4.1.12 passes the release-age rule on 2026-10-29, bump then."
+
+[[IgnoredVulns]]
+id = "GHSA-xp26-3454-mjgp"
+ignoreUntil = 2026-11-05T00:00:00Z
+reason = "@vitest/mocker 4.1.11 dev only, no browser mode or UI server; fix vitest 4.1.12 passes the release-age rule on 2026-10-29, bump then."
