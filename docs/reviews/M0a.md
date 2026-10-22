@@ -75,3 +75,41 @@ Full `pnpm verify` on the FIX tip with no agent running: see `docs/progress/LOG.
 
 ## For the founder (plain language)
 The M0a code is in good shape: three independent reviewers found nothing wrong with it, every test and check passes on Linux CI, and no personal data shows up in any log. Two things only you can fix stop it from closing. First, GitHub's free plan for a private personal repo does not let us lock the `main` branch so that failing checks block a merge. Upgrade the plan, move the repo to a paid organisation, or tell us to accept the gap for now (FOUNDER-QUEUE, first rows). Second, the staging secrets still need to be rolled and renamed, so the first staging deploy can run. Two small database-check improvements are scheduled into M0b, which is being specced now.
+
+## CLOSE re-review addendum (2026-10-22, fresh Opus reviewer)
+Read-only re-review of `7dc8c0d` (= `cp/m0a-06`) against this report, the exit gate and spec §7.2-7.4, §13. The lead added the red-PR probe, the full verify and the osv commit.
+
+### Original findings
+- **SEC-1 (High): met.**
+  - The repo is now public (founder, 2026-10-22, to lift an Actions billing block). `gh api repos/TraceHiring/TraceHiring --jq .visibility` returns `public`.
+  - Ruleset 25633431 "trace rule": active on `~DEFAULT_BRANCH`, `bypass_actors: []`, `current_user_can_bypass: never`. Rules: deletion, non_fast_forward, pull_request (0 approvals, merge method `merge`), required checks static, rls, security, migrations. It is the only ruleset; classic protection returns 404.
+  - **Red-PR probe (AT-13), lead:** PR TraceHiring/TraceHiring#5 from `close/sec1-red-probe` (`0f124f3` = `7dc8c0d` + one test that fails on purpose). Run 39771691911: static failed on `sec1-red-probe.test.ts` ("expected 1 to be 2"), security failed (see osv below), rls and migrations green. `mergeStateStatus` was `BLOCKED`. The PR was closed unmerged; the branch is kept.
+  - Low, founder optional: `strict_required_status_checks_policy` is false (spec §7.4 says strict) and stale reviews are not dismissed. With 0 approvals, L12 is "PR plus green checks"; human review stays a process rule.
+- **SEC-2 (Medium): met.** Secret scanning and push protection are enabled. 0 open alerts. 16 alerts were closed as `false_positive` at 2026-10-22T11:21:15Z, all `google_api_key` at `config/gitleaks-8.30.1/gitleaks.toml:619-634`, the upstream `gcp-api-key` allowlist.
+- **SEC-3 (High): resolved.** Tokens rolled and renamed (FOUNDER-QUEUE "Resolved" on d1); both staging runs below used them.
+- **SEC-4, SPEC-F1, SPEC-F4:** fixed in FIX; nothing reopened. **DB-1, DB-2, SPEC-F2:** built or decided in M0b.
+- **SPEC-F3:** fixed on `d1/integration` only (`apps/candidate/public/_headers:3`). Harmless on the M0a tip, which makes no candidate API call. Deferral, owner D1 CLOSE.
+
+### Exit gate: CI and staging evidence
+- **AT-1a-CI:** run 38199665080 (push, `7dc8c0d`): static, rls, security, migrations green. **AT-1b:** met once on `8a5706e` on Windows (G1).
+- **Staging:** runs 39566827826 (`d1/integration` @ `5306928`) and 39762460219 (@ `df85dd4`). `deploy-staging` succeeded on all 16 steps in both; the overall failure is the D1-only `e2e-staging` job.
+  - AT-16 deferred part: step "Scan the build output". AT-18: "Catalog checks against staging" (d1's catalog, a superset). AT-11: deploy and smoke steps; the smoke fails unless `/health` reports `$GITHUB_SHA`. AT-15 deferred part: "Check Worker secrets". AT-22-staging: served headers (d1's CSP). AT-12 deferred part: deployment branches `main`, `d1/**`, `milestone/**` (widened by the founder, FOUNDER-QUEUE:30-31).
+  - **Caveat:** these runs deployed d1 code, which contains `milestone/m0a`. M0a's own `deploy-staging` on a push to `main` has never run. The founder chose `[skip ci]` on the CLOSE merge commits (2026-10-22) so milestone code does not overwrite the D1 staging. Staging is re-proven from `main` at the D1 CLOSE merge.
+
+### Lead additions at CLOSE
+- **osv advisories:** GHSA-qxg6-89mg-rqv8 and GHSA-xp26-3454-mjgp (`@vitest/mocker` 4.1.11, medium, dev only, published 2026-10-21) turned the required `security` check red on the milestone tips (run 39771691911). With the founder's approval, `02368f2` cherry-picks the d1 time-boxed ignore (`8c3c725`, expires 2026-11-05). The vitest 4.1.12 bump is a dated d1 task (on or after 2026-10-29).
+- **Full verify:** see the M0a summary, "Close record".
+
+### Deferrals and owners
+- D1 CLOSE: SPEC-F3 / L11 edge origin; L1 AT-9-sentry / H6 (the "before D1" owner lapsed; D1 spec lists H6 under BUILD/CLOSE); L11 Sentry origin.
+- M0b: L5 E3 (built on d1 as MT-11 `system_list_policy`), L11 Supabase origin (AT-B9), DB-1, DB-2, SPEC-F2.
+- M4/M5 reviewer checklist: L3 D7, the D6 hand check. M6: L2 D6, L4 D8. M8: L6 ABH-80 drill and alert, L9 S3B-5, and the `braces` ignore (expires 2027-01-11).
+- L7 (N13) and L8 (N11): recorded as accepted limits of `scan-dist`, re-checked at M8.
+- FOUNDER-QUEUE:10 (Medium, "M0a/M0b CLOSE known gap"): a dispatch from `d1/**` or `milestone/**` can still reach the `staging` secrets, because the ruleset covers `main` only. Known gap; a required reviewer on the `staging` environment is now possible on the public repo (founder optional).
+
+### Conditions
+1. Record the visibility change as a founder decision (reverses FOUNDER-QUEUE:29): done in the summaries; the FOUNDER-QUEUE and build-notes rows are added on `d1/integration`.
+2. Update the session-end push rule: a direct push to `main` is now rejected (AUTOPILOT §6, after the merge).
+3. Founder decides Blocker B before the merge: decided, `[skip ci]`.
+
+**Verdict for CLOSE: PASS.** The red-PR probe is recorded above; conditions 1-3 are handled at CLOSE.
