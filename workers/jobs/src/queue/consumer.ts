@@ -79,7 +79,8 @@ export const SESSION_CONCURRENCY = 3;
 
 /** Runs `fn` after every earlier call has settled: one integrity stage at a time per batch. That stage buffers the
  * whole events file (worst accepted input peaks at 32-54 MB, docs/reviews/D1-r2-writer-report.md), while mirror holds
- * at most 8 MB, so the batch stays within the 128 MB isolate (review D1R-DB-1). `attempt` never rejects. */
+ * at most 8 MB of final answers, so the batch plausibly stays within the 128 MB isolate (review D1R-DB-1; the
+ * combined worst case is estimated, not measured). `attempt` never rejects; the catch keeps the chain alive anyway. */
 const oneAtATime = (): (<T>(fn: () => Promise<T>) => Promise<T>) => {
   let tail: Promise<unknown> = Promise.resolve();
   return <T>(fn: () => Promise<T>): Promise<T> => {
@@ -109,8 +110,9 @@ const settle = async (
  * Handles a batch: different sessions side by side (at most SESSION_CONCURRENCY at once, one of them in the
  * integrity stage), one session's messages in arrival order, so within a batch a redelivered message never races its
  * own session's stages. Across concurrent invocations it can (no max_concurrency); every stage is idempotent under
- * its own key (AT-D16), so that is safe (review D1R-SPEC-5). One message's failure never affects another's. (On staging one message takes ~25 s; one at a time put the last of four sessions past the
- * 90 s AT-D17 limit, e2e-staging run 39791480658.)
+ * its own key (AT-D16), so that is safe (review D1R-SPEC-5). One message's failure never affects another's.
+ * (On staging one message takes ~25 s; one at a time put the last of four sessions past the 90 s AT-D17 limit,
+ * e2e-staging run 39791480658.)
  */
 export const processBatch = async (
   batch: MessageBatch<unknown>,

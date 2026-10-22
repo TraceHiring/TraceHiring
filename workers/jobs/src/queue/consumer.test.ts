@@ -363,19 +363,31 @@ describe('processBatch: concurrency across sessions', () => {
     expect(messages.map((m) => m.acked())).toEqual([1, 1, 1]);
   });
 
-  it('a failed integrity stage releases the integrity slot for the next session', async () => {
+  it('a failed integrity stage holds the slot until it settles, then releases it for the next session', async () => {
     const { deps } = setup();
+    let fail!: (err: Error) => void;
+    const failing = new Promise<void>((_resolve, reject) => {
+      fail = reject;
+    });
+    const started: string[] = [];
     const stages: Stages = {
       mirror: () => Promise.resolve(),
       quality: () => Promise.resolve(),
-      integrity: (m) =>
-        m.sessionId === sessionId(1) ? Promise.reject(new Error('x')) : Promise.resolve(),
+      integrity: (m) => {
+        started.push(m.sessionId);
+        return m.sessionId === sessionId(1) ? failing : Promise.resolve();
+      },
     };
     const first = fakeMessage(validMessage({ sessionId: sessionId(1) }), 'a');
     const second = fakeMessage(validMessage({ sessionId: sessionId(2) }), 'b');
 
-    await processBatch(fakeBatch([first, second]), { ...deps, stages });
+    const done = processBatch(fakeBatch([first, second]), { ...deps, stages });
+    await tick();
+    expect(started).toEqual([sessionId(1)]);
 
+    fail(new Error('x'));
+    await done;
+    expect(started).toEqual([sessionId(1), sessionId(2)]);
     expect([first.retried(), first.acked()]).toEqual([1, 0]);
     expect([second.retried(), second.acked()]).toEqual([0, 1]);
   });
