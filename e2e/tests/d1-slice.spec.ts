@@ -103,7 +103,7 @@ const STEP_MS = 45_000;
 const READY_LIMIT_MS = 90_000;
 /**
  * SR-W6-1: the per-test timeouts sum to at most 20 minutes (the CI step has 22, the job 25), so the afterAll hook
- * (logouts, manifest, closing contexts, the end SHA check; its own 60 s) always gets to run. A step's own timeout
+ * (logouts, manifest, closing contexts, the end SHA check; its own 90 s, HOOK_AFTER_MS) always gets to run. A step's own timeout
  * is an upper bound inside its test's budget. Typical runs use a small part of each.
  */
 const T = {

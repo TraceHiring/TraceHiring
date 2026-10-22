@@ -251,8 +251,11 @@ through Hyperdrive (ADR-031 amendment 1).
 | every other entry point (44 rows: edge lobby and session routes, report reads, OPTIONS) | | | | ≤ 10 | 0 |
 
 **Result: the Workers Free 10 ms limit is exceeded.** The mirror consumer (which runs the quality and integrity
-stages) takes 50-99 ms, the sweep up to 42 ms and eight api RPC methods 12-30 ms; candidate-facing edge routes stay at
-or under 11 ms. All invocations ended `ok` on this account today except 3 of 5 `messagingSend` calls, which ended
+stages) takes 50-99 ms, the sweep up to 42 ms and eight api RPC methods 12-30 ms. The candidate-facing edge HTTP
+routes stay at or under 11 ms, but the `SessionDO` RPCs behind them reach 13 ms (`submit`) and 16 ms (`start`), and two
+api HTTP routes exceed 10 ms too (GET results list max 19 ms, POST start-photo-link 14 ms). The consumer figures were
+measured before `48f6e8d`/`f226950`: one batch invocation now runs up to three sessions side by side, so its CPU per
+invocation can only be higher than the 99 ms recorded; the conclusion is unchanged. All invocations ended `ok` on this account today except 3 of 5 `messagingSend` calls, which ended
 `canceled` (Cloudflare's outcome when the caller stops waiting; the slice's step 4 still found one demo-outbox link
 per invitation, so the cause is not yet known and is a follow-up). Nothing failed, but the Free limit gives no
 headroom. Per FOUNDER-QUEUE row 2026-10-14 ("Queues and Workers Paid") and OPEN-8a this is the founder's decision:
