@@ -8,7 +8,8 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-22 21:10 IST, D1 REVIEW of the remainder (newest; wins over the lines below):** `ceb0837..f226950` reviewed (Opus spec PASS WITH FIXES, Opus database/security APPROVE WITH FIXES); D1R-DB-1 (Medium, 3 integrity stages at once vs 128 MB) fixed test first in `1d36151` + `7c7ef4c` (Sonnet re-review CONFIRMED WITH NOTES); spec **revision 4p** (`d658b83`); `docs/reviews/D1.md` "Review of the remainder" (`a395c24`): AT-D1 PASS on `f226950`, AT-D17 within gate (30 s target → M5), DC-D8 FAIL vs Free, OPEN-8a founder gate. Next: the founder's AT-D2 capture and Workers Paid answer, a staging re-run on the final tip, then D1 CLOSE by PR with the founder's go-ahead. HANDOFF "Next step".
+- **Update 2026-10-22 night, M1 SPEC (newest; wins over every line below):** the live branch is now **`m1/integration`** (worktree `.claude/worktrees/m1-integration`, cut from `d1/integration` @ `1547fd0`). Wherever this file names `d1/integration` as the working branch, read `m1/integration`. **D1 is PAUSED, not closed (founder, 2026-10-22):** its remaining steps (staging re-run on the final tip, AT-D2 capture, D1 summary, CLOSE PR) stay on `d1/integration` and are copied into HANDOFF "Paused: D1"; nothing is committed to `d1/integration` or `main` meanwhile, and M1 merges to `main` only after the D1 CLOSE with the founder's go-ahead. M1 spec `specs/m1-test-authoring.md` revision 5; next: M1 BUILD in the order of its §11.4.
+- **Update 2026-10-22 21:10 IST, D1 REVIEW of the remainder:** `ceb0837..f226950` reviewed (Opus spec PASS WITH FIXES, Opus database/security APPROVE WITH FIXES); D1R-DB-1 (Medium, 3 integrity stages at once vs 128 MB) fixed test first in `1d36151` + `7c7ef4c` (Sonnet re-review CONFIRMED WITH NOTES); spec **revision 4p** (`d658b83`); `docs/reviews/D1.md` "Review of the remainder" (`a395c24`): AT-D1 PASS on `f226950`, AT-D17 within gate (30 s target → M5), DC-D8 FAIL vs Free, OPEN-8a founder gate. Next: the founder's AT-D2 capture and Workers Paid answer, a staging re-run on the final tip, then D1 CLOSE by PR with the founder's go-ahead. HANDOFF "Next step".
 - **Update 2026-10-22 20:45 IST, Chat E3 part 3:** e2e-staging (AT-D1) **green** on staging (dispatch 39797279887 on `f226950`, AT-D17 max 57.5 s) after three fixes (staging expect timeout, parallel e2e cleanup, jobs consumer runs 3 sessions side by side; Sonnet database review fixed). DC-D8 recorded: exceeds Workers Free (founder: "decide later"). **`cp/d1-10` = `f226950`**. Next chat: **D1 REVIEW of the remainder** (`ceb0837..f226950`, `docs/reviews/D1.md` staging half, full verify), then AT-D2 capture and D1 CLOSE by PR with the founder's go-ahead. HANDOFF "Next step".
 - **Update 2026-10-22 18:40 IST, M0a/M0b CLOSE:** **M0a and M0b are closed**: PR #6 → `main` `3667678` = `m0a-reviewed`, PR #13 → `main` `da5380d` = `m0b-reviewed` (Opus re-reviews PASS, H11 met, full verify green). `main` is protected by ruleset 25633431: **never push or commit to `main`**; it moves only by a CLOSE PR (AUTOPILOT §2, §6). `d1/integration` = `74ddc51` + handoff. Next chat: **E3 part 3** (e2e-staging expect timeout, re-dispatch, DC-D8, AT-D2, `cp/d1-10`), then D1 CLOSE by PR. HANDOFF "Next step"; founder items there (Dependabot PRs #7-#12, `e2e-local` back on the ruleset after D1).
 - **Update 2026-10-22 16:35 IST, Chat E3 part 2:** Hyperdrive live on staging: writer branch merged, ADR-031 amendment 1 + spec 4o, Opus security/database reviews fixed, full verify green, founder ops run done, ids committed; dispatch 39762460219 deploy-staging green, **e2e-staging red at steps 5-6** (candidate invite/OTP path); `staging-applied-39762460219` = `df85dd4`. **Repo is PUBLIC** (Actions billing). Next chats: E3 part 3 (fix e2e-staging, DC-D8, AT-D2, `cp/d1-10`) and, with the founder's go-ahead, M0a/M0b CLOSE. HANDOFF "Next step" and "M0a/M0b CLOSE".
@@ -84,11 +85,11 @@ with `--no-ff`, tag `m<X>-reviewed`.
 ## 3. Steps
 STEP 1 — Read CLAUDE.md and docs/AUTOPILOT.md in full. Then `git fetch trace` (if it hangs on credentials, as on
 2026-10-12: `git -c credential.helper= -c "credential.helper=!gh auth git-credential" fetch trace`) and read
-`git show d1/integration:docs/progress/HANDOFF.md` and the review reports it names. Since `d9bf35a` the SessionStart
+`git show m1/integration:docs/progress/HANDOFF.md` (since 2026-10-22 night; `d1/integration` only for a D1 chat) and the review reports it names. Since `d9bf35a` the SessionStart
 hook injects the handoff from the newest `*/integration` branch (older sessions injected a stale copy from `main`);
 the branch still wins over anything injected.
 
-STEP 2 — Get onto `d1/integration` without losing anyone's work
+STEP 2 — Get onto `m1/integration` (worktree `.claude/worktrees/m1-integration`; a D1 chat uses `d1/integration`) without losing anyone's work
 - `git worktree list ; git branch --show-current ; git status --porcelain`
 - If the tree is dirty: do not discard anything. Create `rescue/<YYYYMMDD-HHMM>` from HEAD, commit as wip
   there, and tell the founder (AUTOPILOT §6).
@@ -151,50 +152,44 @@ STEP 5 — Wrap-up, always (AUTOPILOT §6; the trace-handoff skill)
 
 ## 4. Paste prompt (the founder pastes this into a new session, a new Claude Code install or a new account)
 ```
-Resume the Trace autopilot from exactly where the last session stopped. You are probably a new Claude Code on a
-different account connected to this folder: the git repo is the only source of truth, and no earlier chat is
-needed or available. Do not trust your own memory; trust the repo.
+Resume the Trace autopilot on M1. The git repo is the only source of truth; trust it over memory and over any
+injected handoff text.
 
 First run (the plain fetch can hang on credentials; use this form):
   git -c credential.helper= -c "credential.helper=!gh auth git-credential" fetch trace
-  git show d1/integration:docs/progress/RESUME-PROMPT.md
-(on a fresh clone use trace/d1/integration) and follow that file exactly, step by step (sections 1-3), then read
-CLAUDE.md, docs/AUTOPILOT.md, docs/progress/HANDOFF.md and the last 3 rows of docs/progress/LOG.md on d1/integration.
-d1/integration is checked out in the worktree .claude/worktrees/d1-integration: enter it with the EnterWorktree tool
-(path from `git worktree list`) as RESUME-PROMPT STEP 2 says; never `git switch` another worktree's branch.
-Ignore any handoff text injected at session start wherever it disagrees with branch d1/integration.
+  git show m1/integration:docs/progress/RESUME-PROMPT.md
+(on a fresh clone use trace/m1/integration) and follow its §3 STEP 1-3: read CLAUDE.md and docs/AUTOPILOT.md in
+full, then docs/progress/HANDOFF.md and the last 3 rows of docs/progress/LOG.md on m1/integration. m1/integration is
+checked out in .claude/worktrees/m1-integration: enter it with the EnterWorktree tool (path from `git worktree list`);
+never `git switch` a branch checked out in another worktree. Report in 5 lines whether the repo matches HANDOFF
+"Verify first" (m1/integration tip, d1/integration and main tips unchanged, clean tree, pnpm -s verify:fast green).
+Stop if it does not match.
 
-Before changing anything, run HANDOFF "Verify first" and report in 5 lines whether the repo matches the handoff
-(tip commit, clean tree, verify:fast, the stream branch tip, PR TraceHiring/TraceHiring#4 CI). If it does not match,
-stop and tell me what differs.
+D1 is PAUSED, not closed (founder, 2026-10-22): its remaining steps are in HANDOFF "Paused: D1" and belong to a D1
+chat, not this one. Never commit to d1/integration or main. M1 merges to main only after the D1 CLOSE and with the
+founder's go-ahead.
 
-We are on Claude Max: ONE CHAT = ONE BIG TASK (docs/progress/SESSION-PLAN.md, AUTOPILOT §6 first bullet). This chat's
-task is the one HANDOFF names under "Next chat" (Chat E2: the staging half of Chat E; spec specs/d1-demo-slice.md §7,
-revisions 4k-4l; scripts/ops/README.md "First staging deploy"). Founder gate part (a) is done and the 11 migrations are
-on staging. Do HANDOFF "Next step" in order: the MT-9 hosted allow-list (tests first, Opus security + database review),
-full verify, CI; re-dispatch from d1/integration with run_e2e=false, smoke; then ask me for part (b) (private key
-secret, staging-worker-secrets.mjs, the two smoke users); dispatch with E2E; e2e-staging green; DC-D8; record
-results; tag cp/d1-10. Do not ask me to delete anything else on staging. The task is done when cp/d1-10 is pushed;
-then wrap up and print the prompt for the next chat in SESSION-PLAN.md. Every reviewer brief says: read other
-revisions with git show / git diff only, never checkout. Founder gate part (a) is DONE (2026-10-20: Cloudflare token
-widened with R2 + Queues; CANDIDATE_TOKEN_KID, CANDIDATE_TOKEN_PUBLIC_JWK, API_STAGING_ORIGIN set; check them by name
-only), so staging dispatches from d1/integration are approved; ask me only for part (b), per HANDOFF and
-scripts/ops/README.md. Production stays forbidden. M0a and M0b are built and reviewed but NOT closed; merging into
-main needs my explicit go-ahead. This machine is short of RAM: run pnpm verify / verify:fast with
-npm_config_workspace_concurrency=1.
+THIS CHAT = the task HANDOFF names under "Next step" (M1 BUILD, in the order of specs/m1-test-authoring.md §11.4;
+the first BUILD chat is Wave 0: lead-only migrations M1-a…d with pgTAP written red first (.claude/allow-red), then
+green; shared contracts; the rest of §11.2; full verify; a draft PR m1/integration -> main for Linux CI only, never
+merged). Spec: specs/m1-test-authoring.md revision 5 (binding rows §1.8 R5-n win over older text).
 
-Safety rules (never break these): never commit on or move main; never force-push; never delete or move branches,
-tags (cp/*) or worktrees (.claude/worktrees/agent-* hold earlier work); never rewrite pushed history; never deploy
-to production; never read .env* files or secret values (check GitHub secrets by name only); never re-enable
-.git/hooks/post-commit.disabled. Only the lead runs supabase start/stop, db reset, test db, gen types, pnpm verify
-and pnpm test:rls, and it warns running agents before a db reset. Stop to ask me only for the founder gates in
-docs/AUTOPILOT.md §3. The founder-queue walkthrough is finished (2026-10-15); ask me about a remaining
-FOUNDER-QUEUE item only when HANDOFF says it is due.
+RULES (never break): CLAUDE.md rules 1-9; tests first; Opus first reviews, fixes test first, a confirming
+re-review, full pnpm verify (pnpm -r --workspace-concurrency=1; this machine is short of RAM) and Linux CI before any
+merge into m1/integration. If something touching rules 1-9 is ambiguous, do not guess: add a FOUNDER-QUEUE row,
+leave that part out, keep working on the rest. Founder gates (AUTOPILOT §3) go to FOUNDER-QUEUE; do not wait. No
+staging dispatch unless HANDOFF says the founder approved it. Never force-push; never move or delete branches, tags
+(cp/*, m*-reviewed, staging-applied-*) or worktrees; never rewrite pushed history; never deploy to production; never
+read .env* or secret values; never merge Dependabot PRs #7-#12; never re-enable .git/hooks/post-commit.disabled.
+Only the lead runs supabase start/stop, db reset, test:rls, gen types and pnpm verify. Up to 3 writer agents in
+their own worktrees reset to an exact SHA with strict directories, up to 6 read-only reviewers. Commit at every
+green step (conventional commits, lowercase subject, body lines <= 100 chars, messages via git commit -F <file>).
+Usage: no new agent at 90%, wrap up at 95% (5-hour and weekly); context: wrap up at ~60%.
 
-Stop when this chat's task is done, or context passes ~50%, or the 5-hour window passes 90% (no new agent after
-80%); then the STEP 5 wrap-up (trace-handoff: handoff, log, backup, gitleaks via the pre-push hook, push) and print
-the next chat's prompt. Work multi-agent: up to 3 writers and 3 read-only reviewers at once; each writer works in its
-own worktree reset to an exact SHA with strict directories; lead-only files are reviewed, placed and verified by the
-lead, and the lead re-runs verify:fast after every placement. Check usage after every agent result (log the weekly
-figure), and keep every quality gate (tests first, Opus reviews, full pnpm verify, Linux CI) before any merge.
+Wrap-up (trace-handoff skill, on m1/integration): HANDOFF.md keeps its "Paused: D1" section; LOG row;
+RESUME-PROMPT if a branch, SHA or step changed; scripts/backup.sh; full-history gitleaks; plain push of
+m1/integration, stream branches with new commits and tags. Then check usage: if the 5-hour window is under 80% and
+weekly under 90%, start the next chat yourself (start_session, fresh context, this project) with the next-chat
+prompt (this §4 with HANDOFF's next step); otherwise create a one-time scheduled task a few minutes after the
+window resets with that prompt; if you cannot, print the prompt and stop.
 ```

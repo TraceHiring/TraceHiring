@@ -1,53 +1,40 @@
-# HANDOFF — 2026-10-22 21:10 IST (D1 REVIEW of the remainder done; D1 waits for the founder: AT-D2 capture, Workers Paid, CLOSE go-ahead)
-Reason for stopping: the chat's task is done. Usage at stop: 5-hour window ~95% (Pro; the founder allowed up to 100% for this chat), weekly ~40%, context ~25%. Start from `docs/progress/RESUME-PROMPT.md` on **`d1/integration`**. The repo wins over this file and over any memory.
+# HANDOFF — 2026-10-23 00:05 IST (M1 SPEC done on `m1/integration`; next: M1 BUILD 1 = Wave 0)
+Reason for stopping: the chat's task (M1 SPEC) is done. Usage at stop: see LOG row. Start from `docs/progress/RESUME-PROMPT.md` on **`m1/integration`** (worktree `.claude/worktrees/m1-integration`). The repo wins over this file and over any memory.
 
-## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M13; 17 milestones)
-- Closed: **2 of 17**. `m0a-reviewed` = `3667678`, `m0b-reviewed` = `da5380d` (= `trace/main`).
-- **D1 ≈ 99%**: code reviewed and fixed, staging half passed (`docs/reviews/D1.md` "Review of the remainder"). Open: AT-D2 capture (founder), a staging re-run on the final tip (goes with the capture), OPEN-8a Workers Paid (founder), D1 CLOSE by PR (founder go-ahead).
+## Paused: D1 (founder, 2026-10-22 night: paused, not closed)
+D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/worktrees/d1-integration`). Nothing is committed to `d1/integration` or `main` from M1. Copied from the `d1/integration` HANDOFF (`3c2e42a`, tip `1547fd0`):
+- **Next step 1.** Workers Paid answered (2026-10-22 21:20): "not yet"; OPEN-8a stays a founder gate and D1 can close without it. Remaining founder item: **AT-D2 capture**. For it: dispatch staging from `d1/integration` with `run_e2e=true` on the final tip (re-checks AT-D1/AT-D17 after `1d36151`), then the founder runs `pnpm e2e:record` (spec 4p §7.3) with an OS-level screen capture; record file name, SHA-256, `recordedMs`, run id.
+- **Next step 2.** Then `docs/milestones/D1-summary.md`, tag the next free `cp/d1-*` number (after `cp/d1-11`, `cp/d1-10`) on the verified tip, and **D1 CLOSE by PR to `main`** only with the founder's go-ahead (AUTOPILOT §2, §6). At the merge the founder adds `e2e-local` back to ruleset 25633431's required checks.
+- **Staging re-run already done on the final tip (reuse it):** dispatch **39820502191** on `1547fd0` (run_e2e=true, started before the pause, not touched by M1): all 7 jobs **success** (static, migrations, rls, security, e2e-local, deploy-staging, e2e-staging). Artifact `e2e-staging-results` manifest: spec `d1-slice`, project `staging`, sha `1547fd0…`, 55/55 steps ok, `durationMs` 304726, `recordedMs` 295068 (`record: false`), **AT-D17 `time_to_ready_ms`: A 46307, B 30833, C 69999, D 19441** (max 70.0 s: inside the 90 s gate; the 30 s target is still the M5-owned deviation). If `d1/integration` is still `1547fd0`, this is the "staging re-run on the final tip"; only the AT-D2 capture (record mode) remains.
+- **D1 founder items:** AT-D2 screen capture (`pnpm e2e:record`); Workers Paid (OPEN-8a) "not yet", decide before any load test (M3a); Dependabot PRs #7-#12 not merged blind; after D1 merges, `e2e-local` back on the required checks.
 
 ## Where we are (verified this chat)
-- **`d1/integration` HEAD = `a395c24`** + this handoff commit. Clean tree. Pushed. `cp/d1-10` = `f226950` (unchanged; no new `cp/*` tag this chat).
-- `verify:fast` passed on `2d4fbfb` at chat start (275.8 s). Full verify: see "Done this chat".
-- No staging dispatch this chat. Last green dispatch: 39797279887 on `f226950`.
+- Milestone **M1 · Test authoring**, phase **SPEC done** (AUTOPILOT §2). Branch **`m1/integration`** cut from `1547fd0` (founder, 2026-10-22). HEAD = this handoff commit; parent chain `d0e67b6` (spec approved) → `1ea5542` → `f225d45` → `25177f9` → `b44847e` → `c523838` → `422dfc8` (merge of `spec/m1-m2` @ `17f3fed`).
+- `d1/integration` = `1547fd0`, `trace/main` = `da5380d`, `cp/d1-10` → `f226950`: unchanged.
+- `pnpm -s verify:fast` green on `1547fd0` (before any M1 commit) (exit 0, 452 s; 2715 passed + 1 skipped); the first run hit the known D1-LEAD-1 commitlint hook timeout under load (passes alone in 1.9 s). Docs-only commits since.
+- No staging dispatch this chat.
 
-## Done this chat (verified, commits on d1/integration)
-- D1 REVIEW of `ceb0837..f226950`: Opus spec-reviewer **PASS WITH FIXES**; Opus database-reviewer (security too) **APPROVE WITH FIXES** (D1R-DB-1 Medium); Sonnet re-review of the fix **CONFIRMED WITH NOTES**. All in `docs/reviews/D1.md` "Review of the remainder".
-- `1d36151` fix(jobs): one integrity stage at a time per batch (`oneAtATime` in `workers/jobs/src/queue/consumer.ts`; D1R-DB-1: 3 × 32-54 MB could pass the 128 MB isolate). Test first (cap test saw 3 in flight). Also D1R-DB-3 test, D1R-SEC-1/D1R-SPEC-5 comments.
-- `d658b83` docs(specs): **spec revision 4p** (AT-D17 30 s target missed → deviation owned by M5; DC-D8 result in §8; §5.1 consumer; §7.2 staging expect + hook budgets); spike README DC-D8 summary corrected; e2e comment 90 s.
-- `7c7ef4c` test(jobs): re-review notes (slot test now fails without the slot; memory claim "estimated, not measured").
-- `a395c24` docs(reviews): D1.md status line, exit-gate rows, "Review of the remainder" (AT-D1 PASS on `f226950`, AT-D17 within gate, DC-D8 FAIL vs Free, DC-D7 staging PASS, OPEN-8a founder gate, AT-D2 founder capture).
-- **Full `pnpm verify` green** (started on `d658b83`; `7c7ef4c`, one test and comments, landed mid-run and is also covered by jobs consumer 33/33 alone, prettier and CI `static` on `a395c24`; each `-r` step at `--workspace-concurrency=1`): typecheck, lint (eslint, prettier, boundaries, workflows, catalog tests, migrations; gitleaks via the pre-push `gitleaks-full-history` hook and CI `security`), every package test, `scripts` 2714 passed + 1 skipped with **one flake**: `scripts/test/gitleaks-config.test.mjs` "still finds a secret key … under the same name" (`expected [] to include 'generic-api-key'`, random `body(32)` input), green on two re-runs alone; `test:rls` OK (32 files, rls 2633, catalog 144, db-types current); build OK (candidate 81.9 kB gzip, photo chunk 3.5 kB).
-- **CI on PR #4 (`a395c24`):** run 39804677965 green: static, rls, security, migrations, e2e-local (deploy-staging and e2e-staging skipped: no dispatch).
+## Done this chat (verified)
+- `422dfc8` merge `spec/m1-m2` (M1 + M2 specs revision 4, SPEC-M1-M2.md).
+- `specs/m1-test-authoring.md` **revision 5** (binding rows §1.8 R5-1…R5-46): `c523838`, `25177f9`, `f225d45`, `1ea5542`, approval `d0e67b6`; founder rows `b44847e`. Highlights: R5-1 branch/CLOSE order; R5-2 ADR-033 `fflate`; R5-3 `LlmDrafter` (Q22); R5-5/R5-31 flags guard refuses all-disabled rules; R5-7 band engine reads `signalSettings` (`band-engine-2`); R5-9/R5-20/R5-21/R5-45 candidate session v2, section state machine §4.6, refused events, forward-only from DO serves; R5-19/R5-41/R5-42 pool scoring from the candidate's draw; R5-22 "Send back"/`not_approved`; R5-28 D1 pgTAP supersession list; R5-30 provisional migration timestamps until D1 CLOSE; R5-33 exit-gate scope; §11.3 streams A1–A7, §11.4 BUILD chats.
+- Reviews: Opus spec-reviewer BLOCK (4 High) → fixed → confirming **PASS WITH FINDINGS** → fixed; Opus database-reviewer BLOCK (1 Blocking, 2 High) → fixed → confirming **PASS WITH FINDINGS** → fixed; final Sonnet check PASS WITH FINDINGS → fixed (R5-47); "Spec approved by autopilot reviewers" recorded (`d0e67b6`).
+- `docs/build-notes.md` §0 row "D1 paused, M1 starts"; `FOUNDER-QUEUE.md` Resolved row + open row Q-M1-1…4; `SPEC-M1-M2.md` stale lines marked superseded; `RESUME-PROMPT.md` points at `m1/integration` with the D1 pause line.
 
 ## Next step (one precise action)
-1. **Workers Paid answered (2026-10-22 21:20): "not yet"**; OPEN-8a stays a founder gate and D1 can close without it. Remaining founder item: **AT-D2 capture**. For it: dispatch staging from `d1/integration` with `run_e2e=true` on the final tip (re-checks AT-D1/AT-D17 after `1d36151`), then the founder runs `pnpm e2e:record` (spec 4p §7.3) with an OS-level screen capture; record file name, SHA-256, `recordedMs`, run id.
-2. Then `docs/milestones/D1-summary.md`, tag the next free `cp/d1-*` number (after `cp/d1-11`, `cp/d1-10`) on the verified tip, and **D1 CLOSE by PR to `main`** only with the founder's go-ahead (AUTOPILOT §2, §6). At the merge the founder adds `e2e-local` back to ruleset 25633431's required checks.
+**M1 BUILD 1 = Wave 0** (spec §11.2 in full, §11.4 checklist): lead only, no writers. Write the `rls_m1_*` pgTAP files of §10 red first (`.claude/allow-red`), plus the R5-28 supersession edits; then migrations M1-a…d (provisional timestamps after `20261021091905`, R5-30) until green; contracts (`contracts-m1.ts`, candidate v2, mirror union, audit actions); db-types; ADR-033; logins, secrets allow-list, queues, boundaries, `rls_roles` lists, floors; carried items; build-notes "Autopilot changes" rows (R5-1, R3-10). Full `pnpm verify` (`pnpm -r --workspace-concurrency=1`), then open a **draft PR `m1/integration` → `main` for CI only (never merged)**. Then BUILD 2 = Wave 1 (A1, A6, A5).
 
 ## Decisions made this chat
-- Founder: work to 100% of the 5-hour window for this chat only.
-- Lead: D1R-DB-1 fixed with a per-batch integrity slot (not a lower `SESSION_CONCURRENCY`), so AT-D17 keeps three lanes.
-- Lead: AT-D17's ≤ 30 s p95 target is a recorded deviation owned by M5 (its exit gate); the 90 s gate is unchanged.
-- Lead: no staging dispatch this chat (it goes with the AT-D2 capture).
+- Founder: D1 paused; M1 starts on `m1/integration`; M1 merges after D1 CLOSE with go-ahead (build-notes §0).
+- Lead: reuse the approved revision 4 (merged with history) and refresh it to revision 5 instead of rewriting; all decisions are rows R5-n in the spec.
+- Lead: M1 builds Q26 one-way written sections (supersedes D1 R-16's deferral for Q26 only, R5-9).
 
-## Founder items
-- AT-D2 screen capture (`pnpm e2e:record`, spec 4p §7.3).
-- Workers Paid (OPEN-8a): DC-D8 shows the Free 10 ms limit exceeded (all invocations still `ok`). Founder 2026-10-22: "not yet"; D1 closes without it; decide before any load test (M3a).
-- Dependabot PRs #7-#12: do not merge blind (unchanged).
-- After D1 merges: `e2e-local` back on the ruleset's required checks.
-
-## Follow-ups (not blocking D1; owners in D1.md)
-- D1R-DB-2: `max_concurrency` on the mirror consumer vs Hyperdrive `origin_connection_limit` 5 (M3a; needs a staging AT-D17 check).
-- D1R-SEC-1: socket-counting test for the consumer (M3a).
-- D1R-SPEC-7: 3/5 `messagingSend` `canceled` on staging (M3a).
-- Peak memory of the consumer's combined worst case is estimated, not measured.
-- `scripts/test/gitleaks-config.test.mjs` random-input flake (see "Done this chat"): make the random `body()` draw deterministic or entropy-checked; never loosen the assertion.
+## Founder items (new or due)
+- Q-M1-1…Q-M1-4 now FOUNDER-QUEUE rows (defaults built). Staging parts of M1 (DC-M1-5 F-1 secret key, F-8 pepper, DC-M1-6 Hyperdrive configs for the two new logins) wait for a staging go-ahead.
 
 ## Gotchas
-- The worktree guard refuses `sh script`, `cd …&&` + git, `$(...)`, heredocs into repo files, and any chain containing `gitleaks git`: run plain commands from the worktree cwd; commit messages via `git commit -F <scratchpad file>` (commitlint: body lines ≤ 100 chars).
-- `gh run view --json jobs` can show a finished job as `queued`; trust the artifacts / `gh run watch`.
-- Timing tests (ReDoS 50 ms budgets, gitleaks-driven tests) fail under heavy local load; re-run alone before suspecting a regression.
-- Bump vitest to 4.1.12 on or after 2026-10-29 and delete the two osv entries (they expire 2026-11-05; `main` has them too).
-- pnpm 12 ignores `npm_config_workspace_concurrency`; use `pnpm -r --workspace-concurrency=1`.
+- The worktree guard refuses `cd …&&` + git, `$(...)`, heredocs whose text names `.github`, and chained git calls: run plain commands from the worktree; commit messages via `git commit -F <scratchpad file>` (body lines ≤ 100 chars).
+- Timing tests (commitlint, gitleaks-driven) can exceed 60 s under load on this laptop (D1-LEAD-1); re-run alone before suspecting a regression.
+- `ADR-032` is the edge link rate limit; M1's `fflate` ADR is ADR-033.
 
 ## Verify first
-`git fetch trace` · `git log --oneline -3 d1/integration` (this handoff, parent `a395c24`) · `git status` · `git rev-parse cp/d1-10^{commit}` (`f226950`) · `git rev-parse --short trace/main` (`da5380d`) · `pnpm -s verify:fast`
+`git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `pnpm -s verify:fast`
