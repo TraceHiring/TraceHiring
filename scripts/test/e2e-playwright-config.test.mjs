@@ -54,6 +54,22 @@ describe('e2e/playwright.config.ts', () => {
     expect(process.env['PLAYWRIGHT_NO_COPY_PROMPT']).toBeUndefined();
   });
 
+  // e2e-staging run 39762460219: a candidate request from the US runner to the Mumbai database takes 5-9 s, so the
+  // default 5 s assertion timeout failed steps 5-6 with no server fault. Only the staging project waits longer.
+  it('staging: assertions wait at least 30 s (the candidate app request timeout)', async () => {
+    process.env['E2E_STAGING'] = '1';
+    const config = await load();
+    expect(config.projects[0].expect?.timeout).toBeGreaterThanOrEqual(30_000);
+    expect(config.expect?.timeout).toBeUndefined();
+  });
+
+  it('local: the assertion timeout stays at the Playwright default', async () => {
+    process.env['E2E_LOCAL'] = '1';
+    const config = await load();
+    expect(config.projects[0].expect?.timeout).toBeUndefined();
+    expect(config.expect?.timeout).toBeUndefined();
+  });
+
   it('unset: the local project (the default for a developer run)', async () => {
     const config = await load();
     expect(config.projects.map((p) => p.name)).toEqual(['local']);

@@ -36,6 +36,9 @@ const local: PlaywrightTestProject = {
 const staging: PlaywrightTestProject = {
   name: 'staging',
   testMatch: /d1-slice\.spec\.ts$/,
+  // A candidate request from the CI runner to the Mumbai database takes 5-9 s (run 39762460219), so an assertion
+  // waits as long as the candidate app's own request timeout (apps/candidate/src/api.ts) instead of the 5 s default.
+  expect: { timeout: 30_000 },
   use: {
     ...devices['Desktop Chrome'],
     // A staging run never keeps or uploads a trace, whatever E2E_TRACE says.
