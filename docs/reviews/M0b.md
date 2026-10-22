@@ -118,3 +118,46 @@ A fresh Sonnet `database-reviewer` (read-only; DB probes in rolled-back transact
 **Gates after the FIX (lead, `45bb351`, no agent running):** full `pnpm verify` exit 0. Package tests are all green, and scripts ran 1559 passed with 1 skipped (K4). `test:rls` reports catalog 138 / rls 697, with AT-B8 and the M0B-DB-5 two-connection test OK. gen-catalog-tests OK (123), check-migrations OK, check-headers OK, scan-dist clean and gitleaks found no leaks in 374 commits. The first full run failed one redactor timing assertion at 50.2 ms against a 50 ms limit (`packages/shared`, untouched by this FIX). This is the load-sensitive case already seen in the BUILD sessions; the immediate re-run was green. Linux CI was green on `ccb584a` (run 38407442501: static, rls with the concurrency step, security, migrations).
 
 **Status after FIX:** the code verdict is now **PASS WITH CONDITIONS** with **no open Medium**. Every remaining Low has an owner: FR-1 and B0-SP7 (rest) go to M1, M0B-DB-1 to M7, and the rest as listed above. The milestone stays **INCOMPLETE until CLOSE**: the staging run (AT-B9, AT-B10) and `m0a-reviewed` remain founder gates.
+
+## CLOSE re-review addendum (2026-10-22, fresh Opus reviewer)
+Read-only re-review of `56c2641` (= `cp/m0b-05`). `milestone/m0a` ⊂ `milestone/m0b` ⊂ `d1/integration` (`git merge-base --is-ancestor`). The lead added H11 and the full verify.
+
+### FR-1: partly fixed in M0b, the rest stays with M1
+- The FR-1 row above and the "Status after FIX" line predate two fixes:
+  - `4fd9c8f` adds `tree_call.bound` and the `caller_unbound` branch, fixture `MT-11.caller_unbound.violation.sql`; catalog floor 138 to 140.
+  - `56c2641` also counts calls inside DISTINCT, NULLIF, row compare, ANY/IN, row-compare sub-selects and a correlated EXISTS as bound, with 3 negative controls (`catalog_probe.test.sql`).
+- Linux CI run 38492229906 on `56c2641`: static, rls, security, migrations green; floors catalog 140, rls 697.
+- Now caught: `deleted_at is null and (select auth.jwt() ->> 'role') = 'authenticated'` and `(select auth.uid()) = (select auth.uid())`.
+- Still missed (`MT-11.sql:41-44`, `:222` say so): CASE or COALESCE bound in one branch only; an OR below an AND or a NOT; an IN sub-select over another table comparing the caller only to a constant. D1 adds three caller helpers, which widens this gap (`docs/reviews/D1.md:91` on d1).
+- The Sonnet re-review of `4fd9c8f` is recorded only in `docs/progress/LOG.md:32` and the `56c2641` message; `56c2641` had no own re-review, but the D1 review of `56c2641..d84f4ca` found no M0b fix regressed (`D1.md:142`). Accepted for a Low. **Residual FR-1 owner: M1**, before M1 adds tables, including the D1 helpers.
+
+### AT-B9 (org user signs in on staging) and AT-B10 (migrations reach staging from CI only)
+- Run 39566827826 (dispatch, `d1/integration` @ `5306928`): deploy-staging steps 1-16 green; step 7 "Remote database is up to date"; step 16 `smoke-staging-auth: OK (9 checks)`.
+- Run 39762460219 (@ `df85dd4`): steps 1-16 green; step 7 applied `20261021091905_d1_flags_rule_table.sql` only; step 8 catalog OK; step 16 `smoke-staging-auth: OK (9 checks)`.
+- Both runs conclude `failure` only because of the D1 job `e2e-staging`. The M0b migrations first reached staging through CI in run 39376946373 (`LOG.md:57` on d1).
+- **Caveat: d1 code, not the milestone tree.** `56c2641` is an ancestor of both heads; `git diff --name-status 56c2641 df85dd4` modifies no M0b migration and `scripts/smoke-staging-auth.mjs` is unchanged. `ci.yml` and MT-7, MT-9, MT-11 changed, so the catalog step ran D1's stricter versions. Acceptable: the founder chose deploy-before-merge from `d1/**` and `milestone/**` (FOUNDER-QUEUE:30), which replaces the "first run is the push of the M0b CLOSE merge" order in spec §1.3 H9 (`specs/m0b-tenancy.md:53`).
+- Second AT-B10 caveat: staging once held migration `20261011003340`, in no commit, applied outside CI on 2026-10-11; dispatch 2 (run 39365183980) failed on it. The founder removed that pre-M0b demo table, its history row and three anon demo policies on `storage.objects` by hand (`LOG.md:56-57`, FOUNDER-QUEUE:27). No M0b migration was applied outside CI; every dispatch since applied migrations from CI only, and `check-workflows` enforces that path.
+- Founder decision 2026-10-22: `[skip ci]` on the CLOSE merge commits, so milestone code never redeploys over the D1 staging.
+
+### H11 / DC-4 / DC-9 (hosted, on `trace-dev`)
+- Spec §1.3 H11 (`specs/m0b-tenancy.md:55`): the `supabase db push` output on `trace-dev` (DC-3, DC-4 `auth.sessions` trigger) and `select session_user, current_setting('role')` = `postgres` / `none` (DC-9).
+- Status: **met** (founder ran both on `trace-dev` from `m0b/integration` @ `56c2641` on 2026-10-22; output in `docs/milestones/M0b-summary.md` §3). `supabase db push` applied all six migrations (M0a baseline and the five M0b ones, including `20261012075547_m0b_auth_audit.sql`, which creates the `auth.sessions` triggers) and finished without error: DC-3 and DC-4 hold on hosted Supabase. The query returned `postgres|none`: DC-9 holds.
+
+### Deferrals and open findings, with owners
+| Item | Owner |
+| --- | --- |
+| Trust & Safety staff read path (spec §1.2) | M6 |
+| Partition-horizon job, must run before 2027-09 | M7 |
+| Replica-mode / data-only restore DR runbook, ABH-80 | M7 |
+| M0B-DB-1: operator can DELETE/TRUNCATE memberships and other tables (D1 widens it, `D1.md:92`) | M7 |
+| FR-1 residual; B0-SP7 rest (gateway `SET ROLE`, pure-owner persona) | M1 |
+| M0B-DB-3 (column ACLs not checked); M0B-SEC-1 (first TOTP enrolment from an aal1 session) | M1 |
+| M0B-DB-4 / M0B-SEC-2 (no audit row for `platform_staff` changes) | M6 |
+| B0-DB3, B0-SEC4, B0-SEC5, B0-SEC7, B0-SEC8, B4-SEC-4, B4-SEC-5, B4-SEC-6 (optional), B2-SEC-1, B2-SEC-4 | M1 |
+| B0-SEC6 (rule 10 direct path) | M3a |
+| B2-SEC-5 (email-code form shows whether an account exists) | Founder (answered "hide it", 2026-10-15) |
+| "CI blocks merge on red" | Closed at the M0a CLOSE: ruleset 25633431 and red-PR probe TraceHiring/TraceHiring#5 |
+
+Every item has an owner; all open findings are Low. `m0a-reviewed` comes before `m0b-reviewed` (line 9).
+
+**Verdict for CLOSE: PASS (pending H11 output)** (reviewer). Lead, 2026-10-22: H11 output received and met (above), so the CLOSE verdict is **PASS**.
