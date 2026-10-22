@@ -299,6 +299,87 @@ describe('processBatch: concurrency across sessions', () => {
     expect(other.acked()).toBe(1);
   });
 
+  it('a throw from retry() itself never rejects the batch or stops other sessions (review D1R-DB-3)', async () => {
+    const { deps } = setup();
+    const stages: Stages = {
+      mirror: (m) =>
+        m.sessionId === sessionId(1) ? Promise.reject(new Error('x')) : Promise.resolve(),
+      quality: () => Promise.resolve(),
+      integrity: () => Promise.resolve(),
+    };
+    let retryCalls = 0;
+    const throwing = {
+      ...fakeMessage(validMessage({ sessionId: sessionId(1) }), 'a'),
+      retry: () => {
+        retryCalls += 1;
+        throw new Error('retry failed');
+      },
+    } as unknown as Message<unknown>;
+    const other = fakeMessage(validMessage({ sessionId: sessionId(2) }), 'b');
+
+    await expect(
+      processBatch(fakeBatch([throwing, other]), { ...deps, stages }),
+    ).resolves.toBeUndefined();
+
+    expect(retryCalls).toBe(2);
+    expect(other.acked()).toBe(1);
+  });
+
+  // Review D1R-DB-1: the integrity stage buffers the whole events file (worst accepted input peaks at 32-54 MB,
+  // docs/reviews/D1-r2-writer-report.md), so three at once could pass the 128 MB isolate limit.
+  it('runs at most one integrity stage at a time; other sessions keep running mirror and quality meanwhile', async () => {
+    const { deps } = setup();
+    const held = gate();
+    const calls: string[] = [];
+    let integrityInFlight = 0;
+    let integrityMost = 0;
+    const stages: Stages = {
+      mirror: (m) => Promise.resolve(void calls.push(`mirror:${m.sessionId}`)),
+      quality: (m) => Promise.resolve(void calls.push(`quality:${m.sessionId}`)),
+      integrity: async (m) => {
+        integrityInFlight += 1;
+        integrityMost = Math.max(integrityMost, integrityInFlight);
+        calls.push(`integrity:${m.sessionId}`);
+        await held.shut;
+        integrityInFlight -= 1;
+      },
+    };
+    const messages = [1, 2, 3].map((n) =>
+      fakeMessage(validMessage({ sessionId: sessionId(n) }), `m${n}`),
+    );
+
+    const done = processBatch(fakeBatch(messages), { ...deps, stages });
+    await tick();
+    expect(integrityInFlight).toBe(1);
+    for (const n of [1, 2, 3]) {
+      expect(calls).toContain(`mirror:${sessionId(n)}`);
+      expect(calls).toContain(`quality:${sessionId(n)}`);
+    }
+
+    held.open();
+    await done;
+    expect(integrityMost).toBe(1);
+    expect(calls.filter((c) => c.startsWith('integrity:'))).toHaveLength(3);
+    expect(messages.map((m) => m.acked())).toEqual([1, 1, 1]);
+  });
+
+  it('a failed integrity stage releases the integrity slot for the next session', async () => {
+    const { deps } = setup();
+    const stages: Stages = {
+      mirror: () => Promise.resolve(),
+      quality: () => Promise.resolve(),
+      integrity: (m) =>
+        m.sessionId === sessionId(1) ? Promise.reject(new Error('x')) : Promise.resolve(),
+    };
+    const first = fakeMessage(validMessage({ sessionId: sessionId(1) }), 'a');
+    const second = fakeMessage(validMessage({ sessionId: sessionId(2) }), 'b');
+
+    await processBatch(fakeBatch([first, second]), { ...deps, stages });
+
+    expect([first.retried(), first.acked()]).toEqual([1, 0]);
+    expect([second.retried(), second.acked()]).toEqual([0, 1]);
+  });
+
   it("one session's failure never holds back or settles another session's message", async () => {
     const { deps } = setup();
     const stages: Stages = {

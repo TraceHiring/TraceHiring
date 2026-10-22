@@ -72,30 +72,44 @@ const attempt = async (
   }
 };
 
-/** Sessions handled side by side in one batch. Each runs one stage at a time, which holds one DB socket and may
- * read R2 meanwhile, so three sessions stay within the six open connections Workers allow per invocation and
- * within memory (a stage buffers up to ~28 MB of evidence; review of 48f6e8d, M1 and M2). */
+/** Sessions handled side by side in one batch. Each runs one stage at a time, which holds one DB socket and reads
+ * R2 one object at a time, so three sessions hold at most six DB and R2 connections (an error report's fetch may
+ * queue behind them; review of 48f6e8d, M1; D1R-SEC-1). */
 export const SESSION_CONCURRENCY = 3;
+
+/** Runs `fn` after every earlier call has settled: one integrity stage at a time per batch. That stage buffers the
+ * whole events file (worst accepted input peaks at 32-54 MB, docs/reviews/D1-r2-writer-report.md), while mirror holds
+ * at most 8 MB, so the batch stays within the 128 MB isolate (review D1R-DB-1). `attempt` never rejects. */
+const oneAtATime = (): (<T>(fn: () => Promise<T>) => Promise<T>) => {
+  let tail: Promise<unknown> = Promise.resolve();
+  return <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = tail.then(fn);
+    tail = run.catch(() => undefined);
+    return run;
+  };
+};
 
 const settle = async (
   raw: Message<unknown>,
   message: SessionMirrorMessage,
   deps: ConsumerDeps,
+  integritySlot: <T>(fn: () => Promise<T>) => Promise<T>,
 ): Promise<void> => {
   if (!(await attempt('mirror', message, deps))) {
     raw.retry();
     return;
   }
   const qualityOk = await attempt('quality', message, deps);
-  const integrityOk = await attempt('integrity', message, deps);
+  const integrityOk = await integritySlot(() => attempt('integrity', message, deps));
   if (qualityOk && integrityOk) raw.ack();
   else raw.retry();
 };
 
 /**
- * Handles a batch: different sessions side by side (at most SESSION_CONCURRENCY at once), one session's messages
- * in arrival order, so a redelivered message never races its own session's stages. One message's failure never
- * affects another's. (On staging one message takes ~25 s; one at a time put the last of four sessions past the
+ * Handles a batch: different sessions side by side (at most SESSION_CONCURRENCY at once, one of them in the
+ * integrity stage), one session's messages in arrival order, so within a batch a redelivered message never races its
+ * own session's stages. Across concurrent invocations it can (no max_concurrency); every stage is idempotent under
+ * its own key (AT-D16), so that is safe (review D1R-SPEC-5). One message's failure never affects another's. (On staging one message takes ~25 s; one at a time put the last of four sessions past the
  * 90 s AT-D17 limit, e2e-staging run 39791480658.)
  */
 export const processBatch = async (
@@ -116,11 +130,12 @@ export const processBatch = async (
     lanes.set(parsed.data.sessionId, lane);
   }
   const waiting = [...lanes.values()];
+  const integritySlot = oneAtATime();
   const runLanes = async (): Promise<void> => {
     for (let lane = waiting.shift(); lane !== undefined; lane = waiting.shift()) {
       for (const { raw, message } of lane) {
         try {
-          await settle(raw, message, deps);
+          await settle(raw, message, deps, integritySlot);
         } catch (err) {
           // A throw from ack/retry or the reporter must not reject the batch while other sessions are mid-stage
           // (review of 48f6e8d, M3): retry this message; every stage is idempotent under its own key.
