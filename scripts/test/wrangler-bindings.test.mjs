@@ -164,11 +164,11 @@ describe.each(Object.keys(EXPECTED))('%s wrangler.jsonc (spec §4.2)', (worker) 
   });
 
   // ADR-031 amendment 1 (revision 4o): staging reaches Postgres only through one Hyperdrive binding per login role;
-  // dev and the top level have none (the local stack uses the loopback URL secrets). Until the founder has created
-  // the configs and their ids are committed, staging may have no hyperdrive key yet; check-deploy-vars refuses that
-  // at deploy time. Whatever is present must be exact.
+  // dev and the top level have none (the local stack uses the loopback URL secrets). The founder created the four
+  // configs on 2026-10-22 and their ids are committed, so staging must carry them, exact (the deploy's
+  // check-deploy-vars applies the same rule).
   it('carries exactly the Hyperdrive bindings of scripts/lib/hyperdrive.mjs, staging only', () => {
-    expect(hyperdriveProblems(worker, CONFIGS[worker], { requireStaging: false })).toEqual([]);
+    expect(hyperdriveProblems(worker, CONFIGS[worker], { requireStaging: true })).toEqual([]);
   });
 
   it('keeps observability exactly as rule 8 requires, with no env override', () => {

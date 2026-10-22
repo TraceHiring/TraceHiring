@@ -2,8 +2,8 @@
 // D1 bindings (specs/d1-demo-slice.md §4.2, §7.1): the mirror Queue consumer and producer, R2 evidence
 // (read) and the every-minute sweep cron, repeated in each env block (bindings and vars are not
 // inherited). No secret on staging: the three jobs database logins are the JOBS_MIRROR_DB, JOBS_QUALITY_DB and
-// JOBS_INTEGRITY_DB Hyperdrive bindings in env.staging (ADR-031 amendment 1; their config ids, not secrets, are
-// added once the founder has created the configs); the local stack instead gets the three loopback URL secrets
+// JOBS_INTEGRITY_DB Hyperdrive bindings in env.staging (ADR-031 amendment 1; their config ids are public, created
+// by the founder on 2026-10-22); the local stack instead gets the three loopback URL secrets
 // (scripts/e2e-local.mjs). Deploy order: services/api, then workers/jobs, then workers/edge.
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
@@ -75,6 +75,12 @@
         ],
       },
       "triggers": { "crons": ["* * * * *"] },
+      // Configs trace-staging-jobs-{mirror,quality,integrity}-login (scripts/lib/hyperdrive.mjs); public ids.
+      "hyperdrive": [
+        { "binding": "JOBS_MIRROR_DB", "id": "784e4dee7f0c4119b482340d48f6089d" },
+        { "binding": "JOBS_QUALITY_DB", "id": "29d5817a3e7f42c5ab5433f56ce0e4d5" },
+        { "binding": "JOBS_INTEGRITY_DB", "id": "e7200fda374f4caf9169b3c3163f636f" },
+      ],
     },
   },
 }

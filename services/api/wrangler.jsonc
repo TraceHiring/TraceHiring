@@ -2,8 +2,8 @@
 // D1 bindings (specs/d1-demo-slice.md §4.2, §7.1): Durable Objects and R2, repeated in each env block
 // (bindings and vars are not inherited). Secrets (set by an operator, never in git): the candidate-token
 // private key and the media-link HMAC key (check-staging-secrets). The database login api_login is the
-// API_DB Hyperdrive binding in env.staging (ADR-031 amendment 1; its config id, not a secret, is added once the
-// founder has created the config with scripts/ops/staging-worker-secrets.mjs); the local stack instead gets the
+// API_DB Hyperdrive binding in env.staging (ADR-031 amendment 1; its config id is public, created by the founder
+// with scripts/ops/staging-worker-secrets.mjs on 2026-10-22); the local stack instead gets the
 // API_DB_URL secret on a loopback host (scripts/e2e-local.mjs). env.dev has no Hyperdrive binding.
 // The Supabase URL and publishable key are public vars (L-10); empty here, the deploy sets them.
 // Deploy order: services/api first (the edge service binding targets it).
@@ -98,6 +98,8 @@
         { "binding": "PACKAGES", "bucket_name": "trace-packages-staging" },
         { "binding": "EVIDENCE", "bucket_name": "trace-evidence-staging" },
       ],
+      // Config trace-staging-api-login (scripts/lib/hyperdrive.mjs); the id is public and works only in this account.
+      "hyperdrive": [{ "binding": "API_DB", "id": "1063006219694669b2a7417f307164fd" }],
     },
   },
 }
