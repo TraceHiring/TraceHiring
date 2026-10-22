@@ -10,7 +10,7 @@ refusal (nothing was changed).
 | `add-member.mjs` | Adds a member through `private.add_member`; prints the membership id | `specs/m0b-tenancy.md` §4.4 |
 | `enrol-smoke-user.mjs` | Creates (local) or enrols (staging) a smoke user: the recruiter (default) or, with `--roles reviewer`, the D1 reviewer | `specs/m0b-tenancy.md` §4.4, `specs/d1-demo-slice.md` §11 |
 | `candidate-token-key.mjs` | Generates the ES256 key pair that signs candidate tokens | `specs/d1-demo-slice.md` §4.3, ADR-030 |
-| `staging-worker-secrets.mjs` | Creates the four staging database login roles and sets the staging Worker secrets that hold them | `specs/d1-demo-slice.md` §3, §7.1, ADR-031 |
+| `staging-worker-secrets.mjs` | Creates the four staging database login roles and the four Hyperdrive configs that hold them, sets the api secret `MEDIA_LINK_HMAC_KEY` and deletes the retired `*_DB_URL` secrets | `specs/d1-demo-slice.md` §3, §7.1, ADR-031 amendment 1 |
 
 ## First staging deploy (do these in this order)
 
@@ -33,7 +33,10 @@ dispatch runs without them, because nothing on staging is ready for them yet.
    may stay red until step 5 creates the smoke users (H9); carry on.
 3. The api secret `CANDIDATE_TOKEN_PRIVATE_JWK` (`wrangler secret put`, from `services/api`), then delete the
    private file: see the key pair section below.
-4. The login roles and the other api and jobs secrets: `staging-worker-secrets.mjs --yes` (section below).
+4. The login roles, their Hyperdrive configs and the api secret `MEDIA_LINK_HMAC_KEY` (section below): upload
+   the Supabase CA once, run `staging-worker-secrets.mjs --ca-certificate-id <ID> --yes`, then send the printed
+   Hyperdrive ids to the lead. The Workers reach the database only after the lead has committed those ids, so the
+   lead does that before the next dispatch.
 5. The staging smoke users (recruiter and reviewer, `enrol-smoke-user.mjs`) and their GitHub secrets: see
    "Staging smoke users" below.
 6. Dispatch again with e2e (`run_e2e` defaults to `true`). This needs step 5 first: `e2e-staging` runs only
@@ -215,23 +218,35 @@ token, capped at 3 hours (10 800 s). So the variable holds both public keys for 
 ## Staging login roles and Worker secrets (`staging-worker-secrets.mjs`)
 
 The api and jobs Workers reach Postgres through four login roles (spec §3). Each login may only switch to its
-one `trace_*` role:
+one `trace_*` role. On staging the Workers cannot open TLS to Supabase Postgres themselves: a Worker trusts only
+public certificate authorities, and Supabase signs its database certificate with its own private "Supabase Root
+2021 CA". So each login lives in a **Cloudflare Hyperdrive config**, which connects to Postgres for the Worker and
+checks that CA (ADR-031 amendment 1). One config per login, one binding per config:
 
-| Login | Switches to | Worker secret | Worker (folder) |
-| --- | --- | --- | --- |
-| `api_login` | `trace_api` | `API_DB_URL` | `trace-api-staging` (`services/api`) |
-| `jobs_mirror_login` | `trace_worker` | `JOBS_MIRROR_DB_URL` | `trace-jobs-staging` (`workers/jobs`) |
-| `jobs_quality_login` | `trace_quality_worker` | `JOBS_QUALITY_DB_URL` | `trace-jobs-staging` (`workers/jobs`) |
-| `jobs_integrity_login` | `trace_integrity_worker` | `JOBS_INTEGRITY_DB_URL` | `trace-jobs-staging` (`workers/jobs`) |
+| Login | Switches to | Hyperdrive config | Binding | Worker (folder) |
+| --- | --- | --- | --- | --- |
+| `api_login` | `trace_api` | `trace-staging-api-login` | `API_DB` | `trace-api-staging` (`services/api`) |
+| `jobs_mirror_login` | `trace_worker` | `trace-staging-jobs-mirror-login` | `JOBS_MIRROR_DB` | `trace-jobs-staging` (`workers/jobs`) |
+| `jobs_quality_login` | `trace_quality_worker` | `trace-staging-jobs-quality-login` | `JOBS_QUALITY_DB` | `trace-jobs-staging` (`workers/jobs`) |
+| `jobs_integrity_login` | `trace_integrity_worker` | `trace-staging-jobs-integrity-login` | `JOBS_INTEGRITY_DB` | `trace-jobs-staging` (`workers/jobs`) |
 
-It also sets `MEDIA_LINK_HMAC_KEY` (64 random hex characters) on the api Worker. It does **not** set
-`CANDIDATE_TOKEN_PRIVATE_JWK` (see the key pair section above) and it never touches the edge Worker, which holds
-no secret.
+It also sets `MEDIA_LINK_HMAC_KEY` (64 random hex characters) on the api Worker, and deletes the old database
+URL secrets (`API_DB_URL` on api; `JOBS_MIRROR_DB_URL`, `JOBS_QUALITY_DB_URL`, `JOBS_INTEGRITY_DB_URL` on jobs)
+where a Worker still holds them: they are retired on staging, and the deploy's `check-staging-secrets` step fails
+while one is left. It does **not** set `CANDIDATE_TOKEN_PRIVATE_JWK` (see the key pair section above) and it never
+touches the edge Worker, which holds no secret.
 
-You run it once, on your own computer, **after the first staging deploy** and before the D1 staging smoke
-(step 4 of "First staging deploy" above). It
-makes new random passwords, gives them to Postgres, then puts each connection string into Cloudflare. It never
-prints, logs or saves a password, a key or your database URL.
+You run it on your own computer, **after the first staging deploy** and before the D1 staging smoke (step 4 of
+"First staging deploy" above). It makes new random passwords, gives them to Postgres, then writes them into the
+four Hyperdrive configs. It never prints, logs or saves a password, a key, the Cloudflare token or your database
+URL.
+
+Good to know:
+
+- Workers Free allows 10 Hyperdrive configs per account; this uses 4.
+- Caching is disabled on every config: a cached answer could be served to another role or org.
+- Each config may open at most 5 connections to the database.
+- A re-run makes new passwords and updates the same four configs (matched by name); it never makes a second set.
 
 ### Before you start
 
@@ -240,70 +255,130 @@ prints, logs or saves a password, a key or your database URL.
    first deploy" below).
 2. `psql` (the PostgreSQL client) is on your `PATH`: `psql --version` prints a version.
 3. wrangler is signed in to the Trace Cloudflare account: from the repository root,
-   `pnpm exec wrangler whoami` shows the account. If not, run `pnpm exec wrangler login` first.
+   `pnpm exec wrangler whoami` shows the account. If not, run `pnpm exec wrangler login` first. The script asks
+   wrangler for its login token (`wrangler auth token`) to call the Hyperdrive API; a login with a global API key
+   (`CLOUDFLARE_API_KEY`) is not supported.
 4. You have the staging **Session pooler** string from the Supabase dashboard (project `trace-staging`,
    Connect, Session pooler, port **5432**), with the `postgres` password filled in and `?sslmode=require` at the
    end. It looks like `postgresql://postgres.<ref>:<password>@aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require`.
-   The direct host (`db.<ref>.supabase.co`, user `postgres`) also works; ADR-031 prefers the pooler.
+   The direct host (`db.<ref>.supabase.co`, user `postgres`) also works; ADR-031 prefers the pooler. The
+   Hyperdrive configs connect to the same host.
 
-### Steps (bash or Git Bash)
+### Step 1: download the Supabase CA certificate (once)
 
-From the repository root. `read -rs` keeps the URL off the screen and out of your shell history.
+In the Supabase dashboard, open project `trace-staging`, then **Project Settings → Database → SSL
+Configuration**, and click **Download certificate**. You get `prod-ca-2021.crt`. It is a public certificate, not
+a secret, but keep it **outside the repository** (for example in your Downloads folder).
+
+### Step 2: upload it to Cloudflare (once)
+
+From the repository root, in PowerShell (put your own path to the file):
 
 ```
-read -rs TRACE_OPERATOR_DB_URL && export TRACE_OPERATOR_DB_URL
-node scripts/ops/staging-worker-secrets.mjs --env staging --dry-run
-node scripts/ops/staging-worker-secrets.mjs --env staging --yes
-unset TRACE_OPERATOR_DB_URL
+cd services/api
+pnpm exec wrangler cert upload certificate-authority --ca-cert C:\Users\<you>\Downloads\prod-ca-2021.crt --name trace-supabase-staging-ca
+cd ../..
 ```
 
-### Steps (PowerShell)
+wrangler prints `Success! Uploaded CA Certificate trace-supabase-staging-ca` and then a line `ID: <a UUID>`.
+Copy that ID; it is not a secret. This needs wrangler 4.9 or later; the repository pins 4.149. You do not upload it again on a
+re-run: reuse the same ID.
+
+### Step 3: run the script
+
+From the repository root, in PowerShell. `Read-Host -AsSecureString` keeps the URL off the screen and out of your
+shell history. Put the ID from step 2 in place of `<ID>`.
 
 ```
 $s = Read-Host -AsSecureString 'staging session pooler URL'
 $env:TRACE_OPERATOR_DB_URL = [System.Net.NetworkCredential]::new('', $s).Password
-node scripts/ops/staging-worker-secrets.mjs --env staging --dry-run
-node scripts/ops/staging-worker-secrets.mjs --env staging --yes
+node scripts/ops/staging-worker-secrets.mjs --env staging --ca-certificate-id <ID> --dry-run
+node scripts/ops/staging-worker-secrets.mjs --env staging --ca-certificate-id <ID> --yes
 Remove-Item Env:TRACE_OPERATOR_DB_URL; Remove-Variable s
 ```
 
-The staging project ref (`vsugnnxeahjtgzmgmyfu`, public, from `docs/infra/environments.md`) is pinned in the
-script, so you do not need to set anything else. The script refuses a URL whose project is not this one. If
-`SUPABASE_STAGING_PROJECT_REF` happens to be set in your shell, it must hold the same value, or the script stops.
+In bash or Git Bash the same steps are:
 
-- `--dry-run` runs the checks and prints the plan (role, secret and Worker names only). It changes nothing and
-  does not call wrangler.
+```
+read -rs TRACE_OPERATOR_DB_URL && export TRACE_OPERATOR_DB_URL
+node scripts/ops/staging-worker-secrets.mjs --env staging --ca-certificate-id <ID> --dry-run
+node scripts/ops/staging-worker-secrets.mjs --env staging --ca-certificate-id <ID> --yes
+unset TRACE_OPERATOR_DB_URL
+```
+
+If Hyperdrive refuses the connection with `--sslmode verify-full` (the default, which also checks the host name
+on the certificate), run the `--yes` line again with `--sslmode verify-ca` added at the end. That still checks
+the certificate against the Supabase CA, only not the host name. `require` (no check) is never allowed.
+
+The staging project ref (`vsugnnxeahjtgzmgmyfu`, public, from `docs/infra/environments.md`) and the staging
+Cloudflare account are pinned in the script, so you do not need to set anything else. The script refuses a URL
+whose project is not this one. If `SUPABASE_STAGING_PROJECT_REF` happens to be set in your shell, it must hold the
+same value, or the script stops.
+
+- `--dry-run` runs the checks and prints the plan (role, config, binding, secret and Worker names, the sslmode
+  and the CA ID). It changes nothing and does not call wrangler or Cloudflare.
 - Without `--dry-run` or `--yes` it prints the plan, changes nothing and exits `2`.
-- `--yes` does the work and prints one line per secret it set. Then the next staging deploy's
-  `check-staging-secrets` step confirms the names.
+- `--yes` does the work and prints one line per config, secret and deleted secret. At the end it prints each
+  Hyperdrive id and the lines to paste into the two `wrangler.jsonc` files.
+
+### Step 4: send the ids to the lead
+
+The last lines of a `--yes` run look like this (the ids are not secrets):
+
+```
+staging-worker-secrets: hyperdrive API_DB (api) id=<32 hex characters>
+staging-worker-secrets: hyperdrive JOBS_MIRROR_DB (jobs) id=...
+staging-worker-secrets: hyperdrive JOBS_QUALITY_DB (jobs) id=...
+staging-worker-secrets: hyperdrive JOBS_INTEGRITY_DB (jobs) id=...
+staging-worker-secrets: paste under env.staging of each wrangler.jsonc:
+  services/api/wrangler.jsonc:
+    "hyperdrive": [{ "binding": "API_DB", "id": "..." }]
+  workers/jobs/wrangler.jsonc:
+    "hyperdrive": [{ "binding": "JOBS_MIRROR_DB", "id": "..." }, ...]
+```
+
+Copy them to the lead. The lead commits them to `services/api/wrangler.jsonc` and `workers/jobs/wrangler.jsonc`
+and dispatches; until then the staging Workers have no way to reach the database. On a re-run the ids stay the
+same (the configs are updated in place), so nothing needs committing again.
 
 ### What it does, in order
 
-1. Checks the arguments (`--env staging` only), the URL and `psql`. It refuses: a missing URL, a URL on this
-   computer (the local stack makes its own logins in `scripts/e2e-local.mjs`), a host that is not Supabase,
-   the transaction pooler (port 6543), a missing or weak `sslmode`, a user other than `postgres`, another
-   project, and anything that looks like production.
-2. Runs `wrangler secret list` for both Workers. If one fails, it stops before the database.
-3. Makes four new 32-byte hex passwords and the HMAC key, in memory only.
-4. Runs one transaction as `postgres` (SQL on `psql`'s standard input, `ON_ERROR_STOP=1`):
+1. Checks the arguments (`--env staging` only, `--ca-certificate-id` a UUID, `--sslmode` `verify-full` or
+   `verify-ca`), the URL and `psql`. It refuses: a missing URL, a URL on this computer (the local stack makes its
+   own logins in `scripts/e2e-local.mjs`), a host that is not Supabase, the transaction pooler (port 6543), a
+   missing or weak `sslmode`, a user other than `postgres`, another project, and anything that looks like
+   production. With `--yes` it then, still before changing anything: runs `wrangler secret list` for both
+   Workers (and remembers which retired secrets each holds); reads wrangler's login token; and lists the
+   account's Hyperdrive configs, which proves the token, the account and Hyperdrive access. If any of these
+   fails, it stops before the database.
+2. Makes four new 32-byte hex passwords and the HMAC key, in memory only.
+3. Runs one transaction as `postgres` (SQL on `psql`'s standard input, `ON_ERROR_STOP=1`):
    stops if a `trace_*` role is missing (migrations not applied); for each login, creates it
    (`login noinherit`) or sets its new password; grants its one `trace_*` role `with inherit false, set true`;
    then stops if any login holds another membership or a powerful attribute. It never drops or revokes
    anything. Postgres receives each password only as a SCRAM-SHA-256 verifier, so the plain password is never
    in a server log. A SQL error rolls the whole transaction back. If the connection drops or `psql` times out
    instead, the script cannot know whether the commit ran, says so, and asks for a re-run with `--yes`.
-5. Puts the five secrets with `pnpm exec wrangler secret put <NAME> --env staging`, each value on standard
-   input, in `services/api` then `workers/jobs`.
+4. Updates each Hyperdrive config that already has its exact name, or creates it: origin host and port 5432,
+   database `postgres`, the login and its new password, the CA ID and sslmode, caching disabled, at most 5
+   connections. The password goes only in the request body to `api.cloudflare.com`. Hyperdrive tries a real
+   connection to the database before it accepts a config, so a wrong CA, sslmode or host fails here.
+5. Puts `MEDIA_LINK_HMAC_KEY` with `pnpm exec wrangler secret put MEDIA_LINK_HMAC_KEY --env staging` in
+   `services/api`, the value on standard input.
+6. Deletes each retired `*_DB_URL` secret that step 1 found, with
+   `pnpm exec wrangler secret delete <NAME> --env staging` in that Worker's folder.
+7. Prints the four ids and the `wrangler.jsonc` lines (step 4 above).
 
 ### Re-running and rotation
 
-A re-run is the rotation: new passwords first (step 4), then new secrets (step 5). Between the two, for tens of
-seconds (five `secret put` calls in a row, and each one deploys a new Worker version), the Workers still hold
-the old passwords. In that window api calls that need the database fail, and jobs messages fail and are retried
-(the Queue retries 5 times; the one-minute sweep re-enqueues what is left). Run it when no candidate is in a test.
+A re-run is the rotation: new passwords first (step 3), then the four configs (step 4). Between the two, for tens
+of seconds (four config updates in a row, each one testing the database connection), the configs still hold the
+old passwords. In that window api calls that need the database fail, and jobs messages fail and are retried (the
+Queue retries 5 times; the one-minute sweep re-enqueues what is left). Run it when no candidate is in a test.
 
-If a `secret put` fails, the script stops and names the secrets that are now stale. Fix the cause and run it
-again with `--yes`; it makes a fresh set of passwords and sets every secret again.
+If a config update fails, the script stops and names the configs that now hold old passwords (or do not exist
+yet). Fix the cause and run it again with `--yes`; it makes a fresh set of passwords and writes every config
+again.
 
 ### Why after the first deploy
 
@@ -315,14 +390,24 @@ first staging deploy" before anything changes. It never hangs on a prompt.
 
 ### If it fails
 
+Cloudflare errors show only the HTTP status and Cloudflare's numeric error codes, never Cloudflare's message
+text (it can repeat what was sent). Look the codes up in Cloudflare's API documentation if the table does not
+help.
+
 | Message says | What to do |
 | --- | --- |
+| `--ca-certificate-id ...` or `--sslmode ...` | fix that flag (the ID is the one step 2 printed) |
 | `TRACE_OPERATOR_DB_URL ...` or `SUPABASE_STAGING_PROJECT_REF ...` | fix that variable (the message says which rule) |
 | `psql is required` | install the PostgreSQL client and reopen the terminal |
 | `does not exist yet` | run the staging deploy first |
 | `wrangler cannot list the secrets` | `pnpm exec wrangler login`, then retry |
+| `wrangler is not logged in with a token` | `pnpm exec wrangler login` (unset `CLOUDFLARE_API_KEY` if it is set), then retry |
+| `listing the Hyperdrive configs ... failed` | nothing changed; check `pnpm exec wrangler whoami` shows the Trace account, then retry |
+| `more Hyperdrive configs than one page` or `configs named ...` | nothing changed; delete unused or duplicate configs on the Hyperdrive page of the Cloudflare dashboard, then retry |
 | `a trace_* role is missing` | the migrations are not on staging yet; run the staging deploy |
 | `unexpected membership or attribute` | someone changed a login role by hand; look at it in the SQL editor, fix it, retry |
 | `the database call failed (SQLSTATE ...)` | nothing changed; check the URL and the password |
-| `ended without a SQL error ... the outcome is unknown` | the connection dropped or `psql` timed out, so the passwords may have changed and all five secrets may be stale; re-run with `--yes` |
-| `setting <NAME> ... failed` | the listed secrets are stale; fix the cause and re-run with `--yes` |
+| `ended without a SQL error ... the outcome is unknown` | the connection dropped or `psql` timed out, so the passwords may have changed and all four configs may be stale; re-run with `--yes` |
+| `creating` or `updating the Hyperdrive config ... failed` | check the `--ca-certificate-id` (step 2), or re-run with `--sslmode verify-ca`; the listed configs are stale until a re-run with `--yes` succeeds |
+| `setting MEDIA_LINK_HMAC_KEY ... failed` | the configs are done; fix the cause and re-run with `--yes` |
+| `deleting the retired secret <NAME> ... failed` | re-run with `--yes`, or run the `wrangler secret delete` command the message shows |

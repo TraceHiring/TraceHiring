@@ -27,11 +27,11 @@ const listed = (...names) =>
 const ok = (stdout) => ({ status: 0, stdout, stderr: '' });
 
 describe('ALLOW_LIST', () => {
-  it('is exactly the D1 list (specs/d1-demo-slice.md §7.1, L-10): edge none, api 3, jobs 3', () => {
+  it('is exactly the D1 list (specs/d1-demo-slice.md §7.1, L-10, revision 4o): edge none, api 2, jobs none', () => {
     expect(ALLOW_LIST).toEqual({
       edge: [],
-      api: ['API_DB_URL', 'CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY'],
-      jobs: ['JOBS_MIRROR_DB_URL', 'JOBS_QUALITY_DB_URL', 'JOBS_INTEGRITY_DB_URL'],
+      api: ['CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY'],
+      jobs: [],
     });
   });
 
@@ -115,15 +115,29 @@ describe('checkWorker', () => {
   it('passes the exact D1 secrets of api and jobs and nothing else', () => {
     expect(checkWorker('api', ok(listed(...ALLOW_LIST.api)))).toEqual([]);
     expect(checkWorker('jobs', ok(listed(...ALLOW_LIST.jobs)))).toEqual([]);
-    expect(checkWorker('api', ok(listed('API_DB_URL')))).toEqual([]);
+    expect(checkWorker('api', ok(listed('MEDIA_LINK_HMAC_KEY')))).toEqual([]);
   });
 
   it('rejects the secret of one Worker on another Worker', () => {
-    expect(checkWorker('api', ok(listed('JOBS_MIRROR_DB_URL')))).toEqual([
-      expect.stringMatching(/^api: secret JOBS_MIRROR_DB_URL is not in the allow-list/),
+    expect(checkWorker('jobs', ok(listed('MEDIA_LINK_HMAC_KEY')))).toEqual([
+      expect.stringMatching(/^jobs: secret MEDIA_LINK_HMAC_KEY is not in the allow-list/),
     ]);
-    expect(checkWorker('jobs', ok(listed('API_DB_URL')))).toEqual([
-      expect.stringMatching(/^jobs: secret API_DB_URL is not in the allow-list/),
+    expect(checkWorker('jobs', ok(listed('CANDIDATE_TOKEN_PRIVATE_JWK')))).toEqual([
+      expect.stringMatching(/^jobs: secret CANDIDATE_TOKEN_PRIVATE_JWK is not in the allow-list/),
+    ]);
+  });
+
+  // ADR-031 amendment 1, revision 4o: on staging the database logins live in Hyperdrive configs, so a database
+  // URL secret on staging is a stale credential.
+  it.each([
+    ['api', 'API_DB_URL'],
+    ['jobs', 'JOBS_MIRROR_DB_URL'],
+    ['jobs', 'JOBS_QUALITY_DB_URL'],
+    ['jobs', 'JOBS_INTEGRITY_DB_URL'],
+  ])('rejects the retired %s secret %s (now a Hyperdrive config)', (worker, name) => {
+    expect(ALLOW_LIST[worker]).not.toContain(name);
+    expect(checkWorker(worker, ok(listed(name)))).toEqual([
+      expect.stringMatching(new RegExp(`^${worker}: secret ${name} is not in the allow-list`)),
     ]);
   });
 

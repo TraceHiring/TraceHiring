@@ -1,36 +1,54 @@
 // scripts/ops/staging-worker-secrets.mjs (specs/d1-demo-slice.md §3 login roles, §7.1 secrets and allow-list,
-// ADR-031). Fakes only: no psql, no wrangler, no database, no network; every process call goes to a scripted
-// spawnSync. Synthetic values only: the project refs are made up and every credential-shaped string is built at
-// run time, so a leak is easy to spot and nothing secret-shaped is committed.
+// ADR-031 amendment 1: on staging the Workers reach Postgres only through Hyperdrive). Fakes only: no psql, no
+// wrangler, no database, no network; every process call goes to a scripted spawnSync and every Cloudflare call to a
+// scripted fetch. Synthetic values only: the project refs, config ids, CA id and token are made up and every
+// credential-shaped string is built at run time, so a leak is easy to spot and nothing secret-shaped is committed.
 import { createHash, createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { apiDbSsl } from '../../services/api/src/modules/candidate/api-db.ts';
-import { jobsDbSsl } from '../../workers/jobs/src/queue/stage-db.ts';
 import { ALLOW_LIST, WORKER_DIRS } from '../check-staging-secrets.mjs';
 import { LOGIN_ROLES } from '../lib/e2e-local-secrets.mjs';
 import {
+  CLOUDFLARE_ACCOUNT_ID,
+  HYPERDRIVE_ID_RE,
+  HYPERDRIVE_PLAN,
+  ORIGIN_CONNECTION_LIMIT,
+  hyperdriveProblems,
+} from '../lib/hyperdrive.mjs';
+import {
+  HYPERDRIVE_CONFIGS_URL,
   PLAN,
+  RETIRED_SECRETS,
   STAGING_PROJECT_REF,
   generateValues,
+  hyperdriveBody,
   main,
+  parseAuthToken,
   parseCli,
   parseOperatorUrl,
   scramSha256Verifier,
-  secretValues,
   stagingLoginRolesSql,
-  workerDbUrl,
+  wranglerSnippets,
 } from '../ops/staging-worker-secrets.mjs';
 
-const ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const REF = 'abcdefghijklmnopqrst';
 const OTHER_REF = 'tsrqponmlkjihgfedcba';
 const POOLER = 'aws-0-ap-south-1.pooler.supabase.com';
 const PG = ['postgres', 'ql'].join('');
 // The operator's password, made at run time.
 const OP_PW = ['op', Math.abs(0x7ace).toString(36), 'x9'].join('-');
+const hexOf = (n, fill) => Buffer.alloc(n, fill).toString('hex');
+// A CA certificate id as `wrangler cert upload certificate-authority` prints it (synthetic, built at run time).
+const CA_ID = [hexOf(4, 0x1c), hexOf(2, 0x2d), hexOf(2, 0x4e), hexOf(2, 0x8f), hexOf(6, 0x3a)].join(
+  '-',
+);
+// The wrangler OAuth token, made at run time.
+const TOKEN = ['cf', hexOf(20, 0x5e)].join('-');
+/** A Hyperdrive config id as Cloudflare issues it (32 lower-case hex). */
+const idOf = (i) => hexOf(16, 0xc1 + i);
 
 /** A postgres URL assembled at run time (no credential literal in the repository). */
 function pgUrl({
@@ -51,7 +69,6 @@ const poolerUrl = (over = {}) => pgUrl({ user: `postgres.${REF}`, host: POOLER, 
 const directUrl = (over = {}) =>
   pgUrl({ user: 'postgres', host: `db.${REF}.supabase.co`, ...over });
 
-const hexOf = (n, fill) => Buffer.alloc(n, fill).toString('hex');
 // Fill bytes 0xa1.. so the hex has letters (the upper-case refusal must change something).
 const passwordsOf = (seed = 0xa1) =>
   Object.fromEntries(LOGIN_ROLES.map(({ login }, i) => [login, hexOf(32, seed + i)]));
@@ -60,39 +77,100 @@ const saltsOf = () =>
 
 // --- arguments ------------------------------------------------------------------------------------
 
+const CA = ['--ca-certificate-id', CA_ID];
+
 describe('parseCli', () => {
-  it('accepts --env staging with --dry-run or --yes, or neither', () => {
-    expect(parseCli(['--env', 'staging'])).toEqual({ ok: true, dryRun: false, yes: false });
-    expect(parseCli(['--env=staging', '--dry-run'])).toEqual({
+  it('accepts --env staging with --dry-run or --yes and the CA id; sslmode defaults to verify-full', () => {
+    expect(parseCli(['--env', 'staging', '--dry-run', ...CA])).toEqual({
       ok: true,
       dryRun: true,
       yes: false,
+      caId: CA_ID,
+      sslmode: 'verify-full',
     });
-    expect(parseCli(['--yes', '--env', 'staging'])).toEqual({ ok: true, dryRun: false, yes: true });
+    expect(parseCli(['--yes', '--env=staging', `--ca-certificate-id=${CA_ID}`])).toEqual({
+      ok: true,
+      dryRun: false,
+      yes: true,
+      caId: CA_ID,
+      sslmode: 'verify-full',
+    });
+  });
+
+  it('takes --sslmode verify-ca or verify-full', () => {
+    expect(parseCli(['--env', 'staging', '--yes', ...CA, '--sslmode', 'verify-ca']).sslmode).toBe(
+      'verify-ca',
+    );
+    expect(parseCli(['--env', 'staging', '--yes', ...CA, '--sslmode=verify-full']).sslmode).toBe(
+      'verify-full',
+    );
+  });
+
+  it('lower-cases the CA id (Cloudflare prints it lower case)', () => {
+    expect(
+      parseCli(['--env', 'staging', '--yes', '--ca-certificate-id', CA_ID.toUpperCase()]).caId,
+    ).toBe(CA_ID);
+  });
+
+  it('without --dry-run or --yes (plan only) the CA id may be left out', () => {
+    expect(parseCli(['--env', 'staging'])).toEqual({
+      ok: true,
+      dryRun: false,
+      yes: false,
+      caId: null,
+      sslmode: 'verify-full',
+    });
   });
 
   it.each([
-    ['no --env', []],
-    ['--env production', ['--env', 'production']],
-    ['--env prod', ['--env', 'prod']],
-    ['--env local', ['--env', 'local']],
-    ['--env dev', ['--env', 'dev']],
-    ['--env STAGING', ['--env', 'STAGING']],
-    ['an unknown flag', ['--env', 'staging', '--only', 'api']],
-    ['a positional', ['--env', 'staging', 'extra']],
-    ['--dry-run and --yes together', ['--env', 'staging', '--dry-run', '--yes']],
+    ['no --env', [...CA]],
+    ['--env production', ['--env', 'production', ...CA]],
+    ['--env prod', ['--env', 'prod', ...CA]],
+    ['--env local', ['--env', 'local', ...CA]],
+    ['--env dev', ['--env', 'dev', ...CA]],
+    ['--env STAGING', ['--env', 'STAGING', ...CA]],
+    ['an unknown flag', ['--env', 'staging', ...CA, '--only', 'api']],
+    ['a positional', ['--env', 'staging', ...CA, 'extra']],
+    ['--dry-run and --yes together', ['--env', 'staging', '--dry-run', '--yes', ...CA]],
     ['--env without a value', ['--env']],
+    ['--yes without --ca-certificate-id', ['--env', 'staging', '--yes']],
+    ['--dry-run without --ca-certificate-id', ['--env', 'staging', '--dry-run']],
+    ['a CA id that is not a UUID', ['--env', 'staging', '--yes', '--ca-certificate-id', 'ca-1']],
+    ['a CA id with extra text', ['--env', 'staging', '--yes', '--ca-certificate-id', `${CA_ID}0`]],
+    ['a CA id without a value', ['--env', 'staging', '--yes', '--ca-certificate-id']],
+    ['an empty CA id', ['--env', 'staging', '--yes', '--ca-certificate-id=']],
+    ['a malformed CA id without --yes', ['--env', 'staging', '--ca-certificate-id', 'x']],
+    [
+      '--sslmode require (no verification)',
+      ['--env', 'staging', '--yes', ...CA, '--sslmode', 'require'],
+    ],
+    ['--sslmode disable', ['--env', 'staging', '--yes', ...CA, '--sslmode', 'disable']],
+    ['--sslmode prefer', ['--env', 'staging', '--yes', ...CA, '--sslmode', 'prefer']],
+    ['--sslmode VERIFY-FULL', ['--env', 'staging', '--yes', ...CA, '--sslmode', 'VERIFY-FULL']],
+    ['--sslmode without a value', ['--env', 'staging', '--yes', ...CA, '--sslmode']],
   ])('refuses %s', (_name, argv) => {
     const r = parseCli(argv);
     expect(r.ok).toBe(false);
     expect(typeof r.why).toBe('string');
   });
 
+  it('names the allowed sslmodes and says require is never allowed', () => {
+    const r = parseCli(['--env', 'staging', '--yes', ...CA, '--sslmode', 'require']);
+    expect(r.why).toMatch(/verify-full/);
+    expect(r.why).toMatch(/verify-ca/);
+  });
+
   it('never echoes an argument value', () => {
     const marker = `zz${OP_PW}`;
-    const r = parseCli(['--env', marker]);
-    expect(r.ok).toBe(false);
-    expect(r.why).not.toContain(marker);
+    for (const argv of [
+      ['--env', marker],
+      ['--env', 'staging', '--yes', '--ca-certificate-id', marker],
+      ['--env', 'staging', '--yes', ...CA, '--sslmode', marker],
+    ]) {
+      const r = parseCli(argv);
+      expect(r.ok).toBe(false);
+      expect(r.why).not.toContain(marker);
+    }
   });
 });
 
@@ -294,62 +372,181 @@ describe('stagingLoginRolesSql', () => {
   });
 });
 
-// --- Worker URLs and the plan ---------------------------------------------------------------------
+// --- Hyperdrive bodies, the token, the snippets and the plan ---------------------------------------
 
-describe('workerDbUrl', () => {
-  const pw = hexOf(32, 7);
+describe('hyperdriveBody', () => {
+  const pw = hexOf(32, 0xb7);
+  const [api] = HYPERDRIVE_PLAN;
+  const opts = { caId: CA_ID, sslmode: 'verify-full' };
 
-  it('pooler: <login>.<ref> on the same pooler host, port 5432, sslmode=require', () => {
+  it('pooler: the exact create/update body, user <login>.<ref>, caching off, the CA verified, limit 5', () => {
     const target = parseOperatorUrl(poolerUrl(), REF);
-    const url = workerDbUrl(target, 'api_login', pw);
-    expect(url).toBe(`${PG}://api_login.${REF}:${pw}@${POOLER}:5432/postgres?sslmode=require`);
+    expect(hyperdriveBody(target, api, pw, opts)).toEqual({
+      name: 'trace-staging-api-login',
+      origin: {
+        scheme: 'postgresql',
+        host: POOLER,
+        port: 5432,
+        database: 'postgres',
+        user: `api_login.${REF}`,
+        password: pw,
+      },
+      caching: { disabled: true },
+      mtls: { ca_certificate_id: CA_ID, sslmode: 'verify-full' },
+      origin_connection_limit: 5,
+    });
   });
 
-  it('direct: <login> on db.<ref>.supabase.co, port 5432, sslmode=require', () => {
+  it('direct: user <login> on db.<ref>.supabase.co; --sslmode verify-ca passes through', () => {
     const target = parseOperatorUrl(directUrl(), REF);
-    const url = workerDbUrl(target, 'jobs_mirror_login', pw);
-    expect(url).toBe(
-      `${PG}://jobs_mirror_login:${pw}@db.${REF}.supabase.co:5432/postgres?sslmode=require`,
-    );
+    const jobs = HYPERDRIVE_PLAN.find((p) => p.login === 'jobs_mirror_login');
+    expect(hyperdriveBody(target, jobs, pw, { caId: CA_ID, sslmode: 'verify-ca' })).toEqual({
+      name: 'trace-staging-jobs-mirror-login',
+      origin: {
+        scheme: 'postgresql',
+        host: `db.${REF}.supabase.co`,
+        port: 5432,
+        database: 'postgres',
+        user: 'jobs_mirror_login',
+        password: pw,
+      },
+      caching: { disabled: true },
+      mtls: { ca_certificate_id: CA_ID, sslmode: 'verify-ca' },
+      origin_connection_limit: 5,
+    });
   });
 
-  it('is accepted by the TLS rule of both Workers (apiDbSsl, jobsDbSsl) as require', () => {
-    for (const raw of [poolerUrl(), directUrl()]) {
-      const url = workerDbUrl(parseOperatorUrl(raw, REF), 'api_login', pw);
-      expect(apiDbSsl(url)).toBe('require');
-      expect(jobsDbSsl(url)).toBe('require');
-    }
-  });
-
-  it('refuses an unknown login and a non-hex password, without the value', () => {
+  it('defaults the sslmode to verify-full', () => {
     const target = parseOperatorUrl(poolerUrl(), REF);
-    expect(() => workerDbUrl(target, 'postgres', pw)).toThrow();
+    expect(hyperdriveBody(target, api, pw, { caId: CA_ID }).mtls.sslmode).toBe('verify-full');
+  });
+
+  it.each(HYPERDRIVE_PLAN.map((p) => [p.config, p]))(
+    '%s carries its own login and name',
+    (_n, entry) => {
+      const target = parseOperatorUrl(poolerUrl(), REF);
+      const body = hyperdriveBody(target, entry, pw, opts);
+      expect(body.name).toBe(entry.config);
+      expect(body.origin.user).toBe(`${entry.login}.${REF}`);
+    },
+  );
+
+  it('keeps caching off with no other cache key (cached reads would cross role and org scoping)', () => {
+    const body = hyperdriveBody(parseOperatorUrl(poolerUrl(), REF), api, pw, opts);
+    expect(body.caching).toEqual({ disabled: true });
+    expect(Object.keys(body).sort()).toEqual(
+      ['caching', 'mtls', 'name', 'origin', 'origin_connection_limit'].sort(),
+    );
+    expect(body.origin_connection_limit).toBe(ORIGIN_CONNECTION_LIMIT);
+  });
+
+  it.each([
+    ['an entry that is not in the plan', { ...api, config: 'trace-staging-other' }, pw, opts],
+    ['a password that is not hex', api, `${pw.slice(0, -1)}g`, opts],
+    ['a short password', api, pw.slice(0, 40), opts],
+    ['a missing password', api, undefined, opts],
+    ['a CA id that is not a UUID', api, pw, { caId: 'ca-1', sslmode: 'verify-full' }],
+    ['a missing CA id', api, pw, { sslmode: 'verify-full' }],
+    ['sslmode require', api, pw, { caId: CA_ID, sslmode: 'require' }],
+  ])('refuses %s, without the value in the message', (_n, entry, password, o) => {
     let error;
     try {
-      workerDbUrl(target, 'api_login', `${pw}@x`);
+      hyperdriveBody(parseOperatorUrl(poolerUrl(), REF), entry, password, o);
     } catch (e) {
       error = e;
     }
+    expect(error).toBeInstanceOf(Error);
     expect(error.message).not.toContain(pw);
   });
 });
 
-describe('PLAN', () => {
-  it('sets the three DB URLs and the HMAC key, and nothing else', () => {
-    const names = PLAN.flatMap((w) => w.secrets.map((s) => s.name)).sort();
-    expect(names).toEqual(
-      [
-        'API_DB_URL',
-        'JOBS_INTEGRITY_DB_URL',
-        'JOBS_MIRROR_DB_URL',
-        'JOBS_QUALITY_DB_URL',
-        'MEDIA_LINK_HMAC_KEY',
-      ].sort(),
-    );
-    expect(names).not.toContain('CANDIDATE_TOKEN_PRIVATE_JWK');
+describe('parseAuthToken', () => {
+  const json = (o) => `${JSON.stringify(o, null, 2)}\n`;
+
+  it('accepts a wrangler OAuth login', () => {
+    expect(parseAuthToken(json({ type: 'oauth', token: TOKEN }))).toEqual({
+      ok: true,
+      type: 'oauth',
+      token: TOKEN,
+    });
   });
 
-  it('puts each secret in the right Worker folder, all on the check-staging-secrets allow-list', () => {
+  it('accepts CLOUDFLARE_API_TOKEN (type api_token)', () => {
+    expect(parseAuthToken(json({ type: 'api_token', token: TOKEN }))).toEqual({
+      ok: true,
+      type: 'api_token',
+      token: TOKEN,
+    });
+  });
+
+  it('reads the JSON object even with a line of wrangler noise around it', () => {
+    expect(parseAuthToken(`note\n${json({ type: 'oauth', token: TOKEN })}`).token).toBe(TOKEN);
+  });
+
+  it.each([
+    ['a global API key (api_key)', json({ type: 'api_key', key: TOKEN, email: 'x@example.test' })],
+    ['an empty token', json({ type: 'oauth', token: '' })],
+    ['a token with a space', json({ type: 'oauth', token: `${TOKEN} x` })],
+    ['a token with a newline', json({ type: 'oauth', token: `${TOKEN}\nx` })],
+    ['a token that is not a string', json({ type: 'oauth', token: 7 })],
+    ['an unknown type', json({ type: 'other', token: TOKEN })],
+    ['no type', json({ token: TOKEN })],
+    ['not JSON', `Not logged in ${TOKEN}`],
+    ['empty output', ''],
+    ['undefined', undefined],
+    ['a JSON list', '[]'],
+    ['null', 'null'],
+  ])('refuses %s, without the token', (_n, stdout) => {
+    const r = parseAuthToken(stdout);
+    expect(r.ok).toBe(false);
+    expect(JSON.stringify(r)).not.toContain(TOKEN);
+  });
+});
+
+describe('wranglerSnippets', () => {
+  const ids = Object.fromEntries(HYPERDRIVE_PLAN.map((p, i) => [p.binding, idOf(i)]));
+
+  it('gives one paste-ready hyperdrive line per Worker, in plan order', () => {
+    expect(wranglerSnippets(ids)).toEqual([
+      {
+        worker: 'api',
+        file: 'services/api/wrangler.jsonc',
+        line: `"hyperdrive": [{ "binding": "API_DB", "id": "${ids.API_DB}" }]`,
+      },
+      {
+        worker: 'jobs',
+        file: 'workers/jobs/wrangler.jsonc',
+        line: `"hyperdrive": [{ "binding": "JOBS_MIRROR_DB", "id": "${ids.JOBS_MIRROR_DB}" }, { "binding": "JOBS_QUALITY_DB", "id": "${ids.JOBS_QUALITY_DB}" }, { "binding": "JOBS_INTEGRITY_DB", "id": "${ids.JOBS_INTEGRITY_DB}" }]`,
+      },
+    ]);
+  });
+
+  it('is what the deploy check (hyperdriveProblems, staging required) accepts', () => {
+    for (const { worker, line } of wranglerSnippets(ids)) {
+      const staging = JSON.parse(`{${line}}`);
+      expect(hyperdriveProblems(worker, { env: { staging } }, { requireStaging: true })).toEqual(
+        [],
+      );
+    }
+  });
+
+  it.each([
+    ['a missing id', { ...ids, JOBS_QUALITY_DB: undefined }],
+    ['an upper-case id', { ...ids, API_DB: ids.API_DB.toUpperCase() }],
+    ['a short id', { ...ids, API_DB: ids.API_DB.slice(1) }],
+  ])('refuses %s', (_n, bad) => {
+    expect(() => wranglerSnippets(bad)).toThrow();
+  });
+});
+
+describe('PLAN, RETIRED_SECRETS and the Hyperdrive plan', () => {
+  it('sets one Worker secret, MEDIA_LINK_HMAC_KEY on api, and no database URL', () => {
+    expect(PLAN.flatMap((w) => w.secrets.map((s) => [w.worker, s.name, s.login]))).toEqual([
+      ['api', 'MEDIA_LINK_HMAC_KEY', null],
+    ]);
+  });
+
+  it('covers both Workers in their folders, every planned secret on the allow-list', () => {
     expect(PLAN.map((w) => [w.worker, w.dir])).toEqual([
       ['api', WORKER_DIRS.api],
       ['jobs', WORKER_DIRS.jobs],
@@ -361,20 +558,7 @@ describe('PLAN', () => {
 
   it('never touches the edge Worker', () => {
     expect(PLAN.some((w) => w.worker === 'edge' || w.dir === WORKER_DIRS.edge)).toBe(false);
-  });
-
-  it('maps each login to its own secret, once', () => {
-    const logins = PLAN.flatMap((w) => w.secrets.map((s) => s.login)).filter(Boolean);
-    expect(logins.sort()).toEqual(LOGIN_ROLES.map((r) => r.login).sort());
-    const byLogin = Object.fromEntries(
-      PLAN.flatMap((w) => w.secrets.filter((s) => s.login).map((s) => [s.login, s.name])),
-    );
-    expect(byLogin).toEqual({
-      api_login: 'API_DB_URL',
-      jobs_mirror_login: 'JOBS_MIRROR_DB_URL',
-      jobs_quality_login: 'JOBS_QUALITY_DB_URL',
-      jobs_integrity_login: 'JOBS_INTEGRITY_DB_URL',
-    });
+    expect(HYPERDRIVE_PLAN.some((p) => p.worker === 'edge')).toBe(false);
   });
 
   it('names the staging Worker of each folder as its wrangler.jsonc does', () => {
@@ -384,9 +568,35 @@ describe('PLAN', () => {
       expect(w.workerName).toMatch(/-staging$/);
     }
   });
+
+  it('retires exactly the four database URL secrets, none of them on the allow-list', () => {
+    expect(RETIRED_SECRETS).toEqual({
+      api: ['API_DB_URL'],
+      jobs: ['JOBS_MIRROR_DB_URL', 'JOBS_QUALITY_DB_URL', 'JOBS_INTEGRITY_DB_URL'],
+    });
+    expect(Object.isFrozen(RETIRED_SECRETS)).toBe(true);
+    for (const [worker, names] of Object.entries(RETIRED_SECRETS)) {
+      expect(Object.isFrozen(names)).toBe(true);
+      for (const name of names) expect(ALLOW_LIST[worker]).not.toContain(name);
+    }
+  });
+
+  it('gives each login exactly one Hyperdrive config on a planned Worker', () => {
+    expect(HYPERDRIVE_PLAN.map((p) => p.login).sort()).toEqual(
+      LOGIN_ROLES.map((r) => r.login).sort(),
+    );
+    const workers = new Set(PLAN.map((w) => w.worker));
+    for (const p of HYPERDRIVE_PLAN) expect(workers.has(p.worker)).toBe(true);
+  });
+
+  it('talks to the pinned staging account only', () => {
+    expect(HYPERDRIVE_CONFIGS_URL).toBe(
+      `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/hyperdrive/configs`,
+    );
+  });
 });
 
-describe('generateValues and secretValues', () => {
+describe('generateValues', () => {
   it('makes four 32-byte hex passwords, a 32-byte hex HMAC key and 16-byte salts', () => {
     let n = 0;
     const randomBytes = (size) => Buffer.alloc(size, ++n);
@@ -397,27 +607,48 @@ describe('generateValues and secretValues', () => {
     expect(v.hmacKey).toMatch(/^[0-9a-f]{64}$/);
     for (const s of Object.values(v.salts)) expect(s.length).toBe(16);
   });
-
-  it('builds one value per planned secret; the HMAC key is what services/api imports (>= 32 chars)', () => {
-    const v = generateValues((size) => Buffer.alloc(size, 3));
-    const target = parseOperatorUrl(poolerUrl(), REF);
-    const values = secretValues(target, v);
-    expect(Object.keys(values).sort()).toEqual(
-      PLAN.flatMap((w) => w.secrets.map((s) => s.name)).sort(),
-    );
-    expect(values.MEDIA_LINK_HMAC_KEY).toBe(v.hmacKey);
-    expect(values.MEDIA_LINK_HMAC_KEY.length).toBeGreaterThanOrEqual(32);
-    expect(values.API_DB_URL).toBe(workerDbUrl(target, 'api_login', v.passwords.api_login));
-  });
 });
 
-// --- main, with an injected sink and spawn stub ---------------------------------------------------
+// --- main, with an injected sink, spawn stub and fetch stub -----------------------------------------
 
 // main checks against the pinned staging ref (SEC-W3-4); the ref is public (docs/infra/environments.md).
 const SREF = STAGING_PROJECT_REF;
 const stagingPooler = (over = {}) => poolerUrl({ user: `postgres.${SREF}`, ...over });
+const BASE = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/hyperdrive/configs`;
+const YES = ['--env', 'staging', '--yes', ...CA];
+const DRY = ['--env', 'staging', '--dry-run', ...CA];
+const tokenJson = (o) => ({ status: 0, stdout: `${JSON.stringify(o, null, 2)}\n`, stderr: '' });
 
-/** A deps object whose spawnSync is scripted; every call and every printed line is recorded. */
+/** A Cloudflare v4 envelope. */
+const cfOk = (result, extra = {}) => ({
+  status: 200,
+  json: { success: true, errors: [], messages: [], result, ...extra },
+});
+const listOf = (configs) =>
+  cfOk(configs, {
+    result_info: {
+      page: 1,
+      per_page: 20,
+      count: configs.length,
+      total_count: configs.length,
+      total_pages: 1,
+    },
+  });
+const cfFail = (status, codes, message) => ({
+  status,
+  json: {
+    success: false,
+    errors: codes.map((code) => ({ code, message })),
+    messages: [],
+    result: null,
+  },
+});
+
+/**
+ * A deps object whose spawnSync and fetch are scripted; every call, every request and every printed line is
+ * recorded. `existing` is the account's Hyperdrive configs; `cf(method, url, body)` may answer a request instead
+ * (return undefined for the default: list `existing`, create with idOf(plan index), update echoes the id).
+ */
 function harness({
   platform = 'linux',
   env = { TRACE_OPERATOR_DB_URL: stagingPooler(), SUPABASE_STAGING_PROJECT_REF: SREF },
@@ -425,8 +656,14 @@ function harness({
   psql = { status: 0, stdout: '', stderr: '' },
   list = () => ({ status: 0, stdout: '[]', stderr: '' }),
   put = () => ({ status: 0, stdout: 'Success! Uploaded secret', stderr: '' }),
+  del = () => ({ status: 0, stdout: 'Success! Deleted secret', stderr: '' }),
+  token = () => tokenJson({ type: 'oauth', token: TOKEN }),
+  existing = [],
+  cf,
 } = {}) {
   const calls = [];
+  const fetches = [];
+  const events = [];
   const out = [];
   const err = [];
   let n = 0;
@@ -447,61 +684,110 @@ function harness({
       const line = [cmd, ...(args ?? [])].join(' ');
       calls.push({ cmd, args, opts, line });
       if (cmd === 'psql' && args[0] === '--version') {
+        events.push('probe');
         return hasPsql
           ? { status: 0, stdout: 'psql (PostgreSQL) 17.0\n' }
           : { error: new Error('x') };
       }
-      if (cmd === 'psql') return psql;
-      if (line.includes('secret list')) return list(line, opts);
-      if (line.includes('secret put')) return put(line, opts);
+      if (cmd === 'psql') {
+        events.push('psql');
+        return psql;
+      }
+      for (const [kind, fn] of [
+        ['auth token', token],
+        ['secret list', list],
+        ['secret put', put],
+        ['secret delete', del],
+      ]) {
+        if (line.includes(kind)) {
+          events.push(kind.split(' ')[1]);
+          return fn(line, opts);
+        }
+      }
+      events.push('other');
       return { status: 127, stdout: '', stderr: '' };
+    },
+    async fetch(url, init = {}) {
+      const method = init.method ?? 'GET';
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
+      fetches.push({ url: String(url), init, method, body });
+      events.push(method);
+      let r = cf ? cf(method, String(url), body) : undefined;
+      if (r === undefined) {
+        if (method === 'GET') r = listOf(existing);
+        else if (method === 'POST') {
+          r = cfOk({ id: idOf(HYPERDRIVE_PLAN.findIndex((p) => p.config === body.name)) });
+        } else r = cfOk({ id: String(url).split('/').at(-1), name: body.name });
+      }
+      if (r instanceof Error) throw r;
+      const text = typeof r.raw === 'string' ? r.raw : JSON.stringify(r.json);
+      return {
+        status: r.status,
+        ok: r.status >= 200 && r.status < 300,
+        text: async () => text,
+        json: async () => JSON.parse(text),
+      };
     },
   };
   const psqlRuns = () => calls.filter((c) => c.cmd === 'psql' && c.args[0] !== '--version');
-  const lists = () => calls.filter((c) => c.line.includes('secret list'));
-  const puts = () => calls.filter((c) => c.line.includes('secret put'));
+  const wranglers = () => calls.filter((c) => c.line.includes('wrangler'));
+  const of = (kind) => () => calls.filter((c) => c.line.includes(kind));
+  const writes = () => fetches.filter((f) => f.method !== 'GET');
   const printed = () => out.join('') + err.join('');
-  return { deps, calls, psqlRuns, lists, puts, generated, out, err, printed };
+  return {
+    deps,
+    calls,
+    fetches,
+    events,
+    psqlRuns,
+    wranglers,
+    lists: of('secret list'),
+    puts: of('secret put'),
+    deletes: of('secret delete'),
+    tokens: of('auth token'),
+    writes,
+    generated,
+    out,
+    err,
+    printed,
+  };
 }
 
-/** Every string that must never be printed, thrown or put on a command line. */
+/** Every string that must never be printed, thrown, put on a command line or in a URL. */
 function secretsOf(h) {
-  const values = [OP_PW, stagingPooler(), ...h.generated];
+  const values = [OP_PW, stagingPooler(), TOKEN, ...h.generated];
   for (const run of h.puts()) values.push(run.opts.input);
   for (const run of h.psqlRuns()) {
     values.push(...(run.opts.input.match(/SCRAM-SHA-256\$[^']+/g) ?? []));
   }
+  for (const f of h.writes()) values.push(f.body?.origin?.password);
   return values.filter((v) => typeof v === 'string' && v.length >= 8);
 }
 
+const entryOf = (name) => HYPERDRIVE_PLAN.find((p) => p.config === name);
+// A `secret list` that shows one retired name of each Worker (each Worker deletes only its own).
+const BOTH_RETIRED = '[{"name":"API_DB_URL"},{"name":"JOBS_MIRROR_DB_URL"}]';
+
 describe('main', () => {
-  it('with --yes: checks, rotates the passwords in one psql run, then puts five secrets', async () => {
+  it('with --yes: checks, proves Cloudflare access, rotates the passwords, writes the four configs and the key', async () => {
     const h = harness();
-    const code = await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps });
-    expect(code).toBe(0);
-    // order: psql probe, both Workers listed, one psql transaction (runSql probes again), then the puts
-    const kinds = h.calls.map((c) =>
-      c.cmd === 'psql'
-        ? c.args[0] === '--version'
-          ? 'probe'
-          : 'psql'
-        : c.line.includes('list')
-          ? 'list'
-          : 'put',
-    );
-    expect(kinds).toEqual([
+    expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+    // psql probe, both Workers listed, the token, the config list (nothing changed so far), one psql transaction
+    // (runSql probes again), the four configs, the HMAC key; no delete (no retired secret was listed)
+    expect(h.events).toEqual([
       'probe',
       'list',
       'list',
+      'token',
+      'GET',
       'probe',
       'psql',
-      'put',
-      'put',
-      'put',
-      'put',
+      'POST',
+      'POST',
+      'POST',
+      'POST',
       'put',
     ]);
-    expect(h.psqlRuns()).toHaveLength(1);
     const run = h.psqlRuns()[0];
     expect(run.args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '-f', '-']));
     expect(run.opts.input).toContain('begin;');
@@ -509,35 +795,179 @@ describe('main', () => {
     expect(run.opts.env.PGSSLMODE).toBe('require');
     expect(run.opts.env.PGUSER).toBe(`postgres.${SREF}`);
     expect(run.opts.env.TRACE_OPERATOR_DB_URL).toBeUndefined();
+    expect(h.writes().map((f) => f.body.name)).toEqual(HYPERDRIVE_PLAN.map((p) => p.config));
   });
 
-  it('puts each value on stdin only, in the right folder, with --env staging', async () => {
+  it('calls only the pinned account Hyperdrive endpoints: Bearer token, JSON, no redirects, a timeout', async () => {
+    const h = harness({
+      existing: [{ id: idOf(10), name: 'trace-staging-jobs-quality-login' }],
+    });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+    expect(h.fetches.map((f) => [f.method, f.url])).toEqual([
+      ['GET', BASE],
+      ['POST', BASE],
+      ['POST', BASE],
+      ['PUT', `${BASE}/${idOf(10)}`],
+      ['POST', BASE],
+    ]);
+    for (const f of h.fetches) {
+      expect(f.init.headers).toEqual({
+        Authorization: `Bearer ${TOKEN}`,
+        'Content-Type': 'application/json',
+      });
+      expect(f.init.redirect).toBe('error');
+      expect(f.init.signal).toBeInstanceOf(AbortSignal);
+    }
+    expect(h.fetches[0].init.body).toBeUndefined();
+  });
+
+  it('updates a config only on an exact name match, else creates it', async () => {
+    const h = harness({
+      existing: [
+        { id: idOf(10), name: 'trace-staging-api-login' },
+        { id: idOf(11), name: 'trace-staging-jobs-mirror-login-old' },
+        { id: idOf(12), name: 'TRACE-STAGING-JOBS-QUALITY-LOGIN' },
+        { id: idOf(13), name: ' trace-staging-jobs-integrity-login' },
+        { id: idOf(14), name: 'someone-elses-config' },
+      ],
+    });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+    expect(h.writes().map((f) => [f.method, f.url, f.body.name])).toEqual([
+      ['PUT', `${BASE}/${idOf(10)}`, 'trace-staging-api-login'],
+      ['POST', BASE, 'trace-staging-jobs-mirror-login'],
+      ['POST', BASE, 'trace-staging-jobs-quality-login'],
+      ['POST', BASE, 'trace-staging-jobs-integrity-login'],
+    ]);
+  });
+
+  it('sends each config the exact body, with the password the database received (as a SCRAM verifier)', async () => {
     const h = harness();
-    await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps });
-    const puts = h.puts();
+    expect(await main({ argv: YES, deps: h.deps })).toBe(0);
     const target = parseOperatorUrl(stagingPooler(), SREF);
-    const expected = PLAN.flatMap((w) => w.secrets.map((s) => [w.dir, s.name]));
-    expect(puts.map((p) => [p.opts.cwd, p.args.at(-3)])).toEqual(
-      expected.map(([dir, name]) => [join(ROOT, dir), name]),
-    );
-    for (const p of puts) {
-      expect(p.cmd).toBe('pnpm');
-      expect(p.args).toEqual(['exec', 'wrangler', 'secret', 'put', p.args[4], '--env', 'staging']);
-      expect(p.opts.shell).toBe(false);
-      expect(typeof p.opts.input).toBe('string');
-      expect(p.opts.input.length).toBeGreaterThanOrEqual(32);
-      expect(p.opts.env.TRACE_OPERATOR_DB_URL).toBeUndefined();
+    const sql = h.psqlRuns()[0].opts.input;
+    for (const f of h.writes()) {
+      const entry = entryOf(f.body.name);
+      const pw = f.body.origin.password;
+      expect(f.body).toEqual(
+        hyperdriveBody(target, entry, pw, { caId: CA_ID, sslmode: 'verify-full' }),
+      );
+      expect(f.body.origin.user).toBe(`${entry.login}.${SREF}`);
+      expect(sql).not.toContain(pw);
+      const m = new RegExp(
+        `create role ${entry.login} with login noinherit password '(SCRAM[^']+)'`,
+      ).exec(sql);
+      const salt = Buffer.from(/\$4096:([^$]+)\$/.exec(m[1])[1], 'base64');
+      expect(scramSha256Verifier(pw, salt)).toBe(m[1]);
     }
-    const api = puts.find((p) => p.args[4] === 'API_DB_URL');
-    expect(api.opts.input.startsWith(`${PG}://api_login.${SREF}:`)).toBe(true);
-    expect(api.opts.input.endsWith(`@${target.host}:5432/postgres?sslmode=require`)).toBe(true);
-    expect(apiDbSsl(api.opts.input)).toBe('require');
-    for (const name of ['JOBS_MIRROR_DB_URL', 'JOBS_QUALITY_DB_URL', 'JOBS_INTEGRITY_DB_URL']) {
-      expect(jobsDbSsl(puts.find((p) => p.args[4] === name).opts.input)).toBe('require');
+    expect(new Set(h.writes().map((f) => f.body.origin.password)).size).toBe(4);
+  });
+
+  it('passes --sslmode verify-ca and the direct host through to every config', async () => {
+    const direct = pgUrl({ user: 'postgres', host: `db.${SREF}.supabase.co` });
+    const h = harness({ env: { TRACE_OPERATOR_DB_URL: direct } });
+    expect(await main({ argv: [...YES, '--sslmode', 'verify-ca'], deps: h.deps })).toBe(0);
+    for (const f of h.writes()) {
+      expect(f.body.mtls).toEqual({ ca_certificate_id: CA_ID, sslmode: 'verify-ca' });
+      expect(f.body.origin.host).toBe(`db.${SREF}.supabase.co`);
+      expect(f.body.origin.user).toBe(entryOf(f.body.name).login);
+      expect(f.body.caching).toEqual({ disabled: true });
+      expect(f.body.origin_connection_limit).toBe(5);
     }
   });
 
-  it('keeps wrangler from writing a debug log to disk (no WRANGLER_LOG, logs off, sanitised)', async () => {
+  it('puts MEDIA_LINK_HMAC_KEY on api, the value on stdin only', async () => {
+    const h = harness();
+    expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+    const puts = h.puts();
+    expect(puts).toHaveLength(1);
+    const [p] = puts;
+    expect(p.cmd).toBe('pnpm');
+    expect(p.args).toEqual([
+      'exec',
+      'wrangler',
+      'secret',
+      'put',
+      'MEDIA_LINK_HMAC_KEY',
+      '--env',
+      'staging',
+    ]);
+    expect(p.opts.cwd).toBe(join(ROOT, WORKER_DIRS.api));
+    expect(p.opts.shell).toBe(false);
+    expect(p.opts.input).toMatch(/^[0-9a-f]{64}$/);
+    expect(h.generated).toContain(p.opts.input);
+    expect(h.writes().map((f) => f.body.origin.password)).not.toContain(p.opts.input);
+    expect(p.opts.env.TRACE_OPERATOR_DB_URL).toBeUndefined();
+  });
+
+  it('deletes each retired database URL secret a Worker still holds, and nothing else', async () => {
+    const listed = (...names) => ({
+      status: 0,
+      stdout: JSON.stringify(names.map((name) => ({ name, type: 'secret_text' }))),
+      stderr: '',
+    });
+    const h = harness({
+      list: (_line, opts) =>
+        opts.cwd.endsWith(join('services', 'api'))
+          ? listed('API_DB_URL', 'CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY')
+          : listed('JOBS_MIRROR_DB_URL', 'JOBS_INTEGRITY_DB_URL'),
+    });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+    expect(h.events.slice(-4)).toEqual(['put', 'delete', 'delete', 'delete']);
+    expect(h.deletes().map((d) => [d.opts.cwd, d.args])).toEqual(
+      [
+        [WORKER_DIRS.api, 'API_DB_URL'],
+        [WORKER_DIRS.jobs, 'JOBS_MIRROR_DB_URL'],
+        [WORKER_DIRS.jobs, 'JOBS_INTEGRITY_DB_URL'],
+      ].map(([dir, name]) => [
+        join(ROOT, dir),
+        ['exec', 'wrangler', 'secret', 'delete', name, '--env', 'staging'],
+      ]),
+    );
+    for (const d of h.deletes()) {
+      expect(d.opts.input).toBe('');
+      expect(d.opts.shell).toBe(false);
+    }
+    expect(h.out.join('')).toMatch(/deleted the retired secret API_DB_URL/);
+  });
+
+  it('a failed delete of a retired secret stops with exit 1 and names it', async () => {
+    const h = harness({
+      list: () => ({ status: 0, stdout: '[{"name":"API_DB_URL"}]', stderr: '' }),
+      del: () => ({ status: 1, stdout: '', stderr: `boom ${OP_PW}` }),
+    });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+    const text = h.err.join('');
+    expect(text).toContain('API_DB_URL');
+    expect(text).toMatch(/check-staging-secrets/);
+    expect(text).not.toContain('boom');
+    expect(h.printed()).not.toContain(OP_PW);
+  });
+
+  it('prints one id line per config and the wrangler.jsonc snippets for the lead', async () => {
+    const h = harness({ existing: [{ id: idOf(10), name: 'trace-staging-jobs-mirror-login' }] });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+    const text = h.out.join('');
+    const ids = {
+      API_DB: idOf(0),
+      JOBS_MIRROR_DB: idOf(10),
+      JOBS_QUALITY_DB: idOf(2),
+      JOBS_INTEGRITY_DB: idOf(3),
+    };
+    for (const p of HYPERDRIVE_PLAN) {
+      expect(text).toContain(
+        `staging-worker-secrets: hyperdrive ${p.binding} (${p.worker}) id=${ids[p.binding]}\n`,
+      );
+    }
+    for (const s of wranglerSnippets(ids)) {
+      expect(text).toContain(s.file);
+      expect(text).toContain(s.line);
+    }
+    expect(text).toMatch(
+      /send these ids to the lead; the next staging dispatch needs them committed/,
+    );
+  });
+
+  it('keeps wrangler from writing a debug log to disk on every call (no WRANGLER_LOG, logs off, sanitised)', async () => {
     const h = harness({
       env: {
         TRACE_OPERATOR_DB_URL: stagingPooler(),
@@ -546,76 +976,266 @@ describe('main', () => {
         WRANGLER_WRITE_LOGS: 'true',
         WRANGLER_LOG_SANITIZE: 'false',
       },
+      list: () => ({ status: 0, stdout: BOTH_RETIRED, stderr: '' }),
     });
-    expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(0);
-    const runs = [...h.lists(), ...h.puts()];
-    expect(runs).toHaveLength(7);
+    expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+    const runs = h.wranglers();
+    expect(runs.map((r) => r.args.slice(2, 4).join(' '))).toEqual([
+      'secret list',
+      'secret list',
+      'auth token',
+      'secret put',
+      'secret delete',
+      'secret delete',
+    ]);
     for (const r of runs) {
       expect(r.opts.env.WRANGLER_LOG).toBeUndefined();
       expect(r.opts.env.WRANGLER_WRITE_LOGS).toBe('false');
       expect(r.opts.env.WRANGLER_LOG_SANITIZE).toBe('true');
+      expect(r.opts.env.TRACE_OPERATOR_DB_URL).toBeUndefined();
     }
   });
 
-  it('the database receives the password the Worker URL carries (as its SCRAM verifier only)', async () => {
+  it('reads the token with `wrangler auth token --json` in services/api', async () => {
     const h = harness();
-    await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps });
-    const sql = h.psqlRuns()[0].opts.input;
-    const api = new URL(h.puts().find((p) => p.args[4] === 'API_DB_URL').opts.input);
-    expect(sql).not.toContain(api.password);
-    const m = new RegExp(`create role api_login with login noinherit password '(SCRAM[^']+)'`).exec(
-      sql,
-    );
-    const salt = Buffer.from(/\$4096:([^$]+)\$/.exec(m[1])[1], 'base64');
-    expect(scramSha256Verifier(api.password, salt)).toBe(m[1]);
+    expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+    const [t] = h.tokens();
+    expect(t.args).toEqual(['exec', 'wrangler', 'auth', 'token', '--json']);
+    expect(t.opts.cwd).toBe(join(ROOT, WORKER_DIRS.api));
+    expect(t.opts.input).toBe('');
   });
 
-  it('on Windows runs pnpm through a constant shell command line, the value still on stdin', async () => {
-    const h = harness({ platform: 'win32' });
-    expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(0);
-    for (const p of [...h.lists(), ...h.puts()]) {
+  it('accepts CLOUDFLARE_API_TOKEN (api_token) as the Bearer token', async () => {
+    const other = ['cfat', hexOf(20, 0x6b)].join('-');
+    const h = harness({ token: () => tokenJson({ type: 'api_token', token: other }) });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+    for (const f of h.fetches) expect(f.init.headers.Authorization).toBe(`Bearer ${other}`);
+    expect(h.printed()).not.toContain(other);
+  });
+
+  it.each([
+    [
+      'a global API key login',
+      () => tokenJson({ type: 'api_key', key: TOKEN, email: 'x@example.test' }),
+    ],
+    ['output that is not JSON', () => ({ status: 0, stdout: `token: ${TOKEN}`, stderr: '' })],
+    ['an empty token', () => tokenJson({ type: 'oauth', token: '' })],
+    [
+      'a failed wrangler run',
+      () => ({ status: 1, stdout: TOKEN, stderr: `Not logged in ${TOKEN}` }),
+    ],
+    [
+      'a wrangler that cannot start',
+      () => {
+        throw new Error(`spawn failed ${TOKEN}`);
+      },
+    ],
+  ])('refuses %s before any Cloudflare call or database change (exit 2)', async (_n, token) => {
+    const h = harness({ token });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(2);
+    expect(h.fetches).toHaveLength(0);
+    expect(h.psqlRuns()).toHaveLength(0);
+    expect(h.puts()).toHaveLength(0);
+    expect(h.err.join('')).toMatch(/pnpm exec wrangler login/);
+    expect(h.err.join('')).toMatch(/nothing was changed/i);
+    expect(h.printed()).not.toContain(TOKEN);
+  });
+
+  it('a failed config list stops before the database (exit 2): HTTP status and error codes only', async () => {
+    const h = harness({
+      cf: (method) =>
+        method === 'GET'
+          ? cfFail(403, [10000, 9109], `Authentication error ${OP_PW} ${TOKEN}`)
+          : undefined,
+    });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(2);
+    expect(h.psqlRuns()).toHaveLength(0);
+    expect(h.writes()).toHaveLength(0);
+    expect(h.puts()).toHaveLength(0);
+    const text = h.err.join('');
+    expect(text).toContain('403');
+    expect(text).toContain('10000');
+    expect(text).toContain('9109');
+    expect(text).toMatch(/nothing was changed/i);
+    expect(h.printed()).not.toMatch(/Authentication error/);
+    expect(h.printed()).not.toContain(OP_PW);
+    expect(h.printed()).not.toContain(TOKEN);
+  });
+
+  it.each([
+    ['HTTP 200 with success false', () => ({ status: 200, json: { success: false, errors: [] } })],
+    ['a body that is not JSON', () => ({ status: 502, raw: `<html>${TOKEN} ${OP_PW}</html>` })],
+    ['a result that is not a list', () => cfOk({ configs: [] })],
+    ['a network failure', () => new Error(`connect failed ${TOKEN}`)],
+  ])('a config list with %s stops before the database (exit 2)', async (_n, answer) => {
+    const h = harness({ cf: (method) => (method === 'GET' ? answer() : undefined) });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(2);
+    expect(h.psqlRuns()).toHaveLength(0);
+    expect(h.writes()).toHaveLength(0);
+    expect(h.printed()).not.toContain(TOKEN);
+    expect(h.printed()).not.toContain(OP_PW);
+    expect(h.printed()).not.toContain('<html>');
+  });
+
+  it.each([
+    [
+      'more than one page (total_pages 2)',
+      () =>
+        cfOk([{ id: idOf(10), name: 'x' }], {
+          result_info: { page: 1, per_page: 1, count: 1, total_count: 2, total_pages: 2 },
+        }),
+      /more Hyperdrive configs than one page/,
+    ],
+    [
+      'more than one page (total_count above the result)',
+      () =>
+        cfOk([{ id: idOf(10), name: 'x' }], {
+          result_info: { page: 1, per_page: 20, count: 1, total_count: 30 },
+        }),
+      /more Hyperdrive configs than one page/,
+    ],
+    [
+      'two configs with a planned name',
+      () =>
+        listOf([
+          { id: idOf(10), name: 'trace-staging-jobs-quality-login' },
+          { id: idOf(11), name: 'trace-staging-jobs-quality-login' },
+        ]),
+      /trace-staging-jobs-quality-login/,
+    ],
+    [
+      'a planned config with a malformed id',
+      () => listOf([{ id: 'not-an-id', name: 'trace-staging-api-login' }]),
+      /trace-staging-api-login/,
+    ],
+  ])('fails closed on %s, before the database (exit 1)', async (_n, answer, named) => {
+    const h = harness({ cf: (method) => (method === 'GET' ? answer() : undefined) });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+    expect(h.psqlRuns()).toHaveLength(0);
+    expect(h.writes()).toHaveLength(0);
+    expect(h.puts()).toHaveLength(0);
+    expect(h.err.join('')).toMatch(named);
+    expect(h.err.join('')).toMatch(/nothing was changed/i);
+  });
+
+  it('a config that fails mid-way names it and the stale ones, hints at the CA and sslmode (exit 1)', async () => {
+    const leak = `could not connect ${OP_PW} ${TOKEN}`;
+    const h = harness({
+      existing: [{ id: idOf(12), name: 'trace-staging-jobs-quality-login' }],
+      cf: (method, _url, body) =>
+        method !== 'GET' && body.name === 'trace-staging-jobs-quality-login'
+          ? cfFail(400, [2008], leak)
+          : undefined,
+    });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+    expect(h.writes().map((f) => f.body.name)).toEqual([
+      'trace-staging-api-login',
+      'trace-staging-jobs-mirror-login',
+      'trace-staging-jobs-quality-login',
+    ]);
+    expect(h.puts()).toHaveLength(0);
+    expect(h.deletes()).toHaveLength(0);
+    const text = h.err.join('');
+    expect(text).toContain('trace-staging-jobs-quality-login');
+    expect(text).toContain('trace-staging-jobs-integrity-login');
+    expect(text).not.toContain('trace-staging-api-login');
+    expect(text).not.toContain('trace-staging-jobs-mirror-login');
+    expect(text).toContain('400');
+    expect(text).toContain('2008');
+    expect(text).toMatch(/--ca-certificate-id/);
+    expect(text).toMatch(/--sslmode verify-ca/);
+    expect(text).toMatch(/re-run with --yes/i);
+    expect(text).not.toContain('could not connect');
+    for (const v of secretsOf(h)) expect(h.printed()).not.toContain(v);
+  });
+
+  it.each([
+    [
+      'HTTP 200 with success false',
+      () => ({ status: 200, json: { success: false, errors: [{ code: 1 }] } }),
+    ],
+    ['a created id that is malformed', () => cfOk({ id: 'XYZ' })],
+    ['no result', () => cfOk(null)],
+    ['a network failure', () => new Error(`timeout ${TOKEN}`)],
+  ])('a create with %s is a failure naming the config (exit 1)', async (_n, answer) => {
+    const h = harness({ cf: (method) => (method === 'POST' ? answer() : undefined) });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+    expect(h.writes()).toHaveLength(1);
+    expect(h.puts()).toHaveLength(0);
+    expect(h.err.join('')).toContain('trace-staging-api-login');
+    expect(h.printed()).not.toContain(TOKEN);
+  });
+
+  it('on Windows runs pnpm through a constant shell command line, values still on stdin', async () => {
+    const h = harness({
+      platform: 'win32',
+      list: () => ({ status: 0, stdout: BOTH_RETIRED, stderr: '' }),
+    });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(0);
+    const runs = h.wranglers();
+    expect(runs).toHaveLength(6);
+    for (const p of runs) {
       expect(p.opts.shell).toBe(true);
       expect(p.args).toEqual([]);
       expect(p.cmd).toMatch(
-        /^pnpm exec wrangler secret (list|put [A-Z_]+) --env staging( --format json)?$/,
+        /^pnpm exec wrangler (secret (list|put [A-Z_]+|delete [A-Z_]+) --env staging( --format json)?|auth token --json)$/,
       );
     }
-    for (const p of h.puts()) expect(p.opts.input.length).toBeGreaterThanOrEqual(32);
+    for (const p of h.puts()) expect(p.opts.input).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('never prints, throws or puts on a command line any generated or operator value', async () => {
-    const h = harness({
-      put: (line) =>
-        line.includes('JOBS_QUALITY_DB_URL')
-          ? { status: 1, stdout: `echo ${OP_PW}`, stderr: `boom ${OP_PW}` }
-          : { status: 0, stdout: '', stderr: '' },
-    });
-    await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps });
-    const leaks = secretsOf(h);
-    expect(leaks.length).toBeGreaterThan(6);
-    for (const v of leaks) {
-      expect(h.printed()).not.toContain(v);
-      for (const c of h.calls) expect(c.line).not.toContain(v);
+  it('never prints, throws or puts on a command line or in a URL any operator, generated or token value', async () => {
+    for (const over of [
+      {},
+      { put: () => ({ status: 1, stdout: `echo ${OP_PW}`, stderr: `boom ${OP_PW}` }) },
+      {
+        cf: (method) =>
+          method === 'PUT' || method === 'POST'
+            ? cfFail(500, [7003], `${OP_PW} ${TOKEN}`)
+            : undefined,
+      },
+    ]) {
+      const h = harness(over);
+      await main({ argv: YES, deps: h.deps });
+      const leaks = secretsOf(h);
+      expect(leaks.length).toBeGreaterThan(6);
+      for (const v of leaks) {
+        expect(h.printed()).not.toContain(v);
+        for (const c of h.calls) {
+          expect(c.line).not.toContain(v);
+          expect(JSON.stringify(c.args)).not.toContain(v);
+        }
+        for (const f of h.fetches) expect(f.url).not.toContain(v);
+      }
+      for (const c of h.calls) expect(JSON.stringify(c.opts?.env ?? {})).not.toContain(TOKEN);
     }
   });
 
-  it('--dry-run prints only the plan: roles, secrets and Workers; no DB write, no wrangler call', async () => {
+  it('--dry-run prints only the plan; nothing but `psql --version` runs and nothing is fetched', async () => {
     const h = harness();
-    expect(await main({ argv: ['--env', 'staging', '--dry-run'], deps: h.deps })).toBe(0);
-    expect(h.psqlRuns()).toHaveLength(0);
-    expect(h.lists()).toHaveLength(0);
-    expect(h.puts()).toHaveLength(0);
+    expect(await main({ argv: DRY, deps: h.deps })).toBe(0);
+    expect(h.events).toEqual(['probe']);
+    expect(h.fetches).toHaveLength(0);
     const text = h.printed();
     for (const { login, role } of LOGIN_ROLES) {
       expect(text).toContain(login);
       expect(text).toContain(role);
     }
-    for (const w of PLAN) {
-      expect(text).toContain(w.workerName);
-      for (const s of w.secrets) expect(text).toContain(s.name);
+    for (const p of HYPERDRIVE_PLAN) {
+      expect(text).toContain(p.config);
+      expect(text).toContain(p.binding);
     }
+    for (const w of PLAN) expect(text).toContain(w.workerName);
+    expect(text).toContain('MEDIA_LINK_HMAC_KEY');
+    for (const name of Object.values(RETIRED_SECRETS).flat()) expect(text).toContain(name);
+    expect(text).toContain(CA_ID);
+    expect(text).toContain('verify-full');
+    expect(text).toMatch(/caching disabled/);
+    expect(text).toMatch(/connection limit 5/);
+    expect(text).toMatch(/session pooler/);
+    expect(text).toContain('Not touched: CANDIDATE_TOKEN_PRIVATE_JWK and trace-edge-staging');
     expect(text).toMatch(/dry run/i);
-    // SEC-W3-3: five sequential puts, each a new Worker version, so the old-password window is tens of seconds.
+    // SEC-W3-3: the old-password window covers four config updates in a row, each testing the connection.
     expect(text).toMatch(/tens of seconds/);
     expect(text).not.toMatch(/a few seconds/);
     expect(text).not.toContain(OP_PW);
@@ -623,22 +1243,31 @@ describe('main', () => {
     for (const g of h.generated) expect(text).not.toContain(g);
   });
 
+  it('--dry-run shows --sslmode verify-ca', async () => {
+    const h = harness();
+    expect(await main({ argv: [...DRY, '--sslmode', 'verify-ca'], deps: h.deps })).toBe(0);
+    expect(h.printed()).toContain('verify-ca');
+    expect(h.printed()).not.toContain('verify-full');
+  });
+
   it('without --yes prints the plan, changes nothing and asks for --yes (exit 2)', async () => {
     const h = harness();
     expect(await main({ argv: ['--env', 'staging'], deps: h.deps })).toBe(2);
-    expect(h.psqlRuns()).toHaveLength(0);
-    expect(h.lists()).toHaveLength(0);
-    expect(h.puts()).toHaveLength(0);
+    expect(h.events).toEqual(['probe']);
+    expect(h.fetches).toHaveLength(0);
     expect(h.printed()).toMatch(/re-run with --yes/);
   });
 
   it.each([
-    ['--env production', ['--env', 'production', '--yes']],
-    ['no --env', ['--yes']],
+    ['--env production', ['--env', 'production', '--yes', ...CA]],
+    ['no --env', ['--yes', ...CA]],
+    ['--yes without a CA id', ['--env', 'staging', '--yes']],
+    ['--sslmode require', [...YES, '--sslmode', 'require']],
   ])('refuses %s before anything runs (exit 2)', async (_name, argv) => {
     const h = harness();
     expect(await main({ argv, deps: h.deps })).toBe(2);
     expect(h.calls).toHaveLength(0);
+    expect(h.fetches).toHaveLength(0);
   });
 
   it.each([
@@ -667,21 +1296,23 @@ describe('main', () => {
     ],
   ])('refuses when %s (exit 2, nothing runs, the variable named)', async (_n, env, named) => {
     const h = harness({ env });
-    expect(await main({ argv: ['--env', 'staging', '--dry-run'], deps: h.deps })).toBe(2);
+    expect(await main({ argv: DRY, deps: h.deps })).toBe(2);
     expect(h.psqlRuns()).toHaveLength(0);
-    expect(h.puts()).toHaveLength(0);
+    expect(h.wranglers()).toHaveLength(0);
+    expect(h.fetches).toHaveLength(0);
     expect(h.err.join('')).toContain(named);
     expect(h.printed()).not.toContain(OP_PW);
   });
 
-  it('refuses without psql (exit 2), before any wrangler call', async () => {
+  it('refuses without psql (exit 2), before any wrangler or Cloudflare call', async () => {
     const h = harness({ hasPsql: false });
-    expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(2);
-    expect(h.lists()).toHaveLength(0);
+    expect(await main({ argv: YES, deps: h.deps })).toBe(2);
+    expect(h.wranglers()).toHaveLength(0);
+    expect(h.fetches).toHaveLength(0);
     expect(h.err.join('')).toMatch(/psql/);
   });
 
-  it('stops before the database when a Worker does not exist yet (wrangler would create a draft)', async () => {
+  it('stops before the token and the database when a Worker does not exist yet', async () => {
     const h = harness({
       list: (line, opts) =>
         opts.cwd.endsWith(join('workers', 'jobs'))
@@ -692,7 +1323,9 @@ describe('main', () => {
             }
           : { status: 0, stdout: '[]', stderr: '' },
     });
-    expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(2);
+    expect(await main({ argv: YES, deps: h.deps })).toBe(2);
+    expect(h.tokens()).toHaveLength(0);
+    expect(h.fetches).toHaveLength(0);
     expect(h.psqlRuns()).toHaveLength(0);
     expect(h.puts()).toHaveLength(0);
     const text = h.err.join('');
@@ -704,32 +1337,44 @@ describe('main', () => {
   it('stops before the database when wrangler cannot list secrets (not logged in), output suppressed', async () => {
     const marker = 'wrangler-said-something';
     const h = harness({ list: () => ({ status: 1, stdout: marker, stderr: marker }) });
-    expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(2);
+    expect(await main({ argv: YES, deps: h.deps })).toBe(2);
     expect(h.psqlRuns()).toHaveLength(0);
+    expect(h.fetches).toHaveLength(0);
     expect(h.printed()).not.toContain(marker);
     expect(h.err.join('')).toMatch(/wrangler whoami|wrangler login/);
   });
 
-  it('names the missing-migrations case (TR001) and sets no secret', async () => {
+  it('stops before the database when the secret list is not wrangler JSON (exit 2)', async () => {
+    const h = harness({ list: () => ({ status: 0, stdout: 'Secret Name: X', stderr: '' }) });
+    expect(await main({ argv: YES, deps: h.deps })).toBe(2);
+    expect(h.psqlRuns()).toHaveLength(0);
+    expect(h.fetches).toHaveLength(0);
+    expect(h.err.join('')).toContain('trace-api-staging');
+  });
+
+  it('names the missing-migrations case (TR001) and changes no config or secret', async () => {
     const h = harness({
       psql: { status: 3, stdout: '', stderr: `psql:<stdin>:9: ERROR:  TR001 ${OP_PW}` },
     });
-    expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(1);
+    expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+    expect(h.writes()).toHaveLength(0);
     expect(h.puts()).toHaveLength(0);
     expect(h.err.join('')).toMatch(/migrations/);
     expect(h.printed()).not.toContain(OP_PW);
   });
 
-  it('names the unexpected-membership case (TR002) and sets no secret', async () => {
+  it('names the unexpected-membership case (TR002) and changes no config or secret', async () => {
     const h = harness({ psql: { status: 3, stdout: '', stderr: 'ERROR:  TR002' } });
-    expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(1);
+    expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+    expect(h.writes()).toHaveLength(0);
     expect(h.puts()).toHaveLength(0);
     expect(h.err.join('')).toMatch(/membership|attribute/);
   });
 
   it('a database failure reports only the SQLSTATE and says nothing was changed', async () => {
     const h = harness({ psql: { status: 2, stdout: '', stderr: `ERROR:  42501 ${OP_PW}` } });
-    expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(1);
+    expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+    expect(h.writes()).toHaveLength(0);
     expect(h.puts()).toHaveLength(0);
     const text = h.err.join('');
     expect(text).toContain('42501');
@@ -753,38 +1398,33 @@ describe('main', () => {
       },
     ],
   ])(
-    'when %s the outcome is unknown: no "rolled back", all five secrets may be stale',
+    'when %s the outcome is unknown: no "rolled back", the four configs and the key may be stale',
     async (_n, psql) => {
       const h = harness({ psql });
-      expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(1);
+      expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+      expect(h.writes()).toHaveLength(0);
       expect(h.puts()).toHaveLength(0);
       const text = h.err.join('');
       expect(text).not.toMatch(/rolled back|nothing was changed/i);
       expect(text).toMatch(/unknown/i);
       expect(text).toMatch(/passwords may have changed/i);
-      for (const w of PLAN) for (const s of w.secrets) expect(text).toContain(s.name);
+      for (const p of HYPERDRIVE_PLAN) expect(text).toContain(p.config);
+      expect(text).toContain('MEDIA_LINK_HMAC_KEY');
       expect(text).toMatch(/re-run with --yes/i);
       expect(h.printed()).not.toContain(OP_PW);
     },
   );
 
-  it('a failed secret put stops, names what is stale and asks for a re-run (exit 1)', async () => {
+  it('a failed HMAC key put stops after the configs, names the secret and asks for a re-run (exit 1)', async () => {
     const h = harness({
-      put: (line) =>
-        line.includes('JOBS_MIRROR_DB_URL')
-          ? { status: 1, stdout: '', stderr: 'latest version not deployed' }
-          : { status: 0, stdout: '', stderr: '' },
+      list: () => ({ status: 0, stdout: '[{"name":"API_DB_URL"}]', stderr: '' }),
+      put: () => ({ status: 1, stdout: '', stderr: 'latest version not deployed' }),
     });
-    expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(1);
-    expect(h.puts().map((p) => p.args[4])).toEqual([
-      'API_DB_URL',
-      'MEDIA_LINK_HMAC_KEY',
-      'JOBS_MIRROR_DB_URL',
-    ]);
+    expect(await main({ argv: YES, deps: h.deps })).toBe(1);
+    expect(h.writes()).toHaveLength(4);
+    expect(h.deletes()).toHaveLength(0);
     const text = h.err.join('');
-    for (const name of ['JOBS_MIRROR_DB_URL', 'JOBS_QUALITY_DB_URL', 'JOBS_INTEGRITY_DB_URL']) {
-      expect(text).toContain(name);
-    }
+    expect(text).toContain('MEDIA_LINK_HMAC_KEY');
     expect(text).toMatch(/re-run/);
     expect(text).not.toContain('latest version not deployed');
   });
@@ -795,21 +1435,13 @@ describe('main', () => {
         throw new Error(`spawn failed ${OP_PW}`);
       },
     });
-    expect(await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps })).toBe(1);
+    expect(await main({ argv: YES, deps: h.deps })).toBe(1);
     expect(h.printed()).not.toContain(OP_PW);
-  });
-
-  it('prints a success summary with names only', async () => {
-    const h = harness();
-    await main({ argv: ['--env', 'staging', '--yes'], deps: h.deps });
-    const text = h.out.join('');
-    for (const w of PLAN) for (const s of w.secrets) expect(text).toContain(s.name);
-    expect(text).toMatch(/check-staging-secrets/);
   });
 
   it('works without SUPABASE_STAGING_PROJECT_REF (the ref is pinned in the script)', async () => {
     const h = harness({ env: { TRACE_OPERATOR_DB_URL: stagingPooler() } });
-    expect(await main({ argv: ['--env', 'staging', '--dry-run'], deps: h.deps })).toBe(0);
+    expect(await main({ argv: DRY, deps: h.deps })).toBe(0);
   });
 
   it('pins the staging ref that docs/infra/environments.md records', () => {
@@ -817,5 +1449,9 @@ describe('main', () => {
     const row = doc.split(/\r?\n/).find((l) => l.startsWith('| `SUPABASE_STAGING_PROJECT_REF` |'));
     expect(row).toContain(`\`${STAGING_PROJECT_REF}\``);
     expect(STAGING_PROJECT_REF).toMatch(/^[a-z0-9]{20}$/);
+  });
+
+  it('every planned id fits the Cloudflare shape the deploy check expects', () => {
+    for (let i = 0; i < 20; i += 1) expect(idOf(i)).toMatch(HYPERDRIVE_ID_RE);
   });
 });
