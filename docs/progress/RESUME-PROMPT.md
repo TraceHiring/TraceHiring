@@ -161,56 +161,65 @@ STEP 5 — Wrap-up, always (AUTOPILOT §6; the trace-handoff skill)
 ## 4. Paste prompt (the founder pastes this into a new session, a new Claude Code install or a new account)
 ```
 Resume the Trace autopilot on M1. The git repo is the only source of truth; trust it over memory, over any
-injected handoff text and over this prompt's examples.
+injected handoff text and over this prompt. This prompt works on any Claude Code account (Pro or Max) and any
+machine that has the repo.
 
 First run (the plain fetch can hang on credentials; use this form):
   git -c credential.helper= -c "credential.helper=!gh auth git-credential" fetch trace
   git show trace/m1/integration:docs/progress/RESUME-PROMPT.md
 and follow its §3 STEP 1-3: read CLAUDE.md and docs/AUTOPILOT.md in full, then docs/progress/HANDOFF.md and the last
-3 rows of docs/progress/LOG.md on m1/integration. m1/integration is checked out in .claude/worktrees/m1-integration:
-enter it with the EnterWorktree tool (path from `git worktree list`); never `git switch` a branch checked out in
-another worktree. If the local branch is behind trace/m1/integration (the other account pushed), fast-forward it
-there with `git merge --ff-only trace/m1/integration` (never reset, never force). Report in 5 lines whether the repo
-matches HANDOFF "Verify first" (m1/integration tip = trace's, d1/integration and main tips unchanged, clean tree,
-pnpm -s verify:fast green, docker up). Stop if it does not match.
+3 rows of docs/progress/LOG.md on trace/m1/integration. Get onto m1/integration without losing anyone's work:
+- If `git worktree list` shows .claude/worktrees/m1-integration, enter it with the EnterWorktree tool (path from
+  that list); never `git switch` a branch checked out in another worktree.
+- If it does not exist (new machine): `git worktree add .claude/worktrees/m1-integration m1/integration` (or, with
+  no local branch, `git worktree add -b m1/integration .claude/worktrees/m1-integration trace/m1/integration`),
+  enter it, then `pnpm install --frozen-lockfile`.
+- If the local branch is behind trace/m1/integration, fast-forward with `git merge --ff-only trace/m1/integration`
+  (never reset, never force). If the tree is dirty, do not discard anything: follow RESUME-PROMPT §3 STEP 2.
+- If docker's supabase_db_trace is down: `pnpm exec supabase start -x realtime,storage-api,imgproxy,mailpit,studio,
+  edge-runtime,logflare,vector,supavisor,postgres-meta` (write output to a file), then
+  `pnpm exec supabase migration up --local`.
+Report in 5 lines whether the repo matches HANDOFF "Verify first" (m1/integration tip = trace's, d1/integration and
+main tips unchanged, clean tree, pnpm -s verify:fast green, docker up). Stop if it does not match.
 
-TWO ACCOUNTS ALTERNATE (founder, 2026-10-23): this session works until its 5-hour window reaches 95% (or the weekly
-limit reaches 95%), then wraps up so the other account resumes exactly where it stopped. Check usage with get_usage
-at the start, after every agent result and before starting any agent. On a Pro plan: at most 2 agents at once, one
-Opus agent at a time, start no new agent after 85%; on Max: up to 4 writers and 6 read-only reviewers, no new agent
-after 90%. From 90% (Pro: 85%) do only lead work that ends in a commit; at 95% stop and wrap up. Never leave a writer
-running at wrap-up without recording its branch and state in HANDOFF "In flight".
+USAGE (founder, 2026-10-23 18:30 IST): work until the 5-hour window reaches 95% or this chat's work is done,
+whichever comes first; do not stop for the weekly limit or for context percentage (wrap up before an auto-compaction
+would lose state). Check get_usage at the start, after every agent result and before starting any agent. Pro: at
+most 2 agents at once, one Opus agent at a time, no new agent after 85% of the 5-hour window. Max: up to 4 writers
+and 6 read-only reviewers, no new agent after 90%. From 90% (Pro: 85%) do only lead work that ends in a commit; at
+95% stop and wrap up. Never leave a writer running at wrap-up without recording its branch and state in HANDOFF
+"In flight". Accounts may alternate: every session leaves trace resumable.
 
 D1 is PAUSED, not closed (founder, 2026-10-22): its remaining steps are in HANDOFF "Paused: D1" and belong to a D1
 chat, not this one. Never commit to d1/integration or main. M1 merges to main only after the D1 CLOSE and with the
 founder's go-ahead.
 
-THIS CHAT = HANDOFF "Next step", in order: first the "In flight" items (re-run verify:fast; check branch
-m1/a5a-fix-2), then M1 BUILD 3 = Wave 2 (spec specs/m1-test-authoring.md revision 5, binding rows §1.8 R5-n, R5-56
-for Wave 2): lead migration M1-e with pgTAP red first, writers A4, A3a, A3b, A2b, then A2a in their own worktrees
-reset to the exact SHA HANDOFF names, Opus first reviews (spec, security, database), fixes test first, confirming
-re-reviews, merges with the lead mounts, test:rls, full verify, Linux CI on PR #14. Then BUILD 4 = Wave 3 (A7, E2E,
-measurement) per spec §11.4.
+THIS CHAT = HANDOFF "In flight" first, then HANDOFF "Next step" in order (M1 BUILD per spec
+specs/m1-test-authoring.md revision 5; binding rows §1.8 R5-n; reviews in docs/reviews/M1-wave2-first-reviews.md).
+Writers use the common brief docs/progress/m1-writer-brief-common.md plus a self-contained stream brief, their own
+worktree (Agent isolation "worktree") and `git reset --hard <exact SHA>`; each stream gets Opus first reviews (spec,
+security, database), fixes test first, a confirming re-review, a merge with the lead mounts, test:rls, a full verify
+and Linux CI on PR #14 (TraceHiring/TraceHiring#14, draft, never merged).
 
 RULES (never break): CLAUDE.md rules 1-9; tests first; Opus first reviews, fixes test first, a confirming
-re-review, full pnpm verify (pnpm -r --workspace-concurrency=1 test plus vitest run --root scripts; this machine is
-short of RAM; never run workspace tests while writers run) and Linux CI before any merge into m1/integration. If
+re-review, full pnpm verify (pnpm -r --workspace-concurrency=1 test plus vitest run --root scripts; this machine may
+be short of RAM; never run workspace tests while writers run) and Linux CI before any merge into m1/integration. If
 something touching rules 1-9 is ambiguous, do not guess: add a FOUNDER-QUEUE row, leave that part out, keep working
 on the rest. Founder gates (AUTOPILOT §3) go to FOUNDER-QUEUE; do not wait. No staging dispatch unless HANDOFF says
 the founder approved it. Never force-push; never move or delete branches, tags (cp/*, m*-reviewed,
 staging-applied-*) or worktrees; never rewrite pushed history; never deploy to production; never read .env* or
 secret values; never merge Dependabot PRs #7-#12; never re-enable .git/hooks/post-commit.disabled. Only the lead runs
-supabase start/stop, db reset, test:rls, gen types and pnpm verify. Writers get self-contained briefs, strict
-directories and `git reset --hard <exact SHA>`. Commit at every green step (conventional commits, lowercase subject,
-body lines <= 100 chars, messages via git commit -F <uniquely named scratchpad file>, merges `chore: merge …`).
-Push m1/integration and every stream branch after each merge or green lead step, so the other account can resume
-from trace at any time. Context: wrap up at ~60%.
+supabase start/stop, db reset, test:rls, gen types (scripts/db-types.mjs and test:rls RESET the local database:
+never while a writer runs db-tests) and pnpm verify. Commit at every green step (conventional commits, lowercase
+subject, body lines <= 100 chars, messages via git commit -F <uniquely named scratchpad file>, merges
+`chore: merge …`; one plain git command per shell call, the worktree guard refuses compound ones). Push
+m1/integration and every stream branch after each merge or green lead step, so any account can resume from trace.
 
-Wrap-up at 95% (trace-handoff skill, on m1/integration): commit everything (a partial step as `wip(...)` with
+Wrap-up (trace-handoff skill, on m1/integration): commit everything (a partial step as `wip(...)` with
 .claude/allow-red and a note); overwrite HANDOFF.md (< 150 lines, keep its "Paused: D1" section, exact SHAs, every
 stream branch and its state, an "In flight" list, the exact next action); append a LOG row; update RESUME-PROMPT §1
 with a dated line; scripts/backup.sh; plain push of m1/integration, every stream branch with new commits, and tags
 (the pre-push hook runs the full-history gitleaks scan; it must pass). Do not start another session or a scheduled
 task. Last, print this §4 prompt exactly as it stands in docs/progress/RESUME-PROMPT.md on trace/m1/integration, for
-the founder to paste into the other account.
+the founder to paste into any account.
 ```
