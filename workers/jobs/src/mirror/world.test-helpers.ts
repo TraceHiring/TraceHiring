@@ -5,7 +5,7 @@
 import type {
   EvidenceEventLine,
   FinalAnswers,
-  SessionMirrorMessage,
+  SessionMirrorMessageV1,
 } from '@trace/shared/contracts/candidate';
 import type { LlmGrader } from '@trace/vendors';
 import { integrityHandlers } from '../integrity/fake-db.test-helpers.js';
@@ -71,7 +71,7 @@ const criteria = (anchors: string[], minHits: number) =>
 export interface SessionWorld {
   db: FakeDb;
   evidence: MemoryEvidence;
-  message: SessionMirrorMessage;
+  message: SessionMirrorMessageV1;
   finalBody: string;
 }
 
@@ -191,7 +191,7 @@ export const sessionWorld = async (opts: SessionWorldOptions = {}): Promise<Sess
     evidence.put(PHOTO_KEY, new Uint8Array(PHOTO_BYTES), { sha256: '8'.repeat(64), blurred: '1' });
   }
 
-  const message: SessionMirrorMessage = {
+  const message: SessionMirrorMessageV1 = {
     v: 1,
     jobKind: 'session_mirror',
     mirrorSeq: 1,

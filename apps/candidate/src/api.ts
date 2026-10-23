@@ -37,6 +37,7 @@ export const ERROR_STATUS: Record<CandidateErrorCode, number> = {
   link_expired: 410,
   link_revoked: 410,
   closed: 410,
+  section_closed: 410,
   out_of_order: 409,
   too_large: 413,
   bad_media: 415,

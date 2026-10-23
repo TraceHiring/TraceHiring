@@ -439,6 +439,32 @@ describe('processBatch: invalid messages', () => {
     });
   });
 
+  // M1 Wave 0: the union parses v2 (R5-8), but the v1 stages would ignore its draws; until stream A3 stores them a
+  // v2 message is retried (then the DLQ), never acked and never run.
+  it('retries a v2 message without running a stage until v2 is implemented', async () => {
+    const { calls, lines, deps } = setup();
+    const v1 = validMessage();
+    const sectionId = '3f2b8c1e-9a47-4d6b-8e15-7c0a2d94b0f0';
+    const message = fakeMessage({
+      ...v1,
+      v: 2,
+      served: v1.served.map((s) => ({ ...s, sectionId })),
+      draws: [],
+      poolSectionIds: [],
+    });
+
+    await processBatch(fakeBatch([message]), deps);
+
+    expect(calls).toEqual([]);
+    expect(message.acked()).toBe(0);
+    expect(message.retried()).toBe(1);
+    expect(LogLine.parse(JSON.parse(lines[0] ?? ''))).toMatchObject({
+      level: 'error',
+      service: 'jobs',
+      event: 'queue.message_v2_unsupported',
+    });
+  });
+
   it('logs no payload field, value or id for an invalid message', async () => {
     const { lines, deps } = setup();
     const body = {

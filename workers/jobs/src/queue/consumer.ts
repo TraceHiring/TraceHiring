@@ -127,6 +127,13 @@ export const processBatch = async (
       raw.ack();
       continue;
     }
+    if (parsed.data.v === 2) {
+      // M1 Wave 0 (spec m1 R5-8): v2 parses, but these v1 stages would drop its draws; until stream A3 stores
+      // them, retry it (5 tries, then the DLQ) so no session is scored from a partial mirror.
+      deps.log.error('queue.message_v2_unsupported', { sessionId: parsed.data.sessionId });
+      raw.retry();
+      continue;
+    }
     const lane = lanes.get(parsed.data.sessionId) ?? [];
     lane.push({ raw, message: parsed.data });
     lanes.set(parsed.data.sessionId, lane);

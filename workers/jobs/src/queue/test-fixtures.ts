@@ -1,6 +1,6 @@
 // Synthetic fixtures for the queue tests: a valid SessionMirrorMessage (spec §4.4) and a fake Workers
 // Message / MessageBatch. All ids are made-up UUIDs; nothing here is real data.
-import type { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
+import type { SessionMirrorMessageV1 } from '@trace/shared/contracts/candidate';
 
 // Realistic (random-looking) v4 ids: the redactor treats long digit runs, such as all zeros, as numbers.
 const uuid = (n: number): string =>
@@ -14,8 +14,10 @@ export const RULESET_ID = uuid(51);
 export const mirrorKey = (orgId: string, sessionId: string): string =>
   `sessions/${orgId}/${sessionId}/mirror.json`;
 
-/** A valid mirror message; `patch` overrides top-level fields. */
-export const validMessage = (patch: Partial<SessionMirrorMessage> = {}): SessionMirrorMessage => ({
+/** A valid v1 mirror message; `patch` overrides top-level fields. */
+export const validMessage = (
+  patch: Partial<SessionMirrorMessageV1> = {},
+): SessionMirrorMessageV1 => ({
   v: 1,
   jobKind: 'session_mirror',
   mirrorSeq: 1,

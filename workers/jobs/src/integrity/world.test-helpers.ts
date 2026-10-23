@@ -2,7 +2,7 @@
 // table (d1-v1), an in-memory evidence bucket with events.ndjson and the start photo, and the matching mirror message.
 // Synthetic data only. Of quality data it can add one row with meets_cutoff (the only field the stage may read).
 import rules from '@trace/band-engine/rules/d1-v1.json';
-import type { EvidenceEventLine, SessionMirrorMessage } from '@trace/shared/contracts/candidate';
+import type { EvidenceEventLine, SessionMirrorMessageV1 } from '@trace/shared/contracts/candidate';
 import type { EvidenceHead, EvidenceObject, EvidenceReader } from '@trace/shared/jobs';
 import { newDb, table, type FakeDb } from './fake-db.test-helpers.js';
 import { sha256HexBytes } from './load.js';
@@ -119,14 +119,14 @@ export interface IntegrityWorldOptions {
   meetsCutoff?: boolean | null;
   coverage?: { activeMs: number; coveredMs: number };
   photo?: 'ok' | 'none' | 'missing_object' | 'other_sha';
-  gaps?: SessionMirrorMessage['gaps'];
+  gaps?: SessionMirrorMessageV1['gaps'];
   lastEventSeq?: number;
 }
 
 export interface IntegrityWorld {
   db: FakeDb;
   evidence: MemoryEvidence;
-  message: SessionMirrorMessage;
+  message: SessionMirrorMessageV1;
 }
 
 export const integrityWorld = async (opts: IntegrityWorldOptions = {}): Promise<IntegrityWorld> => {
@@ -175,7 +175,7 @@ export const integrityWorld = async (opts: IntegrityWorldOptions = {}): Promise<
     evidence.put(photoKey, new Uint8Array(PHOTO_BYTES), { sha256: 'a'.repeat(64), blurred: '1' });
   }
   const maxSeq = lines.reduce((m, l) => Math.max(m, l.gseq), 0);
-  const message: SessionMirrorMessage = {
+  const message: SessionMirrorMessageV1 = {
     v: 1,
     jobKind: 'session_mirror',
     mirrorSeq: 1,
