@@ -13,6 +13,7 @@ import { sha256Hex, type PreparedImage } from './images';
 import type { ParsedImport } from './parse';
 import { ImportSession, type ImportApi, type RunState } from './run';
 import type { RowIssue } from './rows';
+import { rowErrorText } from './texts';
 
 const JOB_ID = '33333333-3333-4333-8333-333333333333';
 const WS_ID = '44444444-4444-4444-8444-444444444444';
@@ -363,6 +364,44 @@ describe('failures', () => {
   });
 });
 
+describe('an image the api refuses (S7)', () => {
+  it('any other refusal of one image is a row error for its rows, and the run goes on', async () => {
+    const [bad1, good] = await Promise.all([image(1), image(2)]);
+    const { api, log } = fakeApi({
+      image: (sha) =>
+        sha === bad1.sha256
+          ? bad('image_too_wide')
+          : ok({ key: `item-media/${'1'.repeat(8)}-1111-4111-8111-${'1'.repeat(12)}/${sha}.png` }),
+    });
+    const s = session(
+      parsedOf([mcq(2, bad1.sha256), mcq(3, good.sha256), mcq(4, bad1.sha256)], [bad1, good]),
+      api,
+    );
+    await s.start();
+    const state = s.state();
+    expect(state.phase).toBe('ready');
+    expect(state.failure).toBeNull();
+    expect(state.issues.map((i) => `${i.rowNo}:${i.field}:${i.code}`)).toEqual([
+      '2:image_file:image_refused',
+      '4:image_file:image_refused',
+    ]);
+    expect(log.batches.flat()).toEqual([3]);
+    expect(log.imageCalls.filter((sha) => sha === bad1.sha256)).toHaveLength(1);
+    expect(rowErrorText('image_refused')).toBe('The server refused this image.');
+  });
+
+  it('a refusal that is about the session or the job, not the image, still stops the run', async () => {
+    for (const code of ['forbidden', 'unauthorized', 'aal2_required', 'not_found', 'conflict']) {
+      const img = await image(1);
+      const { api, log } = fakeApi({ image: () => bad(code) });
+      const s = session(parsedOf([mcq(2, img.sha256)], [img]), api);
+      await s.start();
+      expect(s.state(), code).toMatchObject({ phase: 'stopped', failure: code });
+      expect(log.batches, code).toEqual([]);
+    }
+  });
+});
+
 describe('finish and cancel', () => {
   it('a job the api fails on finish (row_limit, image_limit, timeout, internal) is shown as failed with its code', async () => {
     for (const errorCode of ['row_limit', 'image_limit', 'timeout', 'internal'] as const) {
@@ -442,6 +481,28 @@ describe('finish and cancel', () => {
     await b.cancel();
     expect(b.state().phase).toBe('cancelled');
     expect(log.cancels).toBe(2);
+  });
+
+  it('a second cancel click while the first is still waiting sends one cancel and ends cancelled (S1)', async () => {
+    const rows = Array.from({ length: 400 }, (_, i) => mcq(i + 2));
+    // A second cancel call would be refused, as the api refuses to cancel a job already cancelled.
+    let calls = 0;
+    const { api, log } = fakeApi({
+      rows: async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        return ok({ accepted: 100, errors: [] });
+      },
+      cancel: () =>
+        ++calls === 1 ? ok(job({ status: 'cancelled', completedAt: NOW })) : bad('conflict'),
+    });
+    const s = session(parsedOf(rows), api);
+    const run = s.start();
+    await new Promise((r) => setTimeout(r, 2));
+    const first = s.cancel();
+    const second = s.cancel();
+    await Promise.all([first, second, run]);
+    expect(log.cancels).toBe(1);
+    expect(s.state()).toMatchObject({ phase: 'cancelled', failure: null });
   });
 
   it('notifies listeners of every change with a copy of the state', async () => {

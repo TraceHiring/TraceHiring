@@ -380,13 +380,11 @@ describe('xlsx: file-level failures stop before anything is sent', () => {
 
   it('refuses a macro workbook (E9): by extension, by content type and by a vbaProject part', async () => {
     expect(
-      (
-        await parseImport(
-          { file: asFile(xlsxBytes([mcqRow(1)]), 'items.xlsm'), imagesZip: null },
-          deps,
-        )
-      ).ok,
-    ).toBe(false);
+      await parseImport(
+        { file: asFile(xlsxBytes([mcqRow(1)]), 'items.xlsm'), imagesZip: null },
+        deps,
+      ),
+    ).toEqual({ ok: false, code: 'macro_file' });
     expect(
       await failure(
         readXlsx([mcqRow(1)], { extraEntries: { 'xl/vbaProject.bin': new Uint8Array(3) } }),

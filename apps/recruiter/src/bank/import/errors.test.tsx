@@ -5,7 +5,7 @@ import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
 import { ERROR_CSV_HEADER, errorCsv } from './error-csv';
-import { ErrorsTable, ImportView, MAX_SHOWN_ERRORS, type Screen } from './ImportView';
+import { ERRORS_PER_PAGE, ErrorsTable, ImportView, type Screen } from './ImportView';
 import type { RunState } from './run';
 import type { RowIssue } from './rows';
 import { ITEM_HEADERS, type ImportField } from './template';
@@ -86,18 +86,20 @@ describe('the errors table', () => {
       FIELDS.map((field) => ({ rowNo: 2 + i, field, code })),
     );
     const html = renderToString(<ErrorsTable issues={all} />);
-    expect([...html.matchAll(/<tr\b/g)]).toHaveLength(Math.min(all.length, MAX_SHOWN_ERRORS) + 1);
+    expect([...html.matchAll(/<tr\b/g)]).toHaveLength(Math.min(all.length, ERRORS_PER_PAGE) + 1);
   });
 
-  it('says how many it shows when there are very many, and the file has them all', () => {
-    const many: RowIssue[] = Array.from({ length: MAX_SHOWN_ERRORS + 25 }, (_, i) => ({
+  it('shows one page of problems and says which ones, when there are very many (the pages reach all of them)', () => {
+    const many: RowIssue[] = Array.from({ length: ERRORS_PER_PAGE * 5 + 25 }, (_, i) => ({
       rowNo: i + 2,
       field: 'stem' as const,
       code: 'too_long' as const,
     }));
-    const body = text(renderToString(<ErrorsTable issues={many} />));
-    expect(body).toContain(`first ${MAX_SHOWN_ERRORS}`);
-    expect(body).toContain(String(many.length));
+    const html = renderToString(<ErrorsTable issues={many} />);
+    expect(ERRORS_PER_PAGE).toBe(100);
+    expect([...html.matchAll(/<tr\b/g)]).toHaveLength(ERRORS_PER_PAGE + 1);
+    expect(text(html)).toContain(`Showing 1–${ERRORS_PER_PAGE} of ${many.length}`);
+    expect(buttons(html)).toEqual(['Previous', 'Next']);
     expect(errorCsv(many).trim().split('\r\n')).toHaveLength(many.length + 1);
   });
 
