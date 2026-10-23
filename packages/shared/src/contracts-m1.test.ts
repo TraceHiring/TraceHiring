@@ -380,6 +380,17 @@ describe('BankItemDetail (key only when readable and not library-sourced)', () =
   });
 });
 
+describe('KeyReviewItemRequest (R5-64 h, SEC-M1-4)', () => {
+  it('names the version and nothing else (the reviewer is the caller)', () => {
+    expect(M1.KeyReviewItemRequest.parse({ itemVersionId: id(11) })).toBeTruthy();
+    expect(ok(M1.KeyReviewItemRequest, { itemVersionId: 'x' })).toBe(false);
+    expect(ok(M1.KeyReviewItemRequest, {})).toBe(false);
+    expect(ok(M1.KeyReviewItemRequest, { itemVersionId: id(11), keyReviewedBy: id(12) })).toBe(
+      false,
+    );
+  });
+});
+
 describe('ApproveItemRequest (R5-22)', () => {
   it('decides approve or not_approved, nothing else', () => {
     expect(ApproveItemRequest.parse({ itemVersionId: id(11), decision: 'approve' })).toBeTruthy();

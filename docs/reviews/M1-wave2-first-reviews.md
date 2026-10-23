@@ -134,4 +134,15 @@ Writer (Opus): red `b0ab28a` (72 failing), api 55 files / 596 tests, typecheck +
   library_copy_requests.
 - Notes — D10 failed `queue.send` also strands a `queued` job (one worker sweep fixes S2 and D10); D11 reviewers always
   see `exposureCount` 0; D12 a lost version-insert response leaves a harmless key-less draft.
-**Spec review: NOT YET RUN** (usage stop) — first in the next session.
+**Spec: PASS WITH FIXES** (Opus, 2026-10-24; no rule 1-9 issue; decisions R5-64):
+- Medium 1 — library items can never be approved through the api: the guard needs `key_reviewed_by` recorded first by a
+  non-author, and no route sets it (the review answers 404 on the unmapped guard text) → R5-64 h key-review route.
+- Low 2 — import variant seeds are `SHA-256("import:<job>:<row>:<k>")`, not R5-52 b's → accepted, R5-64 i.
+- Low 3 — `GET …/bank/stats` always `library: null` → accepted, R5-64 j.
+- Low 4 — `MAX_MEMBERS = 10_000` pool cap summed per page (503s; DELETE answers 503 after deleting) → R5-64 d (view).
+- Low 5 — `ai-drafts.test.ts:73-75` ("no id") and `bank.test.ts:92-94` ("origin never sent") assert nothing of that.
+- Note 6 — A2a edited `modules/tests/org-context.ts` (sanctioned by A2b Note 4) → R5-64 l; `invite_settled` still 404.
+- Writer questions: (a) `row_limit` accepted (parse-level); (b) no `open → failed` route in M1; (c) no pool archive in
+  M1 → R5-64 k.
+**Lead (M1-m):** red `7323091`, green `09bb62b`: D1, D2, D4, D6, D7 in the database (rls_m1_bank_fixes, imports
+D6 cases, candidate-denied list); D9 deferred (R5-64 g); `KeyReviewItemRequest` contract (R5-64 h).
