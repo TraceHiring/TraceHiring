@@ -16,6 +16,7 @@ import {
   makePackage,
   PACKAGE_KEY,
   postEvents,
+  serveHttp,
   sessionHarness,
   startInput,
   WRITTEN,
@@ -361,6 +362,8 @@ describe('session tokens after submit (SR-5, RT-3; SEC-C1b-5)', () => {
   it('attach after submit shows the receipt and no answer text', async () => {
     const h = await sessionHarness();
     const { token, view } = await h.startSession();
+    // The DO accepts answers only at a position it has served (R5-59 b).
+    await serveHttp(h, token, [WRITTEN, 1]);
     const answer = 'synthetic answer text kept in the object';
     const edits = [
       { seq: 1, t: 100, kind: 'answer.text', item: WRITTEN, p: 0, d: 0, i: answer },
