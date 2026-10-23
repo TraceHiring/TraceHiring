@@ -277,8 +277,14 @@ export const detailOf = (
             ? {}
             : (() => {
                 const spec = v.param_spec;
+                // A stored key names a current option, or it is not shown (A2a database D1: a failed draft PUT
+                // removes it; the readiness guard refuses the draft until a PUT stores it again).
+                const current =
+                  key !== undefined && (v.options ?? []).some((o) => o.id === key)
+                    ? key
+                    : undefined;
                 const optionId =
-                  key ??
+                  current ??
                   (spec !== null && typeof spec.correctOptionId === 'string'
                     ? spec.correctOptionId
                     : undefined);

@@ -371,18 +371,29 @@ export const createBankRoutes = (deps: BankDeps): Hono<{ Bindings: Env }> => {
       );
       if (updated === undefined) return missedUpdate(ctx, orgId, v.id);
       const key = keyOf(draft);
+      const keyWhere = { item_version_id: eq(v.id), org_id: eq(orgId) };
       if (key === null) {
-        await ctx.rest.remove('item_answer_keys', {
-          item_version_id: eq(v.id),
-          org_id: eq(orgId),
-        });
+        await ctx.rest.remove('item_answer_keys', keyWhere);
       } else {
-        const [changed] = await ctx.rest.update(
-          'item_answer_keys',
-          { item_version_id: eq(v.id), org_id: eq(orgId), select: 'item_version_id' },
-          { key: { option_id: key } },
-        );
-        if (changed === undefined) await insertKey(ctx, orgId, v.id, key);
+        // A2a database D1 (R5-64 b): the contract puts the key on one of this request's options. The content is
+        // already written, so a failed key write must not leave the old key on an option that no longer exists:
+        // the key is removed (best effort) and the draft cannot leave draft until a PUT stores its key again (the
+        // readiness guard refuses it, 422 draft_incomplete). One atomic write is `save_bank_draft` (R5-63 f, lead).
+        try {
+          const [changed] = await ctx.rest.update(
+            'item_answer_keys',
+            { ...keyWhere, select: 'item_version_id' },
+            { key: { option_id: key } },
+          );
+          if (changed === undefined) await insertKey(ctx, orgId, v.id, key);
+        } catch (err) {
+          try {
+            await ctx.rest.remove('item_answer_keys', keyWhere);
+          } catch {
+            // The original failure is answered; the guard still refuses a key on a deleted option.
+          }
+          throw err;
+        }
       }
       return answer(BankItemDetail, await detail(ctx, orgId, updated));
     }),
@@ -395,8 +406,16 @@ export const createBankRoutes = (deps: BankDeps): Hono<{ Bindings: Env }> => {
       const ctx = await deps.org.context(c.req.raw, c.env);
       await requireRole(ctx.rest, ctx.caller, orgId, AUTHORS);
       const v = (await latestVersion(ctx, orgId, itemId)) ?? orgFail('not_found');
-      // One open version at a time; a library copy is frozen content (E7: a new library version is a new copy).
-      if (v.status === 'draft' || v.status === 'in_review' || v.origin === 'library') {
+      // One open version at a time (the database's partial unique index too: its 23505 is 409, R5-64 a); a library
+      // copy is frozen content (E7: a new library version is a new copy); an AI draft a human sent back is never
+      // cloned (R5-64 f). A clone of an approved or retired AI draft is a human-authored version with its own review:
+      // the insert names no origin (the guard sets `human`) and the AI provenance stays on the earlier version.
+      if (
+        v.status === 'draft' ||
+        v.status === 'in_review' ||
+        v.origin === 'library' ||
+        (v.origin === 'ai_draft' && v.status === 'not_approved')
+      ) {
         return orgFail('conflict');
       }
       const key =
