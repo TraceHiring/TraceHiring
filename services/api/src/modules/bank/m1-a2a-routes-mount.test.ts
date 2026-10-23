@@ -29,7 +29,7 @@ const mount = (org: OrgDeps) => {
   app.route('/', createBankRoutes({ org, variants: never('variants') }));
   app.route('/', createPoolsRoutes({ org }));
   app.route('/', createLibraryRoutes({ org, source: never('source'), limiter: never('limiter') }));
-  app.route('/', createImportsRoutes({ org, media: never('media') }));
+  app.route('/', createImportsRoutes({ org, media: never('media'), variants: never('variants') }));
   app.route('/', createAiDraftsRoutes({ org, queue: never('queue') }));
   return app;
 };

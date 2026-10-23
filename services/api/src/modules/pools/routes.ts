@@ -72,7 +72,7 @@ const membersOf = async (
   for (const part of chunks(poolIds)) {
     let after: { pool: string; item: string } | null = null;
     for (;;) {
-      const rows = parseRows(
+      const rows: z.infer<typeof MemberRow>[] = parseRows(
         MemberRow,
         await ctx.rest.select('pool_items', {
           select: 'pool_id,item_version_id',
@@ -89,7 +89,7 @@ const membersOf = async (
       );
       out.push(...rows);
       if (out.length > MAX_MEMBERS) return orgFail('unavailable');
-      const last = rows[rows.length - 1];
+      const last: z.infer<typeof MemberRow> | undefined = rows[rows.length - 1];
       if (rows.length < PGRST_MAX_ROWS || last === undefined) break;
       after = { pool: last.pool_id, item: last.item_version_id };
     }

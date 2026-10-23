@@ -3,7 +3,15 @@
 // other rows as items of the job, idempotent on the row number), a fake ITEM_MEDIA store, and tiny synthetic image
 // headers (PNG, JPEG, WebP) of a chosen size. Synthetic data only.
 import type { FakeDb, Row } from '../tests/rest.test-helpers.js';
-import { a2aDb, callerOf, harness, ORG, stamp, WS } from '../bank/a2a.test-helpers.js';
+import {
+  a2aDb,
+  callerOf,
+  fakeVariants,
+  harness,
+  ORG,
+  stamp,
+  WS,
+} from '../bank/a2a.test-helpers.js';
 import type { ItemMediaStore } from './media.js';
 import { createImportsRoutes } from './routes.js';
 
@@ -111,7 +119,11 @@ export const importsSetup = (
   const media = fakeMedia();
   const { call } = harness(
     (org) =>
-      createImportsRoutes({ org, media: () => (opts.noMedia === true ? null : media.store) }),
+      createImportsRoutes({
+        org,
+        media: () => (opts.noMedia === true ? null : media.store),
+        variants: () => fakeVariants,
+      }),
     db,
     callerOf(),
   );
