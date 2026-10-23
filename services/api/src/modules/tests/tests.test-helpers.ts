@@ -564,7 +564,7 @@ export const saveBody = (patch: Partial<SaveTestDraftRequest> = {}): SaveTestDra
   };
 };
 
-export const rowsOf = (db: FakeDb, table: string): Row[] => db.tables[table] ?? [];
+export const rowsOf = (db: FakeDb, table: string): Row[] => (db.tables[table] ??= []);
 
 /** Sets the draft's ruleset settings directly (as a prior PUT …/integrity would). */
 export const setSettings = (

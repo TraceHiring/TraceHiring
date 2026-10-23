@@ -362,7 +362,7 @@ describe('publish v2 failures', () => {
     const s = await setup({
       seed: (db) => {
         const rows = mcqPool(1300)(db);
-        for (const r of rows) r.stem = `[synthetic] ${'w'.repeat(3990)}`;
+        for (const r of rows) r.stem = `[synthetic] ${'w'.repeat(3980)}`;
       },
       sections: [
         { ...saveBody().sections[1]!, weight: 50 },

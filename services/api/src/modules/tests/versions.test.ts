@@ -85,6 +85,8 @@ describe('POST …/tests/:testId/versions (Edit as new version)', () => {
       org_id: ORG,
       setting_key: 'paste_written',
       locked_value: 'blocked',
+      locked_by: null,
+      locked_at: '2026-10-17T09:00:00.000+00:00',
     });
     const res2 = await s2.clone();
     expect(res2.status).toBe(201);
