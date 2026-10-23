@@ -9,6 +9,11 @@
 -- ruleset_versions_guard, session_items_guard, responses_guard (R5-43) and integrity_flags_guard (from
 -- 20261021091905_d1_flags_rule_table.sql, R5-5).
 --
+-- First reviews folded in place (provisional file, R5-30): DB-M1-1 (a written section's paste rule is the settings'
+-- paste_written), DB-M1-3 (no snapshot row for a published version), DB-M1-4 (pool-section slots), DB-M1-7 (no preset
+-- without settings), DB-M1-8 (sealed settings catalog), DB-M1-9 (E4 read from the written snapshot), DB-M1-10 (index),
+-- DB-M1-12 (strata quotas, the 5,000-item cap, template skills).
+--
 -- I-M1-10: the only integrity.* object touched is private.integrity_flags_guard (R5-5), which already read
 -- public.sessions, public.ruleset_versions and integrity.band_rule_versions; it now also reads
 -- ruleset_versions.signal_settings. Nothing here names quality.*. The band rule table is never changed (rule 3): a setting
@@ -105,9 +110,25 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_blueprint_changed boolean := tg_op = 'INSERT';
 begin
   if exists (select 1 from unnest(new.keywords) as k where char_length(k) not between 2 and 40) then
     raise exception 'TRACE_GUARD: a template keyword has 2 to 40 characters' using errcode = '23514';
+  end if;
+  if tg_op = 'UPDATE' then
+    v_blueprint_changed := new.blueprint is distinct from old.blueprint;
+  end if;
+  -- DB-M1-12: every blueprint section names a live skill of the library taxonomy (a malformed blueprint is left for
+  -- blueprint_valid's CHECK).
+  if v_blueprint_changed and exists (
+    select 1
+    from jsonb_array_elements(
+      case when jsonb_typeof(new.blueprint -> 'sections') = 'array' then new.blueprint -> 'sections' else '[]'::jsonb end
+    ) as s
+    where jsonb_typeof(s -> 'skillKey') = 'string' and not private.skill_key_exists(s ->> 'skillKey')
+  ) then
+    raise exception 'TRACE_GUARD: skill not found' using errcode = '23503';
   end if;
   if tg_op = 'INSERT' then
     if not private.is_operator() then
@@ -249,11 +270,14 @@ create table public.section_pool_snapshot (
 );
 create index section_pool_snapshot_item_idx on public.section_pool_snapshot (org_id, item_version_id);
 create index section_pool_snapshot_test_idx on public.section_pool_snapshot (org_id, test_id);
+-- DB-M1-10: the staff policy reads by workspace.
+create index section_pool_snapshot_workspace_idx on public.section_pool_snapshot (org_id, workspace_id);
 alter table public.section_pool_snapshot enable row level security;
 
 -- Insert only inside the publish guard, which sets trace.publishing to the version it publishes. No app or worker role
 -- holds INSERT, so only the owner's definer code (or the operator naming that version) reaches this branch; never
--- updated, deleted or truncated, for every role (I-M1-2).
+-- updated, deleted or truncated, for every role (I-M1-2). DB-M1-3: the version must still be a draft; the publish guard
+-- is a BEFORE UPDATE trigger, so the row it publishes still reads 'draft' while the snapshot is written.
 create function private.section_pool_snapshot_guard()
 returns trigger
 language plpgsql
@@ -261,7 +285,14 @@ security definer
 set search_path = ''
 as $$
 begin
-  if tg_op <> 'INSERT' or current_setting('trace.publishing', true) is distinct from new.test_version_id::text then
+  if tg_op <> 'INSERT' then
+    raise exception 'TRACE_GUARD: the snapshot is written by publish only and is immutable' using errcode = '42501';
+  end if;
+  if current_setting('trace.publishing', true) is distinct from new.test_version_id::text
+    or not exists (
+      select 1 from public.test_versions as v
+      where v.org_id = new.org_id and v.id = new.test_version_id and v.status = 'draft'
+    ) then
     raise exception 'TRACE_GUARD: the snapshot is written by publish only and is immutable' using errcode = '42501';
   end if;
   return new;
@@ -550,6 +581,10 @@ begin
     perform private.integrity_settings_check(new.org_id, new.settings, new.catalog_version);
     -- I-M1-7: derived, never client-written.
     new.signal_settings := private.derive_signal_settings(new.settings, new.catalog_version);
+  elsif new.preset_key is not null or new.preset_version is not null then
+    -- DB-M1-7: a preset is a set of settings; it is never named without them. D1 rows never set either column, so the D1
+    -- path (R5-39 c) is unchanged.
+    raise exception 'TRACE_GUARD: a preset needs its settings' using errcode = '42501';
   end if;
   return new;
 end
@@ -711,18 +746,8 @@ begin
   ) then
     raise exception 'TRACE_GUARD: a section draws from an active pool of its format' using errcode = '42501';
   end if;
-  -- E4: a pool needs at least draw_count approved items.
-  if exists (
-    select 1 from public.sections as s
-    where s.org_id = new.org_id and s.test_version_id = new.id and s.pool_id is not null
-      and s.draw_count > (
-        select count(*) from public.pool_items as pi
-        join public.item_versions as i on i.org_id = pi.org_id and i.id = pi.item_version_id
-        where pi.org_id = s.org_id and pi.pool_id = s.pool_id and i.status = 'approved'
-      )
-  ) then
-    raise exception 'TRACE_GUARD: the pool has fewer approved items than the section draws' using errcode = '42501';
-  end if;
+  -- E4 (a pool section needs at least draw_count approved items) is checked on the written snapshot below (DB-M1-9), so
+  -- a pool change committed between a check and the snapshot cannot leave a section short.
   if exists (
     select 1 from public.item_versions as i
     where i.org_id = new.org_id and i.test_version_id = new.id and i.format = 'mcq'
@@ -794,6 +819,22 @@ begin
     ) then
       raise exception 'TRACE_GUARD: every section of a version 2 test has its navigation' using errcode = '42501';
     end if;
+    -- DB-M1-1 (rule 3, fairness): the candidate's paste rule and the band input come from one setting. A written section
+    -- names its paste rule and it equals the settings' paste_written (a paste rule without settings is refused above).
+    if exists (
+      select 1 from public.sections as s
+      where s.org_id = new.org_id and s.test_version_id = new.id and s.format = 'written' and s.paste_rule is null
+    ) then
+      raise exception 'TRACE_GUARD: a written section of a version 2 test has its paste rule' using errcode = '42501';
+    end if;
+    if exists (
+      select 1 from public.sections as s
+      where s.org_id = new.org_id and s.test_version_id = new.id and s.format = 'written'
+        and s.paste_rule is distinct from v_settings ->> 'paste_written'
+    ) then
+      raise exception 'TRACE_GUARD: a written section''s paste rule follows the test''s paste setting'
+        using errcode = '42501';
+    end if;
     -- R2-13 / Q26: weights sum to 100.
     if (select sum(s.weight) from public.sections as s where s.org_id = new.org_id and s.test_version_id = new.id) <> 100 then
       raise exception 'TRACE_GUARD: section weights must sum to 100' using errcode = '42501';
@@ -812,6 +853,24 @@ begin
         where s.org_id = new.org_id and s.test_version_id = new.id and s.pool_id is not null)
       + (select count(*) from public.item_versions as i where i.org_id = new.org_id and i.test_version_id = new.id) > 100 then
       raise exception 'TRACE_GUARD: a candidate is served at most 100 items' using errcode = '42501';
+    end if;
+    -- DB-M1-12 (§5 SectionDraft.blueprint, M1-10): strata quotas belong to a pool section and sum to its draw.
+    if exists (
+      select 1 from public.sections as s
+      cross join lateral (
+        select case when jsonb_typeof(s.blueprint -> 'strata') = 'array' then s.blueprint -> 'strata' else '[]'::jsonb end
+          as strata
+      ) as b
+      where s.org_id = new.org_id and s.test_version_id = new.id and s.blueprint is not null
+        and (s.pool_id is null
+          or jsonb_typeof(s.blueprint -> 'strata') is distinct from 'array'
+          or exists (
+            select 1 from jsonb_array_elements(b.strata) as e where jsonb_typeof(e -> 'count') is distinct from 'number'
+          )
+          or (select coalesce(sum(case when jsonb_typeof(e -> 'count') = 'number' then (e ->> 'count')::numeric end), 0)
+              from jsonb_array_elements(b.strata) as e) <> s.draw_count)
+    ) then
+      raise exception 'TRACE_GUARD: a section''s strata quotas sum to its draw' using errcode = '42501';
     end if;
     -- R3-3: an item may appear in only one section of a version.
     if exists (
@@ -845,6 +904,21 @@ begin
       join public.item_versions as i on i.org_id = s.org_id and i.section_id = s.id
       where s.org_id = new.org_id and s.test_version_id = new.id and s.pool_id is null;
     perform set_config('trace.publishing', '', true);
+    -- E4 on the snapshot just written (DB-M1-9): a pool section holds at least draw_count items.
+    if exists (
+      select 1 from public.sections as s
+      where s.org_id = new.org_id and s.test_version_id = new.id and s.pool_id is not null
+        and s.draw_count > (
+          select count(*) from public.section_pool_snapshot as sp where sp.org_id = s.org_id and sp.section_id = s.id
+        )
+    ) then
+      raise exception 'TRACE_GUARD: the pool has fewer approved items than the section draws' using errcode = '42501';
+    end if;
+    -- E22 (DB-M1-12): a package holds at most 5,000 items (R5-9), which also bounds min_pool_ratio (numeric(6, 2)).
+    if (select count(*) from public.section_pool_snapshot as sp
+        where sp.org_id = new.org_id and sp.test_version_id = new.id) > 5000 then
+      raise exception 'TRACE_GUARD: a version holds at most 5,000 items' using errcode = '42501';
+    end if;
     new.min_pool_ratio := (
       select min(round((select count(*) from public.section_pool_snapshot as sp
                         where sp.org_id = s.org_id and sp.section_id = s.id)::numeric / s.draw_count, 2))
@@ -1016,6 +1090,7 @@ declare
   v_format public.section_format;
   v_options jsonb;
   v_pool uuid;
+  v_draw int;
 begin
   if tg_op = 'UPDATE' then
     raise exception 'TRACE_GUARD: session items are insert-only' using errcode = '42501';
@@ -1063,9 +1138,22 @@ begin
     ) then
       raise exception 'TRACE_GUARD: the item is not in the published snapshot of its section' using errcode = '42501';
     end if;
-    select s.pool_id into v_pool from public.sections as s where s.org_id = new.org_id and s.id = new.section_id;
+    select s.pool_id, s.draw_count into v_pool, v_draw
+    from public.sections as s where s.org_id = new.org_id and s.id = new.section_id;
     if v_pool is null and new.served_at is null then
       raise exception 'TRACE_GUARD: an inline item is stored when served' using errcode = '42501';
+    end if;
+    -- DB-M1-4 (R5-19 slots): a pool section stores at most draw_count rows per session, at positions 1..draw_count. The
+    -- session row lock serialises concurrent mirror inserts of the same session.
+    if v_pool is not null then
+      perform 1 from public.sessions as s where s.org_id = new.org_id and s.id = new.session_id for no key update;
+      if new.position > v_draw then
+        raise exception 'TRACE_GUARD: the position is outside the section''s draw' using errcode = '42501';
+      end if;
+      if (select count(*) from public.session_items as si
+          where si.org_id = new.org_id and si.session_id = new.session_id and si.section_id = new.section_id) >= v_draw then
+        raise exception 'TRACE_GUARD: the section''s draw is full' using errcode = '42501';
+      end if;
     end if;
     -- R5-39 a: a parameterised item is served as exactly one of its variants.
     if (new.item_variant_id is not null) is distinct from v_param then
@@ -1335,6 +1423,41 @@ begin
     on conflict (org_id, template_key, version) do nothing;
 end
 $$;
+
+-- DB-M1-8: a seeded catalog is sealed. Its settings and presets are written above, then no row joins it, for any role,
+-- the owner included (UPDATE, DELETE and TRUNCATE are refused by settings_catalog_frozen). A later migration that adds
+-- a catalog inserts its rows first, then replaces sealed_settings_catalogs() with a list that names it. A function, not
+-- a table: no new public relation (db-types, catalog and candidate checks stay unchanged).
+create function private.sealed_settings_catalogs()
+returns text[]
+language sql
+stable
+set search_path = ''
+as $$
+  select array['m1-settings-v1']::text[]
+$$;
+revoke execute on function private.sealed_settings_catalogs() from public, anon, authenticated, service_role;
+
+create function private.settings_catalog_sealed()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.catalog_version = any (private.sealed_settings_catalogs()) then
+    raise exception 'TRACE_GUARD: the settings catalog and presets are immutable' using errcode = '42501';
+  end if;
+  return new;
+end
+$$;
+revoke execute on function private.settings_catalog_sealed() from public, anon, authenticated, service_role;
+create trigger integrity_setting_defs_sealed before insert on public.integrity_setting_defs
+  for each row execute function private.settings_catalog_sealed();
+create trigger integrity_presets_sealed before insert on public.integrity_presets
+  for each row execute function private.settings_catalog_sealed();
+alter table public.integrity_setting_defs enable always trigger integrity_setting_defs_sealed;
+alter table public.integrity_presets enable always trigger integrity_presets_sealed;
 
 -- ---------------------------------------------------------------------------------------------
 -- Grants and policies (§3.5)
