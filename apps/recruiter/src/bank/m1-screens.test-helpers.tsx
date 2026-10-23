@@ -3,10 +3,38 @@
 import type { ReactNode } from 'react';
 import { BankTable, StatsPanel } from './BankRoute';
 import { FilterForm } from './FilterForm';
+import { ItemContentView } from './ItemContentView';
+import { ItemFormView } from './ItemFormView';
+import { ReviewPanel } from './ReviewPanel';
 import { EMPTY_FILTERS } from './filters';
-import { STATS, summary } from './testing/fixtures.test-helpers';
+import { formFromDetail, toDraft } from './item-form';
+import {
+  PARAM_SPEC,
+  STATS,
+  mcqDetail,
+  summary,
+  writtenDetail,
+} from './testing/fixtures.test-helpers';
 
 const noop = () => undefined;
+
+const specDetail = mcqDetail(
+  5,
+  { status: 'in_review', isParameterised: true },
+  { paramSpec: PARAM_SPEC },
+);
+const specForm = { ...formFromDetail(specDetail) };
+specForm.spec = { ...specForm.spec, count: '3', stem: '' };
+const specErrors = (() => {
+  const result = toDraft(specForm);
+  return result.ok ? [] : result.errors;
+})();
+const libraryCopy = (() => {
+  const base = mcqDetail(8, { status: 'approved', origin: 'library', librarySourced: true });
+  const content = { ...base.content } as Record<string, unknown>;
+  delete content['key'];
+  return { ...base, content } as typeof base;
+})();
 
 export function m1Screens(): Record<string, ReactNode> {
   return {
@@ -18,6 +46,35 @@ export function m1Screens(): Record<string, ReactNode> {
           summary(3, { format: 'written', difficulty: null, isParameterised: true }),
         ]}
       />
+    ),
+    'item content': (
+      <ItemContentView detail={mcqDetail(1, { status: 'approved', exposureCount: 4 })} />
+    ),
+    'item content ai draft': (
+      <ItemContentView detail={mcqDetail(2, { status: 'in_review', origin: 'ai_draft' })} />
+    ),
+    'item content parameterised': <ItemContentView detail={specDetail} />,
+    'item content written': <ItemContentView detail={writtenDetail(3, { status: 'approved' })} />,
+    'item content library': <ItemContentView detail={libraryCopy} />,
+    'item review': (
+      <ReviewPanel
+        detail={mcqDetail(2, { status: 'in_review' })}
+        userId={mcqDetail(2).createdBy}
+        busy={false}
+        error="conflict"
+        onDecide={noop}
+      />
+    ),
+    'item form': (
+      <ItemFormView
+        form={formFromDetail(mcqDetail(1))}
+        errors={[{ path: 'stem', message: 'Write the question (1 to 4000 characters).' }]}
+        formatLocked={false}
+        onChange={noop}
+      />
+    ),
+    'item form parameter spec': (
+      <ItemFormView form={specForm} errors={specErrors} formatLocked onChange={noop} />
     ),
     'bank share': <StatsPanel stats={STATS} />,
     'bank filters': (
