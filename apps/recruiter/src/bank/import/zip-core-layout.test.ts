@@ -163,8 +163,8 @@ async function outcome(bytes: Uint8Array<ArrayBuffer>, name: string, kind: 'docx
   return result.type === 'error' ? result.code : `result:${result.type}`;
 }
 
-const REAL = strToU8('<w:document>REAL ROWS HERE</w:document>');
-const DECOY = strToU8('<w:document>DECOY ROWS HERE</w:document>');
+const REAL = strToU8('<w:document>GENUINE ROWS HERE</w:document>');
+const DECOY = strToU8('<w:document>DECOYED ROWS HERE</w:document>');
 const at = (list: Cen[], i: number): Cen => {
   const entry = list[i];
   if (entry === undefined) throw new Error(`no entry ${i}`);

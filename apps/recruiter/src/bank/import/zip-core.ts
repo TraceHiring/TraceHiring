@@ -62,9 +62,54 @@ interface DirectoryEntry {
   flags: number;
   method: number;
   size: number;
+  /** Where the directory says this entry's local record starts, how long its data is, and its raw name bytes. */
+  offset: number;
+  compressed: number;
+  nameBytes: Uint8Array;
 }
 
 const fail = (code: ExtractErrorCode): ExtractFailure => ({ type: 'error', code });
+
+/**
+ * The directory must describe exactly the records the streaming pass walks: contiguous from offset 0 in directory order,
+ * each starting with a local header of the same name, the last one ending where the directory starts. Otherwise a stored
+ * entry could carry the part Office reads while a decoy of the same name and size is the one streamed (re-review).
+ */
+async function layoutMatches(
+  blob: Blob,
+  entries: DirectoryEntry[],
+  dirOffset: number,
+): Promise<boolean> {
+  let expected = 0;
+  for (const entry of entries) {
+    if (entry.offset !== expected || entry.offset + 30 + entry.nameBytes.length > dirOffset) {
+      return false;
+    }
+    const head = new Uint8Array(
+      await blob.slice(entry.offset, entry.offset + 30 + entry.nameBytes.length).arrayBuffer(),
+    );
+    if (head.length < 30 + entry.nameBytes.length) return false;
+    const hv = new DataView(head.buffer, head.byteOffset, head.byteLength);
+    if (hv.getUint32(0, true) !== 0x04034b50) return false;
+    const descriptor = (entry.flags & 8) !== 0;
+    if (descriptor !== ((hv.getUint16(6, true) & 8) !== 0)) return false;
+    if (!descriptor && hv.getUint32(18, true) !== entry.compressed) return false;
+    const nameLength = hv.getUint16(26, true);
+    if (nameLength !== entry.nameBytes.length) return false;
+    for (let i = 0; i < nameLength; i++) {
+      if (head[30 + i] !== entry.nameBytes[i]) return false;
+    }
+    expected = entry.offset + 30 + nameLength + hv.getUint16(28, true) + entry.compressed;
+    if (descriptor) {
+      if (expected + 12 > dirOffset) return false;
+      const lead = new Uint8Array(await blob.slice(expected, expected + 4).arrayBuffer());
+      const signed = new DataView(lead.buffer).getUint32(0, true) === 0x08074b50;
+      expected += signed ? 16 : 12;
+    }
+    if (expected > dirOffset) return false;
+  }
+  return expected === dirOffset;
+}
 
 /** Latin-1 or UTF-8 exactly as fflate decodes the local header name (flag bit 11), so the two always agree. */
 function entryName(bytes: Uint8Array, flags: number): string {
@@ -113,19 +158,30 @@ async function readDirectory(
     if (p + 46 > dir.length || dv.getUint32(p, true) !== 0x02014b50) return fail('bad_archive');
     const flags = dv.getUint16(p + 8, true);
     const method = dv.getUint16(p + 10, true);
+    const compressed = dv.getUint32(p + 20, true);
     const size = dv.getUint32(p + 24, true);
     const nameLength = dv.getUint16(p + 28, true);
     const next = p + 46 + nameLength + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
     if (next > dir.length) return fail('bad_archive');
     const name = entryName(dir.subarray(p + 46, p + 46 + nameLength), flags);
     if ((flags & 1) !== 0 || name.includes('\u0000') || seen.has(name)) return fail('bad_archive');
-    if (dv.getUint32(p + 20, true) === 0xffffffff || size === 0xffffffff) {
+    if (compressed === 0xffffffff || size === 0xffffffff) {
       return fail('archive_too_large'); // zip64 sizes: 4 GiB or more
     }
     seen.add(name);
-    entries.push({ name, flags, method, size });
+    const nameBytes = dir.subarray(p + 46, p + 46 + nameLength);
+    entries.push({
+      name,
+      flags,
+      method,
+      size,
+      offset: dv.getUint32(p + 42, true),
+      compressed,
+      nameBytes,
+    });
     p = next;
   }
+  if (!(await layoutMatches(blob, entries, dirOffset))) return fail('bad_archive');
   return entries;
 }
 
