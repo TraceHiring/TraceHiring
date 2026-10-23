@@ -61,6 +61,7 @@ interface DirectoryEntry {
   name: string;
   flags: number;
   method: number;
+  crc: number;
   size: number;
   /** Where the directory says this entry's local record starts, how long its data is, and its raw name bytes. */
   offset: number;
@@ -71,9 +72,30 @@ interface DirectoryEntry {
 const fail = (code: ExtractErrorCode): ExtractFailure => ({ type: 'error', code });
 
 /**
+ * True when a record signature fflate's `Unzip` acts on (local header, data descriptor, central header) starts at any
+ * byte offset in [from, to). It never aligns, so neither can we. Reads in bounded blocks that overlap by three bytes, so
+ * memory stays flat and a signature straddling a block or the end of the range is still seen.
+ */
+async function hasRecordSignature(blob: Blob, from: number, to: number): Promise<boolean> {
+  for (let at = from; at < to; at += READ_BLOCK_BYTES) {
+    const stop = Math.min(at + READ_BLOCK_BYTES, to);
+    const bytes = new Uint8Array(await blob.slice(at, stop + 3).arrayBuffer());
+    for (let i = 0; i < stop - at && i + 3 < bytes.length; i++) {
+      if (bytes[i] !== 0x50 || bytes[i + 1] !== 0x4b) continue;
+      const a = bytes[i + 2];
+      const b = bytes[i + 3];
+      if ((a === 3 && b === 4) || (a === 7 && b === 8) || (a === 1 && b === 2)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * The directory must describe exactly the records the streaming pass walks: contiguous from offset 0 in directory order,
- * each starting with a local header of the same name, the last one ending where the directory starts. Otherwise a stored
- * entry could carry the part Office reads while a decoy of the same name and size is the one streamed (re-review).
+ * each starting with a local header of the same name and method, the last one ending where the directory starts.
+ * Otherwise a stored entry could carry the part Office reads while a decoy of the same name and size is the one streamed
+ * (re-review). An entry with a data descriptor (flag bit 3) is delimited by fflate scanning its data for record
+ * signatures, not by the sizes, so its data must hold none and its descriptor must repeat the directory's crc and sizes.
  */
 async function layoutMatches(
   blob: Blob,
@@ -93,20 +115,36 @@ async function layoutMatches(
     if (hv.getUint32(0, true) !== 0x04034b50) return false;
     const descriptor = (entry.flags & 8) !== 0;
     if (descriptor !== ((hv.getUint16(6, true) & 8) !== 0)) return false;
+    if (hv.getUint16(8, true) !== entry.method) return false;
     if (!descriptor && hv.getUint32(18, true) !== entry.compressed) return false;
     const nameLength = hv.getUint16(26, true);
     if (nameLength !== entry.nameBytes.length) return false;
     for (let i = 0; i < nameLength; i++) {
       if (head[30 + i] !== entry.nameBytes[i]) return false;
     }
-    expected = entry.offset + 30 + nameLength + hv.getUint16(28, true) + entry.compressed;
+    const dataStart = entry.offset + 30 + nameLength + hv.getUint16(28, true);
+    const dataEnd = dataStart + entry.compressed;
+    expected = dataEnd;
     if (descriptor) {
-      if (expected + 12 > dirOffset) return false;
-      const lead = new Uint8Array(await blob.slice(expected, expected + 4).arrayBuffer());
-      const signed = new DataView(lead.buffer).getUint32(0, true) === 0x08074b50;
-      expected += signed ? 16 : 12;
+      if (dataEnd + 12 > dirOffset) return false;
+      const tail = new Uint8Array(await blob.slice(dataEnd, dataEnd + 16).arrayBuffer());
+      const tv = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
+      const repeats = (at: number): boolean =>
+        tv.getUint32(at, true) === entry.crc &&
+        tv.getUint32(at + 4, true) === entry.compressed &&
+        tv.getUint32(at + 8, true) === entry.size;
+      let scanEnd = dataEnd;
+      if (tail.length >= 16 && tv.getUint32(0, true) === 0x08074b50 && repeats(4)) {
+        expected += 16;
+      } else if (repeats(0)) {
+        expected += 12;
+        scanEnd += 12; // an unsigned descriptor's own bytes are scanned as data too
+      } else {
+        return false;
+      }
+      if (expected > dirOffset) return false;
+      if (await hasRecordSignature(blob, dataStart, scanEnd)) return false;
     }
-    if (expected > dirOffset) return false;
   }
   return expected === dirOffset;
 }
@@ -158,6 +196,7 @@ async function readDirectory(
     if (p + 46 > dir.length || dv.getUint32(p, true) !== 0x02014b50) return fail('bad_archive');
     const flags = dv.getUint16(p + 8, true);
     const method = dv.getUint16(p + 10, true);
+    const crc = dv.getUint32(p + 16, true);
     const compressed = dv.getUint32(p + 20, true);
     const size = dv.getUint32(p + 24, true);
     const nameLength = dv.getUint16(p + 28, true);
@@ -174,6 +213,7 @@ async function readDirectory(
       name,
       flags,
       method,
+      crc,
       size,
       offset: dv.getUint32(p + 42, true),
       compressed,
