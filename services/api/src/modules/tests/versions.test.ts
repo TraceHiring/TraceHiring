@@ -123,3 +123,86 @@ describe('POST …/tests/:testId/versions (Edit as new version)', () => {
     expect(s.db.calls.slice(before).every((c) => c.method === 'select')).toBe(true);
   });
 });
+
+const reference = () => ({
+  settingsCatalog: async () => ({
+    catalogVersion: 'm1-settings-v1',
+    presets: { standard: { version: 4, values: { ...STANDARD } } },
+  }),
+  templates: async () => [],
+  browse: async () => [],
+});
+
+/** A D1 test (no settings) published before the org locked a setting; the clone runs with the reference read. */
+const lockedOrgClone = async (lock: { setting_key: string; locked_value: string }) => {
+  const db = authoringDb();
+  const { call } = testsApp(db, undefined, undefined, { reference });
+  const created = TestDraftView.parse(
+    await (await call('POST', `/v1/orgs/${ORG}/tests`, { name: 'Synthetic Test' })).json(),
+  );
+  expect((await call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, draftBody())).status).toBe(
+    200,
+  );
+  const pub = await call('POST', `/v1/orgs/${ORG}/tests/${created.test.id}/publish`, {
+    testVersionId: created.version.id,
+  });
+  expect(pub.status).toBe(200);
+  rowsOf(db, 'org_integrity_locks').push({
+    id: '0c000000-0000-4000-8000-000000000001',
+    org_id: ORG,
+    locked_by: null,
+    locked_at: '2026-10-17T09:00:00.000+00:00',
+    ...lock,
+  });
+  const res = await call('POST', `/v1/orgs/${ORG}/tests/${created.test.id}/versions`);
+  expect(res.status).toBe(201);
+  const view = TestDraftView.parse(await res.json());
+  const draft = rowsOf(db, 'test_versions').find((v) => v.id === view.version.id);
+  const ruleset = rowsOf(db, 'ruleset_versions').find((r) => r.id === draft?.ruleset_version_id);
+  return { db, call, view, ruleset, testId: created.test.id };
+};
+
+describe('cloning in an org with admin locks (fix round 1 #4, #5, #9; R5-34)', () => {
+  it('a D1 source gets the Standard preset with the locks applied, and its sections the default navigation', async () => {
+    const s = await lockedOrgClone({ setting_key: 'paste_written', locked_value: 'blocked' });
+    expect(s.ruleset).toMatchObject({
+      preset_key: null,
+      preset_version: null,
+      settings: { ...STANDARD, paste_written: 'blocked' },
+    });
+    expect(s.view.version.sections.map((x) => [x.format, x.navigation, x.pasteRule])).toEqual([
+      ['mcq', 'free', undefined],
+      ['written', 'forward_only', 'blocked'],
+    ]);
+    // The new draft is publishable (not draft_incomplete).
+    const res = await s.call('POST', `/v1/orgs/${ORG}/tests/${s.testId}/publish`, {
+      testVersionId: s.view.version.id,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('a lock that keeps the Standard values stores the preset with its catalog version', async () => {
+    const s = await lockedOrgClone({ setting_key: 'question_copy', locked_value: 'on' });
+    expect(s.ruleset).toMatchObject({
+      preset_key: 'standard',
+      preset_version: 4,
+      settings: STANDARD,
+    });
+  });
+
+  it("a source with a named preset keeps that preset's version in the clone", async () => {
+    const s = await setup({ settings: true });
+    const source = rowsOf(s.db, 'ruleset_versions')[0];
+    if (source !== undefined) source.preset_version = 2;
+    const res = await s.clone();
+    expect(res.status).toBe(201);
+    const view = TestDraftView.parse(await res.json());
+    const draft = rowsOf(s.db, 'test_versions').find((v) => v.id === view.version.id);
+    expect(
+      rowsOf(s.db, 'ruleset_versions').find((r) => r.id === draft?.ruleset_version_id),
+    ).toMatchObject({
+      preset_key: 'standard',
+      preset_version: 2,
+    });
+  });
+});

@@ -20,6 +20,7 @@ import {
   STANDARD,
   STRICT,
   authoringDb,
+  draftBody,
   fakeBucket,
   rowsOf,
   saveBody,
@@ -402,5 +403,184 @@ describe('publish v2 failures', () => {
     const pkg = TestPackageV2.parse(JSON.parse(s.pkgText()));
     expect(pkg.sections[1]).toMatchObject({ format: 'written', pasteRule: 'allowed_logged' });
     expect(pkg.items.filter((i) => i.kind === 'written')).toHaveLength(2);
+  });
+});
+
+const ITEM_1 = 'a7100000-0000-4000-8000-000000000001';
+const served = (db: ReturnType<typeof authoringDb>, count: number) =>
+  rowsOf(db, 'v_item_exposure').push({
+    org_id: ORG,
+    workspace_id: '',
+    item_id: ITEM_1,
+    served_count: count,
+  });
+const versionRow = (s: { db: ReturnType<typeof authoringDb>; versionId: string }) =>
+  rowsOf(s.db, 'test_versions').find((v) => v.id === s.versionId);
+
+describe('two publishers of one v2 draft (fix round 1 #1, E2): the stored package is always the frozen one', () => {
+  it('a loser that read the bucket before the winner wrote never lands its put (exposure changed between builds)', async () => {
+    const s = await setup({ seed: mcqPool(3) });
+    let raced = false;
+    let winner: { contentSha256: string } | undefined;
+    s.bucket.beforeWrite = async () => {
+      if (raced) return;
+      raced = true;
+      // An item is served between the two builds: the winner's package differs from the loser's.
+      served(s.db, 4);
+      const w = await s.publish();
+      expect(w.status).toBe(200);
+      winner = PublishTestResponse.parse(await w.json());
+    };
+    const loser = await s.publish();
+    expect(loser.status).toBe(409);
+    expect(versionRow(s)).toMatchObject({
+      status: 'published',
+      content_sha256: winner?.contentSha256,
+    });
+    expect(await sha256Hex(s.pkgText())).toBe(winner?.contentSha256);
+  });
+
+  it("a loser that read the winner's first write never lands its put after the winner's check", async () => {
+    const s = await setup({ seed: mcqPool(3) });
+    const hooks = s.db.hooks.test_versions;
+    const original = hooks?.update;
+    if (hooks === undefined || original === undefined) throw new Error('fixture');
+    let loser: Promise<Response> | undefined;
+    let release = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    hooks.update = async (old, next, d) => {
+      if (next.status === 'published' && loser === undefined) {
+        // The winner's put has landed; before its UPDATE commits, a second publisher reads the bucket and the
+        // still-open draft, builds with one more served item, and stalls just before its own write.
+        served(s.db, 4);
+        let reached = () => {};
+        const atWrite = new Promise<void>((r) => {
+          reached = r;
+        });
+        s.bucket.beforeWrite = async () => {
+          s.bucket.beforeWrite = undefined;
+          reached();
+          await gate;
+        };
+        loser = s.publish();
+        await atWrite;
+      }
+      return original(old, next, d);
+    };
+    const w = await s.publish();
+    expect(w.status).toBe(200);
+    const winner = PublishTestResponse.parse(await w.json());
+    release();
+    const l = await (loser ?? Promise.reject(new Error('no second publisher')));
+    expect(l.status).toBe(409);
+    expect(versionRow(s)?.content_sha256).toBe(winner.contentSha256);
+    expect(await sha256Hex(s.pkgText())).toBe(winner.contentSha256);
+  });
+
+  it('the losing publisher path: its UPDATE finds no draft, it answers 409 and the frozen package stays', async () => {
+    const s = await setup({ seed: mcqPool(3) });
+    let winner: { contentSha256: string } | undefined;
+    s.bucket.afterWrite = async () => {
+      s.bucket.afterWrite = undefined;
+      // After the loser's write and before its UPDATE, another publisher (one more served item) wins.
+      served(s.db, 2);
+      const w = await s.publish();
+      expect(w.status).toBe(200);
+      winner = PublishTestResponse.parse(await w.json());
+    };
+    const loser = await s.publish();
+    expect(loser.status).toBe(409);
+    expect(await codeOf(loser)).toBe('conflict');
+    expect(versionRow(s)?.content_sha256).toBe(winner?.contentSha256);
+    expect(await sha256Hex(s.pkgText())).toBe(winner?.contentSha256);
+  });
+});
+
+describe('the frozen rebuild differs after the update (AT-M1-29, fix round 1 #6): 500 and retired', () => {
+  const afterPublish = (
+    s: Awaited<ReturnType<typeof setup>>,
+    change: (d: ReturnType<typeof authoringDb>) => void,
+  ) => {
+    const hooks = s.db.hooks.test_versions;
+    const original = hooks?.update;
+    if (hooks === undefined || original === undefined) throw new Error('fixture');
+    hooks.update = async (old, next, d) => {
+      const out = await original(old, next, d);
+      if (next.status === 'published') change(s.db);
+      return out;
+    };
+  };
+
+  it('a frozen exposure below the built count retires the version', async () => {
+    const s = await setup({
+      seed: (db) => {
+        mcqPool(3)(db);
+        served(db, 5);
+      },
+    });
+    afterPublish(s, (d) => {
+      for (const r of rowsOf(d, 'section_pool_snapshot')) {
+        if (r.item_version_id === 'a7000000-0000-4000-8000-000000000001') r.exposure_at_publish = 2;
+      }
+    });
+    const res = await s.publish();
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: { code: 'internal' } });
+    expect(versionRow(s)?.status).toBe('retired');
+  });
+
+  it('a pool item changed after the update retires the version', async () => {
+    const s = await setup({ seed: mcqPool(3) });
+    afterPublish(s, (d) => {
+      const item = rowsOf(d, 'item_versions').find(
+        (i) => i.id === 'a7000000-0000-4000-8000-000000000002',
+      );
+      if (item !== undefined) item.stem = '[synthetic] changed after the update';
+    });
+    const res = await s.publish();
+    expect(res.status).toBe(500);
+    expect(versionRow(s)?.status).toBe('retired');
+  });
+});
+
+describe('a locked org: a draft with settings never keeps a null navigation (fix round 1 #5, R5-63 b)', () => {
+  it("D1's PUT in a locked org saves the default navigation; the draft publishes as v2", async () => {
+    const db = authoringDb();
+    rowsOf(db, 'org_integrity_locks').push({
+      id: '0c000000-0000-4000-8000-000000000001',
+      org_id: ORG,
+      setting_key: 'paste_written',
+      locked_value: 'blocked',
+    });
+    const { call } = testsApp(db, fakeBucket(), undefined, {
+      reference: () => ({
+        settingsCatalog: async () => ({
+          catalogVersion: 'm1-settings-v1',
+          presets: { standard: { version: 1, values: { ...STANDARD } } },
+        }),
+        templates: async () => [],
+        browse: async () => [],
+      }),
+    });
+    const created = TestDraftView.parse(
+      await (await call('POST', `/v1/orgs/${ORG}/tests`, { name: 'Synthetic Test' })).json(),
+    );
+    const put = await call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, draftBody());
+    expect(put.status).toBe(200);
+    const view = TestDraftView.parse(await put.json());
+    expect(view.version.sections.map((x) => [x.format, x.navigation, x.pasteRule])).toEqual([
+      ['mcq', 'free', undefined],
+      ['written', 'forward_only', 'blocked'],
+    ]);
+    const res = await call('POST', `/v1/orgs/${ORG}/tests/${created.test.id}/publish`, {
+      testVersionId: created.version.id,
+    });
+    expect(res.status).toBe(200);
+    expect(rowsOf(db, 'test_versions')[0]).toMatchObject({
+      status: 'published',
+      package_version: 2,
+    });
   });
 });

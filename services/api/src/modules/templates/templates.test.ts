@@ -13,12 +13,14 @@ import {
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
 import { sha256Hex } from '../candidate/encoding.js';
+import { RestError } from '../tests/org-context.js';
 import { idMaker } from '../tests/rest.test-helpers.js';
 import {
   OPEN_BOOK,
   ORG,
   STANDARD,
   STRICT,
+  USER,
   WS,
   authoringDb,
   callerOf,
@@ -89,7 +91,7 @@ const reference = (library: LibraryItemRef[]): ReferenceSource & { browsed: unkn
       catalogVersion: 'm1-settings-v1',
       presets: {
         strict: { version: 1, values: { ...STRICT } },
-        standard: { version: 1, values: { ...STANDARD } },
+        standard: { version: 5, values: { ...STANDARD } },
         open_book: { version: 1, values: { ...OPEN_BOOK } },
       },
     }),
@@ -153,7 +155,26 @@ const withLibraryCopies = (db: AuthoringDb) => {
   db.hooks.pool_items = { insert: (row) => ({ workspace_id: WS, ...row }) };
 };
 
-const setup = (opts: { library?: LibraryItemRef[]; locks?: boolean; ref?: boolean } = {}) => {
+/** The injected LibraryLimiter (R5-56 g; shape of a Workers rate-limit binding): records keys, allows `budget` calls. */
+const limiterOf = (budget = Number.POSITIVE_INFINITY) => {
+  const keys: string[] = [];
+  return {
+    keys,
+    limit: async ({ key }: { key: string }) => {
+      keys.push(key);
+      return { success: keys.length <= budget };
+    },
+  };
+};
+
+const setup = (
+  opts: {
+    library?: LibraryItemRef[];
+    locks?: boolean;
+    ref?: boolean;
+    limiter?: ReturnType<typeof limiterOf>;
+  } = {},
+) => {
   const db = authoringDb();
   withLibraryCopies(db);
   if (opts.locks === true) {
@@ -172,12 +193,14 @@ const setup = (opts: { library?: LibraryItemRef[]; locks?: boolean; ref?: boolea
       ...libraryRefs('written_communication', 'written', 3),
     ],
   );
+  const limiter = opts.limiter ?? limiterOf();
   const app = new Hono<{ Bindings: Env }>();
   app.route(
     '/',
     createTemplatesRoutes({
       org: { context: async () => ({ caller: callerOf(), rest: db.rest }) },
       reference: () => (opts.ref === false ? null : ref),
+      limiter: () => limiter,
     }),
   );
   const call = (method: string, path: string, body?: unknown) =>
@@ -190,7 +213,7 @@ const setup = (opts: { library?: LibraryItemRef[]; locks?: boolean; ref?: boolea
       },
       {} as Env,
     );
-  return { db, call, ref };
+  return { db, call, ref, limiter };
 };
 
 describe('JD matching (M1-17)', () => {
@@ -372,5 +395,65 @@ describe('POST …/tests/from-template', () => {
       ).status,
     ).toBe(404);
     expect(r.db.calls.filter((c) => c.method !== 'select')).toEqual([]);
+  });
+});
+
+describe('POST …/tests/from-template: limiter, clean failure, preset version (fix round 1 #9, #10)', () => {
+  const body = {
+    jobTitle: 'Synthetic Support Associate',
+    templateKey: 'customer_support',
+    templateVersion: 1,
+  };
+
+  it('goes through the per-user LibraryLimiter; a spent budget is 429 before any write', async () => {
+    const ok = setup();
+    expect((await ok.call('POST', '/tests/from-template', body)).status).toBe(201);
+    expect(ok.limiter.keys).toEqual([USER]);
+    const spent = setup({ limiter: limiterOf(0) });
+    const res = await spent.call('POST', '/tests/from-template', body);
+    expect(res.status).toBe(429);
+    expect(await res.text()).toBe('{"error":{"code":"rate_limited"}}');
+    expect(spent.db.calls.filter((c) => c.method !== 'select')).toEqual([]);
+    expect(spent.ref.browsed).toEqual([]);
+  });
+
+  it('library_cap mid-way archives the job and the test it created (no live test or job left)', async () => {
+    const s = setup();
+    s.db.failNext('insert', 'library_copy_requests', new RestError(403, '42501', 'library_cap'));
+    const res = await s.call('POST', '/tests/from-template', body);
+    expect(res.status).toBe(429);
+    expect(await res.text()).toBe('{"error":{"code":"library_cap"}}');
+    expect(rowsOf(s.db, 'jobs')).toHaveLength(1);
+    expect(rowsOf(s.db, 'tests')).toHaveLength(1);
+    for (const table of ['jobs', 'tests']) {
+      for (const row of rowsOf(s.db, table))
+        expect(row.archived_at, table).toEqual(expect.any(String));
+    }
+  });
+
+  it('a failed draft save also archives both', async () => {
+    const s = setup();
+    s.db.failNext('rpc', 'save_test_draft', new RestError(503, null));
+    const res = await s.call('POST', '/tests/from-template', body);
+    expect(res.status).toBe(503);
+    for (const table of ['jobs', 'tests']) {
+      for (const row of rowsOf(s.db, table))
+        expect(row.archived_at, table).toEqual(expect.any(String));
+    }
+  });
+
+  it("stores the template preset's catalog version; a lock that moves a value stores none", async () => {
+    const s = setup();
+    expect((await s.call('POST', '/tests/from-template', body)).status).toBe(201);
+    expect(rowsOf(s.db, 'ruleset_versions')[0]).toMatchObject({
+      preset_key: 'standard',
+      preset_version: 5,
+    });
+    const locked = setup({ locks: true });
+    expect((await locked.call('POST', '/tests/from-template', body)).status).toBe(201);
+    expect(rowsOf(locked.db, 'ruleset_versions')[0]).toMatchObject({
+      preset_key: null,
+      preset_version: null,
+    });
   });
 });

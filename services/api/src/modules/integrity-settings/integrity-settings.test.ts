@@ -22,6 +22,7 @@ import {
   STRICT,
   authoringDb,
   callerOf,
+  draftBody,
   rowsOf,
   saveBody,
   testsApp,
@@ -34,8 +35,8 @@ const reference = (): ReferenceSource => ({
   settingsCatalog: async () => ({
     catalogVersion: 'm1-settings-v1',
     presets: {
-      strict: { version: 1, values: { ...STRICT } },
-      standard: { version: 1, values: { ...STANDARD } },
+      strict: { version: 2, values: { ...STRICT } },
+      standard: { version: 3, values: { ...STANDARD } },
       open_book: { version: 1, values: { ...OPEN_BOOK } },
     },
   }),
@@ -294,5 +295,75 @@ describe('R5-34: a new draft of a locked org gets the Standard preset with its l
       { name: 'Synthetic Test' },
     );
     expect(rowsOf(plain, 'ruleset_versions')[0]?.settings).toBeNull();
+  });
+
+  it('a lock equal to the Standard value keeps the preset and stores its catalog version (fix round 1 #9)', async () => {
+    const db = authoringDb();
+    rowsOf(db, 'org_integrity_locks').push(lock('question_copy', 'on'));
+    const { call } = testsApp(db, undefined, undefined, { reference: () => reference() });
+    expect((await call('POST', `/v1/orgs/${ORG}/tests`, { name: 'Synthetic Test' })).status).toBe(
+      201,
+    );
+    expect(rowsOf(db, 'ruleset_versions')[0]).toMatchObject({
+      preset_key: 'standard',
+      preset_version: 3,
+      settings: STANDARD,
+    });
+  });
+});
+
+describe('fix round 1: preset versions (#9) and default navigation (#5)', () => {
+  it('a named preset stores its catalog version; custom stores none', async () => {
+    const s = await setup();
+    expect((await s.call('PUT', s.path, { presetKey: 'strict', values: STRICT })).status).toBe(200);
+    expect(rowsOf(s.db, 'ruleset_versions')[0]).toMatchObject({
+      preset_key: 'strict',
+      preset_version: 2,
+    });
+    const custom = { ...STANDARD, question_copy: 'off' };
+    expect((await s.call('PUT', s.path, { presetKey: null, values: custom })).status).toBe(200);
+    expect(rowsOf(s.db, 'ruleset_versions')[0]).toMatchObject({
+      preset_key: null,
+      preset_version: null,
+    });
+  });
+
+  it('settings on a D1 draft give its null-navigation sections the default and the paste rule', async () => {
+    const db: AuthoringDb = authoringDb();
+    const tests = testsApp(db);
+    const created = TestDraftView.parse(
+      await (await tests.call('POST', `/v1/orgs/${ORG}/tests`, { name: 'Synthetic Test' })).json(),
+    );
+    expect(
+      (await tests.call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, draftBody())).status,
+    ).toBe(200);
+    expect(rowsOf(db, 'sections').map((x) => x.navigation)).toEqual([null, null]);
+    const app = new Hono<{ Bindings: Env }>();
+    app.route(
+      '/',
+      createIntegritySettingsRoutes({
+        org: {
+          context: async () => ({
+            caller: callerOf({ aal: 'aal2', amr: ['totp'] }),
+            rest: db.rest,
+          }),
+        },
+        reference: () => reference(),
+      }),
+    );
+    const res = await app.request(
+      `https://api.test/v1/orgs/${ORG}/tests/${created.test.id}/integrity`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ presetKey: 'strict', values: STRICT }),
+        headers: { 'content-type': 'application/json' },
+      },
+      {} as Env,
+    );
+    expect(res.status).toBe(200);
+    expect(rowsOf(db, 'sections').map((x) => [x.format, x.navigation, x.paste_rule])).toEqual([
+      ['mcq', 'free', null],
+      ['written', 'forward_only', 'blocked'],
+    ]);
   });
 });

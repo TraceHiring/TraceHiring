@@ -173,4 +173,22 @@ describe('PUT …/tests/:testId/draft', () => {
     expect(res.status).toBe(409);
     expect(await codeOf(res)).toBe('setting_locked');
   });
+
+  it('a draft with settings saves a null navigation as the default: mcq free, written forward_only (R5-63 b)', async () => {
+    const s = await setup();
+    setSettings(s.db, s.versionId, { ...STRICT });
+    const body = saveBody();
+    body.sections = body.sections.map((x) => ({ ...x, navigation: null }));
+    const res = await s.call('PUT', s.path, body);
+    expect(res.status).toBe(200);
+    const view = TestDraftView.parse(await res.json());
+    expect(view.version.sections.map((x) => [x.format, x.navigation, x.pasteRule])).toEqual([
+      ['mcq', 'free', undefined],
+      ['written', 'forward_only', 'blocked'],
+    ]);
+    // Without settings (a D1 draft) the null navigation stays: package v1 (R3-1).
+    const d1 = await setup();
+    const plain = TestDraftView.parse(await (await d1.call('PUT', d1.path, body)).json());
+    expect(plain.version.sections.map((x) => x.navigation)).toEqual([null, null]);
+  });
 });

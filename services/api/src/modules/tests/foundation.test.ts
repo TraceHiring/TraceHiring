@@ -11,6 +11,7 @@ import {
   guardKeyOf,
   isSnapshotConflict,
   OrgError,
+  orgErrorResponse,
   restErrorCode,
   RestError,
   rpcOf,
@@ -164,6 +165,25 @@ describe('guardKeyOf and restErrorCode', () => {
     expect(restErrorCode(new RestError(409, '23505'))).toBe('conflict');
     expect(restErrorCode(new RestError(400, '23514'))).toBe('bad_request');
     expect(restErrorCode(new OrgError('cutoff_required'))).toBe('cutoff_required');
+  });
+});
+
+describe('guard keys with their own contract code (fix round 1 #7): never a 404', () => {
+  it('owner_invite, always_locked, setting_not_allowed, item_in_two_sections, digest_required', () => {
+    expect(guardKeyOf('TRACE_GUARD: only an owner invites an owner')).toBe('owner_invite');
+    expect(guardKeyOf('TRACE_GUARD: this setting is always locked')).toBe('always_locked');
+    expect(guardKeyOf('TRACE_GUARD: setting value not allowed')).toBe('setting_not_allowed');
+    expect(guardKeyOf('TRACE_GUARD: an item may appear in only one section')).toBe(
+      'item_in_two_sections',
+    );
+    expect(guardKeyOf('TRACE_GUARD: publish needs the snapshot digest')).toBe('digest_required');
+    expect(restErrorCode(new RestError(403, '42501', 'owner_invite'))).toBe('forbidden');
+    expect(restErrorCode(new RestError(403, '42501', 'always_locked'))).toBe('setting_locked');
+    expect(restErrorCode(new RestError(400, '22023', 'setting_not_allowed'))).toBe('bad_request');
+    expect(restErrorCode(new RestError(403, '42501', 'setting_not_allowed'))).toBe('bad_request');
+    expect(restErrorCode(new RestError(403, '42501', 'item_in_two_sections'))).toBe('bad_request');
+    expect(restErrorCode(new RestError(403, '42501', 'digest_required'))).toBe('draft_incomplete');
+    expect(orgErrorResponse('forbidden').status).toBe(403);
   });
 });
 

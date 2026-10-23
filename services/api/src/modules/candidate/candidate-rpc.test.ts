@@ -17,6 +17,7 @@ import {
   NOTICE_TEXT,
   ORG,
   ORG_B,
+  TV,
   fakeStore,
   makeTestKeys,
   type TestKeys,
@@ -110,6 +111,32 @@ describe('inviteResolve', () => {
     });
     expect(ctx.fake.orgsSeen[0]).toBeNull();
     expect(JSON.stringify(out)).not.toContain('@example.test');
+  });
+
+  it('the title is tests.name read in the org transaction; the package body is never read (fix round 1 #8)', async () => {
+    const ctx = await setup();
+    ctx.fake.titles.set(TV, { orgId: ORG, name: 'Synthetic Stored Name' });
+    let packageReads = 0;
+    const deps = {
+      ...ctx.deps,
+      // A package reader that would hand back another title; it must never be called.
+      ...({
+        packageTitle: async () => {
+          packageReads += 1;
+          return 'Title from the package body';
+        },
+      } as object),
+    } as CandidateDeps;
+    const inv = ctx.fake.addInvitation({ linkHash: await sha256Hex(LINK) });
+    const out = await createCandidateService(deps).inviteResolve({ token: LINK });
+    expect(out).toMatchObject({ invitationId: inv.id, title: 'Synthetic Stored Name' });
+    expect(packageReads).toBe(0);
+    // One transaction for the org after the hash lookup: the title is read inside it.
+    expect(ctx.fake.orgsSeen).toEqual([null, ORG]);
+    // A version whose test name the org cannot see has no title (display data only).
+    ctx.fake.titles.delete(TV);
+    const again = await createCandidateService(deps).inviteResolve({ token: LINK });
+    expect(again).not.toHaveProperty('title');
   });
 
   it('answers invalid_link for an unknown token', async () => {

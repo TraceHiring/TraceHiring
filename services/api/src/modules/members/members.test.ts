@@ -14,14 +14,15 @@ import { describe, expect, it } from 'vitest';
 import { RestError } from '../tests/org-context.js';
 import { fakeDb, idMaker, type Row } from '../tests/rest.test-helpers.js';
 import { callerOf, MEMBERSHIP, ORG, USER, WS } from '../tests/tests.test-helpers.js';
-import { inviteEmailHmac } from './email-hmac.js';
+import { inviteEmailHmac, PEPPER_MIN_BYTES } from '@trace/shared/invite-email';
 import { createMembersRoutes, type InviteQueue } from './routes.js';
 
 // node:crypto (nodejs_compat in the test runtime) is the independent reference; the Worker source has no node types.
 interface NodeCrypto {
   createHmac(alg: 'sha256', key: string): { update(data: string): { digest(enc: 'hex'): string } };
 }
-const PEPPER = ['synthetic', 'pepper', 'for', 'tests', 'only'].join('-');
+// At least PEPPER_MIN_BYTES (32) UTF-8 bytes, built at run time.
+const PEPPER = ['synthetic', 'pepper', 'for', 'api', 'tests', 'only'].join('-');
 const ADDRESS = ['p-invitee', 'example.test'].join('@');
 
 const invitesDb = () => {
@@ -111,14 +112,15 @@ const invite = (patch: Record<string, unknown> = {}) => ({
 const codeOf = async (res: Response) =>
   ((await res.json()) as { error: { code: string } }).error.code;
 
-describe('inviteEmailHmac (shared with workers/jobs: trim, lower-case, HMAC-SHA-256 hex)', () => {
+describe('inviteEmailHmac from @trace/shared (one definition with workers/jobs; argument order email, pepper)', () => {
   it('matches node:crypto on the normalised address, keyed by the pepper', async () => {
+    expect(new TextEncoder().encode(PEPPER).length).toBeGreaterThanOrEqual(PEPPER_MIN_BYTES);
     // @ts-expect-error -- the Worker tsconfig has no node types; nodejs_compat provides the module at test time
     const { createHmac } = (await import('node:crypto')) as NodeCrypto;
     const expected = createHmac('sha256', PEPPER).update(ADDRESS).digest('hex');
-    expect(await inviteEmailHmac(PEPPER, `  ${ADDRESS.toUpperCase()}\n`)).toBe(expected);
-    expect(await inviteEmailHmac(PEPPER, ADDRESS)).toMatch(/^[0-9a-f]{64}$/);
-    expect(await inviteEmailHmac(`${PEPPER}x`, ADDRESS)).not.toBe(expected);
+    expect(await inviteEmailHmac(`  ${ADDRESS.toUpperCase()}\n`, PEPPER)).toBe(expected);
+    expect(await inviteEmailHmac(ADDRESS, PEPPER)).toMatch(/^[0-9a-f]{64}$/);
+    expect(await inviteEmailHmac(ADDRESS, `${PEPPER}x`)).not.toBe(expected);
   });
 });
 
@@ -138,7 +140,7 @@ describe('POST …/members/invites', () => {
     });
     const row = (s.db.tables.member_invites ?? [])[0] as Row;
     expect(row).toMatchObject({ org_id: ORG, roles: ['recruiter'], workspace_id: WS });
-    expect(row.email_hmac).toBe(await inviteEmailHmac(PEPPER, ADDRESS));
+    expect(row.email_hmac).toBe(await inviteEmailHmac(ADDRESS, PEPPER));
     expect(JSON.stringify(row)).not.toContain('example.test');
     expect(text).not.toContain('example.test');
     expect(JSON.stringify(s.db.calls)).not.toContain('example.test');
@@ -177,6 +179,50 @@ describe('POST …/members/invites', () => {
       expect(res.status).toBe(503);
       expect(s.db.tables.member_invites).toEqual([]);
     }
+  });
+
+  it('a pepper under 32 UTF-8 bytes is 503 before any write; 32 bytes of two-byte text is enough (fix round 1 #2)', async () => {
+    for (const pepper of ['p'.repeat(PEPPER_MIN_BYTES - 1), 'é'.repeat(15) + 'p']) {
+      const s = setup({ pepper });
+      const res = await s.call('POST', '/members/invites', invite());
+      expect(res.status).toBe(503);
+      expect(s.db.tables.member_invites).toEqual([]);
+      expect(s.db.calls.filter((c) => c.method !== 'select')).toEqual([]);
+      expect(s.sent).toEqual([]);
+    }
+    const wide = 'é'.repeat(PEPPER_MIN_BYTES / 2);
+    const s = setup({ pepper: wide });
+    expect((await s.call('POST', '/members/invites', invite())).status).toBe(201);
+    expect((s.db.tables.member_invites ?? [])[0]?.email_hmac).toBe(
+      await inviteEmailHmac(ADDRESS, wide),
+    );
+  });
+
+  it('a fixed synthetic vector: the stored email_hmac is the shared definition', async () => {
+    const s = setup();
+    expect((await s.call('POST', '/members/invites', invite())).status).toBe(201);
+    // The jobs check the same digest (workers/jobs members provisioning, @trace/shared/invite-email).
+    expect((s.db.tables.member_invites ?? [])[0]?.email_hmac).toBe(
+      await inviteEmailHmac(`  ${ADDRESS}  `, PEPPER),
+    );
+  });
+
+  it('an admin who is not an owner inviting an owner gets the contract code, not 404 (fix round 1 #7)', async () => {
+    const s = setup();
+    s.db.hooks.member_invites = {
+      insert: () => {
+        // The member_invites guard (R2-14): only an owner invites an owner.
+        throw new RestError(403, '42501', 'owner_invite');
+      },
+    };
+    const res = await s.call(
+      'POST',
+      '/members/invites',
+      invite({ roles: ['org_owner'], workspaceId: undefined }),
+    );
+    expect(res.status).toBe(403);
+    expect(await codeOf(res)).toBe('forbidden');
+    expect(s.sent).toEqual([]);
   });
 
   it('a bad body is 400 and never echoes the address; an org-wide role with a workspace is 400', async () => {

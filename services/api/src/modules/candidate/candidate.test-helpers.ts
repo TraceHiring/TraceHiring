@@ -31,6 +31,8 @@ export const fakeStore = () => {
   const consents = new Map<string, ConsentRow & { invitationId: string; orgId: string }>();
   const testVersions = new Map<string, TestVersionRow & { orgId: string }>();
   const notices = new Map<string, NoticeRow & { orgId: string }>();
+  /** tests.name per test version id (the invite page title, read as trace_api; fix round 1 #8). */
+  const titles = new Map<string, { orgId: string; name: string }>();
   /** The org bound for each transaction, in order (null = the token-hash lookup). */
   const orgsSeen: (string | null)[] = [];
   const writes: string[] = [];
@@ -61,6 +63,10 @@ export const fakeStore = () => {
           noticeVersionId: tv.noticeVersionId,
           contentSha256: tv.contentSha256,
         };
+      },
+      async testTitle(testVersionId) {
+        const t = titles.get(testVersionId);
+        return t === undefined || t.orgId !== orgId ? null : t.name;
       },
       async notice(id) {
         const n = notices.get(id);
@@ -174,6 +180,7 @@ export const fakeStore = () => {
     contentSha256: 'b'.repeat(64),
   });
   notices.set(NOTICE, { id: NOTICE, orgId: ORG, bodyTemplate: NOTICE_TEXT });
+  titles.set(TV, { orgId: ORG, name: 'Synthetic Test' });
 
   let n = 0;
   const addInvitation = (patch: Partial<FakeInvitation> = {}): FakeInvitation => {
@@ -199,7 +206,17 @@ export const fakeStore = () => {
     return inv;
   };
 
-  return { store, invitations, consents, testVersions, notices, orgsSeen, writes, addInvitation };
+  return {
+    store,
+    invitations,
+    consents,
+    testVersions,
+    notices,
+    titles,
+    orgsSeen,
+    writes,
+    addInvitation,
+  };
 };
 
 export interface TestKeys {

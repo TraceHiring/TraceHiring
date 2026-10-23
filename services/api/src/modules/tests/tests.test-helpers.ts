@@ -234,6 +234,7 @@ export const authoringDb = (): AuthoringDb => {
             test_id: row.test_id,
             settings: null,
             preset_key: null,
+            preset_version: null,
             catalog_version: null,
             published_at: null,
           });
@@ -356,9 +357,11 @@ export const authoringDb = (): AuthoringDb => {
           const r = (d.tables.ruleset_versions ?? []).find((x) => x.id === v.ruleset_version_id);
           if (r === undefined || r.published_at !== null) throw frozen();
           if (lockedValueBreaks(d, v.org_id, p.settings)) throw locked();
+          // As the SQL body: preset_version = null (the trigger then takes the newest catalog version).
           Object.assign(r, {
             settings: p.settings,
             preset_key: p.presetKey ?? null,
+            preset_version: null,
             catalog_version: 'm1-settings-v1',
           });
         }
@@ -440,21 +443,62 @@ export const authoringDb = (): AuthoringDb => {
   return Object.assign(db, { savePayloads });
 };
 
+/**
+ * A fake R2 package bucket. Every write gets a later upload time from a fake clock; the etag is content-derived (as
+ * R2's MD5), so rewriting the same bytes keeps the etag and moves the upload time. `putIfUnchanged` writes only when
+ * the object is still the one `head` saw (absent and not written since the read, or the same etag uploaded no later),
+ * like R2's `onlyIf` (fix round 1 #1). `beforeWrite`/`afterWrite` let a test interleave another publisher.
+ */
 export const fakeBucket = (): PackageBucket & {
   objects: Map<string, string>;
   puts: string[];
   failPut: boolean;
+  beforeWrite: (() => Promise<void>) | undefined;
+  afterWrite: (() => Promise<void>) | undefined;
 } => {
   const objects = new Map<string, string>();
+  const meta = new Map<string, { etag: string; uploaded: number }>();
   const puts: string[] = [];
+  let clock = 1_000;
+  const tick = () => (clock += 10);
+  const write = (key: string, text: string) => {
+    puts.push(key);
+    objects.set(key, text);
+    meta.set(key, { etag: `etag:${text}`, uploaded: tick() });
+  };
   const bucket = {
     objects,
     puts,
     failPut: false,
+    beforeWrite: undefined as (() => Promise<void>) | undefined,
+    afterWrite: undefined as (() => Promise<void>) | undefined,
     put: async (key: string, text: string) => {
+      await bucket.beforeWrite?.();
       if (bucket.failPut) throw new Error('r2 down');
-      puts.push(key);
-      objects.set(key, text);
+      write(key, text);
+      await bucket.afterWrite?.();
+    },
+    head: async (key: string) => {
+      const m = meta.get(key);
+      return { etag: m?.etag ?? null, uploadedMs: m?.uploaded ?? null, readAtMs: tick() };
+    },
+    putIfUnchanged: async (
+      key: string,
+      text: string,
+      _sha256: string,
+      seen: { etag: string | null; uploadedMs: number | null; readAtMs: number },
+    ) => {
+      await bucket.beforeWrite?.();
+      if (bucket.failPut) throw new Error('r2 down');
+      const m = meta.get(key);
+      const unchanged =
+        seen.etag === null || seen.uploadedMs === null
+          ? m === undefined || m.uploaded < seen.readAtMs
+          : m !== undefined && m.etag === seen.etag && m.uploaded < seen.uploadedMs + 1;
+      if (!unchanged) return false;
+      write(key, text);
+      await bucket.afterWrite?.();
+      return true;
     },
     getText: async (key: string) => objects.get(key) ?? null,
   };
