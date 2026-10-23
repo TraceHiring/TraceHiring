@@ -1,12 +1,18 @@
 // The extraction core of the import worker (R5-48, ADR-033, spec §6.9, E9, E11). The ONLY file that imports fflate, and
-// it uses only the streaming `Unzip` with `UnzipInflate`: no whole-buffer inflate, no callback-style async helper
-// (source-guards.test.ts pins both). Order of work:
+// it uses only `UnzipInflate`, fflate's non-scanning streaming inflate: no whole-buffer inflate, no callback-style async
+// helper, and no `Unzip` (source-guards.test.ts pins all three). Order of work:
 //   1. extension, then the picked file's size, before any byte is read;
 //   2. the zip directory (read from the end of the file): entry count, every declared size, macro parts;
-//   3. a streaming pass that inflates only the parts we want, in 16 KiB feeds, with a running inflated-byte counter
-//      per entry and for the whole file that aborts at the cap. A header that lies stops at the counter.
+//   3. the records, located from the directory and nothing else: every central entry's local header is read at the
+//      central offset and must agree with it, and the records must tile the file from offset 0 to the directory;
+//   4. for each wanted entry, exactly `central csize` bytes after its local header are inflated (or taken as stored)
+//      in 16 KiB feeds with running inflated-byte counters per entry and for the whole file that abort at the cap, and
+//      the output must match the directory's size and crc32.
+// Nothing here scans for record signatures. Office reads the central directory, so this reads the central directory:
+// a decoy record hidden in an entry's data is bytes of that entry and nothing more. (Three rounds of patching a
+// signature-scanning reader each found a new way to make it disagree with Office; AUTOPILOT §3.5.)
 // It decodes XML parts as UTF-8 text and returns them (and images up to the per-image cap); it never parses XML.
-import { Unzip, UnzipInflate } from 'fflate';
+import { UnzipInflate } from 'fflate';
 import { FEED_CHUNK_BYTES, IMPORT_LIMITS, type ImportLimits } from './limits';
 import type {
   ExtractErrorCode,
@@ -67,37 +73,50 @@ interface DirectoryEntry {
   offset: number;
   compressed: number;
   nameBytes: Uint8Array;
+  /** Where its data starts: set by `locateRecords` once the local header has been checked against the directory. */
+  dataStart: number;
 }
 
 const fail = (code: ExtractErrorCode): ExtractFailure => ({ type: 'error', code });
 
-/**
- * True when a record signature fflate's `Unzip` acts on (local header, data descriptor, central header) starts at any
- * byte offset in [from, to). It never aligns, so neither can we. Reads in bounded blocks that overlap by three bytes, so
- * memory stays flat and a signature straddling a block or the end of the range is still seen.
- */
-async function hasRecordSignature(blob: Blob, from: number, to: number): Promise<boolean> {
-  for (let at = from; at < to; at += READ_BLOCK_BYTES) {
-    const stop = Math.min(at + READ_BLOCK_BYTES, to);
-    const bytes = new Uint8Array(await blob.slice(at, stop + 3).arrayBuffer());
-    for (let i = 0; i < stop - at && i + 3 < bytes.length; i++) {
-      if (bytes[i] !== 0x50 || bytes[i + 1] !== 0x4b) continue;
-      const a = bytes[i + 2];
-      const b = bytes[i + 3];
-      if ((a === 3 && b === 4) || (a === 7 && b === 8) || (a === 1 && b === 2)) return true;
-    }
+const CRC_TABLE = new Uint32Array(256).map((_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = (c & 1) !== 0 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+
+/** Running CRC-32 (the zip one): feed the running value (start 0) and each chunk in turn. */
+function crc32Update(crc: number, chunk: Uint8Array): number {
+  let c = ~crc >>> 0;
+  for (let i = 0; i < chunk.length; i++) {
+    c = (CRC_TABLE[(c ^ (chunk[i] ?? 0)) & 0xff] ?? 0) ^ (c >>> 8);
   }
-  return false;
+  return ~c >>> 0;
+}
+
+/** The local header's extra block must parse to its end, with no field running past it and no zip64 field (id 1). */
+function extraIsPlain(extra: Uint8Array): boolean {
+  const view = new DataView(extra.buffer, extra.byteOffset, extra.byteLength);
+  let at = 0;
+  while (at < extra.length) {
+    if (at + 4 > extra.length) return false;
+    const id = view.getUint16(at, true);
+    const size = view.getUint16(at + 2, true);
+    if (id === 1 || at + 4 + size > extra.length) return false;
+    at += 4 + size;
+  }
+  return true;
 }
 
 /**
- * The directory must describe exactly the records the streaming pass walks: contiguous from offset 0 in directory order,
- * each starting with a local header of the same name and method, the last one ending where the directory starts.
- * Otherwise a stored entry could carry the part Office reads while a decoy of the same name and size is the one streamed
- * (re-review). An entry with a data descriptor (flag bit 3) is delimited by fflate scanning its data for record
- * signatures, not by the sizes, so its data must hold none and its descriptor must repeat the directory's crc and sizes.
+ * The records are the ones the directory names: contiguous from offset 0 in directory order, each starting with a local
+ * header that agrees with its directory entry (name, method, and without a descriptor the crc and both sizes), carrying
+ * no zip64 marker and no malformed extra field, followed by exactly the directory's compressed size of data, then (flag
+ * bit 3) a descriptor repeating the directory's crc and sizes; the last record ends where the directory starts. So the
+ * archive Office reads through the directory is exactly the one imported, with no gap or overlap to hide a part in.
+ * Sets `dataStart` on every entry. Nothing is scanned: a signature inside an entry's data is just data.
  */
-async function layoutMatches(
+async function locateRecords(
   blob: Blob,
   entries: DirectoryEntry[],
   dirOffset: number,
@@ -113,17 +132,38 @@ async function layoutMatches(
     if (head.length < 30 + entry.nameBytes.length) return false;
     const hv = new DataView(head.buffer, head.byteOffset, head.byteLength);
     if (hv.getUint32(0, true) !== 0x04034b50) return false;
+    const localFlags = hv.getUint16(6, true);
+    if ((localFlags & 0x41) !== 0) return false; // encrypted
     const descriptor = (entry.flags & 8) !== 0;
-    if (descriptor !== ((hv.getUint16(6, true) & 8) !== 0)) return false;
+    if (descriptor !== ((localFlags & 8) !== 0)) return false;
     if (hv.getUint16(8, true) !== entry.method) return false;
-    if (!descriptor && hv.getUint32(18, true) !== entry.compressed) return false;
+    const localCrc = hv.getUint32(14, true);
+    const localCompressed = hv.getUint32(18, true);
+    const localSize = hv.getUint32(22, true);
+    if (localCompressed === 0xffffffff || localSize === 0xffffffff) return false; // a zip64 marker
+    if (
+      !descriptor &&
+      (localCrc !== entry.crc || localCompressed !== entry.compressed || localSize !== entry.size)
+    ) {
+      return false;
+    }
     const nameLength = hv.getUint16(26, true);
     if (nameLength !== entry.nameBytes.length) return false;
     for (let i = 0; i < nameLength; i++) {
       if (head[30 + i] !== entry.nameBytes[i]) return false;
     }
-    const dataStart = entry.offset + 30 + nameLength + hv.getUint16(28, true);
-    const dataEnd = dataStart + entry.compressed;
+    const extraLength = hv.getUint16(28, true);
+    const extraStart = entry.offset + 30 + nameLength;
+    if (extraStart + extraLength > dirOffset) return false;
+    if (extraLength > 0) {
+      const extra = new Uint8Array(
+        await blob.slice(extraStart, extraStart + extraLength).arrayBuffer(),
+      );
+      if (extra.length !== extraLength || !extraIsPlain(extra)) return false;
+    }
+    entry.dataStart = extraStart + extraLength;
+    const dataEnd = entry.dataStart + entry.compressed;
+    if (dataEnd > dirOffset) return false;
     expected = dataEnd;
     if (descriptor) {
       if (dataEnd + 12 > dirOffset) return false;
@@ -133,17 +173,14 @@ async function layoutMatches(
         tv.getUint32(at, true) === entry.crc &&
         tv.getUint32(at + 4, true) === entry.compressed &&
         tv.getUint32(at + 8, true) === entry.size;
-      let scanEnd = dataEnd;
       if (tail.length >= 16 && tv.getUint32(0, true) === 0x08074b50 && repeats(4)) {
         expected += 16;
       } else if (repeats(0)) {
         expected += 12;
-        scanEnd += 12; // an unsigned descriptor's own bytes are scanned as data too
       } else {
         return false;
       }
       if (expected > dirOffset) return false;
-      if (await hasRecordSignature(blob, dataStart, scanEnd)) return false;
     }
   }
   return expected === dirOffset;
@@ -218,23 +255,18 @@ async function readDirectory(
       offset: dv.getUint32(p + 42, true),
       compressed,
       nameBytes,
+      dataStart: 0,
     });
     p = next;
   }
-  if (!(await layoutMatches(blob, entries, dirOffset))) return fail('bad_archive');
+  if (!(await locateRecords(blob, entries, dirOffset))) return fail('bad_archive');
   return entries;
 }
 
 /** The decoded text of an XML part, or null when it is not valid UTF-8. */
-function decodeXml(chunks: Uint8Array[], length: number): string | null {
-  const joined = new Uint8Array(length);
-  let at = 0;
-  for (const chunk of chunks) {
-    joined.set(chunk, at);
-    at += chunk.length;
-  }
+function decodeXml(bytes: Uint8Array): string | null {
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(joined);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
     return null;
   }
@@ -248,6 +280,76 @@ function joinBytes(chunks: Uint8Array[], length: number): Uint8Array {
     at += chunk.length;
   }
   return out;
+}
+
+/**
+ * The bytes of one wanted entry, or the code of the cap it crossed. The data is exactly `compressed` bytes after the
+ * checked local header: taken as is when stored, otherwise inflated in 16 KiB feeds with the running counters checked
+ * after every feed. The output must be exactly the directory's size and crc32. A bad stream throws or fails the checks.
+ */
+async function readEntry(
+  blob: Blob,
+  entry: DirectoryEntry,
+  entryCap: number,
+  isXml: boolean,
+  limits: ImportLimits,
+  counters: { total: number; xmlTotal: number },
+): Promise<Uint8Array | ExtractErrorCode> {
+  const end = entry.dataStart + entry.compressed;
+  /** Counts `length` more inflated bytes (`entryTotal` so far in this entry, including them) against every cap. */
+  const account = (length: number, entryTotal: number): ExtractErrorCode | null => {
+    counters.total += length;
+    if (isXml) counters.xmlTotal += length;
+    return counters.total > limits.uncompressedBytes ||
+      counters.xmlTotal > limits.xmlTotalBytes ||
+      entryTotal > entryCap
+      ? 'archive_too_large'
+      : null;
+  };
+  if (entry.method === 0) {
+    if (entry.compressed !== entry.size) return 'bad_archive';
+    const over = account(entry.size, entry.size);
+    if (over !== null) return over;
+    const stored = new Uint8Array(await blob.slice(entry.dataStart, end).arrayBuffer());
+    if (stored.length !== entry.size || crc32Update(0, stored) !== entry.crc) return 'bad_archive';
+    return stored;
+  }
+  if (entry.compressed === 0) return 'bad_archive';
+  const chunks: Uint8Array[] = [];
+  let entryBytes = 0;
+  let crc = 0;
+  const state: { failure: ExtractErrorCode | null } = { failure: null };
+  const inflate = new UnzipInflate();
+  inflate.ondata = (err, chunk) => {
+    if (state.failure !== null) return;
+    if (err !== null) {
+      state.failure = 'bad_archive';
+      return;
+    }
+    entryBytes += chunk.length;
+    const over = account(chunk.length, entryBytes);
+    if (over !== null || entryBytes > entry.size) {
+      state.failure = over ?? 'archive_too_large';
+      return;
+    }
+    crc = crc32Update(crc, chunk);
+    chunks.push(chunk);
+  };
+  // Feeding stops at the first failure or once the output is as long as the directory says: bytes after that point are
+  // never handed to the inflater, so trailing junk after the deflate stream is neither parsed nor buffered.
+  const feeding = (): boolean => state.failure === null && entryBytes < entry.size;
+  for (let at = entry.dataStart; at < end && feeding(); at += READ_BLOCK_BYTES) {
+    const stop = Math.min(at + READ_BLOCK_BYTES, end);
+    const block = new Uint8Array(await blob.slice(at, stop).arrayBuffer());
+    if (block.length !== stop - at) return 'bad_archive';
+    for (let i = 0; i < block.length && feeding(); i += FEED_CHUNK_BYTES) {
+      const last = stop === end && i + FEED_CHUNK_BYTES >= block.length;
+      inflate.push(block.subarray(i, i + FEED_CHUNK_BYTES), last);
+    }
+  }
+  if (state.failure !== null) return state.failure;
+  if (entryBytes !== entry.size || crc !== entry.crc) return 'bad_archive';
+  return joinBytes(chunks, entryBytes);
 }
 
 /**
@@ -274,17 +376,13 @@ export async function extractArchive(
   }
   if (!Array.isArray(directory)) return directory;
 
-  // Declared sizes are a pre-check only; the streaming pass below does not trust them.
-  const declared = new Map<string, DirectoryEntry>();
+  // Declared sizes are a pre-check only; the inflate below counts the bytes it really produces.
   let declaredTotal = 0;
   let declaredXml = 0;
   let imageCount = 0;
   const skipped: SkippedImage[] = [];
-  /** The entries the streaming pass must inflate, each exactly once (see the end of the pass). */
-  const expected: string[] = [];
   for (const entry of directory) {
     if (/(?:^|\/)vbaProject\.bin$/i.test(entry.name)) return fail('macro_file');
-    declared.set(entry.name, entry);
     declaredTotal += entry.size;
     if (declaredTotal > limits.uncompressedBytes) return fail('archive_too_large');
     const role = classifyEntry(kind, entry.name);
@@ -293,96 +391,37 @@ export async function extractArchive(
       if (entry.size > limits.xmlPartBytes || declaredXml > limits.xmlTotalBytes) {
         return fail('archive_too_large');
       }
-      expected.push(entry.name);
     } else if (role === 'image') {
       imageCount += 1;
       if (imageCount > limits.images) return fail('too_many_images');
       if (entry.size > limits.imageBytes) skipped.push({ name: entry.name, reason: 'too_large' });
-      else expected.push(entry.name);
     }
   }
 
   const xml: XmlPart[] = [];
   const images: ImagePart[] = [];
-  const state: { failure: ExtractErrorCode | null } = { failure: null };
-  let total = 0;
-  let xmlTotal = 0;
-  let open = 0;
-  // Office reads the central directory; this pass reads the local records. They must be one list: a name streamed twice
-  // (another record could replace the part the directory names, or slip past the image count above) is refused (X1).
-  const seenLocal = new Set<string>();
-  let startedImages = 0;
-  const stop = (code: ExtractErrorCode): void => {
-    state.failure ??= code;
-  };
-
-  const unzip = new Unzip((file) => {
-    if (state.failure !== null) return;
-    if (seenLocal.has(file.name)) return stop('bad_archive');
-    seenLocal.add(file.name);
-    const entry = declared.get(file.name);
-    if (entry === undefined) return stop('bad_archive');
-    const role = classifyEntry(kind, file.name);
-    if (role === 'skip') return;
-    if (role === 'image' && entry.size > limits.imageBytes) return;
-    if (file.compression !== 0 && file.compression !== 8) return stop('bad_archive');
-    if (role === 'image') {
-      startedImages += 1;
-      if (startedImages > limits.images) return stop('too_many_images');
-    }
-    const chunks: Uint8Array[] = [];
-    let entryBytes = 0;
+  const counters = { total: 0, xmlTotal: 0 };
+  for (const entry of directory) {
+    const role = classifyEntry(kind, entry.name);
+    if (role === 'skip') continue;
+    if (role === 'image' && entry.size > limits.imageBytes) continue;
+    if (entry.method !== 0 && entry.method !== 8) return fail('bad_archive');
     const entryCap = role === 'xml' ? limits.xmlPartBytes : limits.imageBytes;
-    open += 1;
-    file.ondata = (err, chunk, final) => {
-      if (state.failure !== null) return;
-      if (err !== null) return stop('bad_archive');
-      entryBytes += chunk.length;
-      total += chunk.length;
-      if (role === 'xml') xmlTotal += chunk.length;
-      if (
-        total > limits.uncompressedBytes ||
-        xmlTotal > limits.xmlTotalBytes ||
-        entryBytes > entryCap ||
-        entryBytes > entry.size
-      ) {
-        file.terminate();
-        return stop('archive_too_large');
-      }
-      chunks.push(chunk);
-      if (!final) return;
-      open -= 1;
-      if (entryBytes !== entry.size) return stop('bad_archive');
-      if (role === 'image') {
-        images.push({ name: file.name, bytes: joinBytes(chunks, entryBytes) });
-        return;
-      }
-      const text = decodeXml(chunks, entryBytes);
-      if (text === null) return stop('bad_archive');
-      xml.push({ name: file.name, text });
-    };
+    let bytes: Uint8Array | ExtractErrorCode;
     try {
-      file.start();
+      bytes = await readEntry(blob, entry, entryCap, role === 'xml', limits, counters);
     } catch {
-      stop('bad_archive');
+      return fail('bad_archive');
     }
-  });
-  unzip.register(UnzipInflate);
-
-  try {
-    for (let at = 0; at < blob.size && state.failure === null; at += READ_BLOCK_BYTES) {
-      const block = new Uint8Array(await blob.slice(at, at + READ_BLOCK_BYTES).arrayBuffer());
-      for (let i = 0; i < block.length && state.failure === null; i += FEED_CHUNK_BYTES) {
-        unzip.push(block.subarray(i, i + FEED_CHUNK_BYTES), false);
-      }
+    if (typeof bytes === 'string') return fail(bytes);
+    if (role === 'image') {
+      images.push({ name: entry.name, bytes });
+      continue;
     }
-    if (state.failure === null) unzip.push(new Uint8Array(0), true);
-  } catch {
-    stop('bad_archive');
+    const text = decodeXml(bytes);
+    if (text === null) return fail('bad_archive');
+    xml.push({ name: entry.name, text });
   }
-  if (state.failure === null && open !== 0) stop('bad_archive');
-  if (state.failure === null && expected.some((name) => !seenLocal.has(name))) stop('bad_archive');
-  if (state.failure !== null) return fail(state.failure);
 
   const contentTypes = xml.find((part) => part.name === '[Content_Types].xml');
   if (contentTypes !== undefined && /macroEnabled/i.test(contentTypes.text)) {

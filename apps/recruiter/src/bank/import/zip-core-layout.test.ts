@@ -1,7 +1,8 @@
 // A5a re-review (Low): the central directory's local-header offsets and compressed sizes must describe exactly the
-// records a streaming reader walks, in order, with no gap or overlap. Otherwise a STORED entry the directory points into
-// can hide the real part that Word/Excel read while the streamed decoy (same name, same size) is what the browser imports.
-import { deflateSync, strToU8 } from 'fflate';
+// records of the archive, in order, with no gap or overlap. Otherwise a STORED entry the directory points into can hide
+// the real part that Word/Excel read while a decoy (same name, same size) is what the browser imports. Since fix 4 the
+// records are read through the directory and never found by scanning, so the carrier case below reads the directory's part.
+import { deflateSync, strFromU8, strToU8 } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { pngBytes } from './fixtures.test-helpers';
 import { extractArchive } from './zip-core';
@@ -272,7 +273,7 @@ describe('extractArchive: the directory must describe the streamed layout', () =
     },
   );
 
-  it('rejects a data-descriptor entry whose data hides a local record (carrier for a decoy part)', async () => {
+  it('reads the part the directory names, not a decoy record hidden in a descriptor entry', async () => {
     const header = (name: string, flags: number, csize: number): Uint8Array<ArrayBuffer> => {
       const nameBytes = strToU8(name);
       const h = new Uint8Array(30);
@@ -315,7 +316,12 @@ describe('extractArchive: the directory must describe the streamed layout', () =
       cenOf(real, realAt),
     ];
     const bytes = concat([carrier, tail, realBytes, directory(entries, dirAt)]);
-    expect(await outcome(bytes, 'x.docx', 'docx')).toBe('bad_archive');
+    // The decoy record is only bytes of word/a.bin; the part Office reads through the directory is the one imported.
+    const result = await extractArchive(new File([bytes], 'x.docx'), 'x.docx', 'docx');
+    expect(result).toMatchObject({ type: 'result' });
+    if (result.type === 'result') {
+      expect(result.xml.map((p) => p.text)).toEqual([strFromU8(REAL)]);
+    }
   });
 
   it('still reads honest archives: stored, deflated, and both kinds of data descriptor', async () => {

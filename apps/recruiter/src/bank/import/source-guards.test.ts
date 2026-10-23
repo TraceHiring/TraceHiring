@@ -1,6 +1,6 @@
 // Source guards for the import stream (ADR-033, R5-48, rules 5 and 8): production code uses fflate's streaming
-// Unzip + UnzipInflate and nothing else from it, in one file only; imported values are only ever React text; nothing
-// here reads or writes browser storage or talks to the network except through the typed api calls.
+// UnzipInflate (never the signature-scanning Unzip) and nothing else from it, in one file only; imported values are only
+// ever React text; nothing here reads or writes browser storage or talks to the network except through the typed api calls.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,9 +40,9 @@ describe('production import code', () => {
     }
   });
 
-  it('imports fflate in zip-core.ts (Unzip, UnzipInflate) and template-files.ts (strToU8, zipSync) only', () => {
+  it('imports fflate in zip-core.ts (UnzipInflate only, never the scanning Unzip) and template-files.ts (strToU8, zipSync) only', () => {
     const allowed: Record<string, string[]> = {
-      'zip-core.ts': ['Unzip', 'UnzipInflate'],
+      'zip-core.ts': ['UnzipInflate'],
       'template-files.ts': ['strToU8', 'zipSync'],
     };
     for (const file of production) {
