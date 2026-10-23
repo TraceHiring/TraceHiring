@@ -1,7 +1,7 @@
 // AT-M1-31 "Candidate summary follows the settings" (specs/m1-test-authoring.md §6.6, §6.7, §12; R2-12, R2-20,
 // R5-24, R5-39 d). Pins renderCandidateSummary per preset and proves the summary follows what is captured
 // (captureSignals), never under-states it, and never uses a rule-7 term. Synthetic values only.
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -90,8 +90,8 @@ const T = {
   fullscreen: 'We record when you leave full screen.',
   heartbeat: 'We record a regular signal that the page is still connected.',
   review:
-    'A person checks these events only if your answers put you on the shortlist. ' +
-    'No event rejects you on its own.',
+    "A person looks at these records only if your answers score above the employer's cutoff. " +
+    'A record never decides your result by itself.',
 } as const;
 
 const ALL_SIGNALS: readonly CatalogSignal[] = [
@@ -102,10 +102,11 @@ const ALL_SIGNALS: readonly CatalogSignal[] = [
   'fullscreen_exit',
 ];
 
-const migration = readFileSync(
-  resolve(import.meta.dirname, '../../..', 'supabase/migrations/20261023020000_m1_tests.sql'),
-  'utf8',
-);
+// Found by suffix: R5-30 re-timestamps the M1-b migration at the D1 CLOSE merge.
+const migrationsDir = resolve(import.meta.dirname, '../../..', 'supabase/migrations');
+const m1Tests = readdirSync(migrationsDir).filter((f) => f.endsWith('_m1_tests.sql'));
+if (m1Tests.length !== 1) throw new Error('expected exactly one *_m1_tests.sql migration');
+const migration = readFileSync(resolve(migrationsDir, m1Tests[0] as string), 'utf8');
 
 /** Every combination of the three settings that map D1 signals, over every preset. */
 function* allCombinations(): Generator<IntegritySettingValues> {
@@ -384,6 +385,17 @@ describe('never under-states what is recorded', () => {
   });
 });
 
+// Copied from apps/recruiter/src/d1-guards.test.tsx (the same source as e2e/support/report.ts NEVER_BUILD_TEXT).
+const ANYWHERE_WORDS =
+  /\b(?:reject\w*|decline\w*|shortlist\w*|overturn\w*|appeal\w*|confirm\w*)\b/i;
+const COMBINED = /\b(?:overall|combined|total|trust|honesty|composite)\b/i;
+const GAZE_ASN_IP =
+  /\b(?:gaze|ASN|IPv?[46]?)\b|\bIP[\s _-]*address(?:es)?\b|\b(?:\d{1,3}\.){3}\d{1,3}\b/i;
+const NEVER_BUILD = new RegExp(
+  `${GAZE_ASN_IP.source}|\\bemotion|face.?match|\\bdevice\\b|\\bpersonality\\b|voiceprint|biometric|likeness`,
+  'i',
+);
+
 describe('copy rules (CLAUDE.md rule 7; never claims camera, microphone or identity checks at M1)', () => {
   const forbidden: readonly RegExp[] = [
     /emotion/i,
@@ -415,6 +427,12 @@ describe('copy rules (CLAUDE.md rule 7; never claims camera, microphone or ident
     /verif/i,
     /screen ?(record|shar|captur)/i,
     /\bdevice\b/i,
+    // D1's recruiter guards (apps/recruiter/src/d1-guards.test.tsx; R5-22, AT-M1-24, R5-46): A5 renders this summary
+    // on the recruiter integrity step, so its lines obey ANYWHERE_WORDS, COMBINED and NEVER_BUILD too. Copied, not
+    // imported across packages; keep them in step with that file.
+    ANYWHERE_WORDS,
+    COMBINED,
+    NEVER_BUILD,
   ];
 
   it('no rendered line uses a forbidden term, under any setting combination', () => {
