@@ -469,7 +469,6 @@ describe('D1 route table (AT-D13)', () => {
         'library',
         'settings/integrity',
         'settings/members',
-        'tests/new/template',
       ].sort(),
     );
   });

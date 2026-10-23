@@ -113,11 +113,22 @@ export const fullscreenExit = (gseq: number, offsetMs: number): Line => ({
 export const ndjson = (lines: readonly Line[]): string =>
   lines.map((l) => `${JSON.stringify(l)}\n`).join('');
 
+/** ruleset_versions.signal_settings with every D1 kind enabled (the shape private.signal_settings_valid accepts). */
+export const ALL_SIGNALS_ENABLED: Readonly<Record<string, { enabled: boolean }>> = Object.freeze({
+  drop: { enabled: true },
+  fullscreen_exit: { enabled: true },
+  paste: { enabled: true },
+  tab_hidden: { enabled: true },
+  untrusted_input: { enabled: true },
+});
+
 export interface IntegrityWorldOptions {
   lines?: readonly Line[];
   /** null: no quality card yet; otherwise its meets_cutoff. */
   meetsCutoff?: boolean | null;
   coverage?: { activeMs: number; coveredMs: number };
+  /** The pinned ruleset's signal_settings (R5-52 f); default: the five D1 kinds, all enabled. */
+  signalSettings?: Record<string, { enabled: boolean }>;
   photo?: 'ok' | 'none' | 'missing_object' | 'other_sha';
   gaps?: SessionMirrorMessageV1['gaps'];
   lastEventSeq?: number;
@@ -142,6 +153,7 @@ export const integrityWorld = async (opts: IntegrityWorldOptions = {}): Promise<
     org_id: org,
     id: IDS.ruleset,
     band_rule_version_id: IDS.bandRules,
+    signal_settings: opts.signalSettings ?? ALL_SIGNALS_ENABLED,
   });
   table(db, 'band_rule_versions').push({
     org_id: org,

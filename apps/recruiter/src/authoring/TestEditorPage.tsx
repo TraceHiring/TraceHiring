@@ -1,6 +1,7 @@
 // The test editor screens (specs/d1-demo-slice.md §6.1): `/tests/new` creates a draft, `/tests/:testId` edits it
 // (draft only; a published version is read-only in D1). Publish opens a dialog with the Q20 freeze copy and is
-// refused without a valid cutoff.
+// refused without a valid cutoff. M1 extends `/tests/new` in place (specs/m1-test-authoring.md §6.1, R5-15, R5-55 b):
+// step 1 shows the role-template choice next to D1's own start, whose create path is unchanged.
 import type { TestDetailResponse } from '@trace/shared/contracts/d1';
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
@@ -12,6 +13,7 @@ import { useResource } from '../common/useResource';
 import ui from '../common/Ui.module.css';
 import { DraftFormView } from './DraftFormView';
 import { publishDraft, saveDraft } from './editor-actions';
+import { FromTemplateRoute } from './FromTemplateRoute';
 import { fromDetail, isCutoffValid, toRequest, type DraftForm } from './editor-model';
 import { ReviewersPanel } from './ReviewersPanel';
 import { NO_ACCESS_TEXT, isStaff } from '../shell/nav';
@@ -210,9 +212,14 @@ export function TestEditorRoute() {
   );
 }
 
-/** Route `/tests/new`: names the test, creates the draft (cutoff 40) and opens it. */
+/**
+ * Route `/tests/new`, the wizard's step 1: D1's start (names the test, creates the draft with cutoff 40 and opens it)
+ * and, for staff, the role-template choice next to it (§6.1; UX gating only, the server refuses others).
+ */
 export function NewTestRoute() {
   const api = useApi();
+  const info = useOrgInfo();
+  const staff = info !== null && isStaff(info.roles);
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -252,6 +259,7 @@ export function NewTestRoute() {
           {errorText(error)}
         </p>
       )}
+      {staff && <FromTemplateRoute embedded />}
     </section>
   );
 }

@@ -202,6 +202,10 @@ const settingValues = () =>
 
 // ---- Media and parameterised variants (§3.3, §6.3) --------------------------------------------------------------
 
+/** One import image is at most 1 MiB (§6.9, R2-19, R5-48 "1 MB"; R5-55 d): the client, the import worker and the
+ * api all use this constant. */
+export const IMPORT_IMAGE_MAX_BYTES = 1_048_576;
+
 /** A content-addressed item image (`item-media/{org}/{sha256}.{ext}`) and its required alt text. */
 export const ItemMedia = z.strictObject({
   key: z.string().regex(/^item-media\/[0-9a-f-]{36}\/[0-9a-f]{64}\.(png|jpg|webp)$/),
