@@ -47,6 +47,12 @@ export interface BandInput {
   coverage: { activeMs: number; coveredMs: number };
   capturedFamilies: readonly string[];
   photoMissing: boolean;
+  /**
+   * The pinned ruleset's `signal_settings` as stored (M1 R5-7, R5-23 b, R5-52 e): a kind is enabled unless its key
+   * is present with `enabled: false`. An event of a disabled kind is context only and never matches a rule. A key
+   * that is no event's kind is accepted and matches nothing. `{}` = every kind enabled (band-engine-1 behaviour).
+   */
+  signalSettings: Readonly<Record<string, { enabled: boolean }>>;
 }
 
 /**
@@ -81,6 +87,8 @@ export interface Flag {
  * An unvalidated or unmatched signal, or a connectivity gap: shown on the timeline, never counted.
  * One item per event. `ruleId` and `family` name the first unvalidated rule the event matched (table order);
  * an unmatched event has neither; a `connectivity_gap` has family `connectivity` (never `focus`, D1-6).
+ * An event whose kind the test settings switched off is the item an unmatched event would be (no rule, so no
+ * `ruleId` or rule family; a `connectivity_gap` keeps `connectivity`) plus `disabledBySettings: true` (M1 R5-7).
  */
 export interface ContextItem {
   kind: string;
@@ -90,6 +98,7 @@ export interface ContextItem {
   ruleId?: string;
   durationMs?: number;
   observed: Observed;
+  disabledBySettings?: true;
 }
 
 export interface BandOutput {
