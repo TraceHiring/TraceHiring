@@ -6,11 +6,11 @@ import {
   MOCK_DRAFTER_ADAPTER_VERSION,
   MOCK_DRAFTER_MODEL_ID,
   MOCK_DRAFTER_PROVIDER,
-  MockDrafterInProductionError,
+  DrafterMockInProductionError,
   MockLlmDrafter,
   assertMockDrafterEnv,
 } from './llm-drafter.mock.js';
-import type { DraftFormat, DraftRequest, DraftedItem, LlmDrafter } from './llm-drafter.js';
+import type { DraftFormat, DraftRequest, LlmDrafter } from './llm-drafter.js';
 
 const request = (over: Partial<DraftRequest> = {}): DraftRequest => ({
   format: 'mcq',
@@ -62,10 +62,10 @@ describe('production guard (R5-3, AT-M1-09, L-11)', () => {
     ['object', { env: 'dev' }],
     ['array', ['dev']],
   ])('refuses %s with a typed error', (_name, env) => {
-    expect(() => new MockLlmDrafter(env)).toThrow(MockDrafterInProductionError);
+    expect(() => new MockLlmDrafter(env)).toThrow(DrafterMockInProductionError);
     expect(() => {
       assertMockDrafterEnv(env);
-    }).toThrow(MockDrafterInProductionError);
+    }).toThrow(DrafterMockInProductionError);
   });
 
   it('names no environment value in the error message', () => {
@@ -76,7 +76,7 @@ describe('production guard (R5-3, AT-M1-09, L-11)', () => {
       caught = e;
     }
     expect(caught).toBeInstanceOf(Error);
-    expect((caught as Error).name).toBe('MockDrafterInProductionError');
+    expect((caught as Error).name).toBe('DrafterMockInProductionError');
     expect((caught as Error).message).not.toContain('production');
   });
 });
