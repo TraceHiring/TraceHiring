@@ -304,7 +304,13 @@ describe('TestDraftView (the editor round-trips it into SaveTestDraftRequest)', 
     expect(ok(View(), { ...draftView, test: { ...draftView.test, name: '' } })).toBe(false);
   });
   it('rule 1: the read-model carries no integrity result and no combined number', () => {
-    expect(keysMatching(View(), /band$|^band|score|flag|integrity|signal|overall/i)).toEqual([]);
+    // `difficultyBand` (blueprint strata: a difficulty stratum 0-4) is the one allowed "band", as in the §5 sweep.
+    expect(
+      keysMatching(View(), /band|score|flag|integrity|signal|overall/i).filter(
+        (key) => key !== 'difficultyBand',
+      ),
+    ).toEqual([]);
+    expect(keysMatching(View(), /band/i)).toEqual(['difficultyBand']);
   });
 });
 

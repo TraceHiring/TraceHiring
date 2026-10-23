@@ -3,8 +3,8 @@
 // R5-29), and nothing sent to a library browser carries an answer key (I-M1-5). Recruiter-side only: the candidate
 // shapes (package v2, session view v2) live in contracts-candidate.ts.
 import { z } from 'zod';
-import { UpdateTestDraftRequest } from './contracts-d1.js';
-import { AiDraftErrorCode, OrgRole } from './contracts-tenancy.js';
+import { TestDetailResponse, UpdateTestDraftRequest } from './contracts-d1.js';
+import { AiDraftErrorCode, ImportJobErrorCode, OrgRole } from './contracts-tenancy.js';
 
 export { AiDraftErrorCode, ImportJobErrorCode } from './contracts-tenancy.js';
 
@@ -18,6 +18,17 @@ const count = () => z.int().min(0);
 const optionId = () => z.string().min(1).max(64);
 const uniqueBy = <T>(rows: readonly T[], key: (row: T) => unknown) =>
   new Set(rows.map(key)).size === rows.length;
+/** An opaque page cursor (query string and response), as LibraryBrowseQuery's. */
+const cursor = () => z.string().regex(/^[A-Za-z0-9_-]{1,200}$/);
+/** One cursor page of a growing list (bank items, library cards, member invites). */
+const PAGE_SIZE = 50;
+/** 1-500 distinct ids: the library_copy_requests bound (M1-a), used for every id batch. */
+const idBatch = () =>
+  z
+    .array(uuid())
+    .min(1)
+    .max(500)
+    .refine((ids) => new Set(ids).size === ids.length, { message: 'ids must be distinct' });
 
 // ---- Database value lists ------------------------------------------------------------------------------------------
 
@@ -324,6 +335,81 @@ export const ApproveItemRequest = z.strictObject({
 });
 export type ApproveItemRequest = z.infer<typeof ApproveItemRequest>;
 
+/** `GET …/bank/items` filters (§6.2: format, skill, difficulty range, status, origin, pool). Query-string values
+ * arrive as text; difficulties are coerced. The approval queue is `status=in_review`. */
+export const BankItemListQuery = z
+  .strictObject({
+    format: ItemFormat.optional(),
+    skillKey: SkillKey.optional(),
+    difficultyMin: z.coerce.number().min(0).max(1).optional(),
+    difficultyMax: z.coerce.number().min(0).max(1).optional(),
+    status: ItemStatus.optional(),
+    origin: ItemOrigin.optional(),
+    poolId: uuid().optional(),
+    cursor: cursor().optional(),
+  })
+  .refine(
+    (q) =>
+      q.difficultyMin === undefined ||
+      q.difficultyMax === undefined ||
+      q.difficultyMin <= q.difficultyMax,
+    { message: 'difficultyMin cannot exceed difficultyMax' },
+  );
+export type BankItemListQuery = z.infer<typeof BankItemListQuery>;
+
+/** One page of the bank list; `nextCursor` is null on the last page. */
+export const BankItemListResponse = z.strictObject({
+  items: z.array(BankItemSummary).max(PAGE_SIZE),
+  nextCursor: cursor().nullable(),
+});
+export type BankItemListResponse = z.infer<typeof BankItemListResponse>;
+
+/** 201 of `POST …/bank/items` and `POST …/bank/items/:itemId/versions`: the new version, always a draft (M1-2). */
+export const BankItemCreateResponse = BankItemDetail.refine((item) => item.status === 'draft', {
+  message: 'a created version is a draft',
+  path: ['status'],
+});
+export type BankItemCreateResponse = z.infer<typeof BankItemCreateResponse>;
+
+/** The ABH-7 share metric (§6.3) over approved `quant` items: `share = parameterised / approved`, null when none is
+ * approved (no division by zero). Counts only; no item content. */
+const shareMetric = () =>
+  z
+    .strictObject({
+      quantItemsApproved: count(),
+      quantItemsParameterised: count(),
+      share: z.number().min(0).max(1).nullable(),
+    })
+    .superRefine((row, ctx) => {
+      if (row.quantItemsParameterised > row.quantItemsApproved) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['quantItemsParameterised'],
+          message: 'parameterised items are a subset of the approved ones',
+        });
+      }
+      const expected =
+        row.quantItemsApproved === 0 ? null : row.quantItemsParameterised / row.quantItemsApproved;
+      const same =
+        expected === null || row.share === null
+          ? expected === row.share
+          : Math.abs(expected - row.share) < 1e-9;
+      if (!same) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['share'],
+          message: 'share is parameterised / approved',
+        });
+      }
+    });
+
+/** `GET …/bank/stats` (§6.3): the caller's org and the Trace library; `library` is null when no library is served. */
+export const BankStatsResponse = z.strictObject({
+  org: shareMetric(),
+  library: shareMetric().nullable(),
+});
+export type BankStatsResponse = z.infer<typeof BankStatsResponse>;
+
 // ---- Pools and sections (§6.5) --------------------------------------------------------------------------------------
 
 export const PoolRequest = z.strictObject({
@@ -349,6 +435,19 @@ export const PoolDetail = z
     message: 'approvedCount cannot exceed itemCount',
   });
 export type PoolDetail = z.infer<typeof PoolDetail>;
+
+/** `GET …/pools`: the org's pools (a curated working set, not paged). */
+export const PoolListResponse = z
+  .strictObject({ pools: z.array(PoolDetail).max(500) })
+  .refine((res) => uniqueBy(res.pools, (p) => p.id), {
+    message: 'pool ids must be distinct',
+    path: ['pools'],
+  });
+export type PoolListResponse = z.infer<typeof PoolListResponse>;
+
+/** `POST/DELETE …/pools/:id/items`: the item versions to add or remove (the guard requires approved, same format). */
+export const PoolItemsRequest = z.strictObject({ itemVersionIds: idBatch() });
+export type PoolItemsRequest = z.infer<typeof PoolItemsRequest>;
 
 const Stratum = z.strictObject({
   skillKey: SkillKey,
@@ -380,51 +479,68 @@ export const SectionDraft = z
     timeLimitSeconds: z.int().min(60).max(7200).optional(),
     blueprint: z.strictObject({ strata: z.array(Stratum).min(1).max(20) }).optional(),
   })
-  .superRefine((section, ctx) => {
-    const issue = (path: string, message: string) =>
-      ctx.addIssue({ code: 'custom', path: [path], message });
-    if (section.mode === 'inline') {
-      if (
-        section.poolId !== undefined ||
-        section.drawCount !== undefined ||
-        section.blueprint !== undefined
-      ) {
-        issue('mode', 'an inline section has no pool, draw count or blueprint');
-      }
-    } else {
-      if (section.poolId === undefined || section.drawCount === undefined) {
-        issue('mode', 'a pool section needs a pool and a draw count');
-      }
-      if (section.items.length > 0) issue('items', 'a pool section has no inline items');
+  .superRefine((section, ctx) => sectionChecks(section, ctx));
+export type SectionDraft = z.infer<typeof SectionDraft>;
+
+/** The section rules of SectionDraft, shared with the draft read-model (TestDraftView). `navigation` null is a D1
+ * section (package v1, R2-1); the request never sends null. */
+function sectionChecks(
+  section: {
+    mode: 'inline' | 'pool';
+    format: ItemFormat;
+    items: readonly { format: ItemFormat }[];
+    poolId?: string | undefined;
+    drawCount?: number | undefined;
+    navigation: 'free' | 'forward_only' | null;
+    pasteRule?: string | undefined;
+    blueprint?:
+      | { strata: readonly { skillKey: string; difficultyBand: number; count: number }[] }
+      | undefined;
+  },
+  ctx: z.core.$RefinementCtx,
+): void {
+  const issue = (path: string, message: string) =>
+    ctx.addIssue({ code: 'custom', path: [path], message });
+  if (section.mode === 'inline') {
+    if (
+      section.poolId !== undefined ||
+      section.drawCount !== undefined ||
+      section.blueprint !== undefined
+    ) {
+      issue('mode', 'an inline section has no pool, draw count or blueprint');
     }
-    if (section.format === 'written' && section.navigation !== 'forward_only') {
-      issue('navigation', 'a written section is forward-only');
+  } else {
+    if (section.poolId === undefined || section.drawCount === undefined) {
+      issue('mode', 'a pool section needs a pool and a draw count');
     }
-    if (section.pasteRule !== undefined && section.format !== 'written') {
-      issue('pasteRule', 'only a written section takes a paste rule');
-    }
-    section.items.forEach((item, i) => {
-      if (item.format !== section.format) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['items', i, 'format'],
-          message: 'item format differs from its section',
-        });
-      }
-    });
-    if (section.blueprint !== undefined && section.drawCount !== undefined) {
-      const total = section.blueprint.strata.reduce((n, s) => n + s.count, 0);
-      if (total !== section.drawCount)
-        issue('blueprint', 'the strata must add up to the draw count');
-    }
-    if (section.blueprint !== undefined) {
-      const pairs = section.blueprint.strata.map((s) => `${s.skillKey}:${s.difficultyBand}`);
-      if (new Set(pairs).size !== pairs.length) {
-        issue('blueprint', 'one stratum per skill and difficulty band');
-      }
+    if (section.items.length > 0) issue('items', 'a pool section has no inline items');
+  }
+  if (section.format === 'written' && section.navigation === 'free') {
+    issue('navigation', 'a written section is forward-only');
+  }
+  if (section.pasteRule !== undefined && section.format !== 'written') {
+    issue('pasteRule', 'only a written section takes a paste rule');
+  }
+  section.items.forEach((item, i) => {
+    if (item.format !== section.format) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['items', i, 'format'],
+        message: 'item format differs from its section',
+      });
     }
   });
-export type SectionDraft = z.infer<typeof SectionDraft>;
+  if (section.blueprint !== undefined && section.drawCount !== undefined) {
+    const total = section.blueprint.strata.reduce((n, s) => n + s.count, 0);
+    if (total !== section.drawCount) issue('blueprint', 'the strata must add up to the draw count');
+  }
+  if (section.blueprint !== undefined) {
+    const pairs = section.blueprint.strata.map((s) => `${s.skillKey}:${s.difficultyBand}`);
+    if (new Set(pairs).size !== pairs.length) {
+      issue('blueprint', 'one stratum per skill and difficulty band');
+    }
+  }
+}
 
 /**
  * Replaces a draft's sections, inline items, keys and settings (`public.save_test_draft`). Supersedes D1's
@@ -443,6 +559,64 @@ export const SaveTestDraftRequest = z
     path: ['sections'],
   });
 export type SaveTestDraftRequest = z.infer<typeof SaveTestDraftRequest>;
+
+// D1's editor item (TestDetailResponse: id, position, content, key) and version status, reused as is.
+const D1DetailVersion = TestDetailResponse.shape.version;
+const D1DetailItem = D1DetailVersion.shape.sections.element.shape.items.element;
+
+/** A stored section as the editor reads it: SectionDraft plus its id and position, items with theirs. */
+const SectionView = z
+  .strictObject({
+    ...SectionDraft.shape,
+    id: uuid(),
+    position: posInt(),
+    items: z.array(D1DetailItem).max(200),
+    navigation: SectionDraft.shape.navigation.nullable(),
+  })
+  .superRefine((section, ctx) => sectionChecks(section, ctx));
+
+/**
+ * The draft read-model (`GET …/tests/:testId`; also the 201 of `POST …/tests/:testId/versions`): the GET counterpart
+ * of SaveTestDraftRequest, which it round-trips (drop `id` and `position` from sections and items). Org-side only: it
+ * carries inline answer keys, as D1's TestDetailResponse. Integrity settings are not here: they have their own route
+ * (`GET …/tests/:testId/integrity`, IntegritySettingsView). `workspaceId` scopes the pool picker (R2-9 fences).
+ */
+export const TestDraftView = z.strictObject({
+  test: z.strictObject({
+    id: uuid(),
+    workspaceId: uuid(),
+    name: z.string().min(1).max(200),
+    createdAt: time(),
+  }),
+  version: z
+    .strictObject({
+      id: uuid(),
+      versionNo: posInt(),
+      status: D1DetailVersion.shape.status,
+      durationMinutes: z.int().min(1).max(120),
+      qualityCutoff: z.int().min(0).max(100),
+      publishedAt: time().nullable(),
+      sections: z.array(SectionView).max(10),
+    })
+    .superRefine((version, ctx) => {
+      const issue = (message: string) =>
+        ctx.addIssue({ code: 'custom', path: ['sections'], message });
+      if ((version.status === 'draft') !== (version.publishedAt === null)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['publishedAt'],
+          message: 'publishedAt is set exactly when the version is not a draft',
+        });
+      }
+      if (!uniqueBy(version.sections, (s) => s.id)) issue('section ids must be distinct');
+      if (!uniqueBy(version.sections, (s) => s.position))
+        issue('section positions must be distinct');
+      if (version.sections.reduce((n, s) => n + s.items.length, 0) > 200) {
+        issue('at most 200 inline items');
+      }
+    }),
+});
+export type TestDraftView = z.infer<typeof TestDraftView>;
 
 // ---- Integrity settings (§6.6, screen 04) --------------------------------------------------------------------------
 
@@ -483,6 +657,58 @@ export const IntegritySettingsView = z
     }
   });
 export type IntegritySettingsView = z.infer<typeof IntegritySettingsView>;
+
+// ---- Admin locks (§6.6, screen 04; org_integrity_locks) --------------------------------------------------------
+
+/** A lock names a lockable setting (never an always-locked one, M1-14) and one of that setting's own values. */
+const lockOk = (
+  lock: { settingKey: SettingKey; lockedValue: string },
+  ctx: z.core.$RefinementCtx,
+): void => {
+  if (ALWAYS_LOCKED_SETTINGS.includes(lock.settingKey)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['settingKey'],
+      message: 'an always-locked setting takes no lock row',
+    });
+  } else if (
+    !(INTEGRITY_SETTING_VALUES[lock.settingKey] as readonly string[]).includes(lock.lockedValue)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['lockedValue'],
+      message: 'not a value of this setting',
+    });
+  }
+};
+const lockedValue = () => z.string().min(1).max(40);
+const LOCKABLE_SETTING_COUNT = SETTING_KEYS.length - ALWAYS_LOCKED_SETTINGS.length;
+
+/** `POST …/settings/integrity-locks` (admin, aal2). The api answers the stored IntegrityLockView (201). */
+export const IntegrityLockCreateRequest = z
+  .strictObject({ settingKey: SettingKey, lockedValue: lockedValue() })
+  .superRefine(lockOk);
+export type IntegrityLockCreateRequest = z.infer<typeof IntegrityLockCreateRequest>;
+
+export const IntegrityLockView = z
+  .strictObject({
+    id: uuid(),
+    settingKey: SettingKey,
+    lockedValue: lockedValue(),
+    lockedBy: uuid().nullable(),
+    lockedAt: time(),
+  })
+  .superRefine(lockOk);
+export type IntegrityLockView = z.infer<typeof IntegrityLockView>;
+
+/** `GET …/settings/integrity-locks`: at most one lock per lockable setting (unique (org_id, setting_key)). */
+export const IntegrityLockListResponse = z
+  .strictObject({ locks: z.array(IntegrityLockView).max(LOCKABLE_SETTING_COUNT) })
+  .refine((res) => uniqueBy(res.locks, (l) => l.settingKey), {
+    message: 'one lock per setting',
+    path: ['locks'],
+  });
+export type IntegrityLockListResponse = z.infer<typeof IntegrityLockListResponse>;
 
 // ---- Role templates and JD -> blueprint (§6.1) ---------------------------------------------------------------------
 
@@ -534,6 +760,34 @@ export const CreateTestFromTemplateRequest = z.strictObject({
 });
 export type CreateTestFromTemplateRequest = z.infer<typeof CreateTestFromTemplateRequest>;
 
+/**
+ * 201 of `POST …/tests/from-template`: the new draft and the blueprint sections skipped because their format is not
+ * servable yet (M1-16, E18: "skipped when the draft is created, with a visible note").
+ */
+export const CreateTestFromTemplateResponse = z.strictObject({
+  draft: TestDraftView.refine((view) => view.version.status === 'draft', {
+    message: 'a template creates a draft',
+  }),
+  skippedSections: z
+    .array(
+      z.strictObject({
+        title: z.string().min(1).max(120),
+        format: BlueprintSection.shape.format,
+      }),
+    )
+    .max(10),
+});
+export type CreateTestFromTemplateResponse = z.infer<typeof CreateTestFromTemplateResponse>;
+
+/** `GET …/templates`: the published templates the caller may use. */
+export const RoleTemplateListResponse = z
+  .strictObject({ templates: z.array(RoleTemplateSummary).max(100) })
+  .refine((res) => uniqueBy(res.templates, (t) => `${t.templateKey}:${t.version}`), {
+    message: 'one row per template key and version',
+    path: ['templates'],
+  });
+export type RoleTemplateListResponse = z.infer<typeof RoleTemplateListResponse>;
+
 // ---- Import (§4.3, §6.9) --------------------------------------------------------------------------------------------
 
 const OPTION_LETTERS = ['a', 'b', 'c', 'd', 'e', 'f'] as const;
@@ -584,6 +838,53 @@ export const ImportJobCreateRequest = z.strictObject({
   workspaceId: uuid().optional(),
 });
 export type ImportJobCreateRequest = z.infer<typeof ImportJobCreateRequest>;
+
+/** An import job holds at most 2,000 rows and 2,000 images (import_jobs CHECKs, §4.3, R2-19). */
+const importCount = () => z.int().min(0).max(2000);
+
+/**
+ * An import job (`GET …/imports/:id`; `POST …/imports/:id/complete` and `…/cancel` answer it too). Counts are written
+ * by the database when the job ends (0 while open or validating). Ids, enums and counts only: no file name, cell
+ * value or message (§3.2). Per-row errors are returned by each rows batch (ImportRowsResponse).
+ */
+export const ImportJobView = z
+  .strictObject({
+    id: uuid(),
+    workspaceId: uuid(),
+    sourceKind: ImportJobCreateRequest.shape.sourceKind,
+    templateVersion: ImportJobCreateRequest.shape.templateVersion,
+    status: ImportJobStatus,
+    rowsTotal: importCount(),
+    rowsOk: count(),
+    rowsError: count(),
+    imagesOk: importCount(),
+    errorCode: ImportJobErrorCode.optional(),
+    createdAt: time(),
+    completedAt: time().nullable(),
+  })
+  .superRefine((job, ctx) => {
+    const issue = (path: string, message: string) =>
+      ctx.addIssue({ code: 'custom', path: [path], message });
+    if (job.rowsOk + job.rowsError !== job.rowsTotal) {
+      issue('rowsTotal', 'rowsOk + rowsError equals rowsTotal');
+    }
+    if ((job.status === 'failed') !== (job.errorCode !== undefined)) {
+      issue('errorCode', 'a job has an error code exactly when it failed');
+    }
+    const ended =
+      job.status === 'completed' || job.status === 'cancelled' || job.status === 'failed';
+    if (ended !== (job.completedAt !== null)) {
+      issue('completedAt', 'completedAt is set exactly when the job has ended');
+    }
+  });
+export type ImportJobView = z.infer<typeof ImportJobView>;
+
+/** 201 of `POST …/imports`: the new job, open. */
+export const ImportJobCreateResponse = ImportJobView.refine((job) => job.status === 'open', {
+  message: 'a new import job is open',
+  path: ['status'],
+});
+export type ImportJobCreateResponse = z.infer<typeof ImportJobCreateResponse>;
 
 export const ImportRowsRequest = z
   .strictObject({ rows: z.array(ImportRow).min(1).max(100) })
@@ -700,6 +1001,25 @@ export const LibraryItemCard = z
   });
 export type LibraryItemCard = z.infer<typeof LibraryItemCard>;
 
+/** One page of `GET …/library/items`; `nextCursor` is null on the last page. No key field (I-M1-5). */
+export const LibraryBrowseResponse = z.strictObject({
+  items: z.array(LibraryItemCard).max(PAGE_SIZE),
+  nextCursor: cursor().nullable(),
+});
+export type LibraryBrowseResponse = z.infer<typeof LibraryBrowseResponse>;
+
+/** `POST …/library/copy` (a `library_copy_requests` insert, R2-5): approved library versions to copy into the
+ * caller's workspace (absent = the org's default workspace, RLS decides). Over the daily cap: 429 `library_cap` (E8). */
+export const LibraryCopyRequest = z.strictObject({
+  libraryItemVersionIds: idBatch(),
+  workspaceId: uuid().optional(),
+});
+export type LibraryCopyRequest = z.infer<typeof LibraryCopyRequest>;
+
+/** The local item version ids (`result_item_version_ids`), in request order; reused copies included (R3-8). */
+export const LibraryCopyResponse = z.strictObject({ itemVersionIds: idBatch() });
+export type LibraryCopyResponse = z.infer<typeof LibraryCopyResponse>;
+
 // ---- Members (§4.5) -------------------------------------------------------------------------------------------------
 
 /** The address travels in the queue message only; member_invites stores its HMAC (R2-14). */
@@ -714,3 +1034,63 @@ export const MemberInviteRequest = z.strictObject({
   displayName: z.string().min(1).max(120),
 });
 export type MemberInviteRequest = z.infer<typeof MemberInviteRequest>;
+
+const inviteRoles = () =>
+  z
+    .array(OrgRole)
+    .min(1)
+    .max(5)
+    .refine((roles) => new Set(roles).size === roles.length, { message: 'duplicate role' });
+
+/**
+ * A stored invite (`member_invites`) as an admin lists it. No address, HMAC or name exists in the type (R2-14: the
+ * address travels in the queue message only; the display name is stored on the membership once provisioned).
+ */
+export const MemberInviteView = z
+  .strictObject({
+    id: uuid(),
+    roles: inviteRoles(),
+    workspaceId: uuid().nullable(),
+    status: MemberInviteStatus,
+    membershipId: uuid().nullable(),
+    invitedBy: uuid().nullable(),
+    createdAt: time(),
+  })
+  .superRefine((invite, ctx) => {
+    if ((invite.status === 'provisioned') !== (invite.membershipId !== null)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['membershipId'],
+        message: 'an invite names its membership exactly when it is provisioned',
+      });
+    }
+    if (
+      invite.workspaceId !== null &&
+      invite.roles.some((role) => role === 'org_owner' || role === 'admin')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['workspaceId'],
+        message: 'owners and admins are org-wide (D16b)',
+      });
+    }
+  });
+export type MemberInviteView = z.infer<typeof MemberInviteView>;
+
+/** 201 of `POST …/members/invites`: the new invite, pending. */
+export const MemberInviteCreateResponse = MemberInviteView.refine(
+  (invite) => invite.status === 'pending',
+  { message: 'a new invite is pending', path: ['status'] },
+);
+export type MemberInviteCreateResponse = z.infer<typeof MemberInviteCreateResponse>;
+
+/** `GET …/members/invites` query: a page cursor only (no address lookup exists). */
+export const MemberInviteListQuery = z.strictObject({ cursor: cursor().optional() });
+export type MemberInviteListQuery = z.infer<typeof MemberInviteListQuery>;
+
+/** One page of invites, newest first; `nextCursor` is null on the last page. */
+export const MemberInviteListResponse = z.strictObject({
+  invites: z.array(MemberInviteView).max(PAGE_SIZE),
+  nextCursor: cursor().nullable(),
+});
+export type MemberInviteListResponse = z.infer<typeof MemberInviteListResponse>;
