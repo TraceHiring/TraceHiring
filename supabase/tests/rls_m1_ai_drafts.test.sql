@@ -244,20 +244,18 @@ end
 $f$;
 -- publish(version key): operator-path publish with a content hash (the publish guard runs in full).
 -- live_digest(version key): what the api sends as snapshotDigest (R5-56 d): the rows a package built now would use
--- (approved pool items of pool sections, inline items of inline sections) with their exposure, as @trace/shared
--- snapshotDigest computes it. publish() sends it, so a v2 publish passes the M1-e digest check.
+-- (approved pool items of pool sections, inline items of inline sections) as @trace/shared snapshotDigest computes
+-- it: section:item lines, no exposure (R5-60 a). publish() sends it, so a v2 publish passes the digest check.
 create function pg_temp.live_digest(p_tv text) returns text language sql stable as $f$
   select encode(sha256(convert_to(coalesce(string_agg(x.l, E'\n' order by x.l collate "C"), ''), 'UTF8')), 'hex')
   from (
-    select s.id::text || ':' || i.id::text || ':' ||
-      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text as l
+    select s.id::text || ':' || i.id::text as l
     from public.sections as s
     join public.pool_items as pi on pi.org_id = s.org_id and pi.pool_id = s.pool_id
     join public.item_versions as i on i.org_id = pi.org_id and i.id = pi.item_version_id and i.status = 'approved'
     where s.test_version_id = pg_temp.id(p_tv)
     union all
-    select s.id::text || ':' || i.id::text || ':' ||
-      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text
+    select s.id::text || ':' || i.id::text
     from public.sections as s
     join public.item_versions as i on i.org_id = s.org_id and i.section_id = s.id
     where s.test_version_id = pg_temp.id(p_tv) and s.pool_id is null
@@ -357,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(105);
+select plan(107);
 -- Jobs: d1 (recruiter, A1, count 2), d2 (owner, A1, fails), d3 (admin, A1, running), d5 (admin, A1, stays queued),
 -- dw (workspace recruiter, A2). Items of the drafts are written by the authoring worker with fixed ids c8…01-04.
 
@@ -367,6 +365,8 @@ select is(pg_temp.try($$insert into public.ai_draft_jobs (id, org_id, workspace_
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version, status) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1', 'running')$$), '^42501 permission denied', 'ai_draft_jobs I: status is outside the insert grant (a job starts queued)');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version, drafts_created) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1', 2)$$), '^42501 permission denied', 'ai_draft_jobs I: counts are outside the insert grant');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'astrology', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^23503 TRACE_GUARD: skill not found', 'ai_draft_jobs I: the skill comes from the taxonomy');
+select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.405, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^23514', 'ai_draft_jobs I (M1-f, R5-60 c): a difficulty of 0.405 is refused, never rounded to 0.41');
+select is((select format_type(atttypid, atttypmod) from pg_attribute where attrelid = 'public.ai_draft_jobs'::regclass and attname = 'difficulty'), 'numeric', 'ai_draft_jobs (M1-f, R5-60 c): difficulty is unconstrained numeric (no rounding type)');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 11, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^23514', 'ai_draft_jobs I: at most 10 drafts per job');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'voice', 'spoken_english', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^(22P02|23514)', 'ai_draft_jobs I: drafts are MCQ or written only (enum today, CHECK once voice joins section_format)');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, '[synthetic] Write about a named customer', 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^23514', 'ai_draft_jobs I: the topic is stored only as its SHA-256 (text never fits)');

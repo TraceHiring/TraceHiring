@@ -244,20 +244,18 @@ end
 $f$;
 -- publish(version key): operator-path publish with a content hash (the publish guard runs in full).
 -- live_digest(version key): what the api sends as snapshotDigest (R5-56 d): the rows a package built now would use
--- (approved pool items of pool sections, inline items of inline sections) with their exposure, as @trace/shared
--- snapshotDigest computes it. publish() sends it, so a v2 publish passes the M1-e digest check.
+-- (approved pool items of pool sections, inline items of inline sections) as @trace/shared snapshotDigest computes
+-- it: section:item lines, no exposure (R5-60 a). publish() sends it, so a v2 publish passes the digest check.
 create function pg_temp.live_digest(p_tv text) returns text language sql stable as $f$
   select encode(sha256(convert_to(coalesce(string_agg(x.l, E'\n' order by x.l collate "C"), ''), 'UTF8')), 'hex')
   from (
-    select s.id::text || ':' || i.id::text || ':' ||
-      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text as l
+    select s.id::text || ':' || i.id::text as l
     from public.sections as s
     join public.pool_items as pi on pi.org_id = s.org_id and pi.pool_id = s.pool_id
     join public.item_versions as i on i.org_id = pi.org_id and i.id = pi.item_version_id and i.status = 'approved'
     where s.test_version_id = pg_temp.id(p_tv)
     union all
-    select s.id::text || ':' || i.id::text || ':' ||
-      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text
+    select s.id::text || ':' || i.id::text
     from public.sections as s
     join public.item_versions as i on i.org_id = s.org_id and i.section_id = s.id
     where s.test_version_id = pg_temp.id(p_tv) and s.pool_id is null
@@ -357,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(63);
+select plan(65);
 select pg_temp.bank('qa1', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'approved');
 select pg_temp.bank('q2a', pg_temp.id('A'), pg_temp.id('A2'), 'mcq', 'verbal', 0.50, 'approved');
 select pg_temp.bank('qd1', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'draft');
@@ -508,6 +506,8 @@ select is((select pg_get_function_result('private.library_browse(uuid, text, tex
 select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, null, null, 1)), 1, 'library browse (M1-e): a page of one');
 select is((with p1 as (select created_at, library_item_version_id from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, null, null, 1)), p2 as (select b.created_at, b.library_item_version_id from p1, lateral private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, p1.created_at, p1.library_item_version_id, 1) as b) select count(*)::int from p2 where (p2.created_at, p2.library_item_version_id) > (select p1.created_at, p1.library_item_version_id from p1)), 1, 'library browse (M1-e): the page after the cursor holds the next item in (created_at, id) order');
 select is((with p1 as (select created_at, library_item_version_id from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, null, null, 2) order by created_at desc, library_item_version_id desc limit 1) select count(*)::int from p1, lateral private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, p1.created_at, p1.library_item_version_id, 50) as b), 0, 'library browse (M1-e): nothing after the last item');
+select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, now() - interval '10 years', null, 50)), 0, 'library browse (M1-f, R5-60 b): a half cursor with only created_at returns no row');
+select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, null, '00000000-0000-4000-8000-000000000000', 50)), 0, 'library browse (M1-f, R5-60 b): a half cursor with only the id returns no row');
 select pg_temp.api(pg_temp.id('L'));
 select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000020', 'aal2', array['otp', 'totp'], null, null, null, null, null, null, 50)), 0, 'library browse: customers only (library staff use the bank itself)');
 select pg_temp.u('owner');
