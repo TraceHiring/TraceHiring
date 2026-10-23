@@ -3,6 +3,7 @@
 // R5-29), and nothing sent to a library browser carries an answer key (I-M1-5). Recruiter-side only: the candidate
 // shapes (package v2, session view v2) live in contracts-candidate.ts.
 import { z } from 'zod';
+import { canonicalJson } from './canonical-json.js';
 import { TestDetailResponse, UpdateTestDraftRequest } from './contracts-d1.js';
 import { AiDraftErrorCode, ImportJobErrorCode, OrgRole } from './contracts-tenancy.js';
 
@@ -18,10 +19,75 @@ const count = () => z.int().min(0);
 const optionId = () => z.string().min(1).max(64);
 const uniqueBy = <T>(rows: readonly T[], key: (row: T) => unknown) =>
   new Set(rows.map(key)).size === rows.length;
-/** An opaque page cursor (query string and response), as LibraryBrowseQuery's. */
-const cursor = () => z.string().regex(/^[A-Za-z0-9_-]{1,200}$/);
-/** One cursor page of a growing list (bank items, library cards, member invites). */
+
+/** Text Postgres and the queue can carry: no U+0000 and no lone UTF-16 surrogate. */
+const storable = (s: string) =>
+  !s.includes('\u0000') &&
+  !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
+/** Free text a client writes: bounded and storable (security review: every request text field). */
+const text = (min: number, max: number) =>
+  z.string().min(min).max(max).refine(storable, { message: 'unstorable_text' });
+/** Every string inside a value is storable (for D1's item shape, which this file reuses as is). */
+const deepStorable = (value: unknown): boolean => {
+  if (typeof value === 'string') return storable(value);
+  if (Array.isArray(value)) return value.every(deepStorable);
+  if (typeof value === 'object' && value !== null) return Object.values(value).every(deepStorable);
+  return true;
+};
+
+// ---- Page cursors (security review: a keyset only, never a carrier of scope or filters) ---------------------------
+
+/** The keyset of a list page: the last row's `createdAt` and `id`. Org, workspace and filters come from the request. */
+export const PageCursor = z.strictObject({ createdAt: time(), id: uuid() });
+export type PageCursor = z.infer<typeof PageCursor>;
+const CURSOR_MAX = 200;
+
+const toBase64url = (bytes: Uint8Array): string => {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+/** base64url (no padding) of the keyset's canonical JSON. Throws on anything that is not a PageCursor. */
+export function encodePageCursor(value: PageCursor): string {
+  return toBase64url(new TextEncoder().encode(canonicalJson(PageCursor.parse(value))));
+}
+
+/**
+ * The keyset of a cursor, or null: refuses over-length or non-base64url text, invalid UTF-8, non-JSON, extra keys,
+ * bad types and any non-canonical encoding (the cursor must equal the re-encoding of what it decodes to).
+ */
+export function decodePageCursor(cursorText: string): PageCursor | null {
+  if (cursorText.length > CURSOR_MAX || !/^[A-Za-z0-9_-]+$/.test(cursorText)) return null;
+  try {
+    const binary = atob(cursorText.replace(/-/g, '+').replace(/_/g, '/'));
+    const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
+    const json: unknown = JSON.parse(
+      new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes),
+    );
+    const parsed = PageCursor.safeParse(json);
+    if (!parsed.success || encodePageCursor(parsed.data) !== cursorText) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+/** A list cursor (query string and response): only what decodePageCursor accepts. */
+const cursor = () =>
+  z
+    .string()
+    .max(CURSOR_MAX)
+    .refine((s) => decodePageCursor(s) !== null, { message: 'bad_cursor' });
+/** One cursor page of a list. */
 const PAGE_SIZE = 50;
+/** A query-string difficulty: decimal text (so '' or ' ' is never read as 0), then a number in 0..1. */
+const queryDifficulty = () =>
+  z
+    .string()
+    .regex(/^[01](\.[0-9]{1,6})?$/)
+    .transform(Number)
+    .pipe(z.number().min(0).max(1));
 /** 1-500 distinct ids: the library_copy_requests bound (M1-a), used for every id batch. */
 const idBatch = () =>
   z
@@ -139,14 +205,30 @@ const settingValues = () =>
 /** A content-addressed item image (`item-media/{org}/{sha256}.{ext}`) and its required alt text. */
 export const ItemMedia = z.strictObject({
   key: z.string().regex(/^item-media\/[0-9a-f-]{36}\/[0-9a-f]{64}\.(png|jpg|webp)$/),
-  alt: z.string().min(1).max(300),
+  alt: text(1, 300),
 });
 export type ItemMedia = z.infer<typeof ItemMedia>;
 const mediaList = () => z.array(ItemMedia).min(1).max(4);
 
-const ParamName = z.string().regex(/^[a-z][a-z0-9_]{0,15}$/);
+/** Names a parameter may not take: they reach the prototype chain of a plain object (security review). */
+const RESERVED_NAMES: readonly string[] = ['constructor', 'prototype', '__proto__'];
+const ParamName = z
+  .string()
+  .regex(/^[a-z][a-z0-9_]{0,15}$/)
+  .refine((name) => !RESERVED_NAMES.includes(name), { message: 'reserved name' });
+/** A record keyed by ParamName. zod drops an own `__proto__` key silently, so the raw keys are checked first. */
+const nameRecord = <V extends z.ZodType>(value: V) =>
+  z
+    .custom<Record<string, unknown>>(
+      (input) =>
+        typeof input !== 'object' ||
+        input === null ||
+        Object.keys(input).every((key) => !RESERVED_NAMES.includes(key)),
+      { message: 'reserved name' },
+    )
+    .pipe(z.record(ParamName, value));
 /** An expression of the §6.3 grammar; `packages/item-variants` parses it. */
-const Expr = z.string().min(1).max(200);
+const Expr = text(1, 200);
 const ParamDef = z.discriminatedUnion('kind', [
   z
     .strictObject({ kind: z.literal('int'), min: z.int(), max: z.int(), step: posInt() })
@@ -154,7 +236,7 @@ const ParamDef = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('choice'),
     values: z
-      .array(z.union([z.int(), z.string().min(1).max(100)]))
+      .array(z.union([z.int(), text(1, 100)]))
       .min(1)
       .max(20),
   }),
@@ -162,12 +244,12 @@ const ParamDef = z.discriminatedUnion('kind', [
 
 export const ParamSpec = z
   .strictObject({
-    params: z.record(ParamName, ParamDef),
-    derived: z.record(ParamName, Expr),
+    params: nameRecord(ParamDef),
+    derived: nameRecord(Expr),
     constraints: z.array(Expr).max(8),
-    stem: z.string().min(1).max(4000),
+    stem: text(1, 4000),
     options: z
-      .array(z.strictObject({ id: optionId(), text: z.string().min(1).max(500) }))
+      .array(z.strictObject({ id: optionId(), text: text(1, 500) }))
       .min(2)
       .max(6),
     correctOptionId: optionId(),
@@ -202,10 +284,10 @@ export type ParamSpec = z.infer<typeof ParamSpec>;
 
 const mcqOptions = () =>
   z
-    .array(z.strictObject({ id: optionId(), text: z.string().min(1).max(500) }))
+    .array(z.strictObject({ id: optionId(), text: text(1, 500) }))
     .min(2)
     .max(6);
-const stem = () => z.string().min(1).max(4000);
+const stem = () => text(1, 4000);
 const mcqKeyOk = (item: {
   options: readonly { id: string }[];
   key?: { optionId: string } | undefined;
@@ -304,6 +386,14 @@ export const BankItemDetail = z
     content: DetailContent,
   })
   .superRefine((item, ctx) => {
+    // A library copy (origin library) is library-sourced: its key is never shown (I-M1-5, security review).
+    if (item.origin === 'library' && !item.librarySourced) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['librarySourced'],
+        message: 'a library copy is library-sourced',
+      });
+    }
     if (item.librarySourced && item.content.format === 'mcq') {
       if (item.content.key !== undefined || item.content.paramSpec !== undefined) {
         ctx.addIssue({
@@ -341,8 +431,8 @@ export const BankItemListQuery = z
   .strictObject({
     format: ItemFormat.optional(),
     skillKey: SkillKey.optional(),
-    difficultyMin: z.coerce.number().min(0).max(1).optional(),
-    difficultyMax: z.coerce.number().min(0).max(1).optional(),
+    difficultyMin: queryDifficulty().optional(),
+    difficultyMax: queryDifficulty().optional(),
     status: ItemStatus.optional(),
     origin: ItemOrigin.optional(),
     poolId: uuid().optional(),
@@ -413,7 +503,7 @@ export type BankStatsResponse = z.infer<typeof BankStatsResponse>;
 // ---- Pools and sections (§6.5) --------------------------------------------------------------------------------------
 
 export const PoolRequest = z.strictObject({
-  name: z.string().min(1).max(120),
+  name: text(1, 120),
   format: ItemFormat,
   skillKey: SkillKey.optional(),
   workspaceId: uuid().optional(),
@@ -429,16 +519,25 @@ export const PoolDetail = z
     status: z.enum(['active', 'archived']),
     itemCount: count(),
     approvedCount: count(),
-    usedByDraws: z.array(z.strictObject({ testId: uuid(), drawCount: posInt() })),
+    usedByDraws: z.array(z.strictObject({ testId: uuid(), drawCount: posInt() })).max(50),
+    usedByDrawsTotal: count(),
   })
   .refine((pool) => pool.approvedCount <= pool.itemCount, {
     message: 'approvedCount cannot exceed itemCount',
+  })
+  .refine((pool) => pool.usedByDraws.length <= pool.usedByDrawsTotal, {
+    message: 'usedByDraws lists at most usedByDrawsTotal draws',
+    path: ['usedByDrawsTotal'],
   });
 export type PoolDetail = z.infer<typeof PoolDetail>;
 
-/** `GET …/pools`: the org's pools (a curated working set, not paged). */
+/** `GET …/pools` query: a page cursor only. */
+export const PoolListQuery = z.strictObject({ cursor: cursor().optional() });
+export type PoolListQuery = z.infer<typeof PoolListQuery>;
+
+/** One page of the org's pools; `nextCursor` is null on the last page. */
 export const PoolListResponse = z
-  .strictObject({ pools: z.array(PoolDetail).max(500) })
+  .strictObject({ pools: z.array(PoolDetail).max(PAGE_SIZE), nextCursor: cursor().nullable() })
   .refine((res) => uniqueBy(res.pools, (p) => p.id), {
     message: 'pool ids must be distinct',
     path: ['pools'],
@@ -467,14 +566,14 @@ export const SectionDraft = z
   .strictObject({
     mode: z.enum(['inline', 'pool']),
     format: ItemFormat,
-    name: z.string().min(1).max(120),
+    name: text(1, 120),
     weight: z.int().min(1).max(100),
-    items: z.array(D1DraftItem).max(200),
+    items: z.array(D1DraftItem.refine(deepStorable, { message: 'unstorable_text' })).max(200),
     poolId: uuid().optional(),
     drawCount: z.int().min(1).max(100).optional(),
     shuffleItems: z.boolean(),
     shuffleOptions: z.boolean(),
-    navigation: z.enum(['free', 'forward_only']),
+    navigation: z.enum(['free', 'forward_only']).nullable(),
     pasteRule: z.enum(['blocked', 'allowed_logged']).optional(),
     timeLimitSeconds: z.int().min(60).max(7200).optional(),
     blueprint: z.strictObject({ strata: z.array(Stratum).min(1).max(20) }).optional(),
@@ -492,6 +591,8 @@ function sectionChecks(
     poolId?: string | undefined;
     drawCount?: number | undefined;
     navigation: 'free' | 'forward_only' | null;
+    shuffleItems: boolean;
+    shuffleOptions: boolean;
     pasteRule?: string | undefined;
     blueprint?:
       | { strata: readonly { skillKey: string; difficultyBand: number; count: number }[] }
@@ -514,6 +615,17 @@ function sectionChecks(
       issue('mode', 'a pool section needs a pool and a draw count');
     }
     if (section.items.length > 0) issue('items', 'a pool section has no inline items');
+  }
+  // navigation null (the sections column allows it, R2-1) is a D1 section, package v1: it uses no M1 feature, so a D1
+  // draft read and saved back keeps its D1 behaviour (publish guard v2 refuses null navigation in a version 2 test).
+  if (
+    section.navigation === null &&
+    (section.mode !== 'inline' ||
+      section.shuffleItems ||
+      section.shuffleOptions ||
+      section.pasteRule !== undefined)
+  ) {
+    issue('navigation', 'navigation null is a D1 section: inline, unshuffled, no paste rule');
   }
   if (section.format === 'written' && section.navigation === 'free') {
     issue('navigation', 'a written section is forward-only');
@@ -549,7 +661,7 @@ function sectionChecks(
  */
 export const SaveTestDraftRequest = z
   .strictObject({
-    name: z.string().min(1).max(200),
+    name: text(1, 200),
     durationMinutes: z.int().min(5).max(120),
     qualityCutoff: z.int().min(0).max(100),
     sections: z.array(SectionDraft).max(10),
@@ -571,7 +683,6 @@ const SectionView = z
     id: uuid(),
     position: posInt(),
     items: z.array(D1DetailItem).max(200),
-    navigation: SectionDraft.shape.navigation.nullable(),
   })
   .superRefine((section, ctx) => sectionChecks(section, ctx));
 
@@ -745,17 +856,17 @@ export const BlueprintProposal = z.strictObject({
 export type BlueprintProposal = z.infer<typeof BlueprintProposal>;
 
 /** The JD is matched deterministically and never stored, logged or sent to a model (E19). */
-export const BlueprintProposeRequest = z.strictObject({ jdText: z.string().min(1).max(50000) });
+export const BlueprintProposeRequest = z.strictObject({ jdText: text(1, 50000) });
 export type BlueprintProposeRequest = z.infer<typeof BlueprintProposeRequest>;
 /** `null` when no template reaches the threshold ("Pick a template"). */
 export const BlueprintProposeResponse = z.strictObject({ proposal: BlueprintProposal.nullable() });
 export type BlueprintProposeResponse = z.infer<typeof BlueprintProposeResponse>;
 
 export const CreateTestFromTemplateRequest = z.strictObject({
-  jobTitle: z.string().min(1).max(200),
+  jobTitle: text(1, 200),
   templateKey: TemplateKey,
   templateVersion: posInt(),
-  jdText: z.string().max(50000).optional(),
+  jdText: text(0, 50000).optional(),
   workspaceId: uuid().optional(),
 });
 export type CreateTestFromTemplateRequest = z.infer<typeof CreateTestFromTemplateRequest>;
@@ -772,7 +883,7 @@ export const CreateTestFromTemplateResponse = z.strictObject({
     .array(
       z.strictObject({
         title: z.string().min(1).max(120),
-        format: BlueprintSection.shape.format,
+        format: z.enum(['typing', 'voice']),
       }),
     )
     .max(10),
@@ -780,8 +891,16 @@ export const CreateTestFromTemplateResponse = z.strictObject({
 export type CreateTestFromTemplateResponse = z.infer<typeof CreateTestFromTemplateResponse>;
 
 /** `GET …/templates`: the published templates the caller may use. */
+/** `GET …/templates` query: a page cursor only. */
+export const RoleTemplateListQuery = z.strictObject({ cursor: cursor().optional() });
+export type RoleTemplateListQuery = z.infer<typeof RoleTemplateListQuery>;
+
+/** One page of templates; `nextCursor` is null on the last page. */
 export const RoleTemplateListResponse = z
-  .strictObject({ templates: z.array(RoleTemplateSummary).max(100) })
+  .strictObject({
+    templates: z.array(RoleTemplateSummary).max(PAGE_SIZE),
+    nextCursor: cursor().nullable(),
+  })
   .refine((res) => uniqueBy(res.templates, (t) => `${t.templateKey}:${t.version}`), {
     message: 'one row per template key and version',
     path: ['templates'],
@@ -806,10 +925,10 @@ export const ImportRow = z.discriminatedUnion('format', [
       skillKey: SkillKey,
       difficulty: Difficulty,
       stem: stem(),
-      options: z.array(z.string().min(1).max(500)).min(2).max(6),
+      options: z.array(text(1, 500)).min(2).max(6),
       correct: z.enum(OPTION_LETTERS),
       imageSha256: sha256().optional(),
-      imageAlt: z.string().min(1).max(300).optional(),
+      imageAlt: text(1, 300).optional(),
       paramSpec: ParamSpec.optional(),
     })
     .refine((row) => OPTION_LETTERS.indexOf(row.correct) < row.options.length, {
@@ -826,7 +945,7 @@ export const ImportRow = z.discriminatedUnion('format', [
       stem: stem(),
       rubricKey: RubricKey,
       imageSha256: sha256().optional(),
-      imageAlt: z.string().min(1).max(300).optional(),
+      imageAlt: text(1, 300).optional(),
     })
     .refine(importImageOk, { message: IMAGE_MESSAGE }),
 ]);
@@ -930,18 +1049,13 @@ export type ImportImagePutResponse = z.infer<typeof ImportImagePutResponse>;
 
 // ---- AI drafting (§6.4) ---------------------------------------------------------------------------------------------
 
-/** Text Postgres and the queue can carry: no U+0000 and no lone UTF-16 surrogate. */
-const storable = (s: string) =>
-  !s.includes('\u0000') &&
-  !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
-
 /** The topic is scrubbed and travels in the queue message only (never stored, §3.2). */
 export const AiDraftRequest = z.strictObject({
   format: ItemFormat,
   skillKey: SkillKey,
   difficulty: Difficulty,
   count: z.int().min(1).max(10),
-  topic: z.string().min(1).max(500).refine(storable, { message: 'unstorable_text' }),
+  topic: text(1, 500),
   workspaceId: uuid().optional(),
 });
 export type AiDraftRequest = z.infer<typeof AiDraftRequest>;
@@ -969,12 +1083,9 @@ export const LibraryBrowseQuery = z
   .strictObject({
     skillKey: SkillKey.optional(),
     format: ItemFormat.optional(),
-    difficultyMin: z.coerce.number().min(0).max(1).optional(),
-    difficultyMax: z.coerce.number().min(0).max(1).optional(),
-    cursor: z
-      .string()
-      .regex(/^[A-Za-z0-9_-]{1,200}$/)
-      .optional(),
+    difficultyMin: queryDifficulty().optional(),
+    difficultyMax: queryDifficulty().optional(),
+    cursor: cursor().optional(),
   })
   .refine(
     (q) =>
@@ -1031,7 +1142,7 @@ export const MemberInviteRequest = z.strictObject({
     .max(5)
     .refine((roles) => new Set(roles).size === roles.length, { message: 'duplicate role' }),
   workspaceId: uuid().optional(),
-  displayName: z.string().min(1).max(120),
+  displayName: text(1, 120),
 });
 export type MemberInviteRequest = z.infer<typeof MemberInviteRequest>;
 
