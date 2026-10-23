@@ -118,3 +118,32 @@ describe('comparisons and evaluated nodes are charged (F2)', () => {
     });
   });
 });
+
+describe('text normalisation is charged by whitespace runs (A1 re-review round 2, security Medium)', () => {
+  // The review's repro: a 3,900-character stem and six 490-character options of alternating word and space, one
+  // three-valued param. Three variants are accepted, then every tuple is a duplicate; normalising costs grow with the
+  // whitespace runs, so charging by length alone let the budget allow about 4,600 attempts (about 1.1 s of CPU).
+  const spec: ParamSpec = {
+    params: { a: { kind: 'int', min: 1, max: 3, step: 1 } },
+    derived: {},
+    constraints: [],
+    stem: `${'x '.repeat(1950)}{{a}}`,
+    options: Array.from({ length: 6 }, (_, i) => ({
+      id: `o${i}`,
+      text: `${'x '.repeat(245)}{{a}} s${i}`,
+    })),
+    correctOptionId: 'o0',
+    count: 200,
+  };
+
+  it('the spec is accepted', () => {
+    expect(validateParamSpec(spec)).toEqual({ ok: true });
+  });
+
+  it('stops on the work budget within 1,000 attempts at count 200', () => {
+    const result = generateVariants(spec, seedsFor(200));
+    expect(result).toMatchObject({ ok: false, reason: 'work_budget' });
+    if (result.ok) return;
+    expect(result.attempts).toBeLessThanOrEqual(1000);
+  });
+});
