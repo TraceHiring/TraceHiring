@@ -2,14 +2,14 @@
 // images; this module parses the XML (DOMParser, on the page), builds the rows and their errors, and hashes the images.
 // The file itself never leaves the browser; nothing here talks to the network.
 import type { ImportRow } from '@trace/shared/contracts/m1';
-import { readDocxRows } from './docx';
+import { readDocxRows, type DocxOutcome } from './docx';
 import { buildImageIndex, type ImageIndex, type ImageLookup, type PreparedImage } from './images';
 import { IMPORT_LIMITS, type ImportLimits } from './limits';
 import type { ExtractErrorCode, ExtractResult } from './protocol';
 import { buildRow, type ImageResolution, type RowIssue } from './rows';
 import type { RawRow } from './template';
 import { extractInWorker, type CreateWorker } from './worker-client';
-import { readXlsxRows, type SheetFailure } from './xlsx';
+import { readXlsxRows, type SheetFailure, type SheetOutcome } from './xlsx';
 
 /** Why a whole file was refused (nothing is created or sent): the worker's codes plus the page's own. */
 export type ParseFailureCode = ExtractErrorCode | SheetFailure;
@@ -67,10 +67,16 @@ export async function parseImport(input: ParseInput, deps: ParseDeps): Promise<P
 
   const main = await extract(deps, input.file, sourceKind);
   if (main.type === 'error') return fail(main.code);
-  const sheet =
-    sourceKind === 'xlsx'
-      ? readXlsxRows(main.xml, limits.rows)
-      : readDocxRows(main.xml, limits.rows);
+  // A reader that throws (a part the DOM cannot walk) is the same as a part that is not valid: one constant code.
+  let sheet: SheetOutcome | DocxOutcome;
+  try {
+    sheet =
+      sourceKind === 'xlsx'
+        ? readXlsxRows(main.xml, limits.rows)
+        : readDocxRows(main.xml, limits.rows);
+  } catch {
+    return fail('bad_xml');
+  }
   if (!sheet.ok) return fail(sheet.code);
 
   let imageSource: ExtractResult | null = main;
@@ -82,10 +88,12 @@ export async function parseImport(input: ParseInput, deps: ParseDeps): Promise<P
       imageSource = zip;
     }
   }
-  const index: ImageIndex = await buildImageIndex(
-    imageSource?.images ?? [],
-    imageSource?.skippedImages ?? [],
-  );
+  let index: ImageIndex;
+  try {
+    index = await buildImageIndex(imageSource?.images ?? [], imageSource?.skippedImages ?? []);
+  } catch {
+    return fail('bad_xml');
+  }
 
   const used = new Map<string, PreparedImage>();
   const resolve = (raw: RawRow): ImageResolution => {

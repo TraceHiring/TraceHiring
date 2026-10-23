@@ -1,10 +1,12 @@
 // Import caps (spec §6.9, R2-19, E9, E11, R5-48; docs/adr/ADR-033). Every number here is checked in the worker before
 // and during inflate, and again by the api for every row and image, so skipping one in a modified browser gains nothing.
+import { IMPORT_IMAGE_MAX_BYTES } from '@trace/shared/contracts/m1';
+
 const MIB = 1_048_576;
 
-/** One image is at most 1 MiB = 1,048,576 bytes (R2-19; the client's putImage refuses more). The lead replaces this
- * with a shared contract constant at merge. */
-export const IMPORT_IMAGE_MAX_BYTES = 1_048_576;
+/** One image is at most 1 MiB = 1,048,576 bytes (R2-19, R5-55 d): the one shared contract constant, which the client,
+ * the worker and the api all use. */
+export { IMPORT_IMAGE_MAX_BYTES };
 
 export interface ImportLimits {
   /** The picked `.xlsx` (the sheet file), checked against `File.size` before any byte is read. */

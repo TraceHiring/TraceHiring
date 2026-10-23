@@ -11,8 +11,13 @@ interface WorkerScope {
 
 const scope = self as unknown as WorkerScope;
 
+// Whatever goes wrong (the handler, or posting the answer), the page gets exactly one answer: a constant code.
 scope.addEventListener('message', (event) => {
-  void handleWorkerMessage(event.data).then((reply) => {
-    scope.postMessage(reply.answer, reply.transfer);
-  });
+  void handleWorkerMessage(event.data)
+    .then((reply) => {
+      scope.postMessage(reply.answer, reply.transfer);
+    })
+    .catch(() => {
+      scope.postMessage({ type: 'error', code: 'worker_failed' }, []);
+    });
 });

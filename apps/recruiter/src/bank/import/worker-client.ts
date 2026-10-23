@@ -45,6 +45,9 @@ export const createImportWorker: CreateWorker = () => {
 
 const FAILED: ExtractFailure = { type: 'error', code: 'worker_failed' };
 
+/** A worker that has not answered after this long is stopped and the check ends in `worker_failed`. */
+export const EXTRACT_TIMEOUT_MS = 60_000;
+
 /** Runs one extraction in a fresh worker and always terminates it. */
 export function extractInWorker(
   create: CreateWorker,
@@ -59,7 +62,11 @@ export function extractInWorker(
       resolve(FAILED);
       return;
     }
+    const timer = setTimeout(() => {
+      finish(FAILED);
+    }, EXTRACT_TIMEOUT_MS);
     const finish = (answer: ExtractResult | ExtractFailure): void => {
+      clearTimeout(timer);
       worker.onmessage = null;
       worker.onerror = null;
       worker.onmessageerror = null;
