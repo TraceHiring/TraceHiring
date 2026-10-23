@@ -6,10 +6,13 @@
 import { ImportRow, ParamSpec, type ImportErrorCode } from '@trace/shared/contracts/m1';
 import { OPTION_HEADERS, OPTION_LETTERS, type ImportField, type RawRow } from './template';
 
+/** A code only the page makes: the api refused an image for a reason the row codes have no word for. */
+export type PageErrorCode = 'image_refused';
+
 export interface RowIssue {
   rowNo: number;
   field: ImportField;
-  code: ImportErrorCode;
+  code: ImportErrorCode | PageErrorCode;
 }
 
 /** What the image cell of a row resolved to (the caller looks the name up in the images that came with the file). */

@@ -85,12 +85,30 @@ export interface SessionOptions {
 
 /** Failures worth another try; every other code stops the run at once. */
 const TRANSIENT = new Set(['network', 'unavailable', 'rate_limited']);
-const IMAGE_REFUSALS = new Set(['image_too_large', 'image_bad_type']);
+/**
+ * Codes that are about the session or the job, not about one image: they stop the run at once. Any other refusal of one
+ * image (the api names its own reasons: too large, bad type, too wide, ...) fails only the rows that use that image.
+ */
+const RUN_LEVEL = new Set([
+  'unauthorized',
+  'forbidden',
+  'aal2_required',
+  'not_found',
+  'conflict',
+  'invalid_response',
+  'internal',
+]);
 
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+
+/** The image codes the page already has words for; every other refusal of an image is `image_refused`. */
+const IMAGE_ROW_CODE: Readonly<Record<string, 'image_too_large' | 'image_bad_type' | undefined>> = {
+  image_too_large: 'image_too_large',
+  image_bad_type: 'image_bad_type',
+};
 
 const issueKey = (i: RowIssue): string => `${i.rowNo}:${i.field}:${i.code}`;
 
@@ -109,6 +127,7 @@ export class ImportSession {
   private halted = false;
   private cancelRequested = false;
   private running: Promise<void> | null = null;
+  private cancelling: Promise<void> | null = null;
   private readonly uploaded = new Set<string>();
   private readonly refused = new Map<string, string>();
   private readonly answered = new Map<number, { rows: number; accepted: number }>();
@@ -245,8 +264,8 @@ export class ImportSession {
           this.api.putImage(jobId, image.sha256, image.type, image.bytes),
         );
         if (result.ok) this.uploaded.add(image.sha256);
-        else if (IMAGE_REFUSALS.has(result.code)) this.refuse(image.sha256, result.code);
-        else this.halt(result.code);
+        else if (TRANSIENT.has(result.code) || RUN_LEVEL.has(result.code)) this.halt(result.code);
+        else this.refuse(image.sha256, result.code);
         this.emit();
       });
     }
@@ -289,7 +308,7 @@ export class ImportSession {
       const issue: RowIssue = {
         rowNo: row.rowNo,
         field: 'image_file',
-        code: code === 'image_bad_type' ? 'image_bad_type' : 'image_too_large',
+        code: IMAGE_ROW_CODE[code] ?? 'image_refused',
       };
       this.pageIssues.set(issueKey(issue), issue);
     }
@@ -318,8 +337,18 @@ export class ImportSession {
     }
   }
 
-  /** Stop and cancel the job; the rows already imported stay (R5-51 g). */
-  async cancel(): Promise<void> {
+  /**
+   * Stop and cancel the job; the rows already imported stay (R5-51 g). One cancel at a time: a second click while the
+   * first is still waiting for the run to end gets the first one's promise, so the api is asked once.
+   */
+  cancel(): Promise<void> {
+    this.cancelling ??= this.doCancel().finally(() => {
+      this.cancelling = null;
+    });
+    return this.cancelling;
+  }
+
+  private async doCancel(): Promise<void> {
     if (this.phase === 'cancelled' || this.phase === 'cancelling') return;
     this.cancelRequested = true;
     if (this.running !== null) await this.running;

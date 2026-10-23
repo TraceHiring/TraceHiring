@@ -3,6 +3,7 @@
 // text). The words stay clear of the product's never-build and decision lists (m1-guards.test.tsx).
 import type { ImportErrorCode } from '@trace/shared/contracts/m1';
 import { errorText } from '../../common/messages';
+import type { PageErrorCode } from './rows';
 import type { ImportField } from './template';
 
 export const ROW_ERROR_TEXT: Readonly<Record<ImportErrorCode, string>> = {
@@ -23,6 +24,11 @@ export const ROW_ERROR_TEXT: Readonly<Record<ImportErrorCode, string>> = {
   variant_generation_failed:
     'The parameter spec could not produce enough different variants of this question.',
   row_limit: 'More than 2,000 rows: the limit for one import is 2,000.',
+};
+
+/** Codes only this page makes (rows.ts PageErrorCode); they are in the error list like any other code. */
+export const PAGE_ERROR_TEXT: Readonly<Record<PageErrorCode, string>> = {
+  image_refused: 'The server refused this image.',
 };
 
 export const FIELD_LABEL: Readonly<Record<ImportField, string>> = {
@@ -46,7 +52,9 @@ export const FIELD_LABEL: Readonly<Record<ImportField, string>> = {
 };
 
 export const rowErrorText = (code: string): string =>
-  (ROW_ERROR_TEXT as Record<string, string | undefined>)[code] ?? 'The row has a problem.';
+  (ROW_ERROR_TEXT as Record<string, string | undefined>)[code] ??
+  (PAGE_ERROR_TEXT as Record<string, string | undefined>)[code] ??
+  'The row has a problem.';
 export const fieldLabel = (field: string): string =>
   (FIELD_LABEL as Record<string, string | undefined>)[field] ?? field;
 
