@@ -9,7 +9,6 @@ import {
   PublishTestResponse,
   ResultsListResponse,
   ReviewQueueResponse,
-  TestDetailResponse,
   TestListResponse,
   type CreateAssignmentRequest,
   type CreateInvitationRequest,
@@ -68,21 +67,22 @@ const id = (value: string): string => encodeURIComponent(value);
 export const listTests = (api: ApiClient): Promise<ApiResult<TestListResponse>> =>
   api.call({ method: 'GET', path: '/tests', schema: TestListResponse });
 
+// R5-53 a: D1's three editor calls keep their requests; the api answers each with the M1 read-model, TestDraftView.
 export const createTest = (
   api: ApiClient,
   body: CreateTestRequest,
-): Promise<ApiResult<TestDetailResponse>> =>
-  api.call({ method: 'POST', path: '/tests', schema: TestDetailResponse, body });
+): Promise<ApiResult<TestDraftView>> =>
+  api.call({ method: 'POST', path: '/tests', schema: TestDraftView, body });
 
-export const getTest = (api: ApiClient, testId: string): Promise<ApiResult<TestDetailResponse>> =>
-  api.call({ method: 'GET', path: `/tests/${id(testId)}`, schema: TestDetailResponse });
+export const getTest = (api: ApiClient, testId: string): Promise<ApiResult<TestDraftView>> =>
+  api.call({ method: 'GET', path: `/tests/${id(testId)}`, schema: TestDraftView });
 
 export const updateDraft = (
   api: ApiClient,
   testId: string,
   body: UpdateTestDraftRequest,
-): Promise<ApiResult<TestDetailResponse>> =>
-  api.call({ method: 'PUT', path: `/tests/${id(testId)}`, schema: TestDetailResponse, body });
+): Promise<ApiResult<TestDraftView>> =>
+  api.call({ method: 'PUT', path: `/tests/${id(testId)}`, schema: TestDraftView, body });
 
 export const publishTest = (
   api: ApiClient,
@@ -518,11 +518,7 @@ export const createTestFromTemplate = (
     CreateTestFromTemplateResponse,
   );
 
-/**
- * `GET …/tests/:testId` as the M1 draft read-model (R5-53 a). Until A2 switches the api over (together with the
- * editor's load and save), the live route still answers D1's `TestDetailResponse`, which this does not parse; D1's
- * editor keeps using `getTest` and `updateDraft`.
- */
+/** `GET …/tests/:testId` as the M1 draft read-model (R5-53 a; the same call as `getTest`, kept for the v2 screens). */
 export const getTestDraft = (api: ApiClient, testId: string): Promise<ApiResult<TestDraftView>> =>
   api.call({ method: 'GET', path: `/tests/${id(testId)}`, schema: TestDraftView });
 

@@ -3,7 +3,8 @@
 // overall, total, trust, honesty or composite number; no band outside the integrity card; no row selection, bulk
 // action or export; no gaze, emotion, face-match, IP, ASN or device text. The route table is pinned too, so a new
 // route cannot appear without this file being updated.
-import type { ResultsListResponse, TestDetailResponse } from '@trace/shared/contracts/d1';
+import type { ResultsListResponse } from '@trace/shared/contracts/d1';
+import type { TestDraftView } from '@trace/shared/contracts/m1';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
@@ -135,8 +136,14 @@ const ORG_INFO = (roles: string[]): OrgInfo => ({
 let full = emptyDraft('Synthetic test');
 full = addWrittenItem(addMcqItem(full));
 
-const DETAIL = (status: 'draft' | 'published'): TestDetailResponse => ({
-  test: { id: ID(50), name: 'Synthetic test', createdAt: '2026-10-19T10:00:00.000Z' },
+// The editor's load answer is the M1 read-model (R5-53 a): a D1-shaped draft, inline sections with navigation null.
+const DETAIL = (status: 'draft' | 'published'): TestDraftView => ({
+  test: {
+    id: ID(50),
+    workspaceId: ID(49),
+    name: 'Synthetic test',
+    createdAt: '2026-10-19T10:00:00.000Z',
+  },
   version: {
     id: ID(51),
     versionNo: 1,
@@ -148,6 +155,10 @@ const DETAIL = (status: 'draft' | 'published'): TestDetailResponse => ({
       {
         id: ID(52),
         position: 1,
+        mode: 'inline',
+        shuffleItems: false,
+        shuffleOptions: false,
+        navigation: null,
         name: 'Multiple choice',
         format: 'mcq',
         weight: 40,
@@ -168,6 +179,10 @@ const DETAIL = (status: 'draft' | 'published'): TestDetailResponse => ({
       {
         id: ID(54),
         position: 2,
+        mode: 'inline',
+        shuffleItems: false,
+        shuffleOptions: false,
+        navigation: null,
         name: 'Written answer',
         format: 'written',
         weight: 60,

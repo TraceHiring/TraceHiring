@@ -1,6 +1,7 @@
 // Save and publish for the editor. Publish never reaches the api without a valid cutoff (specs/d1-demo-slice.md
 // §6.1; the api also refuses it with 422 `cutoff_required`).
-import type { PublishTestResponse, TestDetailResponse } from '@trace/shared/contracts/d1';
+import type { PublishTestResponse } from '@trace/shared/contracts/d1';
+import type { TestDraftView } from '@trace/shared/contracts/m1';
 import type { ApiClient, ApiResult } from '../api/client';
 import { publishTest, updateDraft } from '../api/endpoints';
 import { isCutoffValid, toRequest, type DraftForm } from './editor-model';
@@ -9,7 +10,7 @@ export async function saveDraft(
   api: ApiClient,
   testId: string,
   form: DraftForm,
-): Promise<ApiResult<TestDetailResponse>> {
+): Promise<ApiResult<TestDraftView>> {
   const built = toRequest(form);
   if (!built.ok) {
     return { ok: false, code: built.reason === 'cutoff' ? 'cutoff_required' : 'bad_request' };
