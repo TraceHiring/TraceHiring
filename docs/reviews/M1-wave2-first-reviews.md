@@ -104,3 +104,45 @@ has no SELECT privilege"); M1-l (`d1342de` red, `4fca331`) drops it and adds `pr
 Full serial verify green on `4fca331` (rls 3716, catalog 150). Findings: Low 1 `testTitle` relies only on the
 `api_org_id()` binding → documented in the store header (must run inside `inOrg`); Info 2 the `library/items` consumer of
 `LIBRARY_LIMITER` lands with A2a; Info 3 `ratelimits` on staging is confirmed only by the next staging dispatch (ADR-032).
+
+## A2a api (`620065a..08b27ce`, branch `m1/a2a-api-bank`) — Opus first reviews
+Writer (Opus): red `b0ab28a` (72 failing), api 55 files / 596 tests, typecheck + lint clean. Lead ask 1 done `0eb91ac`
+(item-variants `crypto.subtle`).
+**Security: APPROVE WITH FIXES** (no rule 1-9 issue):
+- Low S1 — `pathId` keeps an upper-case org UUID; the image PUT writes `item-media/{UPPER}/…` outside the org prefix, then
+  answers 503 (erasure/retention by prefix misses it). Fix: lower-case in `pathId` (all modules) + test.
+- Low S2 — `scrubDraftTopic` can lengthen a topic and `.slice(0, 500)` can cut a surrogate; the message then fails
+  `AuthoringQueueMessage` after the job insert → job stuck `queued` (no org role may fail it). Fix: parse the message
+  before the insert; cut by code point (shared, lead); a sweep `queued` → `failed` (`enqueue_failed`) for any enqueue failure.
+- Notes — `import_item_batch`/`save_item_variants` INVOKER + authenticated EXECUTE make the api's hash/variant checks
+  advisory (same org only; R2-5); image sniff checks headers only (serve with fixed type + nosniff); no per-job image cap;
+  `POST …/bank/ai-drafts` unlimited (cost exposure when ABH-87 lands a real LLM).
+**Database: APPROVE WITH FIXES** (no rule 1-9 issue):
+- Medium D1 — bank draft PUT is two writes (content, then key); a failed key write or a concurrent submit leaves a key on a
+  deleted option, and `private.item_version_ready` only checks a key exists → the approved version blocks every publish
+  drawing it. Fix (lead migration): `item_version_ready` requires the key's option id among the version's options; later
+  an invoker RPC `save_bank_draft` (create, PUT, clone) — R5-63 f list.
+- Medium D2 — pool reads cost one call per 50 items (~105 per 5,000-item pool; list page up to ~215; OPEN-8a). Fix: a
+  `security_invoker` per-pool counts view (all + approved).
+- Lows — D3 bank pool filter refuses pools > 500 ids (use `pool_items!inner(pool_id)`); D4 "one open version per item"
+  only in the api (partial unique index); D5 guard texts missing from `GUARD_TEXTS` → 404 (`item_version_ready` "needs its
+  answer key/rubric/variants", "variants are numbered 1 to n"; pool guard "a pool holds approved bank items of its
+  format"); D6 `images_ok` client-writable and stale (compute in the guard at completion, revoke the grant); D7 no index
+  for the bank list keyset (`item_versions (org_id, created_at desc, id desc) where section_id is null`); D8 (spec
+  decision) cloning an `ai_draft` version yields `origin = 'human'` (keep the AI origin or refuse cloning a
+  `not_approved` AI draft); D9 R5-51 f: revoke the `id` INSERT grants on ai_draft_jobs, import_jobs, items, pools,
+  library_copy_requests.
+- Notes — D10 failed `queue.send` also strands a `queued` job (one worker sweep fixes S2 and D10); D11 reviewers always
+  see `exposureCount` 0; D12 a lost version-insert response leaves a harmless key-less draft.
+**Spec: PASS WITH FIXES** (Opus, 2026-10-24; no rule 1-9 issue; decisions R5-64):
+- Medium 1 — library items can never be approved through the api: the guard needs `key_reviewed_by` recorded first by a
+  non-author, and no route sets it (the review answers 404 on the unmapped guard text) → R5-64 h key-review route.
+- Low 2 — import variant seeds are `SHA-256("import:<job>:<row>:<k>")`, not R5-52 b's → accepted, R5-64 i.
+- Low 3 — `GET …/bank/stats` always `library: null` → accepted, R5-64 j.
+- Low 4 — `MAX_MEMBERS = 10_000` pool cap summed per page (503s; DELETE answers 503 after deleting) → R5-64 d (view).
+- Low 5 — `ai-drafts.test.ts:73-75` ("no id") and `bank.test.ts:92-94` ("origin never sent") assert nothing of that.
+- Note 6 — A2a edited `modules/tests/org-context.ts` (sanctioned by A2b Note 4) → R5-64 l; `invite_settled` still 404.
+- Writer questions: (a) `row_limit` accepted (parse-level); (b) no `open → failed` route in M1; (c) no pool archive in
+  M1 → R5-64 k.
+**Lead (M1-m):** red `7323091`, green `09bb62b`: D1, D2, D4, D6, D7 in the database (rls_m1_bank_fixes, imports
+D6 cases, candidate-denied list); D9 deferred (R5-64 g); `KeyReviewItemRequest` contract (R5-64 h).

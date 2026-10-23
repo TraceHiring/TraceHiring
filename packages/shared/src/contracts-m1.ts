@@ -422,6 +422,14 @@ export const BankItemDetail = z
   });
 export type BankItemDetail = z.infer<typeof BankItemDetail>;
 
+/** Library expert review (ABH-6, SEC-M1-4, R5-64 h): `POST …/bank/item-versions/:versionId/key-review` records the
+ * caller as the answer-key reviewer of an in-review version of the `trace_library` org, in an update of its own,
+ * before the approval. The reviewer is always the caller; the body id equals the path id (R5-54 a). */
+export const KeyReviewItemRequest = z.strictObject({
+  itemVersionId: uuid(),
+});
+export type KeyReviewItemRequest = z.infer<typeof KeyReviewItemRequest>;
+
 /** Approve, or send back (`not_approved`, R5-22). */
 export const ApproveItemRequest = z.strictObject({
   itemVersionId: uuid(),

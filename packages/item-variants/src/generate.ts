@@ -416,7 +416,7 @@ export async function variantSeed(itemVersionId: string, variantNo: number): Pro
     throw new RangeError('variantSeed: variant_no >= 1');
   }
   const bytes = new TextEncoder().encode(`${itemVersionId}${String(variantNo)}`);
-  return new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes));
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
 }
 
 /** generateVariants with variant k seeded by variantSeed(itemVersionId, k); a bad spec is reported unhashed. */

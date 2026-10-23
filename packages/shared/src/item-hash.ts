@@ -99,9 +99,12 @@ export function scrubDraftTopic(topic: string): string {
     .replace(EMAIL, REMOVED)
     .replace(DIGIT_RUN, (run) => (run.replace(/\D/g, '').length >= 8 ? REMOVED : run))
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MAX_TOPIC);
-  return scrubbed === '' ? REMOVED : scrubbed;
+    .trim();
+  // Cap in UTF-16 units (the contract's max) without splitting a surrogate pair (A2a security S2).
+  let capped = scrubbed.slice(0, MAX_TOPIC);
+  if (capped.length > 0 && /[\uD800-\uDBFF]$/.test(capped)) capped = capped.slice(0, -1);
+  capped = capped.trimEnd();
+  return capped === '' ? REMOVED : capped;
 }
 
 export interface SnapshotRow {

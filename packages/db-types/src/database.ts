@@ -1718,6 +1718,26 @@ isOneToOne: false
       referencedColumns: ["org_id","id"]
     }
                   ]
+                },"v_pool_item_counts": {
+                  Row: {
+                    "approved_count": number | null,"item_count": number | null,"org_id": string | null,"pool_id": string | null,"workspace_id": string | null
+                  }
+                  ComputedFields: never
+                  Relationships: [
+                    {
+      foreignKeyName: "pool_items_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "pool_items_org_id_pool_id_workspace_id_fkey"
+      columns: ["org_id","pool_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "pools"
+      referencedColumns: ["org_id","id","workspace_id"]
+    }
+                  ]
                 }
           }
           Functions: {
