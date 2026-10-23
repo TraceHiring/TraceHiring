@@ -142,6 +142,67 @@ describe('GET …/pools/:id and …/pools', () => {
   });
 });
 
+describe('pool counts from v_pool_item_counts (database D2, spec Low 4, R5-64 d)', () => {
+  it('reads the counts of a list page in one view read, never the members', async () => {
+    const { db, call } = setup();
+    const p1 = await create(call, { name: 'Synthetic pool 1' });
+    const p2 = await create(call, { name: 'Synthetic pool 2' });
+    await create(call, { name: 'Synthetic empty pool' });
+    const a = seedVersion(db);
+    const b = seedVersion(db, { status: 'retired' });
+    const items = (db.tables.pool_items ??= []);
+    items.push(
+      { org_id: ORG, workspace_id: WS, pool_id: p1.id, item_version_id: a.id },
+      { org_id: ORG, workspace_id: WS, pool_id: p1.id, item_version_id: b.id },
+      { org_id: ORG, workspace_id: WS, pool_id: p2.id, item_version_id: a.id },
+    );
+    db.calls.length = 0;
+    const page = PoolListResponse.parse(await (await call('GET', '/pools')).json());
+    expect(page.pools.map((p) => [p.name, p.itemCount, p.approvedCount])).toEqual([
+      ['Synthetic empty pool', 0, 0],
+      ['Synthetic pool 2', 1, 1],
+      ['Synthetic pool 1', 2, 1],
+    ]);
+    const tables = db.calls.map((c) => c.table);
+    expect(tables.filter((t) => t === 'v_pool_item_counts')).toHaveLength(1);
+    expect(tables).not.toContain('pool_items');
+    expect(tables).not.toContain('item_versions');
+  });
+
+  it('has no pool size cap: a pool over 10,000 items reads, adds and removes without a 503', async () => {
+    const { db, call } = setup();
+    const pool = await create(call);
+    const versions = (db.tables.item_versions ??= []);
+    const items = (db.tables.pool_items ??= []);
+    for (let n = 0; n < 10_001; n += 1) {
+      const id = `c7000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+      versions.push({ id, org_id: ORG, workspace_id: WS, status: 'approved', format: 'mcq' });
+      items.push({ org_id: ORG, workspace_id: WS, pool_id: pool.id, item_version_id: id });
+    }
+    const read = await call('GET', `/pools/${pool.id}`);
+    expect(read.status).toBe(200);
+    expect(PoolDetail.parse(await read.json())).toMatchObject({
+      itemCount: 10_001,
+      approvedCount: 10_001,
+    });
+    const extra = seedVersion(db);
+    const first = String(items[0]?.item_version_id);
+    db.calls.length = 0;
+    const added = await call('POST', `/pools/${pool.id}/items`, {
+      itemVersionIds: [first, extra.id],
+    });
+    expect(added.status).toBe(200);
+    expect(PoolDetail.parse(await added.json()).itemCount).toBe(10_002);
+    // The no-op check reads only the requested ids, never the whole pool.
+    for (const c of db.calls.filter((x) => x.method === 'select' && x.table === 'pool_items')) {
+      expect(c.query.item_version_id).toMatch(/^in\./);
+    }
+    const removed = await call('DELETE', `/pools/${pool.id}/items`, { itemVersionIds: [first] });
+    expect(removed.status).toBe(200);
+    expect(PoolDetail.parse(await removed.json()).itemCount).toBe(10_001);
+  });
+});
+
 describe('PUT …/pools/:id', () => {
   it('renames the pool and changes its skill; format and workspace never move', async () => {
     const { call } = setup();

@@ -99,6 +99,31 @@ const versionUpdate = (old: Row, next: Row, db: FakeDb): Row => {
   throw guard('item_status_change');
 };
 
+/**
+ * The M1-m view `v_pool_item_counts` (R5-64 d) over the fake's pool_items and item_versions: one row per pool with
+ * items (inner join, so a pool with no item has no row), its items and its approved items.
+ */
+const poolCounts = (db: FakeDb): Row[] => {
+  const status = new Map(tableOf(db, 'item_versions').map((v) => [String(v.id), v.status]));
+  const out = new Map<string, Row>();
+  for (const p of tableOf(db, 'pool_items')) {
+    const s = status.get(String(p.item_version_id));
+    if (s === undefined) continue;
+    const key = String(p.pool_id);
+    const row = out.get(key) ?? {
+      org_id: p.org_id,
+      workspace_id: p.workspace_id ?? null,
+      pool_id: p.pool_id,
+      item_count: 0,
+      approved_count: 0,
+    };
+    row.item_count = Number(row.item_count) + 1;
+    if (s === 'approved') row.approved_count = Number(row.approved_count) + 1;
+    out.set(key, row);
+  }
+  return [...out.values()];
+};
+
 export interface A2aDbOptions {
   /** The caller's roles in ORG (default recruiter). */
   roles?: string[];
@@ -360,6 +385,7 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
   // The fake applies `or=(…)` logic trees only: an `and=(…)` filter is moved into a one-arm `or` (first pages only).
   const select = db.rest.select.bind(db.rest);
   db.rest.select = <T>(table: string, query: Query): Promise<T[]> => {
+    if (table === 'v_pool_item_counts') db.tables.v_pool_item_counts = poolCounts(db);
     const { and, ...rest } = query;
     if (and === undefined) return select<T>(table, query);
     if (rest.or !== undefined) throw new Error('fake rest: and with or');
