@@ -4,19 +4,25 @@
 // routes.tsx (staff); the server decides. The heading shows in every state.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../api/runtime';
-import { downloadErrorCsv } from './csv-download';
+import { downloadErrorCsv, downloadTemplate } from './csv-download';
 import { errorCsv } from './error-csv';
 import { ImportView, type ImportHandlers, type Screen } from './ImportView';
 import { parseImport, type ParsedImport } from './parse';
 import { ImportSession, importApiFor, type RunState } from './run';
 import { createImportWorker, type CreateWorker } from './worker-client';
 
+/** A checked or running import carries the name of the file it was made from (not whatever is selected now). */
 type Flow =
   | { step: 'choose'; checking: boolean; failure: string | null }
-  | { step: 'checked'; parsed: ParsedImport }
-  | { step: 'run'; parsed: ParsedImport; state: RunState };
+  | { step: 'checked'; parsed: ParsedImport; fileName: string }
+  | { step: 'run'; parsed: ParsedImport; fileName: string; state: RunState };
 
 const START: Flow = { step: 'choose', checking: false, failure: null };
+
+interface Selection {
+  file: File | null;
+  zip: File | null;
+}
 
 /** `createWorker` is only for tests; the app passes nothing and gets the bundled worker. */
 export function ImportRoute({
@@ -29,6 +35,8 @@ export function ImportRoute({
   const [zip, setZip] = useState<File | null>(null);
   const [flow, setFlow] = useState<Flow>(START);
   const session = useRef<ImportSession | null>(null);
+  /** What is selected right now; a check result is kept only if it was made for exactly this (X4). */
+  const selected = useRef<Selection>({ file: null, zip: null });
   const live = useRef(true);
   useEffect(() => {
     live.current = true;
@@ -37,28 +45,44 @@ export function ImportRoute({
     };
   }, []);
 
+  // Choosing a file while a check runs drops that check: its answer belongs to a file that is not selected any more.
+  const pick = useCallback((which: 'file' | 'zip', picked: File | null) => {
+    selected.current = { ...selected.current, [which]: picked };
+    if (which === 'file') setFile(picked);
+    else setZip(picked);
+    setFlow((now) => (now.step === 'choose' && now.checking ? START : now));
+  }, []);
+
   const check = useCallback(() => {
     if (file === null) return;
+    const made: Selection = { file, zip };
+    const stale = (): boolean =>
+      !live.current || selected.current.file !== made.file || selected.current.zip !== made.zip;
     setFlow({ step: 'choose', checking: true, failure: null });
-    void parseImport({ file, imagesZip: zip }, { createWorker }).then((outcome) => {
-      if (!live.current) return;
-      setFlow(
-        outcome.ok
-          ? { step: 'checked', parsed: outcome.parsed }
-          : { step: 'choose', checking: false, failure: outcome.code },
-      );
-    });
+    parseImport({ file, imagesZip: zip }, { createWorker })
+      .then((outcome) => {
+        if (stale()) return;
+        setFlow(
+          outcome.ok
+            ? { step: 'checked', parsed: outcome.parsed, fileName: file.name }
+            : { step: 'choose', checking: false, failure: outcome.code },
+        );
+      })
+      .catch(() => {
+        if (stale()) return;
+        setFlow({ step: 'choose', checking: false, failure: 'worker_failed' });
+      });
   }, [file, zip, createWorker]);
 
   const start = useCallback(
-    (parsed: ParsedImport) => {
+    (parsed: ParsedImport, fileName: string) => {
       if (api === null) {
         setFlow({ step: 'choose', checking: false, failure: 'unauthorized' });
         return;
       }
       const next = new ImportSession(parsed, importApiFor(api), {
         onChange: (state) => {
-          if (live.current) setFlow({ step: 'run', parsed, state });
+          if (live.current) setFlow({ step: 'run', parsed, fileName, state });
         },
       });
       session.current = next;
@@ -69,6 +93,7 @@ export function ImportRoute({
 
   const reset = useCallback(() => {
     session.current = null;
+    selected.current = { file: null, zip: null };
     setFile(null);
     setZip(null);
     setFlow(START);
@@ -78,11 +103,15 @@ export function ImportRoute({
     flow.step === 'run' ? flow.state.issues : flow.step === 'checked' ? flow.parsed.issues : [];
 
   const handlers: ImportHandlers = {
-    onFile: setFile,
-    onZip: setZip,
+    onFile: (picked) => {
+      pick('file', picked);
+    },
+    onZip: (picked) => {
+      pick('zip', picked);
+    },
     onCheck: check,
     onStart: () => {
-      if (flow.step === 'checked') start(flow.parsed);
+      if (flow.step === 'checked') start(flow.parsed, flow.fileName);
     },
     onChooseAnother: reset,
     onTryAgain: () => {
@@ -96,6 +125,9 @@ export function ImportRoute({
     },
     onDownloadErrors: () => {
       downloadErrorCsv(errorCsv(issuesNow()));
+    },
+    onDownloadTemplate: (kind) => {
+      downloadTemplate(kind);
     },
   };
 
@@ -113,7 +145,7 @@ export function ImportRoute({
     screen = {
       kind: 'checked',
       sourceKind: parsed.sourceKind,
-      fileName: file?.name ?? '',
+      fileName: flow.fileName,
       rowsRead: parsed.rowsRead,
       rowsReady: parsed.rows.length,
       imagesInFile: parsed.imagesInFile,
@@ -123,7 +155,7 @@ export function ImportRoute({
     screen = {
       kind: 'run',
       sourceKind: flow.parsed.sourceKind,
-      fileName: file?.name ?? '',
+      fileName: flow.fileName,
       rowsRead: flow.parsed.rowsRead,
       state: flow.state,
     };

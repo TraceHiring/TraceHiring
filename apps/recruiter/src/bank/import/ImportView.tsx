@@ -1,14 +1,16 @@
 // The import screen's views (spec §6.9). Pure: every state comes in as props, so each one renders from synthetic data.
 // Every value from a file is drawn only as React text, and the errors table shows a row, a column and a reason in
 // words, never a cell value. The heading stays in every state.
+import { useState } from 'react';
 import { Link } from 'react-router';
 import ui from '../../common/Ui.module.css';
 import type { RunState } from './run';
 import type { RowIssue } from './rows';
+import type { TemplateKind } from './template-files';
 import { failureText, fieldLabel, rowErrorText } from './texts';
 
-/** The table shows this many problems; the downloadable list has all of them. */
-export const MAX_SHOWN_ERRORS = 500;
+/** The table shows this many problems a page; Previous and Next reach every one of them (AT-M1-11). */
+export const ERRORS_PER_PAGE = 100;
 
 export type Screen =
   | {
@@ -45,14 +47,20 @@ export interface ImportHandlers {
   onFinish(): void;
   onCancel(): void;
   onDownloadErrors(): void;
+  onDownloadTemplate(kind: TemplateKind): void;
 }
 
 const distinctRows = (issues: readonly RowIssue[]): number =>
   new Set(issues.map((issue) => issue.rowNo)).size;
 
 export function ErrorsTable({ issues }: { issues: readonly RowIssue[] }) {
+  const [requested, setPage] = useState(0);
   if (issues.length === 0) return null;
-  const shown = issues.slice(0, MAX_SHOWN_ERRORS);
+  const pages = Math.ceil(issues.length / ERRORS_PER_PAGE);
+  // The list can get shorter while a page past its end is open (a retry fixed rows): stay on the last page there is.
+  const page = Math.min(requested, pages - 1);
+  const first = page * ERRORS_PER_PAGE;
+  const shown = issues.slice(first, first + ERRORS_PER_PAGE);
   return (
     <div className={ui.stack}>
       <table className={ui.table}>
@@ -73,11 +81,32 @@ export function ErrorsTable({ issues }: { issues: readonly RowIssue[] }) {
           ))}
         </tbody>
       </table>
-      {issues.length > shown.length && (
-        <p className={ui.note}>
-          Showing the first {MAX_SHOWN_ERRORS} of {issues.length} problems. Download the error list
-          to see all of them.
-        </p>
+      {pages > 1 && (
+        <div className={ui.row}>
+          <button
+            type="button"
+            className={ui.button}
+            disabled={page === 0}
+            onClick={() => {
+              setPage(page - 1);
+            }}
+          >
+            Previous
+          </button>
+          <p className={ui.note}>
+            {`Showing ${first + 1}–${first + shown.length} of ${issues.length} problems`}
+          </p>
+          <button
+            type="button"
+            className={ui.button}
+            disabled={page >= pages - 1}
+            onClick={() => {
+              setPage(page + 1);
+            }}
+          >
+            Next
+          </button>
+        </div>
       )}
     </div>
   );
@@ -98,6 +127,26 @@ function Choose({
         Import questions from a file made with the Trace template (trace-items-v1). The file is read
         in your browser and is not uploaded; only the questions and their images are sent.
       </p>
+      <div className={ui.row}>
+        <button
+          type="button"
+          className={ui.button}
+          onClick={() => {
+            handlers.onDownloadTemplate('xlsx');
+          }}
+        >
+          Download the template (.xlsx)
+        </button>
+        <button
+          type="button"
+          className={ui.button}
+          onClick={() => {
+            handlers.onDownloadTemplate('docx');
+          }}
+        >
+          Download the template (.docx)
+        </button>
+      </div>
       <div className={ui.form}>
         <div className={ui.field}>
           <label className={ui.label} htmlFor="import-file">
@@ -108,6 +157,7 @@ function Choose({
             className={ui.input}
             type="file"
             accept=".xlsx,.docx"
+            disabled={screen.checking}
             onChange={(event) => {
               handlers.onFile(event.target.files?.[0] ?? null);
             }}
@@ -123,6 +173,7 @@ function Choose({
             className={ui.input}
             type="file"
             accept=".zip"
+            disabled={screen.checking}
             onChange={(event) => {
               handlers.onZip(event.target.files?.[0] ?? null);
             }}

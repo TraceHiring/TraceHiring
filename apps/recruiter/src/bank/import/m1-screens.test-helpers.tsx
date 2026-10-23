@@ -16,6 +16,7 @@ const handlers: ImportHandlers = {
   onFinish: noop,
   onCancel: noop,
   onDownloadErrors: noop,
+  onDownloadTemplate: noop,
 };
 
 const run: RunState = {
@@ -64,6 +65,13 @@ const SCREENS: Record<string, Screen> = {
     checking: false,
     failure: null,
   },
+  'import checking': {
+    kind: 'choose',
+    fileName: 'synthetic-items.xlsx',
+    zipName: 'synthetic-images.zip',
+    checking: true,
+    failure: null,
+  },
   'import refused': {
     kind: 'choose',
     fileName: 'synthetic-items.xlsm',
@@ -89,8 +97,24 @@ const SCREENS: Record<string, Screen> = {
     imagesInFile: 0,
     issues: [{ rowNo: 2, field: 'format', code: 'missing_field' }],
   },
+  'import checked many problems': {
+    kind: 'checked',
+    sourceKind: 'xlsx',
+    fileName: 'synthetic-items.xlsx',
+    rowsRead: 260,
+    rowsReady: 10,
+    imagesInFile: 0,
+    issues: Array.from({ length: 250 }, (_, i) => ({
+      rowNo: i + 2,
+      field: 'stem' as const,
+      code: 'too_long' as const,
+    })),
+  },
   'import running': onRun({ phase: 'running', stage: 'rows', rowsSent: 4 }),
   'import ready': onRun({}),
+  'import ready finish failed': onRun({ failure: 'conflict' }),
+  'import completing': onRun({ phase: 'completing', stage: null }),
+  'import cancelling': onRun({ phase: 'cancelling', stage: null }),
   'import stopped': onRun({ phase: 'stopped', stage: null, failure: 'network' }),
   'import completed': onRun({ phase: 'completed', job }),
   'import cancelled': onRun({ phase: 'cancelled', job: { ...job, status: 'cancelled' } }),

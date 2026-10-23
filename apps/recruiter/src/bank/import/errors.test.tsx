@@ -29,6 +29,7 @@ const handlers = {
   onFinish: noop,
   onCancel: noop,
   onDownloadErrors: noop,
+  onDownloadTemplate: noop,
 };
 const text = (html: string) =>
   html

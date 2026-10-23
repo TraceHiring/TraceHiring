@@ -76,3 +76,19 @@ export const emptyValues = (): Record<ItemHeader, string> => ({
   image_alt: '',
   param_spec_json: '',
 });
+
+/**
+ * The one example row of both template files: synthetic, and plainly an example (spec §6.9). The fields not named here
+ * are blank. Reading either template file gives back exactly this row, with no problem.
+ */
+export const TEMPLATE_EXAMPLE: Readonly<Record<ItemHeader, string>> = {
+  ...emptyValues(),
+  format: 'mcq',
+  skill: 'quant',
+  difficulty: '0.5',
+  stem: 'Example question (replace or delete this row): which option is listed second?',
+  option_a: 'First option',
+  option_b: 'Second option',
+  option_c: 'Third option',
+  correct: 'b',
+};
