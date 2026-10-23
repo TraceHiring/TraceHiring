@@ -202,14 +202,17 @@ begin
 end
 $f$;
 -- sec(key, version key, position, format, pool, draw, weight): a section of a draft version on the operator path, with
--- package-v2 navigation (written sections forward-only). A null pool makes an inline section. Records <key>.
+-- package-v2 navigation (written sections forward-only, with the Standard preset's paste rule allowed_logged, DB-M1-1).
+-- A null pool makes an inline section. Records <key>.
 create function pg_temp.sec(p_key text, p_tv text, p_pos int, p_format text, p_pool uuid, p_draw int, p_weight numeric)
 returns uuid language plpgsql as $f$
 declare v_id uuid;
 begin
-  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation)
+  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation,
+      paste_rule)
     select v.org_id, v.id, p_pos, 'Section ' || p_key, p_format::public.section_format, p_weight, p_pool, p_draw,
-      case when p_format = 'written' then 'forward_only' else 'free' end
+      case when p_format = 'written' then 'forward_only' else 'free' end,
+      case when p_format = 'written' then 'allowed_logged' end
     from public.test_versions as v where v.id = pg_temp.id(p_tv)
     returning id into v_id;
   insert into pg_temp.ids values (p_key, v_id);
@@ -280,7 +283,8 @@ begin
 end
 $f$;
 -- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review (the operator path names origin, as the
--- authoring worker's write path would; its answer key is added by the authoring worker). Records <key>, <key>_item.
+-- authoring worker's write path would; its answer key is added on the operator path too, since the worker writes only
+-- for a running drafting job, which M1-c brings, SEC-M1-3). Records <key>, <key>_item.
 create function pg_temp.ai_draft(p_key text, p_org uuid, p_ws uuid) returns uuid language plpgsql as $f$
 declare v_item uuid; v_ver uuid;
 begin
@@ -291,9 +295,7 @@ begin
     values (p_org, v_item, 'mcq', '[synthetic] AI draft ' || p_key,
       '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', repeat('c', 64))
     returning id into v_ver;
-  perform pg_temp.w('trace_authoring_worker', p_org);
   insert into public.item_answer_keys (org_id, item_version_id, format, key) values (p_org, v_ver, 'mcq', '{"option_id": "o1"}');
-  perform pg_temp.op();
   insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
   return v_ver;
 end
@@ -323,7 +325,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(50);
+select plan(54);
 -- Fixtures (operator path): pool P (mcq, workspace A1) = approved s1..s8, the parameterised pq (two variants) and cp1, a
 -- copy of the library item lib1; s9 is approved but in no pool; ai1 is an AI draft in review. Version v2 (Standard):
 -- section sp draws 3 from P, section si is inline with ii1. Version v1: D1-style inline section with iv1.
@@ -373,6 +375,7 @@ select pg_temp.inline('iv1', 'sv1');
 select pg_temp.publish('v1');
 select pg_temp.session('a', 'v2', 11);
 select pg_temp.session('b', 'v2', 12);
+select pg_temp.session('d', 'v2', 14);
 select pg_temp.session('c', 'v1', 13);
 -- si(key, session, section, item, position, served, variant, option order): one session_items insert as the mirror
 -- (trace_worker bound to org A); returns try()'s result. Records <key> = the row id.
@@ -425,6 +428,12 @@ select pg_temp.u('owner');
 select is(pg_temp.try(format($$update public.item_versions set status = 'retired' where id = %L$$, pg_temp.id('s5'))), 'OK 1', 'E3: a snapshotted item is retired');
 select pg_temp.op();
 select is(pg_temp.si('b_s5', 'b', 'sp', 's5', 3, true), 'OK 1', 'E3: a retired item of the published snapshot is still served');
+
+-- ===== DB-M1-4 (R5-19 slots): a pool section stores at most its draw, in positions 1..draw_count =====
+select matches(pg_temp.si('x13', 'a', 'sp', 's4', 2, true), '^42501 TRACE_GUARD: the section''s draw is full', 'DB-M1-4: a fourth row in a section that draws 3 is refused');
+select matches(pg_temp.si('x14', 'd', 'sp', 's4', 4, false), '^42501 TRACE_GUARD: the position is outside the section''s draw', 'DB-M1-4: a position past the draw is refused');
+select is(pg_temp.si('d_s4', 'd', 'sp', 's4', 3, false), 'OK 1', 'DB-M1-4: a position within the draw is stored');
+select is((select count(*)::int from public.item_exposure_events where session_item_id = pg_temp.id('d_s4')), 0, 'DB-M1-4: the drawn row writes no exposure');
 
 -- ===== Package v1 (AT-M1-28): the D1 rule stands =====
 select is(pg_temp.si('c_iv1', 'c', 'sv1', 'iv1', 1, true), 'OK 1', 'v1 (AT-M1-28): a D1-style version still serves its inline item');

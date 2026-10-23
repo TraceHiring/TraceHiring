@@ -202,14 +202,17 @@ begin
 end
 $f$;
 -- sec(key, version key, position, format, pool, draw, weight): a section of a draft version on the operator path, with
--- package-v2 navigation (written sections forward-only). A null pool makes an inline section. Records <key>.
+-- package-v2 navigation (written sections forward-only, with the Standard preset's paste rule allowed_logged, DB-M1-1).
+-- A null pool makes an inline section. Records <key>.
 create function pg_temp.sec(p_key text, p_tv text, p_pos int, p_format text, p_pool uuid, p_draw int, p_weight numeric)
 returns uuid language plpgsql as $f$
 declare v_id uuid;
 begin
-  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation)
+  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation,
+      paste_rule)
     select v.org_id, v.id, p_pos, 'Section ' || p_key, p_format::public.section_format, p_weight, p_pool, p_draw,
-      case when p_format = 'written' then 'forward_only' else 'free' end
+      case when p_format = 'written' then 'forward_only' else 'free' end,
+      case when p_format = 'written' then 'allowed_logged' end
     from public.test_versions as v where v.id = pg_temp.id(p_tv)
     returning id into v_id;
   insert into pg_temp.ids values (p_key, v_id);
@@ -280,7 +283,8 @@ begin
 end
 $f$;
 -- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review (the operator path names origin, as the
--- authoring worker's write path would; its answer key is added by the authoring worker). Records <key>, <key>_item.
+-- authoring worker's write path would; its answer key is added on the operator path too, since the worker writes only
+-- for a running drafting job, which M1-c brings, SEC-M1-3). Records <key>, <key>_item.
 create function pg_temp.ai_draft(p_key text, p_org uuid, p_ws uuid) returns uuid language plpgsql as $f$
 declare v_item uuid; v_ver uuid;
 begin
@@ -291,9 +295,7 @@ begin
     values (p_org, v_item, 'mcq', '[synthetic] AI draft ' || p_key,
       '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', repeat('c', 64))
     returning id into v_ver;
-  perform pg_temp.w('trace_authoring_worker', p_org);
   insert into public.item_answer_keys (org_id, item_version_id, format, key) values (p_org, v_ver, 'mcq', '{"option_id": "o1"}');
-  perform pg_temp.op();
   insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
   return v_ver;
 end
@@ -323,7 +325,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(61);
+select plan(63);
 insert into pg_temp.ids select 'tpl_cs', id from public.role_templates where org_id = pg_temp.id('L') and template_key = 'customer_support' and version = 1;
 insert into pg_temp.ids select 'tpl_bpo', id from public.role_templates where org_id = pg_temp.id('L') and template_key = 'bpo_voice' and version = 1;
 -- An org B published template, for the cross-org case.
@@ -360,6 +362,7 @@ select pg_temp.op();
 select pg_temp.u('admin');
 select is(pg_temp.try($$insert into public.role_templates (id, org_id, template_key, version, name, keywords, blueprint, preset_key) values ('e3000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'night_shift_support', 1, 'Night shift support', '{night,shift,support}', '{"sections": [{"title": "Verbal", "format": "mcq", "skillKey": "verbal", "drawCount": 5, "available": true}], "totalTimeSeconds": 600}', 'strict')$$), 'OK 1', 'templates I: an admin adds an own-org template');
 select matches(pg_temp.try($$insert into public.role_templates (org_id, template_key, version, name, keywords, blueprint, preset_key) values ('a1000000-0000-4000-8000-000000000001', 'bad_tpl', 1, 'Bad', '{a,support}', '{"sections": [{"title": "Verbal", "format": "mcq", "skillKey": "verbal", "drawCount": 5, "available": true}], "totalTimeSeconds": 600}', 'strict')$$), '^23514 TRACE_GUARD: a template keyword has 2 to 40 characters', 'templates I: a one-letter keyword is refused');
+select matches(pg_temp.try($$insert into public.role_templates (org_id, template_key, version, name, keywords, blueprint, preset_key) values ('a1000000-0000-4000-8000-000000000001', 'astro_tpl', 1, 'Astro', '{night}', '{"sections": [{"title": "Verbal", "format": "mcq", "skillKey": "astrology", "drawCount": 5, "available": true}], "totalTimeSeconds": 600}', 'strict')$$), '^23503 TRACE_GUARD: skill not found', 'templates I (DB-M1-12): every blueprint skill is a key of the library taxonomy');
 select matches(pg_temp.try($$insert into public.role_templates (org_id, template_key, version, name, keywords, blueprint, preset_key) values ('a1000000-0000-4000-8000-000000000001', 'bad_tpl', 1, 'Bad', '{night}', '{"sections": [], "totalTimeSeconds": 600}', 'strict')$$), '^23514', 'templates I: an invalid blueprint is refused');
 select matches(pg_temp.try($$insert into public.role_templates (org_id, template_key, version, name, keywords, blueprint, preset_key, status) values ('a1000000-0000-4000-8000-000000000001', 'bad_tpl', 1, 'Bad', '{night}', '{"sections": [{"title": "Verbal", "format": "mcq", "skillKey": "verbal", "drawCount": 5, "available": true}], "totalTimeSeconds": 600}', 'strict', 'published')$$), '^42501 permission denied', 'templates I: status is outside the insert grant (a template starts as a draft)');
 select pg_temp.u('admin_aal1');
@@ -374,6 +377,7 @@ select pg_temp.u('hm');
 select is((select count(*)::int from public.role_templates), 0, 'templates S: a hiring manager reads no template');
 select pg_temp.u('admin');
 select is(pg_temp.try($$update public.role_templates set name = 'Night support' where id = 'e3000000-0000-4000-8000-000000000001'$$), 'OK 1', 'templates U: an admin edits the draft');
+select matches(pg_temp.try($$update public.role_templates set blueprint = '{"sections": [{"title": "Verbal", "format": "mcq", "skillKey": "palmistry", "drawCount": 5, "available": true}], "totalTimeSeconds": 600}' where id = 'e3000000-0000-4000-8000-000000000001'$$), '^23503 TRACE_GUARD: skill not found', 'templates U (DB-M1-12): a draft blueprint cannot name an unknown skill');
 select is(pg_temp.try($$update public.role_templates set status = 'published' where id = 'e3000000-0000-4000-8000-000000000001'$$), 'OK 1', 'templates U: an admin publishes it');
 select matches(pg_temp.try($$update public.role_templates set keywords = '{night,support}' where id = 'e3000000-0000-4000-8000-000000000001'$$), '^42501 TRACE_GUARD: a published template is frozen', 'templates U: a published template is frozen');
 select matches(pg_temp.try($$update public.role_templates set status = 'draft' where id = 'e3000000-0000-4000-8000-000000000001'$$), '^42501 TRACE_GUARD: a published template is frozen', 'templates U: a published template never returns to draft');

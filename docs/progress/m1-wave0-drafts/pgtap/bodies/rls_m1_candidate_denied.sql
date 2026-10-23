@@ -11,7 +11,8 @@ create function pg_temp.m1_functions() returns text[] language sql as $f$
   select array['library_org_id', 'param_spec_valid', 'media_refs_valid', 'skill_key_exists', 'ai_draft_job_running',
     'import_job_open', 'item_version_ready', 'library_copy', 'library_viewer_ok', 'library_browse', 'library_exposure',
     'blueprint_valid', 'current_settings_catalog', 'integrity_settings_check', 'derive_signal_settings',
-    'assert_drive_pool_ratio', 'library_reference', 'session_items_a_ai_gate', 'session_items_exposure']
+    'assert_drive_pool_ratio', 'library_reference', 'session_items_a_ai_gate', 'session_items_exposure',
+    'ai_draft_job_running_in', 'item_media_in_org', 'bank_no_truncate', 'sealed_settings_catalogs', 'settings_catalog_sealed']
 $f$;
 grant execute on function pg_temp.m1_functions() to public;
 -- held(role): the M1 tables and functions the role holds any privilege on (table, any column, EXECUTE), sorted.

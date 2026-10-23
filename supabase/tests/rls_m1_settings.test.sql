@@ -202,14 +202,17 @@ begin
 end
 $f$;
 -- sec(key, version key, position, format, pool, draw, weight): a section of a draft version on the operator path, with
--- package-v2 navigation (written sections forward-only). A null pool makes an inline section. Records <key>.
+-- package-v2 navigation (written sections forward-only, with the Standard preset's paste rule allowed_logged, DB-M1-1).
+-- A null pool makes an inline section. Records <key>.
 create function pg_temp.sec(p_key text, p_tv text, p_pos int, p_format text, p_pool uuid, p_draw int, p_weight numeric)
 returns uuid language plpgsql as $f$
 declare v_id uuid;
 begin
-  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation)
+  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation,
+      paste_rule)
     select v.org_id, v.id, p_pos, 'Section ' || p_key, p_format::public.section_format, p_weight, p_pool, p_draw,
-      case when p_format = 'written' then 'forward_only' else 'free' end
+      case when p_format = 'written' then 'forward_only' else 'free' end,
+      case when p_format = 'written' then 'allowed_logged' end
     from public.test_versions as v where v.id = pg_temp.id(p_tv)
     returning id into v_id;
   insert into pg_temp.ids values (p_key, v_id);
@@ -280,7 +283,8 @@ begin
 end
 $f$;
 -- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review (the operator path names origin, as the
--- authoring worker's write path would; its answer key is added by the authoring worker). Records <key>, <key>_item.
+-- authoring worker's write path would; its answer key is added on the operator path too, since the worker writes only
+-- for a running drafting job, which M1-c brings, SEC-M1-3). Records <key>, <key>_item.
 create function pg_temp.ai_draft(p_key text, p_org uuid, p_ws uuid) returns uuid language plpgsql as $f$
 declare v_item uuid; v_ver uuid;
 begin
@@ -291,9 +295,7 @@ begin
     values (p_org, v_item, 'mcq', '[synthetic] AI draft ' || p_key,
       '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', repeat('c', 64))
     returning id into v_ver;
-  perform pg_temp.w('trace_authoring_worker', p_org);
   insert into public.item_answer_keys (org_id, item_version_id, format, key) values (p_org, v_ver, 'mcq', '{"option_id": "o1"}');
-  perform pg_temp.op();
   insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
   return v_ver;
 end
@@ -323,7 +325,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(75);
+select plan(83);
 -- Fixtures (operator path): org A rule table v2 = the D1 rules plus X-COPY (kinds ['copy'], no settings key) and X-MIX
 -- (kinds ['paste', 'copy']), so drafts made below pin it. Versions: vstd (Standard), vstr (Strict), e16 (Standard,
 -- saved before any lock), r34 (D1-style, no settings), t1 (draft for the settings writes).
@@ -351,6 +353,14 @@ insert into public.sections (id, org_id, test_version_id, position, name, format
   ('51000000-0000-4000-8000-0000000000c1', pg_temp.id('A'), pg_temp.id('r34'), 1, 'Choices', 'mcq', 1);
 insert into pg_temp.ids values ('sr34', '51000000-0000-4000-8000-0000000000c1');
 select pg_temp.inline('ir34', 'sr34');
+-- w34 (Strict, paste blocked) has a written section that allows paste (DB-M1-1).
+select pg_temp.tv('w34', pg_temp.id('A'), pg_temp.id('A1'));
+insert into public.sections (id, org_id, test_version_id, position, name, format, weight, navigation, paste_rule) values
+  ('51000000-0000-4000-8000-0000000000c2', pg_temp.id('A'), pg_temp.id('w34'), 1, 'Essay', 'written', 100, 'forward_only', 'allowed_logged');
+insert into public.item_versions (org_id, section_id, format, position, stem, rubric_version_id, content_sha256) values
+  (pg_temp.id('A'), '51000000-0000-4000-8000-0000000000c2', 'written', 1, '[synthetic] Essay',
+   (select r.id from public.rubric_versions as r where r.org_id = pg_temp.id('A') and r.rubric_key = 'default'), repeat('c', 64));
+select pg_temp.preset('w34', 'strict');
 select pg_temp.tv('t1', pg_temp.id('A'), pg_temp.id('A1'));
 insert into pg_temp.ids select 't1_rs', ruleset_version_id from public.test_versions where id = pg_temp.id('t1');
 select pg_temp.session('sess_std', 'vstd', 1);
@@ -382,6 +392,9 @@ select matches(pg_temp.try($$delete from public.integrity_setting_defs$$), '^425
 select matches(pg_temp.try($$truncate public.integrity_setting_defs cascade$$), '^42501 TRACE_GUARD: the settings catalog and presets are immutable', 'catalog: never truncated');
 select matches(pg_temp.try($$update public.integrity_presets set preset_values = '{}'$$), '^42501 TRACE_GUARD: the settings catalog and presets are immutable', 'presets: immutable, even on the operator path');
 select matches(pg_temp.try($$delete from public.integrity_presets$$), '^42501 TRACE_GUARD: the settings catalog and presets are immutable', 'presets: never deleted');
+select matches(pg_temp.try(format($$insert into public.integrity_setting_defs (org_id, catalog_version, setting_key, value_kind, allowed_values, default_value, always_locked, available_from) values (%L, 'm1-settings-v1', 'gaze_tracking', 'on_off', '{on,off}', 'off', false, 'M4')$$, pg_temp.id('L'))), '^42501 TRACE_GUARD: the settings catalog and presets are immutable', 'catalog (DB-M1-8): no setting joins the sealed catalog, even on the operator path');
+select matches(pg_temp.try(format($$insert into public.integrity_presets (org_id, preset_key, version, catalog_version, preset_values) values (%L, 'strict', 2, 'm1-settings-v1', '{}')$$, pg_temp.id('L'))), '^42501 TRACE_GUARD: the settings catalog and presets are immutable', 'presets (DB-M1-8): no preset joins the sealed catalog, even on the operator path');
+select is((select count(*)::int from public.integrity_setting_defs where catalog_version = 'm1-settings-v1') || '|' || (select count(*)::int from public.integrity_presets where catalog_version = 'm1-settings-v1'), '13|3', 'catalog (DB-M1-8): the sealed catalog keeps its 13 settings and 3 presets');
 select pg_temp.u('owner');
 select matches(pg_temp.try('select * from public.integrity_setting_defs'), '^42501 permission denied', 'catalog S: no authenticated grant (R2-5)');
 select matches(pg_temp.try('select * from public.integrity_presets'), '^42501 permission denied', 'presets S: no authenticated grant (R2-5)');
@@ -453,6 +466,8 @@ select matches(pg_temp.try(format($$update public.ruleset_versions set settings 
 select matches(pg_temp.try(format($$update public.ruleset_versions set settings = %L where id = pg_temp.id('t1_rs')$$, pg_temp.with_setting('strict', 'emotion_detection', 'on'))), '^23514 TRACE_GUARD: the settings name every setting of the catalog', 'settings U (rule 7): an unknown setting is refused');
 select matches(pg_temp.try($$update public.ruleset_versions set preset_key = 'lenient' where id = pg_temp.id('t1_rs')$$), '^23503 TRACE_GUARD: preset not found', 'settings U: an unknown preset key is refused');
 select matches(pg_temp.try($$update public.ruleset_versions set settings = null where id = pg_temp.id('t1_rs')$$), '^42501 TRACE_GUARD: settings once set are not removed', 'settings U: settings once set are never removed');
+select matches(pg_temp.try($$update public.ruleset_versions set preset_key = 'standard' where id = (select ruleset_version_id from public.test_versions where id = pg_temp.id('r34'))$$), '^42501 TRACE_GUARD: a preset needs its settings', 'settings U (DB-M1-7): a preset key without settings is refused');
+select matches(pg_temp.try($$update public.ruleset_versions set preset_version = 1 where id = (select ruleset_version_id from public.test_versions where id = pg_temp.id('r34'))$$), '^42501 TRACE_GUARD: a preset needs its settings', 'settings U (DB-M1-7): a preset version without settings is refused');
 select pg_temp.u('ws_recruiter');
 select is(pg_temp.try(format($$update public.ruleset_versions set settings = %L where id = pg_temp.id('t1_rs')$$, pg_temp.with_setting('strict', 'question_copy', 'off'))), 'OK 0', 'settings U: a workspace A2 recruiter cannot write a workspace A1 ruleset');
 select pg_temp.u('reviewer');
@@ -470,6 +485,11 @@ select pg_temp.u('recruiter');
 select is(pg_temp.try(format($$update public.ruleset_versions set settings = %L where id = (select ruleset_version_id from public.test_versions where id = pg_temp.id('e16'))$$, pg_temp.with_setting('standard', 'paste_written', 'blocked'))), 'OK 1', 'E16: the draft is changed to the locked value');
 select pg_temp.op();
 select is(pg_temp.try($$select pg_temp.publish('e16')$$), 'OK 1', 'E16: then it publishes');
+select matches(pg_temp.try($$select pg_temp.publish('w34')$$), '^42501 TRACE_GUARD: a written section''s paste rule follows the test''s paste setting', 'DB-M1-1: with paste locked to blocked, a written section that allows paste is refused at publish');
+select pg_temp.u('recruiter');
+select is(pg_temp.try($$update public.sections set paste_rule = 'blocked' where id = '51000000-0000-4000-8000-0000000000c2'$$), 'OK 1', 'DB-M1-1: the recruiter aligns the section with the paste setting');
+select pg_temp.op();
+select is(pg_temp.try($$select pg_temp.publish('w34')$$), 'OK 1', 'DB-M1-1: then it publishes');
 select matches(pg_temp.try($$select pg_temp.publish('r34')$$), '^42501 TRACE_GUARD: settings required while admin locks exist', 'R5-34: a draft without settings cannot dodge the org''s locks');
 select pg_temp.u('admin');
 select is(pg_temp.try($$delete from public.org_integrity_locks where id = 'e2000000-0000-4000-8000-000000000001'$$), 'OK 1', 'locks D: admin removes a lock');

@@ -202,14 +202,17 @@ begin
 end
 $f$;
 -- sec(key, version key, position, format, pool, draw, weight): a section of a draft version on the operator path, with
--- package-v2 navigation (written sections forward-only). A null pool makes an inline section. Records <key>.
+-- package-v2 navigation (written sections forward-only, with the Standard preset's paste rule allowed_logged, DB-M1-1).
+-- A null pool makes an inline section. Records <key>.
 create function pg_temp.sec(p_key text, p_tv text, p_pos int, p_format text, p_pool uuid, p_draw int, p_weight numeric)
 returns uuid language plpgsql as $f$
 declare v_id uuid;
 begin
-  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation)
+  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation,
+      paste_rule)
     select v.org_id, v.id, p_pos, 'Section ' || p_key, p_format::public.section_format, p_weight, p_pool, p_draw,
-      case when p_format = 'written' then 'forward_only' else 'free' end
+      case when p_format = 'written' then 'forward_only' else 'free' end,
+      case when p_format = 'written' then 'allowed_logged' end
     from public.test_versions as v where v.id = pg_temp.id(p_tv)
     returning id into v_id;
   insert into pg_temp.ids values (p_key, v_id);
@@ -280,7 +283,8 @@ begin
 end
 $f$;
 -- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review (the operator path names origin, as the
--- authoring worker's write path would; its answer key is added by the authoring worker). Records <key>, <key>_item.
+-- authoring worker's write path would; its answer key is added on the operator path too, since the worker writes only
+-- for a running drafting job, which M1-c brings, SEC-M1-3). Records <key>, <key>_item.
 create function pg_temp.ai_draft(p_key text, p_org uuid, p_ws uuid) returns uuid language plpgsql as $f$
 declare v_item uuid; v_ver uuid;
 begin
@@ -291,9 +295,7 @@ begin
     values (p_org, v_item, 'mcq', '[synthetic] AI draft ' || p_key,
       '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', repeat('c', 64))
     returning id into v_ver;
-  perform pg_temp.w('trace_authoring_worker', p_org);
   insert into public.item_answer_keys (org_id, item_version_id, format, key) values (p_org, v_ver, 'mcq', '{"option_id": "o1"}');
-  perform pg_temp.op();
   insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
   return v_ver;
 end
@@ -323,7 +325,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(47);
+select plan(55);
 -- Fixtures (operator path): pool PA = approved MCQ items pa1..pa11 plus the parameterised item pq; written pool PW =
 -- approved written items pw1..pw10; pool PX (archived); pool PBIG = 101 approved MCQ items; an AI draft ai1 (in review).
 select pg_temp.bank('pa' || n, pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'approved') from generate_series(1, 11) as n;
@@ -394,12 +396,35 @@ update public.sections set time_limit_seconds = null where test_version_id = pg_
 update public.sections set pool_id = 'd1000000-0000-4000-8000-0000000000a4', draw_count = 101 where id = pg_temp.id('ps1');
 select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a candidate is served at most 100 items', 'publish (R5-9): more than 100 served items are refused');
 update public.sections set pool_id = 'd1000000-0000-4000-8000-0000000000a1', draw_count = 1 where id = pg_temp.id('ps1');
+-- DB-M1-1 (rule 3, fairness): a written section's paste rule is the test's paste setting (Standard: allowed_logged).
+update public.sections set paste_rule = null where id = pg_temp.id('ps2');
+select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a written section of a version 2 test has its paste rule', 'publish (DB-M1-1): a v2 written section names its paste rule');
+update public.sections set paste_rule = 'blocked' where id = pg_temp.id('ps2');
+select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a written section''s paste rule follows the test''s paste setting', 'publish (DB-M1-1): a paste rule other than the settings'' paste_written is refused');
+update public.sections set paste_rule = 'allowed_logged' where id = pg_temp.id('ps2');
+-- DB-M1-12: a section's strata quotas sum to its draw; an inline section has no strata.
+update public.sections set blueprint = '{"strata": [{"skillKey": "verbal", "difficultyBand": 2, "count": 1}, {"skillKey": "quant", "difficultyBand": 2, "count": 1}]}' where id = pg_temp.id('ps1');
+select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a section''s strata quotas sum to its draw', 'publish (DB-M1-12): strata quotas that do not sum to the draw are refused');
+update public.sections set blueprint = '{"strata": [{"skillKey": "verbal", "difficultyBand": 2, "count": "one"}]}' where id = pg_temp.id('ps1');
+select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a section''s strata quotas sum to its draw', 'publish (DB-M1-12): a quota that is not a number is refused');
+update public.sections set blueprint = '{"strata": [{"skillKey": "verbal", "difficultyBand": 2, "count": 1}]}' where id = pg_temp.id('ps3');
+select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a section''s strata quotas sum to its draw', 'publish (DB-M1-12): an inline section takes no strata');
+update public.sections set blueprint = null where id = pg_temp.id('ps3');
+update public.sections set blueprint = '{"strata": [{"skillKey": "verbal", "difficultyBand": 2, "count": 1}]}' where id = pg_temp.id('ps1');
 select pg_temp.sec('ps4', 'p', 4, 'mcq', null, null, 1);
 select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: every section needs at least one item', 'publish (R2-1): an inline section without items is refused');
 delete from public.sections where id = pg_temp.id('ps4');
 update public.sections set shuffle_options = true, shuffle_items = true where id = pg_temp.id('ps1');
 select is((select count(*)::int from public.section_pool_snapshot where test_version_id = pg_temp.id('p')), 0, 'publish: refused publishes wrote no snapshot');
 select is((select status::text from public.test_versions where id = pg_temp.id('p')), 'draft', 'publish: the version is still a draft');
+-- DB-M1-1: a paste rule alone makes a version 2 draft, so it needs its settings.
+select pg_temp.tv('pw0', pg_temp.id('A'), pg_temp.id('A1'));
+insert into public.sections (id, org_id, test_version_id, position, name, format, weight, paste_rule) values
+  ('51000000-0000-4000-8000-0000000000e9', pg_temp.id('A'), pg_temp.id('pw0'), 1, 'Essay', 'written', 100, 'blocked');
+insert into public.item_versions (org_id, section_id, format, position, stem, rubric_version_id, content_sha256) values
+  (pg_temp.id('A'), '51000000-0000-4000-8000-0000000000e9', 'written', 1, '[synthetic] Essay',
+   (select r.id from public.rubric_versions as r where r.org_id = pg_temp.id('A') and r.rubric_key = 'default'), repeat('c', 64));
+select matches(pg_temp.try($$select pg_temp.publish('pw0')$$), '^42501 TRACE_GUARD: a version that uses M1 features needs its integrity settings', 'publish (DB-M1-1): a paste rule without settings is refused');
 
 -- ===== AT-M1-08 (publish half): an unapproved AI draft never enters a snapshot =====
 select matches(pg_temp.try(format($$insert into public.pool_items (org_id, pool_id, item_version_id) values (%L, 'd1000000-0000-4000-8000-0000000000a1', %L)$$, pg_temp.id('A'), pg_temp.id('ai1'))), '^42501 TRACE_GUARD: a pool holds approved bank items of its format', 'AT-M1-08: an in-review AI draft cannot join a pool, even on the operator path');
@@ -448,7 +473,12 @@ begin
     $$update public.item_variants set stem = 'changed' where item_version_id = pg_temp.id('pq')$$,
     $$delete from public.item_variants where item_version_id = pg_temp.id('pq')$$,
     $$update public.item_variant_keys set key = '{"option_id": "o2"}' where item_variant_id = pg_temp.id('pqv')$$,
-    $$delete from public.item_variant_keys where item_variant_id = pg_temp.id('pqv')$$
+    $$delete from public.item_variant_keys where item_variant_id = pg_temp.id('pqv')$$,
+    -- DB-M1-3: INSERT probes. Each is written so that only a guard can refuse it (no key or row conflict).
+    $$insert into public.section_pool_snapshot (org_id, section_id, item_version_id, workspace_id, test_id, test_version_id, exposure_at_publish) select v.org_id, pg_temp.id('ps1'), pg_temp.id('big1'), v.workspace_id, v.test_id, v.id, 0 from public.test_versions as v where v.id = pg_temp.id('p') and set_config('trace.publishing', pg_temp.id('p')::text, true) is not null$$,
+    $$insert into public.item_variants (org_id, item_version_id, variant_no, params, stem, options, difficulty, content_sha256) values ('a1000000-0000-4000-8000-000000000001', pg_temp.id('pq'), 9, '{"a": 8}', '[synthetic] What is 8 + 1?', '[{"id": "o1", "text": "9"}, {"id": "o2", "text": "8"}]', 0.50, repeat('c', 64))$$,
+    $$insert into public.item_variant_keys (org_id, item_variant_id, key) values ('a1000000-0000-4000-8000-000000000001', pg_temp.id('pqv'), '{"option_id": "o2"}') on conflict (org_id, item_variant_id) do update set key = excluded.key$$,
+    $$insert into public.item_answer_keys (org_id, item_version_id, format, key) values ('a1000000-0000-4000-8000-000000000001', pg_temp.id('pa1'), 'mcq', '{"option_id": "o2"}') on conflict (org_id, item_version_id) do update set key = excluded.key$$
   ] loop
     v_r := pg_temp.try(v_sql);
     if v_r ~ '^OK [1-9]' then
@@ -482,6 +512,10 @@ select is(pg_temp.frozen_probe(), '', 'AT-M1-13: trace_admin_worker changes noth
 select pg_temp.op();
 select is(pg_temp.frozen_probe(), '', 'AT-M1-13: the operator changes nothing (ENABLE ALWAYS, no bypass)');
 select is((select count(*)::int from public.section_pool_snapshot where test_version_id = pg_temp.id('p')), 24, 'AT-M1-13: the snapshot is whole after every probe');
+select set_config('trace.publishing', pg_temp.id('p')::text, true);
+select matches(pg_temp.try(format($$insert into public.section_pool_snapshot (org_id, section_id, item_version_id, workspace_id, test_id, test_version_id, exposure_at_publish) values (%L, %L, %L, %L, %L, %L, 0)$$, pg_temp.id('A'), pg_temp.id('ps1'), pg_temp.id('big1'), pg_temp.id('A1'), pg_temp.id('p_test'), pg_temp.id('p'))), '^42501 TRACE_GUARD: the snapshot is written by publish only and is immutable', 'DB-M1-3 (I-M1-2): the operator cannot add to a published snapshot, even naming it in trace.publishing');
+select set_config('trace.publishing', '', true);
+select is((select count(*)::int from public.section_pool_snapshot where test_version_id = pg_temp.id('p')), 24, 'DB-M1-3: the published snapshot still holds 24 rows');
 -- What may still change: a snapshotted bank item may be retired (approved -> retired only), and the version retires.
 select pg_temp.u('recruiter');
 select is(pg_temp.try(format($$update public.item_versions set status = 'retired' where id = %L$$, pg_temp.id('pa3'))), 'OK 1', 'R5-33: a snapshotted item may go approved -> retired');

@@ -202,14 +202,17 @@ begin
 end
 $f$;
 -- sec(key, version key, position, format, pool, draw, weight): a section of a draft version on the operator path, with
--- package-v2 navigation (written sections forward-only). A null pool makes an inline section. Records <key>.
+-- package-v2 navigation (written sections forward-only, with the Standard preset's paste rule allowed_logged, DB-M1-1).
+-- A null pool makes an inline section. Records <key>.
 create function pg_temp.sec(p_key text, p_tv text, p_pos int, p_format text, p_pool uuid, p_draw int, p_weight numeric)
 returns uuid language plpgsql as $f$
 declare v_id uuid;
 begin
-  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation)
+  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation,
+      paste_rule)
     select v.org_id, v.id, p_pos, 'Section ' || p_key, p_format::public.section_format, p_weight, p_pool, p_draw,
-      case when p_format = 'written' then 'forward_only' else 'free' end
+      case when p_format = 'written' then 'forward_only' else 'free' end,
+      case when p_format = 'written' then 'allowed_logged' end
     from public.test_versions as v where v.id = pg_temp.id(p_tv)
     returning id into v_id;
   insert into pg_temp.ids values (p_key, v_id);
@@ -280,7 +283,8 @@ begin
 end
 $f$;
 -- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review (the operator path names origin, as the
--- authoring worker's write path would; its answer key is added by the authoring worker). Records <key>, <key>_item.
+-- authoring worker's write path would; its answer key is added on the operator path too, since the worker writes only
+-- for a running drafting job, which M1-c brings, SEC-M1-3). Records <key>, <key>_item.
 create function pg_temp.ai_draft(p_key text, p_org uuid, p_ws uuid) returns uuid language plpgsql as $f$
 declare v_item uuid; v_ver uuid;
 begin
@@ -291,9 +295,7 @@ begin
     values (p_org, v_item, 'mcq', '[synthetic] AI draft ' || p_key,
       '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', repeat('c', 64))
     returning id into v_ver;
-  perform pg_temp.w('trace_authoring_worker', p_org);
   insert into public.item_answer_keys (org_id, item_version_id, format, key) values (p_org, v_ver, 'mcq', '{"option_id": "o1"}');
-  perform pg_temp.op();
   insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
   return v_ver;
 end

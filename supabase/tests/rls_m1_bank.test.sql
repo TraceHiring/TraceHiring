@@ -202,14 +202,17 @@ begin
 end
 $f$;
 -- sec(key, version key, position, format, pool, draw, weight): a section of a draft version on the operator path, with
--- package-v2 navigation (written sections forward-only). A null pool makes an inline section. Records <key>.
+-- package-v2 navigation (written sections forward-only, with the Standard preset's paste rule allowed_logged, DB-M1-1).
+-- A null pool makes an inline section. Records <key>.
 create function pg_temp.sec(p_key text, p_tv text, p_pos int, p_format text, p_pool uuid, p_draw int, p_weight numeric)
 returns uuid language plpgsql as $f$
 declare v_id uuid;
 begin
-  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation)
+  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation,
+      paste_rule)
     select v.org_id, v.id, p_pos, 'Section ' || p_key, p_format::public.section_format, p_weight, p_pool, p_draw,
-      case when p_format = 'written' then 'forward_only' else 'free' end
+      case when p_format = 'written' then 'forward_only' else 'free' end,
+      case when p_format = 'written' then 'allowed_logged' end
     from public.test_versions as v where v.id = pg_temp.id(p_tv)
     returning id into v_id;
   insert into pg_temp.ids values (p_key, v_id);
@@ -280,7 +283,8 @@ begin
 end
 $f$;
 -- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review (the operator path names origin, as the
--- authoring worker's write path would; its answer key is added by the authoring worker). Records <key>, <key>_item.
+-- authoring worker's write path would; its answer key is added on the operator path too, since the worker writes only
+-- for a running drafting job, which M1-c brings, SEC-M1-3). Records <key>, <key>_item.
 create function pg_temp.ai_draft(p_key text, p_org uuid, p_ws uuid) returns uuid language plpgsql as $f$
 declare v_item uuid; v_ver uuid;
 begin
@@ -291,9 +295,7 @@ begin
     values (p_org, v_item, 'mcq', '[synthetic] AI draft ' || p_key,
       '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', repeat('c', 64))
     returning id into v_ver;
-  perform pg_temp.w('trace_authoring_worker', p_org);
   insert into public.item_answer_keys (org_id, item_version_id, format, key) values (p_org, v_ver, 'mcq', '{"option_id": "o1"}');
-  perform pg_temp.op();
   insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
   return v_ver;
 end
@@ -323,7 +325,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(110);
+select plan(138);
 -- Fixtures (operator path): approved, draft and in-review bank items in orgs A, B and the library.
 select pg_temp.bank('qa1', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'quant', 0.50, 'approved');
 select pg_temp.bank('qa2', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'quant', 0.40, 'approved');
@@ -430,6 +432,40 @@ select pg_temp.op();
 select is((select (test_id = 'e1000000-0000-4000-8000-000000000001')::text || '|' || status::text from public.item_versions where stem = '[synthetic] Inline one'), 'true|approved', 'inline I: test filled from the section; an inline item is approved with its version (R5-28 c inline proof)');
 select is((select count(*)::int from public.item_versions where section_id is not null and test_id is null), 0, 'inline I: no inline row exists without its test');
 
+-- ===== trace_authoring_worker writes (R5-35, DB-M1-5, SEC-M1-2, SEC-M1-3). No drafting job can be running before
+-- migration M1-c creates ai_draft_jobs, so every worker write is refused here; M1-c adds the allowed cases. =====
+insert into public.items (id, org_id, workspace_id, format, skill_key) values
+  ('c3000000-0000-4000-8000-000000000001', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal');
+-- The operator path names the drafting job id (no ai_draft_jobs row exists before M1-c; M1-c adds the FK and the job).
+insert into public.item_versions (id, org_id, item_id, format, stem, options, skill_key, difficulty, origin, ai_draft_job_id, content_sha256) values
+  ('c3100000-0000-4000-8000-000000000001', pg_temp.id('A'), 'c3000000-0000-4000-8000-000000000001', 'mcq', '[synthetic] AI draft without its key',
+   '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', 'c3900000-0000-4000-8000-000000000001', repeat('c', 64));
+select pg_temp.w('trace_authoring_worker', pg_temp.id('A'));
+select matches(pg_temp.try($$insert into public.items (org_id, workspace_id, format, skill_key) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal')$$), '^42501 TRACE_GUARD: the authoring worker writes only for a running drafting job', 'worker items I (SEC-M1-3): no item without a running drafting job of its org and workspace');
+select matches(pg_temp.try($$insert into public.items (org_id, workspace_id, format, skill_key) values ('a1000000-0000-4000-8000-000000000003', 'b1000000-0000-4000-8000-000000000004', 'mcq', 'verbal')$$), '^42501', 'worker items I: a worker bound to org A writes no org B item (cross-org)');
+select matches(pg_temp.try($$insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c3000000-0000-4000-8000-000000000001', 'mcq', '[synthetic] Worker v2', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, repeat('c', 64))$$), '^42501 TRACE_GUARD: an AI draft needs its running drafting job', 'worker versions I (R5-35): no version without a running drafting job');
+select matches(pg_temp.try(format($$insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, content_sha256) values ('a1000000-0000-4000-8000-000000000003', %L, 'mcq', '[synthetic] Worker cross', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, repeat('c', 64))$$, pg_temp.id('qb1_item'))), '^42501', 'worker versions I: a worker bound to org A writes no org B version (cross-org)');
+select matches(pg_temp.try($$insert into public.item_answer_keys (org_id, item_version_id, format, key) values ('a1000000-0000-4000-8000-000000000001', 'c3100000-0000-4000-8000-000000000001', 'mcq', '{"option_id": "o1"}')$$), '^42501 TRACE_GUARD: the authoring worker keys only an AI draft of its running job', 'worker keys I (SEC-M1-3): no key for an in-review AI draft without its running job');
+select matches(pg_temp.try(format($$insert into public.item_answer_keys (org_id, item_version_id, format, key) values ('a1000000-0000-4000-8000-000000000001', %L, 'mcq', '{"option_id": "o2"}')$$, pg_temp.id('qdq'))), '^42501 TRACE_GUARD: the authoring worker keys only an AI draft of its running job', 'worker keys I (SEC-M1-3): never the key of a human draft');
+select matches(pg_temp.try($$insert into public.item_answer_keys (org_id, item_version_id, format, key) select org_id, id, 'mcq', '{"option_id": "o1"}' from public.item_versions where stem = '[synthetic] Inline one'$$), '^42501 TRACE_GUARD: the authoring worker keys only an AI draft of its running job', 'worker keys I (SEC-M1-3): never the key of an inline item');
+select matches(pg_temp.try(format($$insert into public.item_answer_keys (org_id, item_version_id, format, key) values ('a1000000-0000-4000-8000-000000000003', %L, 'mcq', '{"option_id": "o1"}')$$, pg_temp.id('qb1'))), '^42501', 'worker keys I: a worker bound to org A writes no org B key (cross-org)');
+select matches(pg_temp.try('select * from public.item_answer_keys'), '^42501 permission denied', 'worker keys S (SEC-M1-2): the authoring worker reads no answer key');
+select is(private.media_refs_valid('[{"key": "item-media/a1000000-0000-4000-8000-000000000001/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", "alt": "A chart"}]'), true, 'validators (R2-6): media_refs_valid runs for the authoring worker');
+select is(private.param_spec_valid('{"params": {"a": {"kind": "int", "min": 1, "max": 9, "step": 1}}, "stem": "What is {{a}} + 1?", "options": [{"id": "o1", "text": "{{a}} + 1"}, {"id": "o2", "text": "{{a}}"}], "count": 5}'), true, 'validators (R2-6, SEC-M1-1): param_spec_valid runs for the authoring worker; a spec without correctOptionId has a valid shape');
+select pg_temp.op();
+
+-- ===== SEC-M1-5: an item image lives under its own org's prefix (bank and inline rows, insert and edit) =====
+select pg_temp.u('owner');
+select is(pg_temp.try($$insert into public.items (id, org_id, workspace_id, format, skill_key) values ('c1000000-0000-4000-8000-000000000005', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal')$$), 'OK 1', 'media: owner creates an item for the image cases');
+select is(pg_temp.try($$insert into public.item_versions (org_id, item_id, format, stem, options, media, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000005', 'mcq', '[synthetic] With image', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', '[{"key": "item-media/a1000000-0000-4000-8000-000000000001/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", "alt": "A chart"}]', repeat('d', 64))$$), 'OK 1', 'media: a bank version takes an image under its org''s prefix');
+select matches(pg_temp.try($$insert into public.item_versions (org_id, item_id, format, stem, options, media, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000005', 'mcq', '[synthetic] Foreign image', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', '[{"key": "item-media/a1000000-0000-4000-8000-000000000003/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", "alt": "A chart"}]', repeat('d', 64))$$), '^42501 TRACE_GUARD: an item image belongs to the item''s org', 'media (SEC-M1-5): a bank version cannot name an org B image');
+select matches(pg_temp.try(format($$insert into public.item_versions (org_id, item_id, format, stem, options, media, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000005', 'mcq', '[synthetic] Library image', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', %L, repeat('d', 64))$$, jsonb_build_array(jsonb_build_object('key', 'item-media/' || pg_temp.id('L') || '/' || repeat('a', 64) || '.png', 'alt', 'A chart')))), '^42501 TRACE_GUARD: an item image belongs to the item''s org', 'media (SEC-M1-5): a human version cannot name a library image (only a library copy may)');
+select matches(pg_temp.try($$update public.item_versions set media = '[{"key": "item-media/a1000000-0000-4000-8000-000000000003/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png", "alt": "A chart"}]' where stem = '[synthetic] With image'$$), '^42501 TRACE_GUARD: an item image belongs to the item''s org', 'media (SEC-M1-5): a draft edit cannot switch to an org B image');
+select matches(pg_temp.try($$update public.item_versions set media = '[{"key": "elsewhere/a.png", "alt": "A chart"}]' where stem = '[synthetic] With image'$$), '^23514', 'media (media_refs_valid): a key outside the item-media prefix breaks the CHECK');
+select matches(pg_temp.try($$insert into public.item_versions (org_id, section_id, format, position, stem, options, media, content_sha256) values ('a1000000-0000-4000-8000-000000000001', '51000000-0000-4000-8000-000000000001', 'mcq', 5, '[synthetic] Inline foreign image', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', '[{"key": "item-media/a1000000-0000-4000-8000-000000000003/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", "alt": "A chart"}]', repeat('c', 64))$$), '^42501 TRACE_GUARD: an item image belongs to the item''s org', 'media (SEC-M1-5): an inline item cannot name an org B image');
+select matches(pg_temp.try($$update public.item_versions set media = '[{"key": "item-media/a1000000-0000-4000-8000-000000000003/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", "alt": "A chart"}]' where stem = '[synthetic] Inline one'$$), '^42501 TRACE_GUARD: an item image belongs to the item''s org', 'media (SEC-M1-5): an inline edit cannot switch to an org B image');
+select is(pg_temp.try($$update public.item_versions set media = '[{"key": "item-media/a1000000-0000-4000-8000-000000000001/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.webp", "alt": "A chart"}]' where stem = '[synthetic] Inline one'$$), 'OK 1', 'media: an inline draft item takes an image under its org''s prefix');
+
 -- ===== Lifecycle (§4.1) =====
 select pg_temp.u('recruiter');
 select is(pg_temp.try($$update public.item_versions set stem = '[synthetic] Bank written v1 edited' where stem = '[synthetic] Bank written v1'$$), 'OK 1', 'lifecycle: a draft is edited');
@@ -490,11 +526,21 @@ select pg_temp.u('lib_author');
 select is(pg_temp.try(format($$insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, content_sha256) values (%L, %L, 'mcq', '[synthetic] Library v2', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, repeat('e', 64))$$, pg_temp.id('L'), pg_temp.id('la1_item'))), 'OK 1', 'library: the author adds a new library version');
 select is(pg_temp.try($$insert into public.item_answer_keys (org_id, item_version_id, format, key) select org_id, id, 'mcq', '{"option_id": "o1"}' from public.item_versions where stem = '[synthetic] Library v2'$$), 'OK 1', 'library: the author adds its key');
 select is(pg_temp.try($$update public.item_versions set status = 'in_review' where stem = '[synthetic] Library v2'$$), 'OK 1', 'library: the author submits it');
-select matches(pg_temp.try(format($$update public.item_versions set status = 'approved', key_reviewed_by = %L where stem = '[synthetic] Library v2'$$, pg_temp.id('lib_expert'))), '^42501 TRACE_GUARD: a library item needs a reviewer and a key reviewer other than its author', 'library: the author cannot be the reviewer');
+-- SEC-M1-4 (ABH-6): the key review is an attested action of its own: the reviewer records it on the in-review version
+-- (key_reviewed_by null -> themselves, nothing else changes); the approval then requires it and cannot name it.
+select matches(pg_temp.try(format($$update public.item_versions set key_reviewed_by = %L where stem = '[synthetic] Library v2'$$, pg_temp.id('lib_author'))), '^42501 TRACE_GUARD: a library item needs a reviewer and a key reviewer other than its author', 'library (SEC-M1-4): the author cannot review their own key');
+select matches(pg_temp.try($$update public.item_versions set status = 'approved' where stem = '[synthetic] Library v2'$$), '^42501 TRACE_GUARD: a library item needs a reviewer and a key reviewer other than its author', 'library: the author cannot be the reviewer');
+select pg_temp.u('owner');
+select is(pg_temp.try(format($$update public.item_versions set key_reviewed_by = %L where stem = '[synthetic] Library v2'$$, pg_temp.id('owner'))), 'OK 0', 'library (SEC-M1-4): a customer owner records no library key review');
+select matches(pg_temp.try(format($$update public.item_versions set key_reviewed_by = %L where stem = '[synthetic] No difficulty'$$, pg_temp.id('owner'))), '^42501 TRACE_GUARD: an item version is frozen once it leaves draft', 'library (SEC-M1-4): a customer item has no key review step');
 select pg_temp.u('lib_expert');
-select matches(pg_temp.try(format($$update public.item_versions set status = 'approved', key_reviewed_by = %L where stem = '[synthetic] Library v2'$$, pg_temp.id('lib_author'))), '^42501 TRACE_GUARD: a library item needs a reviewer and a key reviewer other than its author', 'library: the author cannot be the key reviewer');
-select matches(pg_temp.try($$update public.item_versions set status = 'approved' where stem = '[synthetic] Library v2'$$), '^42501 TRACE_GUARD: a library item needs a reviewer and a key reviewer other than its author', 'library: a key reviewer is required');
-select is(pg_temp.try(format($$update public.item_versions set status = 'approved', key_reviewed_by = %L where stem = '[synthetic] Library v2'$$, pg_temp.id('lib_expert'))), 'OK 1', 'library: an expert other than the author approves and reviews the key');
+select matches(pg_temp.try($$update public.item_versions set status = 'approved' where stem = '[synthetic] Library v2'$$), '^42501 TRACE_GUARD: a library item needs a reviewer and a key reviewer other than its author', 'library: the key review comes before the approval');
+select matches(pg_temp.try(format($$update public.item_versions set key_reviewed_by = %L where stem = '[synthetic] Library v2'$$, pg_temp.id('lib_author'))), '^42501 TRACE_GUARD: the key reviewer records their own review', 'library (SEC-M1-4): an expert cannot record a key review in another member''s name');
+select matches(pg_temp.try(format($$update public.item_versions set status = 'approved', key_reviewed_by = %L where stem = '[synthetic] Library v2'$$, pg_temp.id('lib_expert'))), '^42501 TRACE_GUARD: the key review is recorded in its own update', 'library (SEC-M1-4): the approval does not name the key reviewer');
+select matches(pg_temp.try(format($$update public.item_versions set key_reviewed_by = %L, difficulty = 0.60 where stem = '[synthetic] Library v2'$$, pg_temp.id('lib_expert'))), '^42501 TRACE_GUARD: an item version is frozen once it leaves draft', 'library (SEC-M1-4): the key review changes nothing else');
+select is(pg_temp.try(format($$update public.item_versions set key_reviewed_by = %L where stem = '[synthetic] Library v2'$$, pg_temp.id('lib_expert'))), 'OK 1', 'library (SEC-M1-4): the expert records their own key review');
+select matches(pg_temp.try(format($$update public.item_versions set key_reviewed_by = %L where stem = '[synthetic] Library v2'$$, pg_temp.id('lib_author'))), '^42501 TRACE_GUARD: an item version is frozen once it leaves draft', 'library (SEC-M1-4): a recorded key review is final');
+select is(pg_temp.try($$update public.item_versions set status = 'approved' where stem = '[synthetic] Library v2'$$), 'OK 1', 'library: an expert other than the author approves after the key review');
 select pg_temp.op();
 select is((select (reviewed_by = pg_temp.id('lib_expert'))::text || '|' || (key_reviewed_by = pg_temp.id('lib_expert'))::text || '|' || (approved_by = pg_temp.id('lib_expert'))::text from public.item_versions where stem = '[synthetic] Library v2'), 'true|true|true', 'library: reviewer, key reviewer and approver recorded');
 
@@ -569,5 +615,8 @@ select pg_temp.op();
 select is((select count(*)::int from public.audit_log where (action like 'item.%' or action = 'library.copy') and exists (select 1 from jsonb_each(details) as e where jsonb_typeof(e.value) not in ('string', 'boolean', 'number'))), 0, 'AT-M1-25: no item or library audit row carries a nested or free-text structure');
 select is((select count(*)::int from public.audit_log where action in ('item.submit', 'item.approve', 'item.not_approved', 'item.retire') and pg_temp.keys(details) <> 'from,item_version_id,self_approved,to'), 0, 'AT-M1-25: every item transition carries exactly item_version_id, from, to, self_approved');
 select is((select count(*)::int from public.audit_log where action in ('item.submit', 'item.approve', 'item.not_approved', 'item.retire') and ((details ->> 'item_version_id') !~ '^[0-9a-f-]{36}$' or (details ->> 'from') not in ('draft', 'in_review', 'approved') or (details ->> 'to') not in ('in_review', 'approved', 'not_approved', 'retired'))), 0, 'AT-M1-25: transition values are an id and status enums');
+
+-- ===== DB-M1-10: the indexes behind the workspace reads and the library copy cap =====
+select is((select string_agg(indexname || ':' || indexdef, '; ' order by indexname) from pg_indexes where schemaname = 'public' and indexname in ('item_exposure_events_workspace_idx', 'section_pool_snapshot_workspace_idx', 'item_versions_library_copy_day_idx')), 'item_exposure_events_workspace_idx:CREATE INDEX item_exposure_events_workspace_idx ON public.item_exposure_events USING btree (org_id, workspace_id); item_versions_library_copy_day_idx:CREATE INDEX item_versions_library_copy_day_idx ON public.item_versions USING btree (org_id, origin, created_at) WHERE (origin = ''library''::text); section_pool_snapshot_workspace_idx:CREATE INDEX section_pool_snapshot_workspace_idx ON public.section_pool_snapshot USING btree (org_id, workspace_id)', 'DB-M1-10: exposure events and snapshot rows are indexed by workspace, library copies by org and day');
 select * from finish();
 rollback;
