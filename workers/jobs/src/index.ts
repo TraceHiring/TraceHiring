@@ -7,9 +7,11 @@
 // merge); any other queue is an error.
 // The stages (stream R2) are built per invocation from its env (queue/wiring.ts): each runs in its own
 // transaction as its own worker role; a missing secret or binding fails closed, so the message is retried and
-// then dead-lettered, never acked without its results. The sweep runs private.sweep_pending as trace_worker.
+// then dead-lettered, never acked without its results. The sweep runs private.sweep_pending as trace_worker; the same
+// cron fails stranded queued drafting jobs as the authoring worker (drafting/sweep.ts, R5-64 m).
 import { createApp } from './app.js';
 import { createDraftingConsumer } from './drafting/consumer.js';
+import { draftSweepFor } from './drafting/sweep.js';
 import { draftingDepsFor } from './drafting/wiring.js';
 import { sentryReporter, withErrorReporting } from './error-reporting.js';
 import { createMembersConsumer } from './members/consumer.js';
@@ -23,6 +25,7 @@ const { queue: mirrorQueue, scheduled } = createQueueHandlers({
   reporter: sentryReporter,
   stages: (env) => stagesFor(env),
   pendingStages: (limit, env) => pendingStagesFor(limit, env),
+  draftSweep: (env) => draftSweepFor(env),
 });
 
 const queue = dispatchQueue({

@@ -26,9 +26,21 @@ export interface QueueHandlerDeps {
   stages: Stages | ((env: Env) => Stages);
   /** The database part of the sweep: private.sweep_pending(limit), with the invocation's env. */
   pendingStages(limit: number, env: Env): Promise<readonly PendingStage[]>;
+  /**
+   * The stranded drafting-job sweep (R5-64 m), run on every tick beside the mirror sweep and independent of its
+   * bindings. Absent: not run.
+   */
+  draftSweep?: ((env: Env) => Promise<unknown>) | undefined;
   /** Where log lines go. Defaults to the logger's own sink (console). Tests inject their own. */
   sink?: ((line: string) => void) | undefined;
 }
+
+/** Settles every task; then throws the first rejection, if any (each task has run to its end). */
+const allOrFirstError = async (tasks: readonly Promise<unknown>[]): Promise<void> => {
+  const settled = await Promise.allSettled(tasks);
+  const failed = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected');
+  if (failed !== undefined) throw failed.reason;
+};
 
 export interface QueueHandlers {
   queue: ExportedHandlerQueueHandler<Env, unknown>;
@@ -55,17 +67,24 @@ export const createQueueHandlers = (deps: QueueHandlerDeps): QueueHandlers => ({
   },
 
   scheduled: async (_controller, env, ctx) => {
-    const queue = env.MIRROR_QUEUE;
-    const evidence = env.EVIDENCE;
-    if (queue === undefined || evidence === undefined) throw new Error(BINDING_UNAVAILABLE);
-    const { log } = loggerFor(env, deps.sink);
-    const run = runSweep({
-      pendingStages: (limit) => deps.pendingStages(limit, env),
-      readMirror: r2TextReader(evidence),
-      send: queueSender(queue),
-      log,
-    });
-    // The invocation stays alive until the sweep ends. The rejection is not swallowed: awaiting
+    const mirrorSweep = async (): Promise<void> => {
+      const queue = env.MIRROR_QUEUE;
+      const evidence = env.EVIDENCE;
+      if (queue === undefined || evidence === undefined) throw new Error(BINDING_UNAVAILABLE);
+      const { log } = loggerFor(env, deps.sink);
+      await runSweep({
+        pendingStages: (limit) => deps.pendingStages(limit, env),
+        readMirror: r2TextReader(evidence),
+        send: queueSender(queue),
+        log,
+      });
+    };
+    const draftSweep = deps.draftSweep;
+    const run = allOrFirstError([
+      mirrorSweep(),
+      ...(draftSweep === undefined ? [] : [draftSweep(env)]),
+    ]);
+    // The invocation stays alive until both sweeps end. The rejection is not swallowed: awaiting
     // `run` hands it to the error-reporting wrapper, so a failed sweep is reported once.
     ctx.waitUntil(run.catch(() => undefined));
     await run;

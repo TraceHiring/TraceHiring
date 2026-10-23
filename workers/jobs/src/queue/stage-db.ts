@@ -14,7 +14,8 @@ import {
 import { connect as cfConnect } from 'cloudflare:sockets';
 import postgres from 'postgres';
 
-export type StageDbName = 'mirror' | 'quality' | 'integrity' | 'sweep' | 'authoring' | 'admin';
+export type StageDbName =
+  'mirror' | 'quality' | 'integrity' | 'sweep' | 'authoring' | 'admin' | 'authoring_sweep';
 type Secret =
   | 'JOBS_MIRROR_DB_URL'
   | 'JOBS_QUALITY_DB_URL'
@@ -61,6 +62,13 @@ export const STAGE_DB: Readonly<
     role: 'trace_authoring_worker',
   },
   admin: { binding: 'JOBS_ADMIN_DB', secret: 'JOBS_ADMIN_DB_URL', role: 'trace_admin_worker' },
+  // R5-64 m: the stranded drafting-job sweep (private.fail_stranded_ai_draft_jobs is EXECUTE to the authoring worker
+  // only) reads every org, on the authoring login.
+  authoring_sweep: {
+    binding: 'JOBS_AUTHORING_DB',
+    secret: 'JOBS_AUTHORING_DB_URL',
+    role: 'trace_authoring_worker',
+  },
 });
 
 const SET_ROLE_SQL: Readonly<Record<WorkerRole, string>> = Object.freeze({
@@ -94,8 +102,9 @@ export const createStageDb = (
   newRequestId: () => string = () => crypto.randomUUID(),
 ): StageDb => ({
   withOrg: (orgId, fn) => {
-    // Only the sweep reads across orgs (sweep_pending); every other stage is bound to one org.
-    if (orgId === null ? stage !== 'sweep' : !UUID.test(orgId)) {
+    // Only the two sweeps read across orgs (sweep_pending, fail_stranded_ai_draft_jobs); every other stage is bound
+    // to one org.
+    if (orgId === null ? stage !== 'sweep' && stage !== 'authoring_sweep' : !UUID.test(orgId)) {
       return Promise.reject(new Error('bad_org'));
     }
     return begin(async (run) => {
