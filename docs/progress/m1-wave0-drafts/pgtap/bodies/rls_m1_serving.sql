@@ -48,6 +48,7 @@ select pg_temp.inline('iv1', 'sv1');
 select pg_temp.publish('v1');
 select pg_temp.session('a', 'v2', 11);
 select pg_temp.session('b', 'v2', 12);
+select pg_temp.session('d', 'v2', 14);
 select pg_temp.session('c', 'v1', 13);
 -- si(key, session, section, item, position, served, variant, option order): one session_items insert as the mirror
 -- (trace_worker bound to org A); returns try()'s result. Records <key> = the row id.
@@ -100,6 +101,12 @@ select pg_temp.u('owner');
 select is(pg_temp.try(format($$update public.item_versions set status = 'retired' where id = %L$$, pg_temp.id('s5'))), 'OK 1', 'E3: a snapshotted item is retired');
 select pg_temp.op();
 select is(pg_temp.si('b_s5', 'b', 'sp', 's5', 3, true), 'OK 1', 'E3: a retired item of the published snapshot is still served');
+
+-- ===== DB-M1-4 (R5-19 slots): a pool section stores at most its draw, in positions 1..draw_count =====
+select matches(pg_temp.si('x13', 'a', 'sp', 's4', 2, true), '^42501 TRACE_GUARD: the section''s draw is full', 'DB-M1-4: a fourth row in a section that draws 3 is refused');
+select matches(pg_temp.si('x14', 'd', 'sp', 's4', 4, false), '^42501 TRACE_GUARD: the position is outside the section''s draw', 'DB-M1-4: a position past the draw is refused');
+select is(pg_temp.si('d_s4', 'd', 'sp', 's4', 3, false), 'OK 1', 'DB-M1-4: a position within the draw is stored');
+select is((select count(*)::int from public.item_exposure_events where session_item_id = pg_temp.id('d_s4')), 0, 'DB-M1-4: the drawn row writes no exposure');
 
 -- ===== Package v1 (AT-M1-28): the D1 rule stands =====
 select is(pg_temp.si('c_iv1', 'c', 'sv1', 'iv1', 1, true), 'OK 1', 'v1 (AT-M1-28): a D1-style version still serves its inline item');

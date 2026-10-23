@@ -46,6 +46,24 @@ select pg_temp.op();
 insert into pg_temp.ids select 'copy_la1', id from public.item_versions where org_id = pg_temp.id('A') and source_item_version_id = pg_temp.id('la1');
 insert into pg_temp.ids select 'copy_param', id from public.item_versions where org_id = pg_temp.id('A') and source_item_version_id = 'c2100000-0000-4000-8000-000000000002';
 
+-- ===== SEC-M1-1 (I-M1-5): a library copy never carries the key inside its param_spec =====
+select is((select (param_spec is not null)::text || '|' || (param_spec ? 'correctOptionId')::text || '|' || (param_spec = (select s.param_spec - 'correctOptionId' from public.item_versions as s where s.id = 'c2100000-0000-4000-8000-000000000002'))::text from public.item_versions where id = pg_temp.id('copy_param')), 'true|false|true', 'SEC-M1-1: the copy keeps the library param_spec without correctOptionId');
+select pg_temp.u('owner');
+select is((select count(*)::int || '|' || (count(*) filter (where param_spec ? 'correctOptionId'))::int from public.item_versions where source_item_version_id is not null and param_spec is not null), '1|0', 'SEC-M1-1: owner reads the parameterised copy, never its key');
+select pg_temp.u('admin');
+select is((select count(*)::int || '|' || (count(*) filter (where param_spec ? 'correctOptionId'))::int from public.item_versions where source_item_version_id is not null and param_spec is not null), '1|0', 'SEC-M1-1: admin reads the parameterised copy, never its key');
+select pg_temp.u('recruiter');
+select is((select count(*)::int || '|' || (count(*) filter (where param_spec ? 'correctOptionId'))::int from public.item_versions where source_item_version_id is not null and param_spec is not null), '1|0', 'SEC-M1-1: recruiter reads the parameterised copy, never its key');
+select pg_temp.u('reviewer');
+select is((select count(*)::int || '|' || (count(*) filter (where param_spec ? 'correctOptionId'))::int from public.item_versions where source_item_version_id is not null and param_spec is not null), '1|0', 'SEC-M1-1: reviewer reads the parameterised copy, never its key');
+select pg_temp.u('owner');
+select matches(pg_temp.try($$insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, is_parameterised, param_spec, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c2000000-0000-4000-8000-000000000003', 'mcq', '[synthetic] Org A param v2', '[{"id": "o1", "text": "a + 1"}, {"id": "o2", "text": "a"}]', 'quant', 0.50, true, '{"params": {"a": {"kind": "int", "min": 1, "max": 9, "step": 1}}, "stem": "What is {{a}} + 1?", "options": [{"id": "o1", "text": "{{a}} + 1"}, {"id": "o2", "text": "{{a}}"}], "count": 5}', repeat('c', 64))$$), '^23514', 'SEC-M1-1: an authored parameterised item names its correct option (only a library copy omits it)');
+select pg_temp.op();
+insert into public.items (id, org_id, workspace_id, format, skill_key) values
+  ('c2000000-0000-4000-8000-000000000009', pg_temp.id('A'), pg_temp.id('A2'), 'mcq', 'quant');
+select matches(pg_temp.try($$insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, is_parameterised, param_spec, origin, source_item_version_id, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c2000000-0000-4000-8000-000000000009', 'mcq', '[synthetic] Copy with key', '[{"id": "o1", "text": "a + 1"}, {"id": "o2", "text": "a"}]', 'quant', 0.50, true, '{"params": {"a": {"kind": "int", "min": 1, "max": 9, "step": 1}}, "stem": "What is {{a}} + 1?", "options": [{"id": "o1", "text": "{{a}} + 1"}, {"id": "o2", "text": "{{a}}"}], "correctOptionId": "o1", "count": 5}', 'library', 'c2100000-0000-4000-8000-000000000002', repeat('c', 64))$$), '^23514', 'SEC-M1-1: a library-origin row carrying correctOptionId breaks its CHECK, even on the operator path');
+select is((select pg_get_function_result('private.library_browse(uuid, text, text[], text, public.section_format, numeric, numeric, uuid, int)'::regprocedure) !~ '(param_spec|correct|answer|option_id)'), true, 'SEC-M1-1: library browse returns no param_spec and no key-like column');
+
 -- ===== I-M1-5 / AT-M1-22: library-sourced keys are invisible to every org role =====
 select is((select count(*)::int from public.item_answer_keys where library_sourced) || '/' || (select count(*)::int from public.item_variant_keys where library_sourced), '1/1', 'fixture: the copy brought one base key and one variant key, both library_sourced');
 select pg_temp.u('owner');
@@ -131,3 +149,23 @@ select is((select count(*)::int from private.library_browse('00000000-0000-4000-
 select pg_temp.u('owner');
 select matches(pg_temp.try($$select * from private.library_browse(null, null, null, null, null, null, null, null, 50)$$), '^42501', 'library browse: authenticated cannot call it');
 select pg_temp.op();
+
+-- ===== SEC-M1-5: a library copy keeps the library prefix of its images (the one cross-org prefix allowed) =====
+insert into public.items (id, org_id, workspace_id, format, skill_key, created_by) values
+  ('c2000000-0000-4000-8000-0000000000f1', pg_temp.id('L'), pg_temp.id('LW'), 'mcq', 'verbal', pg_temp.id('lib_author'));
+insert into public.item_versions (id, org_id, item_id, format, stem, options, skill_key, difficulty, media, content_sha256, created_by) values
+  ('c2100000-0000-4000-8000-0000000000f1', pg_temp.id('L'), 'c2000000-0000-4000-8000-0000000000f1', 'mcq', '[synthetic] Library item with image',
+   '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50,
+   jsonb_build_array(jsonb_build_object('key', 'item-media/' || pg_temp.id('L') || '/' || repeat('a', 64) || '.png', 'alt', 'A chart')),
+   repeat('c', 64), pg_temp.id('lib_author'));
+insert into public.item_answer_keys (org_id, item_version_id, format, key) values (pg_temp.id('L'), 'c2100000-0000-4000-8000-0000000000f1', 'mcq', '{"option_id": "o1"}');
+update public.item_versions set status = 'in_review' where id = 'c2100000-0000-4000-8000-0000000000f1';
+update public.item_versions set status = 'approved', approved_by = pg_temp.id('lib_expert'), reviewed_by = pg_temp.id('lib_expert'), key_reviewed_by = pg_temp.id('lib_expert') where id = 'c2100000-0000-4000-8000-0000000000f1';
+select pg_temp.u('owner');
+select is(pg_temp.try($$insert into public.library_copy_requests (org_id, workspace_id, library_item_version_ids) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000002', array['c2100000-0000-4000-8000-0000000000f1']::uuid[])$$), 'OK 1', 'SEC-M1-5: a library item with an image is copied into workspace A2');
+select pg_temp.op();
+select is((select split_part(media -> 0 ->> 'key', '/', 2) from public.item_versions where org_id = pg_temp.id('A') and source_item_version_id = 'c2100000-0000-4000-8000-0000000000f1'), pg_temp.id('L')::text, 'SEC-M1-5: the copy keeps the library image prefix');
+
+-- ===== DB-M1-6 (R5-33): answer keys are never truncated, even by the owner =====
+select matches(pg_temp.try('truncate public.item_answer_keys'), '^42501 TRACE_GUARD: bank content is never truncated', 'DB-M1-6: TRUNCATE item_answer_keys is refused on the operator path');
+select is((select tgenabled::text from pg_trigger where tgrelid = 'public.item_answer_keys'::regclass and tgname = 'item_answer_keys_no_truncate'), 'A', 'DB-M1-6: the truncate trigger is ENABLE ALWAYS');

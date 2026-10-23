@@ -202,14 +202,17 @@ begin
 end
 $f$;
 -- sec(key, version key, position, format, pool, draw, weight): a section of a draft version on the operator path, with
--- package-v2 navigation (written sections forward-only). A null pool makes an inline section. Records <key>.
+-- package-v2 navigation (written sections forward-only, with the Standard preset's paste rule allowed_logged, DB-M1-1).
+-- A null pool makes an inline section. Records <key>.
 create function pg_temp.sec(p_key text, p_tv text, p_pos int, p_format text, p_pool uuid, p_draw int, p_weight numeric)
 returns uuid language plpgsql as $f$
 declare v_id uuid;
 begin
-  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation)
+  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation,
+      paste_rule)
     select v.org_id, v.id, p_pos, 'Section ' || p_key, p_format::public.section_format, p_weight, p_pool, p_draw,
-      case when p_format = 'written' then 'forward_only' else 'free' end
+      case when p_format = 'written' then 'forward_only' else 'free' end,
+      case when p_format = 'written' then 'allowed_logged' end
     from public.test_versions as v where v.id = pg_temp.id(p_tv)
     returning id into v_id;
   insert into pg_temp.ids values (p_key, v_id);
@@ -280,7 +283,8 @@ begin
 end
 $f$;
 -- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review (the operator path names origin, as the
--- authoring worker's write path would; its answer key is added by the authoring worker). Records <key>, <key>_item.
+-- authoring worker's write path would; its answer key is added on the operator path too, since the worker writes only
+-- for a running drafting job, which M1-c brings, SEC-M1-3). Records <key>, <key>_item.
 create function pg_temp.ai_draft(p_key text, p_org uuid, p_ws uuid) returns uuid language plpgsql as $f$
 declare v_item uuid; v_ver uuid;
 begin
@@ -291,9 +295,7 @@ begin
     values (p_org, v_item, 'mcq', '[synthetic] AI draft ' || p_key,
       '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', repeat('c', 64))
     returning id into v_ver;
-  perform pg_temp.w('trace_authoring_worker', p_org);
   insert into public.item_answer_keys (org_id, item_version_id, format, key) values (p_org, v_ver, 'mcq', '{"option_id": "o1"}');
-  perform pg_temp.op();
   insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
   return v_ver;
 end
@@ -323,7 +325,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(51);
+select plan(55);
 -- Fixtures (operator path): approved MCQ bank items v1..v10 and w1..w100 in workspace A1; pools PA = v1..v10,
 -- PB = w1..w99, PC = w1..w100, PD = {v1, w1} (overlaps PA); org B pool PBB = 10 items.
 select pg_temp.bank('v' || n, pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'approved') from generate_series(1, 10) as n;
@@ -461,5 +463,28 @@ select pg_temp.op();
 select is((select count(*)::int from public.section_pool_snapshot where section_id = pg_temp.id('sa')), 10, 'E3: the published snapshot keeps all 10 items');
 select is((select min_pool_ratio::text from public.test_versions where id = pg_temp.id('ta')), '10.00', 'E3: the published ratio is unchanged');
 select matches(pg_temp.try(format($$select private.assert_drive_pool_ratio(%L, %L)$$, pg_temp.id('A'), pg_temp.id('ta'))), '^OK', 'E3: the drive check reads the frozen snapshot, so ta still passes');
+
+-- ===== E22 (DB-M1-12): a version holds at most 5,000 items, which also bounds min_pool_ratio =====
+-- Pool PH = 5,001 approved written items in workspace A1 (operator path); version th draws 1 from it.
+select pg_temp.op();
+create temp table huge_src as select gen_random_uuid() as item, gen_random_uuid() as ver, n from generate_series(1, 5001) as n;
+insert into public.items (id, org_id, workspace_id, format, skill_key, created_by)
+  select item, pg_temp.id('A'), pg_temp.id('A1'), 'written', 'written_communication', pg_temp.id('owner') from huge_src;
+insert into public.item_versions (id, org_id, item_id, format, stem, rubric_version_id, skill_key, difficulty, content_sha256, created_by)
+  select ver, pg_temp.id('A'), item, 'written', '[synthetic] Huge ' || n, (select r.id from public.rubric_versions as r where r.org_id = pg_temp.id('A') and r.rubric_key = 'default'), 'written_communication', 0.50, repeat('e', 64), pg_temp.id('owner') from huge_src;
+update public.item_versions set status = 'in_review' where id in (select ver from huge_src);
+update public.item_versions set status = 'approved', approved_by = pg_temp.id('owner') where id in (select ver from huge_src);
+insert into public.pools (id, org_id, workspace_id, name, format) values
+  ('d1000000-0000-4000-8000-0000000000ee', pg_temp.id('A'), pg_temp.id('A1'), 'Pool huge', 'written');
+insert into public.pool_items (org_id, pool_id, item_version_id)
+  select pg_temp.id('A'), 'd1000000-0000-4000-8000-0000000000ee'::uuid, ver from huge_src;
+select pg_temp.tv('th', pg_temp.id('A'), pg_temp.id('A1'));
+select pg_temp.sec('sh', 'th', 1, 'written', 'd1000000-0000-4000-8000-0000000000ee', 1, 100);
+select pg_temp.preset('th', 'standard');
+select matches(pg_temp.try($$select pg_temp.publish('th')$$), '^42501 TRACE_GUARD: a version holds at most 5,000 items', 'publish (E22, DB-M1-12): a snapshot of more than 5,000 items is refused');
+select is((select count(*)::int from public.section_pool_snapshot where test_version_id = pg_temp.id('th')), 0, 'publish (E22): the refused publish wrote no snapshot');
+delete from public.pool_items where pool_id = 'd1000000-0000-4000-8000-0000000000ee' and item_version_id = (select ver from huge_src where n = 5001);
+select is(pg_temp.try($$select pg_temp.publish('th')$$), 'OK 1', 'publish (E22): exactly 5,000 items publish');
+select is((select min_pool_ratio::text from public.test_versions where id = pg_temp.id('th')), '5000.00', 'publish (E22): min_pool_ratio stays within numeric(6, 2)');
 select * from finish();
 rollback;

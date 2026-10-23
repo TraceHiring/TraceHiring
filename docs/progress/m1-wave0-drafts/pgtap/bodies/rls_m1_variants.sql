@@ -69,3 +69,26 @@ select pg_temp.u('ws_recruiter');
 select matches(pg_temp.try($$update public.item_versions set status = 'in_review' where id = 'c2100000-0000-4000-8000-000000000002'$$), '^42501 TRACE_GUARD: every variant needs its answer key', 'readiness: the A2 item without variant keys cannot be submitted');
 select is(pg_temp.try($$delete from public.item_variants where item_version_id = 'c2100000-0000-4000-8000-000000000002'$$), 'OK 1', 'regeneration: the A2 variant is deleted');
 select matches(pg_temp.try($$update public.item_versions set status = 'in_review' where id = 'c2100000-0000-4000-8000-000000000002'$$), '^42501 TRACE_GUARD: a parameterised item needs its variants', 'readiness: a parameterised item without variants cannot be submitted');
+
+-- ===== DB-M1-6 (R5-33): variants and their keys are never truncated, even by the owner =====
+select pg_temp.op();
+-- TRUNCATE CASCADE from item_variants reaches the append-only D1 tables whose TRUNCATE is revoked from the owner; the
+-- privilege is re-granted for this rolled-back test (as rls_d1_consents does), so only a trigger can refuse it. The named
+-- table's BEFORE TRUNCATE trigger fires first.
+do $do$
+declare
+  r record;
+begin
+  for r in
+    select c.oid::regclass as rel from pg_class as c
+    where c.relnamespace in ('public'::regnamespace, 'quality'::regnamespace, 'integrity'::regnamespace)
+      and c.relkind in ('r', 'p') and not has_table_privilege('postgres', c.oid, 'TRUNCATE')
+  loop
+    execute format('grant truncate on %s to postgres', r.rel);
+  end loop;
+end
+$do$;
+select matches(pg_temp.try('truncate public.item_variants cascade'), '^42501 TRACE_GUARD: bank content is never truncated', 'DB-M1-6: TRUNCATE item_variants is refused on the operator path');
+select matches(pg_temp.try('truncate public.item_variant_keys'), '^42501 TRACE_GUARD: bank content is never truncated', 'DB-M1-6: TRUNCATE item_variant_keys is refused on the operator path');
+select is((select string_agg(tgname || '=' || tgenabled::text, ',' order by tgname) from pg_trigger where tgname in ('item_variants_no_truncate', 'item_variant_keys_no_truncate')), 'item_variant_keys_no_truncate=A,item_variants_no_truncate=A', 'DB-M1-6: both truncate triggers are ENABLE ALWAYS');
+select is((select count(*)::int from public.item_variants) > 0, true, 'DB-M1-6: the variants are still there');
