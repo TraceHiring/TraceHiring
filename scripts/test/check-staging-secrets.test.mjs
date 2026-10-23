@@ -27,11 +27,11 @@ const listed = (...names) =>
 const ok = (stdout) => ({ status: 0, stdout, stderr: '' });
 
 describe('ALLOW_LIST', () => {
-  it('is exactly the D1 list (specs/d1-demo-slice.md §7.1, L-10, revision 4o): edge none, api 2, jobs none', () => {
+  it('is exactly the D1 list widened by M1 R5-12 (d1 §7.1 revision 4q): edge none, api 3, jobs 2', () => {
     expect(ALLOW_LIST).toEqual({
       edge: [],
-      api: ['CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY'],
-      jobs: [],
+      api: ['CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY', 'MEMBER_INVITE_PEPPER'],
+      jobs: ['MEMBER_INVITE_PEPPER', 'SUPABASE_SECRET_KEY_JOBS'],
     });
   });
 
@@ -48,9 +48,21 @@ describe('ALLOW_LIST', () => {
       expect(all, name).not.toContain(name);
   });
 
-  it('gives each secret to exactly one Worker', () => {
+  it('gives each secret to exactly one Worker, except the invite pepper api and jobs share (M1 R5-12)', () => {
     const all = Object.values(ALLOW_LIST).flat();
-    expect(new Set(all).size).toBe(all.length);
+    const shared = all.filter((name, i) => all.indexOf(name) !== i);
+    expect(shared).toEqual(['MEMBER_INVITE_PEPPER']);
+    expect(ALLOW_LIST.api).toContain('MEMBER_INVITE_PEPPER');
+    expect(ALLOW_LIST.jobs).toContain('MEMBER_INVITE_PEPPER');
+    for (const list of Object.values(ALLOW_LIST)) expect(new Set(list).size).toBe(list.length);
+  });
+
+  it('keeps the Supabase secret key on jobs only (member provisioning, M1-20), never api or edge', () => {
+    expect(ALLOW_LIST.jobs).toContain('SUPABASE_SECRET_KEY_JOBS');
+    expect(ALLOW_LIST.api).not.toContain('SUPABASE_SECRET_KEY_JOBS');
+    expect(checkWorker('api', ok(listed('SUPABASE_SECRET_KEY_JOBS')))).toEqual([
+      expect.stringMatching(/^api: secret SUPABASE_SECRET_KEY_JOBS is not in the allow-list/),
+    ]);
   });
 
   it('cannot be extended at run time', () => {
@@ -134,6 +146,9 @@ describe('checkWorker', () => {
     ['jobs', 'JOBS_MIRROR_DB_URL'],
     ['jobs', 'JOBS_QUALITY_DB_URL'],
     ['jobs', 'JOBS_INTEGRITY_DB_URL'],
+    // M1 R5-11: the two new local-only twins are never a staging secret.
+    ['jobs', 'JOBS_AUTHORING_DB_URL'],
+    ['jobs', 'JOBS_ADMIN_DB_URL'],
   ])('rejects the retired %s secret %s (now a Hyperdrive config)', (worker, name) => {
     expect(ALLOW_LIST[worker]).not.toContain(name);
     expect(checkWorker(worker, ok(listed(name)))).toEqual([

@@ -19,11 +19,18 @@ import { isEntryPoint } from './lib/cli.mjs';
  * On staging the database logins live in Hyperdrive configs reached through Hyperdrive bindings (ADR-031
  * amendment 1, d1 revision 4o), so API_DB_URL and the three JOBS_*_DB_URL secrets are retired there; a leftover
  * one is a stale credential and fails this check (scripts/ops/staging-worker-secrets.mjs deletes them).
+ * M1 R5-12 (specs/m1-test-authoring.md; d1 revision 4q) widens it for member provisioning (M1-20): the invite pepper
+ * on api (issues invites) and jobs (provisions members), and the Supabase secret key on jobs only (the admin API
+ * "create user" call, DC-M1-5). Edge stays empty.
  */
 export const ALLOW_LIST = Object.freeze({
   edge: Object.freeze([]),
-  jobs: Object.freeze([]),
-  api: Object.freeze(['CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY']),
+  jobs: Object.freeze(['MEMBER_INVITE_PEPPER', 'SUPABASE_SECRET_KEY_JOBS']),
+  api: Object.freeze([
+    'CANDIDATE_TOKEN_PRIVATE_JWK',
+    'MEDIA_LINK_HMAC_KEY',
+    'MEMBER_INVITE_PEPPER',
+  ]),
 });
 
 /** Where each Worker's wrangler.jsonc lives, in check order. */
