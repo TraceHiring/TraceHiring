@@ -37,3 +37,10 @@ export const hexEqual = (a: string, b: string): boolean => {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 };
+
+/** The pepper's minimum length in UTF-8 bytes: one rule for the api (writes the invite) and the jobs (check it). */
+export const PEPPER_MIN_BYTES = 32;
+
+/** True when the pepper is set and at least PEPPER_MIN_BYTES UTF-8 bytes long; anything else fails closed. */
+export const pepperStrongEnough = (pepper: string | undefined): boolean =>
+  pepper !== undefined && new TextEncoder().encode(pepper).length >= PEPPER_MIN_BYTES;

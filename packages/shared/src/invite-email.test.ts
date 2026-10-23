@@ -3,7 +3,14 @@
 // bytes, 64 lower-case hex; compared in constant time.
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { hexEqual, hmacSha256Hex, inviteEmailHmac, normaliseInviteEmail } from './invite-email.js';
+import {
+  hexEqual,
+  hmacSha256Hex,
+  inviteEmailHmac,
+  normaliseInviteEmail,
+  PEPPER_MIN_BYTES,
+  pepperStrongEnough,
+} from './invite-email.js';
 
 describe('invite email HMAC (shared by the api and the jobs, A3b lead ask)', () => {
   it('hmacSha256Hex matches the RFC-style known vector', async () => {
@@ -23,6 +30,14 @@ describe('invite email HMAC (shared by the api and the jobs, A3b lead ask)', () 
       .digest('hex');
     expect(await inviteEmailHmac(' P-SOMEONE@example.test ', pepper)).toBe(expected);
     expect(await inviteEmailHmac('p-someone@example.test', `${pepper}x`)).not.toBe(expected);
+  });
+
+  it('pepperStrongEnough: at least PEPPER_MIN_BYTES (32) UTF-8 bytes, the one rule for the api and the jobs', () => {
+    expect(PEPPER_MIN_BYTES).toBe(32);
+    expect(pepperStrongEnough('x'.repeat(32))).toBe(true);
+    expect(pepperStrongEnough('x'.repeat(31))).toBe(false);
+    expect(pepperStrongEnough('é'.repeat(16))).toBe(true); // 32 bytes in 16 characters
+    expect(pepperStrongEnough(undefined)).toBe(false);
   });
 
   it('refuses an empty pepper', async () => {
