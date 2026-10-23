@@ -933,7 +933,8 @@ describe('EvidenceEventLine (events.ndjson, L-21, rule 7)', () => {
 
 /** Keys of the signal envelope and payload (everything in ClientEvent except answer-only keys). */
 function isSignalKey(key: string): boolean {
-  return !['p', 'd', 'i', 'option'].includes(key);
+  // Answer-edit keys, and section.finish's sectionId (M1): neither kind is an evidence line.
+  return !['p', 'd', 'i', 'option', 'sectionId'].includes(key);
 }
 
 describe('FinalAnswers (final.json, §4.4)', () => {
@@ -1389,7 +1390,7 @@ const viewV2 = {
 describe('ServedItemV2 and SessionViewV2 (R5-9, §4.6)', () => {
   it('a served item carries media {hash, alt}, options in served order and its variant id', () => {
     expect(ServedItemV2.parse(servedV2)).toEqual(servedV2);
-    const { media: _m, variantId: _v, ...plain } = servedV2;
+    const plain = { ...servedV2, media: undefined, variantId: undefined };
     expect(ok(ServedItemV2, plain)).toBe(true);
     const keyed = { ...servedV2, media: [{ hash: HEX, alt: 'x', key: 'item-media/x.png' }] };
     expect(ok(ServedItemV2, keyed)).toBe(false);
@@ -1575,13 +1576,17 @@ describe('SessionMirrorMessage v1 | v2 (R5-8, R5-19, R5-42; AT-M1-21)', () => {
   ])('refuses %s', (_label, patch) => {
     expect(ok(SessionMirrorMessage, { ...mirrorV2, ...patch })).toBe(false);
   });
-  it('v2 carries no signal list, answer text, key or identity beyond ids', () => {
+  it('v2 carries no signal list, answer text, answer key or identity beyond ids', () => {
     expect(
       keysMatching(
         SessionMirrorMessageV2,
-        /signals|text|answer|score|band|name|email|ip$|correct|^key$/i,
+        /signals|text|answer|score|band|name|email|ip$|correct|rubric/i,
       ),
     ).toEqual([]);
+    // The only "key" names are v1's storage keys (jobKey, evidence keys, photo key); v2 adds none.
+    expect(keysMatching(SessionMirrorMessageV2, /key/i)).toEqual(
+      keysMatching(SessionMirrorMessageV1, /key/i),
+    );
     expect(allObjectsStrict(SessionMirrorMessageV2)).toBe(true);
   });
 });

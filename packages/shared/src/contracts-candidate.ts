@@ -1,8 +1,11 @@
 // D1 candidate wire contracts (specs/d1-demo-slice.md §4.2-§4.6). Every object schema is strict: an unknown key fails.
 // Nothing here can carry a score, band, outcome, answer key or another person's data (CLAUDE.md rules 1, 5, 7).
 import { z } from 'zod';
+import { SIGNAL_CATALOG } from './signal-catalog.js';
 
 const Uuid = z.uuid();
+/** skill_taxonomy.skill_key, as contracts-m1's SkillKey (kept local: the candidate path imports no org contract). */
+const SkillKey = z.string().regex(/^[a-z][a-z0-9_]{1,40}$/);
 const Time = z.iso.datetime();
 const Sha256Hex = z.string().regex(/^[0-9a-f]{64}$/);
 const Position = z.int().min(1);
@@ -260,6 +263,13 @@ export const ClientEvent = z.discriminatedUnion('kind', [
   }),
   ClientSignal,
   z.strictObject({ seq: Position, t: z.int().min(0), kind: z.literal('heartbeat') }),
+  // M1 (R5-9, R5-20): the candidate leaves a section for good. v2 sessions only; there is no `item.view` event.
+  z.strictObject({
+    seq: Position,
+    t: z.int().min(0),
+    kind: z.literal('section.finish'),
+    sectionId: Uuid,
+  }),
 ]);
 export type ClientEvent = z.infer<typeof ClientEvent>;
 
@@ -320,12 +330,25 @@ export const EventBatchReq = z.strictObject({
   streamId: Uuid,
   events: z.array(ClientEvent).min(1).max(100),
 });
-export const EventBatchAck = z.strictObject({
-  ackSeq: z.int().min(0),
-  serverNow: Time,
-  deadlineAt: Time,
-  state: SessionState,
-});
+/**
+ * `refusedSeqs` (M1, R5-20): events of this stream acknowledged but recorded as refused (an answer for a closed
+ * section or a passed forward-only position). They advance `ackSeq` like accepted ones and never change an answer.
+ */
+export const EventBatchAck = z
+  .strictObject({
+    ackSeq: z.int().min(0),
+    serverNow: Time,
+    deadlineAt: Time,
+    state: SessionState,
+    refusedSeqs: z.array(Position).max(100).optional(),
+  })
+  .refine(
+    (ack) =>
+      ack.refusedSeqs === undefined ||
+      (new Set(ack.refusedSeqs).size === ack.refusedSeqs.length &&
+        ack.refusedSeqs.every((seq) => seq <= ack.ackSeq)),
+    { message: 'refusedSeqs are distinct and acknowledged' },
+  );
 export const SubmitReq = z.strictObject({ streamId: Uuid, finalSeq: z.int().min(0) });
 
 // ---- Errors ----------------------------------------------------------------------------------------------------
@@ -343,6 +366,9 @@ export const CANDIDATE_ERROR_STATUS = {
   link_expired: 410,
   link_revoked: 410,
   closed: 410,
+  // M1 (R5-20): an item GET for a position of a closed section, or below the highest served one in a forward-only
+  // section. An item GET is not an outbox event, so it never blocks the queue.
+  section_closed: 410,
   out_of_order: 409,
   too_large: 413,
   bad_media: 415,
@@ -440,9 +466,251 @@ export const TestPackage = z
   });
 export type TestPackage = z.infer<typeof TestPackage>;
 
+// ---- M1 package v2 and session v2 (specs/m1-test-authoring.md §4.6, §5; R5-9, R5-20) ------------------------------
+// The v1 shapes above are unchanged and still accepted. No answer key, rubric, weight, cutoff or score field here.
+
+const Navigation = z.enum(['free', 'forward_only']);
+const PasteRule = z.enum(['blocked', 'allowed_logged']);
+const DifficultyBand = z.int().min(0).max(4);
+type CatalogSignalName = keyof typeof SIGNAL_CATALOG.signals;
+const CatalogSignalName = z.enum(
+  Object.keys(SIGNAL_CATALOG.signals) as [CatalogSignalName, ...CatalogSignalName[]],
+);
+const PackageStratum = z.strictObject({
+  skillKey: SkillKey,
+  difficultyBand: DifficultyBand,
+  count: Position,
+});
+
+/**
+ * The package v2 the SessionDO draws from (R2 object ≤ 5 MB). A section with `draw` serves `draw.count` of its
+ * eligible items (strata, if any, add up to the count; none = one stratum of all items); a section without serves all
+ * its items. A candidate is served at most 100 items in total (R5-9); the package holds at most 5,000. An image is
+ * named by its content hash and extension, never by a storage key.
+ */
+export const TestPackageV2 = z
+  .strictObject({
+    v: z.literal(2),
+    testVersionId: Uuid,
+    rulesetVersionId: Uuid,
+    title: z.string().min(1).max(200),
+    language: z.literal('en'),
+    durationSeconds: z.int().min(60).max(7200),
+    heartbeatSeconds: z.literal(10),
+    signalCatalogVersion: z.string().min(1).max(64),
+    captureSignals: z.array(CatalogSignalName).max(5),
+    sections: z
+      .array(
+        z.strictObject({
+          id: Uuid,
+          title: z.string().min(1).max(120),
+          position: Position,
+          timeLimitSeconds: z.int().min(60).max(7200).optional(),
+          navigation: Navigation,
+          shuffleItems: z.boolean(),
+          shuffleOptions: z.boolean(),
+          pasteRule: PasteRule.optional(),
+          draw: z
+            .strictObject({ count: Position.max(100), strata: z.array(PackageStratum).max(20) })
+            .nullable(),
+        }),
+      )
+      .min(1)
+      .max(10),
+    items: z
+      .array(
+        z.strictObject({
+          sectionId: Uuid,
+          itemVersionId: Uuid,
+          itemId: Uuid,
+          kind: ItemKind,
+          prompt: z.string().min(1).max(4000),
+          options: McqOptions.optional(),
+          maxChars: z.int().min(1).max(10000).optional(),
+          media: z
+            .array(
+              z.strictObject({
+                hash: Sha256Hex,
+                ext: z.enum(['png', 'jpg', 'webp']),
+                alt: z.string().min(1).max(300),
+              }),
+            )
+            .min(1)
+            .max(4)
+            .optional(),
+          skillKey: SkillKey,
+          difficultyBand: DifficultyBand,
+          variants: z
+            .array(
+              z.strictObject({
+                variantId: Uuid,
+                prompt: z.string().min(1).max(4000),
+                options: McqOptions,
+              }),
+            )
+            .min(1)
+            .max(200)
+            .optional(),
+        }),
+      )
+      .min(1)
+      .max(5000),
+  })
+  .superRefine((pkg, ctx) => {
+    const issue = (path: (string | number)[], message: string) =>
+      ctx.addIssue({ code: 'custom', path, message });
+    if (new Set(pkg.captureSignals).size !== pkg.captureSignals.length) {
+      issue(['captureSignals'], 'duplicate signal');
+    }
+    if (new Set(pkg.sections.map((s) => s.id)).size !== pkg.sections.length) {
+      issue(['sections'], 'duplicate section id');
+    }
+    if (new Set(pkg.sections.map((s) => s.position)).size !== pkg.sections.length) {
+      issue(['sections'], 'duplicate section position');
+    }
+    const timed = pkg.sections.filter((s) => s.timeLimitSeconds !== undefined).length;
+    if (timed !== 0 && timed !== pkg.sections.length) {
+      issue(['sections'], 'section timers are all or none');
+    }
+    if (new Set(pkg.items.map((i) => i.itemVersionId)).size !== pkg.items.length) {
+      issue(['items'], 'an item version appears once');
+    }
+    const bySection = new Map(pkg.sections.map((s) => [s.id, [] as typeof pkg.items]));
+    pkg.items.forEach((item, index) => {
+      const list = bySection.get(item.sectionId);
+      if (list === undefined) issue(['items', index, 'sectionId'], 'unknown section');
+      else list.push(item);
+      const shapeOk =
+        item.kind === 'mcq'
+          ? item.options !== undefined && item.maxChars === undefined
+          : item.options === undefined && item.variants === undefined;
+      if (!shapeOk) issue(['items', index], 'options and variants belong to mcq items only');
+    });
+    let served = 0;
+    pkg.sections.forEach((section, s) => {
+      const eligible = bySection.get(section.id) ?? [];
+      if (eligible.length === 0) issue(['sections', s], 'a section has items');
+      if (section.draw === null) {
+        served += eligible.length;
+        return;
+      }
+      served += section.draw.count;
+      if (section.draw.count > eligible.length) {
+        issue(['sections', s, 'draw', 'count'], 'the draw exceeds the eligible items');
+      }
+      const strata = section.draw.strata;
+      if (strata.length > 0 && strata.reduce((n, st) => n + st.count, 0) !== section.draw.count) {
+        issue(['sections', s, 'draw', 'strata'], 'the strata must add up to the draw count');
+      }
+      strata.forEach((st, k) => {
+        const matching = eligible.filter(
+          (i) => i.skillKey === st.skillKey && i.difficultyBand === st.difficultyBand,
+        ).length;
+        if (st.count > matching) {
+          issue(['sections', s, 'draw', 'strata', k], 'the stratum exceeds its eligible items');
+        }
+      });
+    });
+    if (served > 100) issue(['sections'], 'a candidate is served at most 100 items');
+  });
+export type TestPackageV2 = z.infer<typeof TestPackageV2>;
+
+/** One served item of a v2 session: options already in served order, images by hash (fetched as bytes, R5-10). */
+export const ServedItemV2 = z
+  .strictObject({
+    position: Position,
+    kind: ItemKind,
+    sectionId: Uuid,
+    prompt: z.string().min(1).max(4000),
+    options: McqOptions.optional(),
+    maxChars: z.int().min(1).max(10000).optional(),
+    media: z
+      .array(z.strictObject({ hash: Sha256Hex, alt: z.string().min(1).max(300) }))
+      .min(1)
+      .max(4)
+      .optional(),
+    variantId: Uuid.optional(),
+    servedAt: Time,
+  })
+  .refine(
+    (item) =>
+      item.kind === 'mcq'
+        ? item.options !== undefined && item.maxChars === undefined
+        : item.options === undefined && item.variantId === undefined,
+    { message: 'options and variants belong to mcq items only' },
+  );
+export type ServedItemV2 = z.infer<typeof ServedItemV2>;
+
+/**
+ * The v2 session view. Section state and deadline are read from the DO, never the client clock (§4.6); `pasteRule`
+ * drives the rules text (R5-24). `v: 2` tells it apart from the v1 view, which keeps its single `pasteBlocked` flag.
+ */
+export const SessionViewV2 = z
+  .strictObject({
+    v: z.literal(2),
+    sessionId: Uuid,
+    state: SessionState,
+    serverNow: Time,
+    startedAt: Time,
+    deadlineAt: Time,
+    streamId: Uuid,
+    heartbeatSeconds: z.literal(10),
+    title: z.string().min(1).max(200),
+    sections: z
+      .array(
+        z.strictObject({
+          id: Uuid,
+          title: z.string().min(1).max(120),
+          position: Position,
+          navigation: Navigation,
+          pasteRule: PasteRule,
+          state: z.enum(['not_entered', 'open', 'closed']),
+          deadlineAt: Time.optional(),
+        }),
+      )
+      .min(1)
+      .max(10),
+    items: z
+      .array(
+        z.strictObject({
+          position: Position,
+          sectionId: Uuid,
+          kind: ItemKind,
+          servedAt: Time.nullable(),
+        }),
+      )
+      .min(1)
+      .max(100),
+    answers: z
+      .array(
+        z.union([
+          z.strictObject({ position: Position, text: StorableText(100000) }),
+          z.strictObject({ position: Position, choice: OptionId }),
+        ]),
+      )
+      .max(100),
+    receipt: Receipt.optional(),
+  })
+  .refine(
+    (view) => view.items.every((item) => view.sections.some((s) => s.id === item.sectionId)),
+    {
+      message: 'unknown section',
+    },
+  );
+export type SessionViewV2 = z.infer<typeof SessionViewV2>;
+
+export const SessionStartResV2 = z.union([
+  z.strictObject({ sessionToken: Jws, expiresAt: Time, view: SessionViewV2 }),
+  z.strictObject({ state: z.literal('submitted'), receipt: Receipt }),
+]);
+export type SessionStartResV2 = z.infer<typeof SessionStartResV2>;
+export const SessionAttachResV2 = z.strictObject({ view: SessionViewV2 });
+export type SessionAttachResV2 = z.infer<typeof SessionAttachResV2>;
+
 // ---- The one mirror message (SessionDO -> trace-session-mirror queue and R2 mirror.json; §4.4) ----------------------
 
-export const SessionMirrorMessage = z.strictObject({
+/** The D1 mirror message, unchanged (v1 sessions and the sweep's re-enqueued v1 mirror.json files). */
+export const SessionMirrorMessageV1 = z.strictObject({
   v: z.literal(1),
   jobKind: z.literal('session_mirror'),
   mirrorSeq: z.literal(1), // single mirror at submit in D1; forward-only column stays for M3a
@@ -500,6 +768,80 @@ export const SessionMirrorMessage = z.strictObject({
     .nullable(),
   photoSkippedReason: z.enum(['camera_denied', 'no_camera', 'declined']).nullable(),
 });
+export type SessionMirrorMessageV1 = z.infer<typeof SessionMirrorMessageV1>;
+
+/**
+ * The v2 mirror (package v2 sessions; R5-19, R5-42). Served rows gain their section, variant, option order and draw
+ * seed hash; `draws` lists, per entered pool section, the drawn item versions in draw order with a parallel list of
+ * variant ids (null for an item that is not parameterised). `poolSectionIds` names every pool section of the test
+ * version, so the contract can refuse a served pool item missing from its section's draw (R5-42): such a message is
+ * malformed and follows D1's retry -> DLQ path (R5-8). Positions are checked by the jobs code, not here.
+ */
+export const SessionMirrorMessageV2 = SessionMirrorMessageV1.extend({
+  v: z.literal(2),
+  served: z
+    .array(
+      z.strictObject({
+        position: z.number().int(),
+        itemVersionId: z.uuid(),
+        servedAt: z.iso.datetime(),
+        sectionId: z.uuid(),
+        itemVariantId: z.uuid().optional(),
+        optionOrder: z.array(OptionId).min(2).max(6).optional(),
+        drawSeedSha256: Sha256Hex.optional(),
+      }),
+    )
+    .max(100),
+  poolSectionIds: z.array(z.uuid()).max(10),
+  draws: z
+    .array(
+      z.strictObject({
+        sectionId: z.uuid(),
+        itemVersionIds: z.array(z.uuid()).min(1).max(100),
+        itemVariantIds: z.array(z.uuid().nullable()).min(1).max(100),
+      }),
+    )
+    .max(10),
+}).superRefine((msg, ctx) => {
+  const issue = (path: (string | number)[], message: string) =>
+    ctx.addIssue({ code: 'custom', path, message });
+  const pool = new Set(msg.poolSectionIds);
+  if (pool.size !== msg.poolSectionIds.length) issue(['poolSectionIds'], 'duplicate section');
+  const drawOf = new Map<string, { itemVersionIds: string[]; itemVariantIds: (string | null)[] }>();
+  msg.draws.forEach((draw, d) => {
+    if (!pool.has(draw.sectionId)) issue(['draws', d, 'sectionId'], 'not a pool section');
+    if (drawOf.has(draw.sectionId)) issue(['draws', d, 'sectionId'], 'one draw per section');
+    if (draw.itemVariantIds.length !== draw.itemVersionIds.length) {
+      issue(['draws', d, 'itemVariantIds'], 'one variant entry per drawn item');
+    }
+    if (new Set(draw.itemVersionIds).size !== draw.itemVersionIds.length) {
+      issue(['draws', d, 'itemVersionIds'], 'an item is drawn once');
+    }
+    drawOf.set(draw.sectionId, draw);
+  });
+  msg.served.forEach((row, s) => {
+    if (row.optionOrder !== undefined && new Set(row.optionOrder).size !== row.optionOrder.length) {
+      issue(['served', s, 'optionOrder'], 'option order is a permutation');
+    }
+    if (!pool.has(row.sectionId)) return;
+    const draw = drawOf.get(row.sectionId);
+    const at = draw === undefined ? -1 : draw.itemVersionIds.indexOf(row.itemVersionId);
+    if (draw === undefined || at < 0) {
+      issue(['served', s, 'itemVersionId'], 'a served pool item is missing from its draw');
+      return;
+    }
+    if ((row.itemVariantId ?? null) !== draw.itemVariantIds[at]) {
+      issue(['served', s, 'itemVariantId'], 'the served variant differs from the drawn one');
+    }
+  });
+});
+export type SessionMirrorMessageV2 = z.infer<typeof SessionMirrorMessageV2>;
+
+/** What `workers/jobs` parses (R5-8): v1 and v2, accepted before the edge emits v2 (deploy api -> jobs -> edge). */
+export const SessionMirrorMessage = z.discriminatedUnion('v', [
+  SessionMirrorMessageV1,
+  SessionMirrorMessageV2,
+]);
 export type SessionMirrorMessage = z.infer<typeof SessionMirrorMessage>;
 
 // ---- CandidateRpc (service binding edge -> services/api; §4.2) --------------------------------------------------

@@ -635,7 +635,7 @@ describe('IntegritySettingsRequest and IntegritySettingsView', () => {
   };
   it('the view marks every always-locked setting as always and the rest as admin at most', () => {
     expect(IntegritySettingsView.parse(view)).toEqual(view);
-    const { id_verification: _drop, ...missingAlways } = view.locked;
+    const missingAlways = { ...view.locked, id_verification: undefined };
     expect(ok(IntegritySettingsView, { ...view, locked: missingAlways })).toBe(false);
     expect(
       ok(IntegritySettingsView, { ...view, locked: { ...view.locked, paste_written: 'always' } }),
