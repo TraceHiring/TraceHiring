@@ -29,8 +29,11 @@ export interface RuleTableRow {
   coverage_floor_permille: number;
   coverage_photo_missing_factor_permille: number;
   rules: string;
-  /** The pinned ruleset's `signal_settings` (jsonb as text; M1 R5-52 f): handed to the engine as stored. */
-  signal_settings: string;
+  /**
+   * The pinned ruleset's `signal_settings` (jsonb as text; M1 R5-52 f): handed to the engine as stored. The driver
+   * hands a SQL null over as null.
+   */
+  signal_settings: string | null;
 }
 
 export type SignalSettings = Readonly<Record<string, { enabled: boolean }>>;
@@ -40,6 +43,7 @@ export type SignalSettings = Readonly<Record<string, { enabled: boolean }>>;
  * fails closed; the values are checked by the engine (`{enabled: boolean}` only, else bad input).
  */
 export const signalSettingsOf = (row: RuleTableRow): SignalSettings => {
+  if (typeof row.signal_settings !== 'string') return fail('integrity_bad_signal_settings');
   let parsed: unknown;
   try {
     parsed = JSON.parse(row.signal_settings) as unknown;

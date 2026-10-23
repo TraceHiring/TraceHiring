@@ -114,7 +114,9 @@ export const integrityHandlers: Record<string, Handler> = {
         coverage_floor_permille: b['coverage_floor_permille'],
         coverage_photo_missing_factor_permille: b['coverage_photo_missing_factor_permille'],
         rules: JSON.stringify(b['rules']),
-        signal_settings: JSON.stringify(r?.['signal_settings']),
+        // As the driver: jsonb::text of a SQL null is null, never the text 'null' (mock/real parity, R5-52 f).
+        signal_settings:
+          r?.['signal_settings'] == null ? null : JSON.stringify(r['signal_settings']),
       },
     ];
   },
