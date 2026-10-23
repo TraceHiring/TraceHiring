@@ -373,7 +373,7 @@ create function pg_temp.m1_functions() returns text[] language sql as $f$
     'ai_draft_job_running_in', 'item_media_in_org', 'bank_no_truncate', 'sealed_settings_catalogs', 'settings_catalog_sealed',
     'import_jobs_guard', 'import_jobs_audit', 'import_row_errors_guard', 'ai_draft_jobs_guard', 'ai_draft_jobs_audit',
     'save_item_variants', 'import_item_batch', 'save_test_draft', 'member_invites_guard', 'member_invites_audit',
-    'provision_invited_member', 'ai_draft_job_has_room']
+    'provision_invited_member', 'ai_draft_job_has_room', 'fail_stranded_ai_draft_jobs']
 $f$;
 grant execute on function pg_temp.m1_functions() to public;
 -- held(role): the M1 tables and functions the role holds any privilege on (table, any column, EXECUTE), sorted.
