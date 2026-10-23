@@ -7,7 +7,11 @@ import { RouterProvider } from 'react-router/dom';
 import { RuntimeContext, type Runtime } from './api/runtime';
 import { AuthFlowContext } from './auth/auth-context';
 import { AuthFlow } from './auth/flow';
-import { browserSessionStorage, createRecruiterSupabase } from './auth/supabase-client';
+import {
+  browserSessionStorage,
+  createRecruiterSupabase,
+  readApiOrigin,
+} from './auth/supabase-client';
 import { initErrorReporting, installGlobalErrorReporting } from './error-reporting';
 import { routes } from './routes';
 import { currentAccessToken } from './shell/org-info';
@@ -25,12 +29,14 @@ installGlobalErrorReporting(window);
 
 const router = createBrowserRouter(routes);
 
-// No client (state `unconfigured`) unless both build variables are set (specs/m0b-tenancy.md §2.7).
+// No client (state `unconfigured`) unless both build variables are set (specs/m0b-tenancy.md §2.7). Plain http to
+// the local stack is accepted only in a build whose environment is exactly `dev` (M1 AT-M1-27, B2-SEC-1).
 const storage = browserSessionStorage(window);
 const supabase = createRecruiterSupabase(
   {
     VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
     VITE_SUPABASE_PUBLISHABLE_KEY: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    traceEnv: import.meta.env.VITE_TRACE_ENV,
   },
   storage,
 );
@@ -38,10 +44,13 @@ const authFlow = new AuthFlow(supabase, storage);
 void authFlow.start();
 
 // The signed-in screens need the api origin (VITE_API_ORIGIN) as well as the Supabase client; without both the
-// shell says the build is not configured.
-const apiOrigin = import.meta.env.VITE_API_ORIGIN?.trim() ?? '';
+// shell says the build is not configured. The api origin follows the same https / dev-only http rule.
+const apiOrigin = readApiOrigin({
+  VITE_API_ORIGIN: import.meta.env.VITE_API_ORIGIN,
+  traceEnv: import.meta.env.VITE_TRACE_ENV,
+});
 const runtime: Runtime | null =
-  supabase !== null && apiOrigin !== ''
+  supabase !== null && apiOrigin !== null
     ? {
         origin: apiOrigin,
         fetch: (url, init) => window.fetch(url, init),
