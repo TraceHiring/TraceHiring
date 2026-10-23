@@ -4,10 +4,25 @@
 // supabase-js the sign-in flow calls, so tests inject a fake and never reach the network.
 import { createClient } from '@supabase/supabase-js';
 
-/** The build variables this module reads (declared in vite-env.d.ts). */
-export interface SupabaseEnv {
+/**
+ * The build's Trace environment, as main.tsx reads it from the build: plain http (loopback only) is
+ * allowed only when it is exactly `dev` (e2e-local and the local stack), the same rule as the
+ * headers plugin (d1 spec rev 4i). Unset, `staging`, `production` or anything else: https only
+ * (M0b B2-SEC-1, M1 AT-M1-27).
+ */
+export interface BuildEnv {
+  readonly traceEnv?: string | undefined;
+}
+
+/** The build variables this module reads (declared in vite-env.d.ts), plus the build environment. */
+export interface SupabaseEnv extends BuildEnv {
   readonly VITE_SUPABASE_URL?: string | undefined;
   readonly VITE_SUPABASE_PUBLISHABLE_KEY?: string | undefined;
+}
+
+/** The api origin build variable (declared in vite-env.d.ts), plus the build environment. */
+export interface ApiEnv extends BuildEnv {
+  readonly VITE_API_ORIGIN?: string | undefined;
 }
 
 export interface SupabaseConfig {
@@ -87,6 +102,14 @@ export interface EnrolData {
   totp: { qr_code: string; secret: string };
 }
 
+/** One supabase-js auth event: its name (`SIGNED_OUT`, `TOKEN_REFRESHED`, …) and the session, if any. */
+export type AuthEventListener = (event: string, session: { user: { id: string } } | null) => void;
+
+/** What `onAuthStateChange` returns; `unsubscribe` stops the events. */
+export interface AuthSubscription {
+  data: { subscription: { unsubscribe(): void } };
+}
+
 /** A PostgREST read: `.from(table).select(columns)` filtered by `.eq` or `.in`. */
 export interface RowSelect {
   eq(column: string, value: string): PromiseLike<Outcome<unknown[] | null>>;
@@ -104,6 +127,8 @@ export interface RecruiterSupabase {
     signInWithPassword(params: { email: string; password: string }): Promise<Outcome<unknown>>;
     getSession(): Promise<Outcome<SessionData | null>>;
     signOut(): Promise<{ error: unknown }>;
+    /** supabase-js auth events (M0b B2-SEC-4); the flow reads only the event name and whether a session exists. */
+    onAuthStateChange(callback: AuthEventListener): AuthSubscription;
     mfa: {
       getAuthenticatorAssuranceLevel(): Promise<Outcome<AssuranceData | null>>;
       listFactors(): Promise<Outcome<FactorsData | null>>;
@@ -122,20 +147,31 @@ export type ClientFactory = (
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost']);
 
-/** Both variables set and non-blank, and the URL https (plain http only for the local stack). */
-export function readSupabaseConfig(env: SupabaseEnv): SupabaseConfig | null {
-  const url = env.VITE_SUPABASE_URL?.trim() ?? '';
-  const publishableKey = env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ?? '';
-  if (url === '' || publishableKey === '') return null;
+/** https, or plain http to the local stack's loopback host in a build whose environment is exactly `dev`. */
+function allowedUrl(url: string, env: BuildEnv): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    return null;
+    return false;
   }
-  const secure = parsed.protocol === 'https:';
-  const local = parsed.protocol === 'http:' && LOCAL_HOSTS.has(parsed.hostname);
-  return secure || local ? { url, publishableKey } : null;
+  if (parsed.protocol === 'https:') return true;
+  return parsed.protocol === 'http:' && env.traceEnv === 'dev' && LOCAL_HOSTS.has(parsed.hostname);
+}
+
+/** Both variables set and non-blank, and the URL https (plain http only for the local stack in dev). */
+export function readSupabaseConfig(env: SupabaseEnv): SupabaseConfig | null {
+  const url = env.VITE_SUPABASE_URL?.trim() ?? '';
+  const publishableKey = env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ?? '';
+  if (url === '' || publishableKey === '') return null;
+  return allowedUrl(url, env) ? { url, publishableKey } : null;
+}
+
+/** The api origin under the same rule as the Supabase URL; null (not configured) otherwise. */
+export function readApiOrigin(env: ApiEnv): string | null {
+  const origin = env.VITE_API_ORIGIN?.trim() ?? '';
+  if (origin === '') return null;
+  return allowedUrl(origin, env) ? origin : null;
 }
 
 /** supabase-js `createClient`, narrowed to the calls the app makes. */
@@ -148,6 +184,10 @@ export const createSupabaseClient: ClientFactory = (url, publishableKey, options
       signInWithPassword: (params) => client.auth.signInWithPassword(params),
       getSession: () => client.auth.getSession(),
       signOut: () => client.auth.signOut(),
+      onAuthStateChange: (callback) =>
+        client.auth.onAuthStateChange((event, session) => {
+          callback(event, session);
+        }),
       mfa: {
         getAuthenticatorAssuranceLevel: () => client.auth.mfa.getAuthenticatorAssuranceLevel(),
         listFactors: () => client.auth.mfa.listFactors(),

@@ -45,7 +45,23 @@ describe('demo outbox gating (AT-D18)', () => {
 
   it('uses the flag and the environment nowhere else', () => {
     expect(where(/VITE_DEMO_OUTBOX/).sort()).toEqual(['./routes.tsx', './vite-env.d.ts']);
-    expect(where(/VITE_TRACE_ENV/).sort()).toEqual(['./routes.tsx', './vite-env.d.ts']);
+    expect(where(/VITE_TRACE_ENV/).sort()).toEqual([
+      './main.tsx',
+      './routes.tsx',
+      './vite-env.d.ts',
+    ]);
+  });
+
+  // M1 AT-M1-27 (B2-SEC-1, security review AUTH-1): main.tsx hands the build environment to the auth
+  // config readers, so plain http to the local stack works only in a dev build, for Supabase and the api.
+  it('main.tsx passes the build environment to the Supabase and api origin readers', () => {
+    const main = all['./main.tsx'] ?? '';
+    expect(main).toContain('traceEnv: import.meta.env.VITE_TRACE_ENV');
+    expect(main).toMatch(/createRecruiterSupabase\(\s*\{[^}]*\btraceEnv\b[^}]*\}/);
+    expect(main).toMatch(
+      /readApiOrigin\(\s*\{[^}]*VITE_API_ORIGIN:\s*import\.meta\.env\.VITE_API_ORIGIN[^}]*\btraceEnv\b/,
+    );
+    expect(main).not.toContain('VITE_API_ORIGIN?.trim()');
   });
 });
 

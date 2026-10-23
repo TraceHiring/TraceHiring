@@ -39,7 +39,7 @@ describe('readSupabaseConfig', () => {
     ).toBeNull();
   });
 
-  it('accepts an https URL, and plain http only for the local stack', () => {
+  it('accepts an https URL, and plain http only for the local stack in a dev build (AT-M1-27)', () => {
     const key = publishableKey();
     expect(
       readSupabaseConfig({ VITE_SUPABASE_URL: HOSTED_URL, VITE_SUPABASE_PUBLISHABLE_KEY: key }),
@@ -48,8 +48,15 @@ describe('readSupabaseConfig', () => {
       readSupabaseConfig({
         VITE_SUPABASE_URL: 'http://127.0.0.1:54321',
         VITE_SUPABASE_PUBLISHABLE_KEY: key,
+        traceEnv: 'dev',
       }),
     ).toEqual({ url: 'http://127.0.0.1:54321', publishableKey: key });
+    expect(
+      readSupabaseConfig({
+        VITE_SUPABASE_URL: 'http://127.0.0.1:54321',
+        VITE_SUPABASE_PUBLISHABLE_KEY: key,
+      }),
+    ).toBeNull();
   });
 
   it('is null for a URL that is not https (or local http), so the build fails closed', () => {
