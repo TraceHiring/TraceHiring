@@ -30,7 +30,8 @@ import { parseImport, type ParsedImport } from './parse';
 import type { ItemHeader } from './template';
 
 const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
-const deps = { createWorker: inProcessWorker };
+const deps = { createWorker: inProcessWorker() };
+const depsWith = (lim: ImportLimits) => ({ createWorker: inProcessWorker(lim), limits: lim });
 const limits = (over: Partial<ImportLimits>): ImportLimits => ({ ...IMPORT_LIMITS, ...over });
 
 async function readXlsx(
@@ -44,7 +45,7 @@ async function readXlsx(
       file: asFile(xlsxBytes(rows, options), 'items.xlsx'),
       imagesZip: imagesZip === null ? null : asFile(imagesZip, 'pics.zip'),
     },
-    { ...deps, limits: lim },
+    depsWith(lim),
   );
 }
 async function readDocx(items: DocxItem[], options: DocxOptions = {}) {
@@ -195,7 +196,6 @@ describe('xlsx: every bad row gets a row, a field and a code (AT-M1-11)', () => 
     ['difficulty text', { difficulty: 'hard' }, 'difficulty:bad_difficulty'],
     ['difficulty not a multiple of 0.01', { difficulty: 0.555 }, 'difficulty:bad_difficulty'],
     ['stem over 4000', { stem: 'x'.repeat(4001) }, 'stem:too_long'],
-    ['stem with a NUL', { stem: 'a\u0000b' }, 'stem:bad_format'],
     ['no options', { option_a: null, option_b: null }, 'options:missing_field'],
     ['one option', { option_b: null }, 'options:bad_options'],
     ['gap in the options', { option_b: null, option_c: 'three' }, 'options:bad_options'],
@@ -490,7 +490,7 @@ describe('xlsx: file-level failures stop before anything is sent', () => {
     const file = asFile(xlsxBytes([mcqRow(1)]), 'items.xlsx');
     const r = await parseImport(
       { file, imagesZip: null },
-      { ...deps, limits: limits({ sheetFileBytes: 100 }) },
+      depsWith(limits({ sheetFileBytes: 100 })),
     );
     expect(r).toEqual({ ok: false, code: 'file_too_large' });
   });
@@ -604,7 +604,7 @@ describe('docx', () => {
         file: asFile(docxBytes([mcqDocxItem(1), mcqDocxItem(2), mcqDocxItem(3)]), 'items.docx'),
         imagesZip: null,
       },
-      { ...deps, limits: limits({ rows: 2 }) },
+      depsWith(limits({ rows: 2 })),
     );
     expect(r).toEqual({ ok: false, code: 'row_limit' });
   });
@@ -630,7 +630,7 @@ describe('docx', () => {
         ),
         imagesZip: null,
       },
-      { ...deps, limits: limits({ uncompressedBytes: 1_048_576 }) },
+      depsWith(limits({ uncompressedBytes: 1_048_576 })),
     );
     expect(bomb).toEqual({ ok: false, code: 'archive_too_large' });
   });

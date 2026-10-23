@@ -1,6 +1,7 @@
 // Tiny synthetic xlsx / docx / zip builders for the import tests. Tests only: `zipSync` is used here to make fixtures
 // and never in production code (ADR-033; source-guards.test.ts scans the non-test files). Every value is synthetic.
 import { strToU8, zipSync, type Zippable } from 'fflate';
+import type { ImportLimits } from './limits';
 import { ITEM_HEADERS } from './template';
 import type { CreateWorker, WorkerLike } from './worker-client';
 import { handleWorkerMessage } from './worker-handler';
@@ -256,10 +257,10 @@ export function docxEntries(items: DocxItem[], options: DocxOptions = {}): Zippa
     ),
   };
   if (options.noStyles !== true) {
-    const style = (id: string, name: string): string =>
+    const styleXml = (id: string, name: string): string =>
       `<w:style w:type="paragraph" w:styleId="${id}"><w:name w:val="${name}"/></w:style>`;
     out['word/styles.xml'] = strToU8(
-      `${XML_HEAD}<w:styles ${W_NS}>${style('Normal', 'Normal')}${style('Heading2', 'heading 2')}${style('TraceStem', 'Trace Stem')}${style('TraceOption', 'Trace Option')}${style('TraceCorrect', 'Trace Correct')}${style('TraceMeta', 'Trace Meta')}</w:styles>`,
+      `${XML_HEAD}<w:styles ${W_NS}>${styleXml('Normal', 'Normal')}${styleXml('Heading2', 'heading 2')}${styleXml('TraceStem', 'Trace Stem')}${styleXml('TraceOption', 'Trace Option')}${styleXml('TraceCorrect', 'Trace Correct')}${styleXml('TraceMeta', 'Trace Meta')}</w:styles>`,
     );
   }
   for (const [name, bytes] of Object.entries(options.images ?? {})) {
@@ -291,17 +292,19 @@ export const asFile = (bytes: Uint8Array<ArrayBuffer>, name: string): File =>
 // ---- an in-process worker ------------------------------------------------------------------------------------------
 
 /** A Worker stand-in that runs the real handler (worker-handler.ts) in this process, with the real protocol. */
-export const inProcessWorker: CreateWorker = () => {
-  const worker: WorkerLike = {
-    onmessage: null,
-    onerror: null,
-    onmessageerror: null,
-    postMessage(message) {
-      void handleWorkerMessage(message).then((reply) => {
-        worker.onmessage?.({ data: reply.answer });
-      });
-    },
-    terminate() {},
+export const inProcessWorker =
+  (limits?: ImportLimits): CreateWorker =>
+  () => {
+    const worker: WorkerLike = {
+      onmessage: null,
+      onerror: null,
+      onmessageerror: null,
+      postMessage(message) {
+        void handleWorkerMessage(message, limits).then((reply) => {
+          worker.onmessage?.({ data: reply.answer });
+        });
+      },
+      terminate() {},
+    };
+    return worker;
   };
-  return worker;
-};

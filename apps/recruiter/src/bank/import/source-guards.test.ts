@@ -61,7 +61,7 @@ describe('production import code', () => {
     );
     for (const file of production) {
       expect(code(file.text), file.name).not.toMatch(
-        /\bblob:|createObjectURL.*Worker|\beval\s*\(|new Function\s*\(/,
+        /["'`]blob:|createObjectURL|\beval\s*\(|new Function\s*\(/,
       );
     }
   });
