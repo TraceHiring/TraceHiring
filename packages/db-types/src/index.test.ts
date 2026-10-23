@@ -91,7 +91,8 @@ describe('@trace/db-types', () => {
       | 'member_invites'
     >();
     expectTypeOf<keyof Database['public']['Views']>().toEqualTypeOf<
-      'v_item_exposure' | 'v_item_bank_quant_share'
+      // M1-m (R5-64 d): per-pool counts.
+      'v_item_exposure' | 'v_item_bank_quant_share' | 'v_pool_item_counts'
     >();
     // M1-c: three INVOKER functions the api calls with the caller's JWT (§3.4, DC-M1-1).
     expectTypeOf<keyof Database['public']['Functions']>().toEqualTypeOf<
