@@ -37,6 +37,12 @@ describe('sfc32', () => {
     }
   });
 
+  // Regression pin: stored variants are regenerated from their seeds, so the stream must never change silently.
+  it('pins the stream for seed bytes 0..15 (big-endian words, 12 outputs discarded)', () => {
+    const rng = sfc32(seed((i) => i, 16));
+    expect([rng.next(), rng.next(), rng.next()]).toEqual([858807458, 1403912697, 1845977855]);
+  });
+
   it('refuses a seed shorter than 128 bits', () => {
     expect(() => sfc32(new Uint8Array(15))).toThrow(RangeError);
   });

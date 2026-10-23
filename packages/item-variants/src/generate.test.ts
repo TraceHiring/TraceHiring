@@ -37,7 +37,7 @@ const seedsFor = (count: number, salt = 0): Uint8Array[] =>
     Uint8Array.from({ length: 32 }, (_, i) => (salt + k * 31 + i * 7) % 256),
   );
 
-const variantsOf = (spec: ParamSpec, seeds = seedsFor(spec.count)): GeneratedVariant[] => {
+const variantsOf = (spec: ParamSpec, seeds = seedsFor(spec.count)): readonly GeneratedVariant[] => {
   const result = generateVariants(spec, seeds);
   if (!result.ok) throw new Error(`generation failed: ${result.code}`);
   return result.variants;
@@ -337,6 +337,23 @@ describe('variantSeed (R5-52 b)', () => {
     const viaHelper = await generateVariantsFor(SUM_SPEC, ITEM);
     expect(viaHelper).toEqual(generateVariants(SUM_SPEC, seeds));
     expect(viaHelper.ok).toBe(true);
+  });
+
+  it('pins the tuples generated for a fixed item version id (regression pin)', async () => {
+    const result = await generateVariantsFor(SUM_SPEC, ITEM);
+    if (!result.ok) throw new Error(result.code);
+    expect(result.variants.map((v) => v.params)).toEqual([
+      { a: 7, b: 8 },
+      { a: 5, b: 16 },
+      { a: 2, b: 16 },
+      { a: 16, b: 14 },
+      { a: 15, b: 8 },
+      { a: 11, b: 12 },
+      { a: 14, b: 16 },
+      { a: 11, b: 6 },
+      { a: 4, b: 20 },
+      { a: 12, b: 14 },
+    ]);
   });
 
   it('generateVariantsFor reports a bad spec without hashing', async () => {
