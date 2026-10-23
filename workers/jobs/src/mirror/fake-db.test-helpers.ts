@@ -1,7 +1,8 @@
 // In-memory stand-in for the mirror stage's SQL (test only), with what migration d1_invites_sessions enforces for
 // trace_worker: the job-org binding, unique keys with ON CONFLICT DO NOTHING, the sessions guard (no session for a
 // dead invitation), the session_items guard (the item belongs to the session's version; section copied), the media
-// key shape, and `submitted` only once a sessions row exists (L-35). The real SQL is proven in db-test/.
+// key shape, `submitted` only once a sessions row exists (L-35), and the M1-i layout reads (org-bound). The real SQL
+// is proven in db-test/.
 import type { SqlParam, SqlTx } from '@trace/shared/jobs';
 import { SQL } from './writes.js';
 
@@ -60,6 +61,16 @@ export const mirrorHandlers: Record<string, Handler> = {
     visible(db, 'consents', org)
       .filter((r) => r['id'] === id && r['invitation_id'] === inv && r['ruleset_version_id'] === rs)
       .map(() => ({ one: 1 })),
+  // Migration M1-i: trace_worker reads the layout columns of the job org's sections and item versions only.
+  [SQL.layoutSections]: (db, [org, tv]) =>
+    visible(db, 'sections', org)
+      .filter((r) => r['test_version_id'] === tv)
+      .sort((a, b) => Number(a['position']) - Number(b['position']))
+      .map((r) => ({ id: r['id'], draw_count: r['draw_count'] ?? null })),
+  [SQL.layoutItems]: (db, [org, tv]) =>
+    visible(db, 'item_versions', org)
+      .filter((r) => r['test_version_id'] === tv && r['section_id'] != null)
+      .map((r) => ({ id: r['id'], section_id: r['section_id'] })),
   [SQL.insertSession]: (db, p) => {
     const [
       id,

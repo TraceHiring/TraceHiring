@@ -13,6 +13,7 @@
 // rather than being skipped; a partial replay fails at the guard and nothing commits.
 import type { SqlTx } from '@trace/shared/jobs';
 import type { SessionItemInsert } from './draws.js';
+import type { LayoutItem, LayoutSection } from '../quality/layout.js';
 
 export const SQL = {
   lockInvitation:
@@ -23,6 +24,15 @@ export const SQL = {
   consent:
     'select 1 as one from public.consents where org_id = $1::uuid and id = $2::uuid and invitation_id = $3::uuid ' +
     'and ruleset_version_id = $4::uuid',
+  // Migration M1-i (spec m1 R5-62 b): the pinned version's layout, column-level grants only (no names, stems,
+  // options, keys or weights), bound to the job org. Sections in `position` order with their draw count; the items
+  // placed inline in a section of the version.
+  layoutSections:
+    'select id::text as id, draw_count::int as draw_count from public.sections ' +
+    'where org_id = $1::uuid and test_version_id = $2::uuid order by position',
+  layoutItems:
+    'select id::text as id, section_id::text as section_id from public.item_versions ' +
+    'where org_id = $1::uuid and test_version_id = $2::uuid and section_id is not null',
   insertSession:
     'insert into public.sessions (id, org_id, test_version_id, ruleset_version_id, invitation_id, consent_id, state, ' +
     'submit_kind, adult_confirmed_at_start, started_at, server_deadline_at, submitted_at, mirror_seq, receipt_ref) ' +
@@ -125,6 +135,26 @@ export const consentExists = async (
   rulesetVersionId: string,
 ): Promise<boolean> =>
   (await tx.query(SQL.consent, [orgId, consentId, invitationId, rulesetVersionId])).length > 0;
+
+/** The pinned version's layout (M1-i reads): sections in `position` order, and the inline item placements. */
+export const loadLayout = async (
+  tx: SqlTx,
+  orgId: string,
+  testVersionId: string,
+): Promise<{ sections: LayoutSection[]; inline: LayoutItem[] }> => {
+  const sections = await tx.query<{ id: string; draw_count: number | null }>(SQL.layoutSections, [
+    orgId,
+    testVersionId,
+  ]);
+  const inline = await tx.query<{ id: string; section_id: string }>(SQL.layoutItems, [
+    orgId,
+    testVersionId,
+  ]);
+  return {
+    sections: sections.map((r) => ({ id: r.id, drawCount: r.draw_count })),
+    inline: inline.map((r) => ({ itemVersionId: r.id, sectionId: r.section_id })),
+  };
+};
 
 /** Inserts the session (once) and checks the stored row is this invitation's. */
 export const upsertSession = async (tx: SqlTx, orgId: string, s: SessionInsert): Promise<void> => {
