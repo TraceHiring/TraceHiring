@@ -24,6 +24,16 @@ import {
   type CopyEntry,
 } from './copy-list';
 
+/** The line after a copy: how many items reached the bank, and a link to it. */
+export function CopyDoneLine({ copied }: { copied: number }) {
+  return (
+    <p role="status">
+      {`Copied ${String(copied)} ${copied === 1 ? 'item' : 'items'} to your bank. `}
+      <Link to="/bank">Open the item bank</Link>
+    </p>
+  );
+}
+
 export function LibraryCards({
   cards,
   list,
@@ -198,12 +208,7 @@ export function LibraryRoute() {
         }}
         onCopy={copy}
       />
-      {copied !== null && (
-        <p role="status">
-          {`Copied ${String(copied)} ${copied === 1 ? 'item' : 'items'} to your bank. `}
-          <Link to="/bank">Open the item bank</Link>
-        </p>
-      )}
+      {copied !== null && <CopyDoneLine copied={copied} />}
       {failure !== null && (
         <p role="alert" className={ui.alert}>
           {bankErrorText(failure)}

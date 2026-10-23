@@ -11,7 +11,7 @@ import ui from '../common/Ui.module.css';
 import { useResource } from '../common/useResource';
 import { OriginCell, toPage } from './BankRoute';
 import { ItemContentView } from './ItemContentView';
-import { FORMAT_LABEL, bankErrorText, difficultyText } from './labels';
+import { APPROVAL_STALE, FORMAT_LABEL, bankErrorText, difficultyText } from './labels';
 import { ReviewPanel } from './ReviewPanel';
 import { usePages, type Page } from './use-pages';
 
@@ -72,11 +72,14 @@ export function ApprovalQueueTable({
 function OpenItem({
   api,
   itemId,
+  itemVersionId,
   userId,
   onDone,
 }: {
   api: ApiClient;
   itemId: string;
+  /** The version that was queued: only this version can be decided here. */
+  itemVersionId: string;
   userId: string;
   onDone(message: string): void;
 }) {
@@ -93,6 +96,13 @@ function OpenItem({
     );
   }
   const detail = state.data;
+  if (detail.itemVersionId !== itemVersionId) {
+    return (
+      <p role="alert" className={ui.alert}>
+        {APPROVAL_STALE}
+      </p>
+    );
+  }
   const decide = (decision: 'approve' | 'not_approved') => {
     setBusy(true);
     setFailure(null);
@@ -125,7 +135,7 @@ function OpenItem({
 export function ApprovalsRoute() {
   const api = useApi();
   const info = useOrgInfo();
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [open, setOpen] = useState<{ itemId: string; itemVersionId: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const loadPage = useMemo(
@@ -161,10 +171,10 @@ export function ApprovalsRoute() {
         <>
           <ApprovalQueueTable
             rows={state.rows}
-            openId={openId}
+            openId={open?.itemId ?? null}
             onOpen={(item) => {
               setMessage(null);
-              setOpenId(item.itemId);
+              setOpen({ itemId: item.itemId, itemVersionId: item.itemVersionId });
             }}
           />
           {state.moreError !== null && (
@@ -181,14 +191,15 @@ export function ApprovalsRoute() {
           )}
         </>
       )}
-      {openId !== null && api !== null && info !== null && (
+      {open !== null && api !== null && info !== null && (
         <OpenItem
-          key={openId}
+          key={open.itemVersionId}
           api={api}
-          itemId={openId}
+          itemId={open.itemId}
+          itemVersionId={open.itemVersionId}
           userId={info.userId}
           onDone={(done) => {
-            setOpenId(null);
+            setOpen(null);
             setMessage(done);
             reload();
           }}

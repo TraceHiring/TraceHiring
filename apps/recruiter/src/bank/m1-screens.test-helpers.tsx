@@ -7,7 +7,8 @@ import { BankTable, StatsPanel } from './BankRoute';
 import { FilterForm } from './FilterForm';
 import { ItemContentView } from './ItemContentView';
 import { ItemFormView } from './ItemFormView';
-import { NewPoolForm, PoolTable } from './PoolsRoute';
+import { ItemActionRow } from './ItemRoute';
+import { NewPoolForm, PoolManagerView, PoolTable } from './PoolsRoute';
 import { ReviewPanel } from './ReviewPanel';
 import { EMPTY_FILTERS } from './filters';
 import { formFromDetail, toDraft } from './item-form';
@@ -71,6 +72,9 @@ export function m1Screens(): Record<string, ReactNode> {
         onDecide={noop}
       />
     ),
+    'item actions': (
+      <ItemActionRow canNewVersion canRetire busy={false} onNewVersion={noop} onRetire={noop} />
+    ),
     'item form': (
       <ItemFormView
         form={formFromDetail(mcqDetail(1))}
@@ -114,6 +118,31 @@ export function m1Screens(): Record<string, ReactNode> {
         ]}
         openId={null}
         onManage={noop}
+      />
+    ),
+    'pool manager': (
+      <PoolManagerView
+        pool={pool(1, { usedByDraws: [{ testId: pool(9).id, drawCount: 3 }], usedByDrawsTotal: 8 })}
+        busy={false}
+        failure="conflict"
+        inPool={{
+          kind: 'ready',
+          rows: [summary(1)],
+          nextCursor: 'next',
+          more: false,
+          moreError: null,
+        }}
+        candidates={{
+          kind: 'ready',
+          rows: [summary(2), summary(3, { format: 'written', difficulty: null })],
+          nextCursor: null,
+          more: false,
+          moreError: null,
+        }}
+        onRemove={noop}
+        onAdd={noop}
+        onMoreInPool={noop}
+        onMoreCandidates={noop}
       />
     ),
     'pool new': <NewPoolForm busy={false} failure="bad_request" onCreate={noop} />,

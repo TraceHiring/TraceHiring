@@ -287,7 +287,12 @@ describe('the drive gap when the list of tests is cut off (R5-54 a)', () => {
   });
 
   it('shows the cut-off wording on the pool list', async () => {
-    const cut = pool(1, { approvedCount: 400, usedByDraws: draws, usedByDrawsTotal: 60 });
+    const cut = pool(1, {
+      approvedCount: 400,
+      itemCount: 400,
+      usedByDraws: draws,
+      usedByDrawsTotal: 60,
+    });
     const { api } = fakeApi((call) =>
       call.path === '/pools' ? { body: { pools: [cut], nextCursor: null } } : undefined,
     );

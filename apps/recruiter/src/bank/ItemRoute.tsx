@@ -174,39 +174,53 @@ function ItemDetailScreen({
           }}
         />
       )}
-      {(canRetire || canNewVersion) && (
-        <div className={ui.row}>
-          {canNewVersion && (
-            <button
-              type="button"
-              className={ui.button}
-              disabled={busy}
-              onClick={() => {
-                run(() => createBankItemVersion(api, detail.itemId), null);
-              }}
-            >
-              Edit as new version
-            </button>
-          )}
-          {canRetire && (
-            <button
-              type="button"
-              className={ui.button}
-              disabled={busy}
-              onClick={() => {
-                run(() => retireBankItemVersion(api, detail.itemVersionId), null);
-              }}
-            >
-              Retire
-            </button>
-          )}
-        </div>
-      )}
+      <ItemActionRow
+        canNewVersion={canNewVersion}
+        canRetire={canRetire}
+        busy={busy}
+        onNewVersion={() => {
+          run(() => createBankItemVersion(api, detail.itemId), null);
+        }}
+        onRetire={() => {
+          run(() => retireBankItemVersion(api, detail.itemVersionId), null);
+        }}
+      />
       {note !== null && <p role="status">{note}</p>}
       {failure !== null && (
         <p role="alert" className={ui.alert}>
           {bankErrorText(failure)}
         </p>
+      )}
+    </div>
+  );
+}
+
+/** "Edit as new version" and "Retire", shown only to the roles and states that allow them. */
+export function ItemActionRow({
+  canNewVersion,
+  canRetire,
+  busy,
+  onNewVersion,
+  onRetire,
+}: {
+  canNewVersion: boolean;
+  canRetire: boolean;
+  busy: boolean;
+  onNewVersion(): void;
+  onRetire(): void;
+}) {
+  if (!canRetire && !canNewVersion) return null;
+  return (
+    <div className={ui.row}>
+      {canNewVersion && (
+        <button type="button" className={ui.button} disabled={busy} onClick={onNewVersion}>
+          Edit as new version
+        </button>
+      )}
+      {canRetire && (
+        <button type="button" className={ui.button} disabled={busy} onClick={onRetire}>
+          Retire
+        </button>
       )}
     </div>
   );

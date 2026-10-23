@@ -24,7 +24,7 @@ import { useApi } from '../api/runtime';
 import ui from '../common/Ui.module.css';
 import { toPage } from './BankRoute';
 import { FORMAT_LABEL, bankErrorText } from './labels';
-import { usePages, type Page } from './use-pages';
+import { usePages, type Page, type PagesState } from './use-pages';
 
 const DRIVE_RATIO = 10;
 
@@ -34,8 +34,15 @@ export function driveGapText(pool: PoolDetail): string | null {
   const largest = Math.max(...pool.usedByDraws.map((d) => d.drawCount));
   const need = largest * DRIVE_RATIO;
   const basis = `${String(DRIVE_RATIO)} times the largest draw, ${String(largest)}`;
-  const cutOff = pool.usedByDraws.length < pool.usedByDrawsTotal;
-  if (pool.approvedCount >= need) return `Large enough for drives (${basis})`;
+  const shown = pool.usedByDraws.length;
+  const hidden = pool.usedByDrawsTotal - shown;
+  const cutOff = hidden > 0;
+  if (pool.approvedCount >= need) {
+    if (!cutOff) return `Large enough for drives (${basis})`;
+    // The tests that are not listed may draw more, so a complete claim would be wrong.
+    const noun = hidden === 1 ? 'test is' : 'tests are';
+    return `Large enough for the ${String(shown)} ${shown === 1 ? 'test' : 'tests'} shown (${basis}); ${String(hidden)} more ${noun} not shown and may need more`;
+  }
   const missing = String(need - pool.approvedCount);
   return `Needs ${cutOff ? 'at least ' : ''}${missing} more approved items for drives (${basis})`;
 }
@@ -323,14 +330,52 @@ function PoolManager({
     });
   };
 
-  const inPoolIds = new Set(
-    inPool.state.kind === 'ready' ? inPool.state.rows.map((r) => r.itemVersionId) : [],
+  return (
+    <PoolManagerView
+      pool={pool}
+      busy={busy}
+      failure={failure}
+      inPool={inPool.state}
+      candidates={candidates.state}
+      onRemove={(item) => {
+        change(() => removePoolItems(api, pool.id, { itemVersionIds: [item.itemVersionId] }));
+      }}
+      onAdd={(item) => {
+        change(() => addPoolItems(api, pool.id, { itemVersionIds: [item.itemVersionId] }));
+      }}
+      onMoreInPool={inPool.loadMore}
+      onMoreCandidates={candidates.loadMore}
+    />
   );
-  const offered =
-    candidates.state.kind === 'ready'
-      ? candidates.state.rows.filter((r) => !inPoolIds.has(r.itemVersionId))
-      : [];
+}
 
+/** The open pool: the items in it and the approved items that could be added, one click each. */
+export function PoolManagerView({
+  pool,
+  busy,
+  failure,
+  inPool,
+  candidates,
+  onRemove,
+  onAdd,
+  onMoreInPool,
+  onMoreCandidates,
+}: {
+  pool: PoolDetail;
+  busy: boolean;
+  failure: string | null;
+  inPool: PagesState<BankItemSummary>;
+  candidates: PagesState<BankItemSummary>;
+  onRemove(item: BankItemSummary): void;
+  onAdd(item: BankItemSummary): void;
+  onMoreInPool(): void;
+  onMoreCandidates(): void;
+}) {
+  const inPoolIds = new Set(inPool.kind === 'ready' ? inPool.rows.map((r) => r.itemVersionId) : []);
+  const offered =
+    candidates.kind === 'ready'
+      ? candidates.rows.filter((r) => !inPoolIds.has(r.itemVersionId))
+      : [];
   return (
     <section className={ui.stack} aria-label={`Pool: ${pool.name}`}>
       <h3 className={ui.subtitle}>{pool.name}</h3>
@@ -343,50 +388,40 @@ function PoolManager({
         </p>
       )}
       <h4 className={ui.subtitle}>Items in this pool</h4>
-      {inPool.state.kind === 'loading' && <p role="status">Loading...</p>}
-      {inPool.state.kind === 'error' && (
+      {inPool.kind === 'loading' && <p role="status">Loading...</p>}
+      {inPool.kind === 'error' && (
         <p role="alert" className={ui.alert}>
-          {bankErrorText(inPool.state.code)}
+          {bankErrorText(inPool.code)}
         </p>
       )}
-      {inPool.state.kind === 'ready' && (
+      {inPool.kind === 'ready' && (
         <>
           <ItemList
-            rows={inPool.state.rows}
+            rows={inPool.rows}
             actionLabel="Remove"
             verb="Remove from pool"
             busy={busy}
-            onAct={(item) => {
-              change(() => removePoolItems(api, pool.id, { itemVersionIds: [item.itemVersionId] }));
-            }}
+            onAct={onRemove}
           />
-          {inPool.state.nextCursor !== null && (
-            <button type="button" className={ui.button} onClick={inPool.loadMore}>
+          {inPool.nextCursor !== null && (
+            <button type="button" className={ui.button} onClick={onMoreInPool}>
               Load more items in the pool
             </button>
           )}
         </>
       )}
       <h4 className={ui.subtitle}>Approved items that could be added</h4>
-      {candidates.state.kind === 'loading' && <p role="status">Loading...</p>}
-      {candidates.state.kind === 'error' && (
+      {candidates.kind === 'loading' && <p role="status">Loading...</p>}
+      {candidates.kind === 'error' && (
         <p role="alert" className={ui.alert}>
-          {bankErrorText(candidates.state.code)}
+          {bankErrorText(candidates.code)}
         </p>
       )}
-      {candidates.state.kind === 'ready' && (
+      {candidates.kind === 'ready' && (
         <>
-          <ItemList
-            rows={offered}
-            actionLabel="Add"
-            verb="Add to pool"
-            busy={busy}
-            onAct={(item) => {
-              change(() => addPoolItems(api, pool.id, { itemVersionIds: [item.itemVersionId] }));
-            }}
-          />
-          {candidates.state.nextCursor !== null && (
-            <button type="button" className={ui.button} onClick={candidates.loadMore}>
+          <ItemList rows={offered} actionLabel="Add" verb="Add to pool" busy={busy} onAct={onAdd} />
+          {candidates.nextCursor !== null && (
+            <button type="button" className={ui.button} onClick={onMoreCandidates}>
               Load more approved items
             </button>
           )}

@@ -32,6 +32,17 @@ export const FORMAT_LABEL: Readonly<Record<ItemFormat, string>> = {
 /** The badge an approver sees on an AI-drafted item (§6.4). Nothing about the model is ever shown. */
 export const AI_DRAFT_BADGE = 'AI draft — needs approval';
 
+/** Every stored AI draft passed the duplicate, readability and placeholder checks (§6.4); failed drafts are discarded. */
+export const AI_DRAFT_CHECKS =
+  'This draft passed the duplicate, readability and placeholder checks.';
+
+/** The approvals screen refuses a fetched version that is not the one that was queued. */
+export const APPROVAL_STALE =
+  'This item changed after it was queued. Close it, reload the queue and open it again.';
+
+/** Shown when polling of an AI draft job stopped before the job finished. */
+export const JOB_STILL_RUNNING = 'The job is still running. Refresh this page later to check it.';
+
 export const JOB_STATUS_LABEL: Readonly<Record<AiDraftJobStatus, string>> = {
   queued: 'Queued',
   running: 'Running',

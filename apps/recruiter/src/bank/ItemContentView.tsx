@@ -4,7 +4,14 @@
 import type { BankItemDetail, ParamSpec } from '@trace/shared/contracts/m1';
 import { formatTime } from '../common/format';
 import ui from '../common/Ui.module.css';
-import { AI_DRAFT_BADGE, FORMAT_LABEL, ORIGIN_LABEL, STATUS_LABEL, difficultyText } from './labels';
+import {
+  AI_DRAFT_BADGE,
+  AI_DRAFT_CHECKS,
+  FORMAT_LABEL,
+  ORIGIN_LABEL,
+  STATUS_LABEL,
+  difficultyText,
+} from './labels';
 
 type Spec = ParamSpec;
 
@@ -50,10 +57,13 @@ export function ItemContentView({ detail }: { detail: BankItemDetail }) {
   return (
     <section className={ui.stack} aria-label="Item content">
       {detail.origin === 'ai_draft' && detail.status === 'in_review' && (
-        <p className={ui.banner}>{AI_DRAFT_BADGE}</p>
+        <>
+          <p className={ui.banner}>{AI_DRAFT_BADGE}</p>
+          <p className={ui.note}>{AI_DRAFT_CHECKS}</p>
+        </>
       )}
       <p className={ui.note}>
-        {`${STATUS_LABEL[detail.status]} · Version ${String(detail.versionNo)} · ${ORIGIN_LABEL[detail.origin]} · ${FORMAT_LABEL[content.format]}${detail.isParameterised ? ' � Parameterised' : ''}`}
+        {`${STATUS_LABEL[detail.status]} · Version ${String(detail.versionNo)} · ${ORIGIN_LABEL[detail.origin]} · ${FORMAT_LABEL[content.format]}${detail.isParameterised ? ' · Parameterised' : ''}`}
       </p>
       <p className={ui.note}>
         {`Skill ${content.skillKey} · Difficulty ${difficultyText(content.difficulty)} · Times served: ${String(detail.exposureCount)}`}

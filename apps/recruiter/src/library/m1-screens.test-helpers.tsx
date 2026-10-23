@@ -2,7 +2,7 @@
 // src/m1-screen-registry.test-helpers.ts. The route module itself is rendered by the guard file.
 import type { ReactNode } from 'react';
 import { libraryCard, uid } from '../bank/testing/fixtures.test-helpers';
-import { CopyListPanel, LibraryCards } from './LibraryRoute';
+import { CopyDoneLine, CopyListPanel, LibraryCards } from './LibraryRoute';
 
 const noop = () => undefined;
 
@@ -22,6 +22,8 @@ export function m1Screens(): Record<string, ReactNode> {
     ),
     'library cards empty': <LibraryCards cards={[]} list={[]} onAdd={noop} />,
     'library copy list': <CopyListPanel list={list} busy={false} onRemove={noop} onCopy={noop} />,
+    'library copy done': <CopyDoneLine copied={2} />,
+    'library copy done one': <CopyDoneLine copied={1} />,
     'library copy list empty': (
       <CopyListPanel list={[]} busy={false} onRemove={noop} onCopy={noop} />
     ),

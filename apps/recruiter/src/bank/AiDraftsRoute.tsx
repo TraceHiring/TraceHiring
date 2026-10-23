@@ -17,6 +17,7 @@ import {
   AI_ERROR_TEXT,
   FORMAT_LABEL,
   JOB_STATUS_LABEL,
+  JOB_STILL_RUNNING,
   SKILL_SUGGESTIONS,
   bankErrorText,
   difficultyText,
@@ -178,19 +179,37 @@ export function AiJobView({ job }: { job: AiDraftJobView }) {
 
 const isFinal = (job: AiDraftJobView): boolean =>
   job.status === 'completed' || job.status === 'failed';
-const isTerminal = (code: string): boolean =>
-  code === 'not_found' || code === 'unauthorized' || code === 'bad_request';
+/** The poll limit is our own code: a failure no retry changes, or a job that outlasted the polling. */
+const POLL_LIMIT = 'poll_limit';
+/** At 3 s then 15 s (common/poller.ts) this is about ten minutes; a longer job is read again on refresh. */
+const MAX_POLLS = 60;
+const TERMINAL_CODES: ReadonlySet<string> = new Set([
+  'not_found',
+  'unauthorized',
+  'bad_request',
+  'forbidden',
+  'aal2_required',
+  'invalid_response',
+  POLL_LIMIT,
+]);
+const isTerminal = (code: string): boolean => TERMINAL_CODES.has(code);
 
 function JobStatus({ api, jobId }: { api: ApiClient; jobId: string }) {
-  const poller = useMemo(
-    () =>
-      new CardPoller<AiDraftJobView>({
-        fetchCard: () => getAiDraftJob(api, jobId),
-        isFinal,
-        isTerminal,
-      }),
-    [api, jobId],
-  );
+  const { poller, seen } = useMemo(() => {
+    const last: { job: AiDraftJobView | null; polls: number } = { job: null, polls: 0 };
+    const card = new CardPoller<AiDraftJobView>({
+      fetchCard: async () => {
+        if (last.polls >= MAX_POLLS) return { ok: false as const, code: POLL_LIMIT };
+        last.polls += 1;
+        const result = await getAiDraftJob(api, jobId);
+        if (result.ok) last.job = result.data;
+        return result;
+      },
+      isFinal,
+      isTerminal,
+    });
+    return { poller: card, seen: last };
+  }, [api, jobId]);
   useEffect(() => {
     poller.start();
     return () => {
@@ -200,6 +219,14 @@ function JobStatus({ api, jobId }: { api: ApiClient; jobId: string }) {
   const snapshot = usePoller(poller);
   const state = snapshot.state;
   if (state.kind === 'loading') return <p role="status">Loading...</p>;
+  if (state.kind === 'terminal' && state.code === POLL_LIMIT) {
+    return (
+      <>
+        {seen.job !== null && <AiJobView job={seen.job} />}
+        <p role="status">{JOB_STILL_RUNNING}</p>
+      </>
+    );
+  }
   if (state.kind === 'terminal') {
     return (
       <p role="alert" className={ui.alert}>
