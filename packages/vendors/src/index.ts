@@ -13,6 +13,17 @@ export type {
   DraftedWrittenItem,
   LlmDrafter,
 } from './llm-drafter.js';
+export type { DraftRequestErrorCode } from './llm-drafter.mock.js';
+export {
+  DRAFT_PROMPT_VERSION,
+  DraftRequestError,
+  DrafterMockInProductionError,
+  MOCK_DRAFTER_ADAPTER_VERSION,
+  MOCK_DRAFTER_MODEL_ID,
+  MOCK_DRAFTER_PROVIDER,
+  MockLlmDrafter,
+  assertMockDrafterEnv,
+} from './llm-drafter.mock.js';
 
 export type {
   GradeRequest,
