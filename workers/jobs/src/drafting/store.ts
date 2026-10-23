@@ -15,7 +15,7 @@ const WS_CLASS = '[ \t\n\r\f\v]+';
 export const SQL = {
   lockJob:
     'select id::text as id, workspace_id::text as workspace_id, format::text as format, skill_key, ' +
-    'difficulty::text as difficulty, count::int as count, status, provider, model_id, prompt_version ' +
+    'difficulty::text as difficulty, count::int as count, status, provider, model_id, prompt_version, topic_sha256 ' +
     'from public.ai_draft_jobs where org_id = $1::uuid and id = $2::uuid for no key update',
   claim:
     "update public.ai_draft_jobs set status = 'running' where org_id = $1::uuid and id = $2::uuid " +
@@ -32,8 +32,9 @@ export const SQL = {
     "select stem from public.item_versions where org_id = $1::uuid and section_id is null and status = 'approved' " +
     'and skill_key = $2 order by created_at desc, id limit $3::int',
   insertItem:
-    "insert into public.items (id, org_id, workspace_id, format, skill_key) values ($1::uuid, $2::uuid, $3::uuid, 'mcq', $4) " +
-    'on conflict do nothing returning id::text as id',
+    // A plain insert (R5-61; A3b security review): an id clash, in this org or another, raises 23505, the stage rolls
+    // back and the message is retried (the last try ends the job `internal`); it is never read as a re-delivery.
+    "insert into public.items (id, org_id, workspace_id, format, skill_key) values ($1::uuid, $2::uuid, $3::uuid, 'mcq', $4)",
   insertVersion:
     'insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, origin, ' +
     "ai_draft_job_id, content_sha256) values ($1::uuid, $2::uuid, 'mcq', $3, $4::text::jsonb, $5, $6::numeric, " +
@@ -66,6 +67,8 @@ export interface DraftJobRow {
   provider: string;
   model_id: string;
   prompt_version: string;
+  /** SHA-256 hex of the UTF-8 of scrubDraftTopic(topic), written by the api (R5-61 d). */
+  topic_sha256: string;
 }
 
 /** A checked MCQ draft as it is stored (texts already trimmed; the hash is of exactly these texts). */
@@ -90,8 +93,8 @@ export interface DraftStore {
   existingStems(normalised: readonly string[]): Promise<Set<string>>;
   /** Approved bank stems of a skill, most recent first. */
   approvedStems(skillKey: string, limit: number): Promise<string[]>;
-  /** Stores one draft with its key; returns the version id, or null when its item already exists (re-delivery). */
-  insertDraft(job: DraftJobRow, draft: StoredDraft): Promise<string | null>;
+  /** Stores one draft with its key; returns the version id. Throws (23505) when its item id already exists. */
+  insertDraft(job: DraftJobRow, draft: StoredDraft): Promise<string>;
   /** Ends the job and writes its idempotency key; throws when the job is no longer open. */
   finish(jobId: string, outcome: DraftOutcomeWrite): Promise<void>;
 }
@@ -131,13 +134,7 @@ export const sqlDraftStore = (tx: SqlTx, orgId: string): DraftStore => ({
       (r) => r.stem,
     ),
   insertDraft: async (job, draft) => {
-    const items = await tx.query<{ id: string }>(SQL.insertItem, [
-      draft.itemId,
-      orgId,
-      job.workspace_id,
-      job.skill_key,
-    ]);
-    if (items.length === 0) return null;
+    await tx.query(SQL.insertItem, [draft.itemId, orgId, job.workspace_id, job.skill_key]);
     const [version] = await tx.query<{ id: string }>(SQL.insertVersion, [
       orgId,
       draft.itemId,

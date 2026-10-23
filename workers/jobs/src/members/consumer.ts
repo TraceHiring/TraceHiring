@@ -10,7 +10,13 @@ import { AdminQueueMessage } from '@trace/shared/contracts/m1';
 import { reportError, type ErrorReporter } from '@trace/shared/log';
 import { failInvite, handleInviteMessage, type MembersDeps } from './provision.js';
 
-/** The delivery that is the queue's last: the first try plus max_retries (5, workers/jobs/wrangler.jsonc). */
+/**
+ * The delivery that is the queue's last: the first try plus max_retries (5, workers/jobs/wrangler.jsonc; asserted by
+ * consumer.test.ts). Cloudflare Queues docs (developers.cloudflare.com/queues/configuration/javascript-apis/,
+ * Message.attempts): "The number of times the consumer has attempted to process this message. Starts at 1." and
+ * (/queues/configuration/batching-retries/) "Messages that reach the configured maximum retries will be deleted from
+ * the queue" (or written to the DLQ). So the deliveries are attempts 1 .. max_retries + 1.
+ */
 export const FINAL_ATTEMPT = 6;
 
 export const MEMBER_INVITE_JOB_ERROR = 'member_invite_job_error';

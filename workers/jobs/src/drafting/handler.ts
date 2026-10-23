@@ -1,15 +1,20 @@
-// One AI drafting job (specs/m1-test-authoring.md §4.4, §6.4, M1-8, M1-19, R5-35, R5-50, R5-51 d, R5-52 g, R5-56 c/e).
+// One AI drafting job (specs/m1-test-authoring.md §4.4, §6.4, M1-8, M1-19, R5-35, R5-50, R5-51 d, R5-52 g, R5-56 c/e,
+// R5-61 b/c/d).
 //
 // Stage 1 (one transaction as trace_authoring_worker): lock the job row; a finished job, or one whose idempotency key
-// exists, is skipped; a message that disagrees with the row ends the job `internal`; a queued job is claimed (running).
-// Then, outside any transaction, the drafter runs with the job row's pinned values, the topic re-scrubbed and passed as
-// DATA (the request has no identity field), and a seed derived from the job id, so a re-delivery drafts the same items.
+// exists, is skipped; a message that disagrees with the row (its topic included: SHA-256 hex of the UTF-8 of
+// scrubDraftTopic(topic) must equal topic_sha256, R5-61 d) ends the job `internal` with no drafter call; a queued job is
+// claimed (running). Then, outside any transaction, the drafter runs with the job row's pinned values, the topic
+// re-scrubbed and passed as DATA (the request has no identity field), and a seed derived from the job id, so a
+// re-delivery drafts the same items. An answer of more than 3 x count items is `bad_output`.
 // Stage 2 (one transaction): lock the job again; if it is still running, screen the answer (checks.ts), store the
 // passing MCQ drafts while the job has room (the guard stores them `in_review`, never approved; a job never approves),
 // and end the job: `completed` when it holds a draft, else `failed no_draft_passed`; a written draft is always discarded
-// (R5-56 e). The end and the drafts commit together, and draft item ids are derived from the job id, so a re-delivery
-// never duplicates a draft. A drafter failure ends the job `drafter_error`, `timeout` or `bad_output`. Database errors
-// propagate (the consumer retries). Logs carry ids, codes and counts only: never the topic, a prompt or a draft.
+// (R5-56 e); every failed attempt counts in drafts_discarded (R5-61 c). The end and the drafts commit together, and
+// draft item ids are derived from the job id, so a re-delivery finds the job ended and never duplicates a draft; an
+// item id that already exists (any org) raises, the stage rolls back and the message is retried. A drafter failure
+// ends the job `drafter_error`, `timeout` or `bad_output`. Database errors propagate (the consumer retries). Logs carry
+// ids, codes and counts only: never the topic, a prompt or a draft.
 import type { AiDraftErrorCode, AuthoringQueueMessage } from '@trace/shared/contracts/m1';
 import { itemContentSha256, scrubDraftTopic } from '@trace/shared/item-hash';
 import type { Logger } from '@trace/shared/log';
@@ -44,17 +49,28 @@ export type DraftOutcome = 'completed' | 'failed' | 'skipped';
 
 export const DRAFT_TIMEOUT_MS = 60_000;
 
-const clampDiscarded = (n: number, count: number): number => Math.max(0, Math.min(n, count));
+/** The most items a drafter answer may hold, per item asked for; more is `bad_output`. */
+export const MAX_ITEMS_PER_COUNT = 3;
+
+/** ai_draft_jobs.topic_sha256 of a topic: SHA-256 hex of the UTF-8 of scrubDraftTopic(topic) (R5-61 d). */
+export const draftTopicSha256 = async (topic: string): Promise<string> => {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(scrubDraftTopic(topic)),
+  );
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+};
 
 const sameDifficulty = (stored: string, sent: number): boolean =>
   Math.round(Number(stored) * 100) === Math.round(sent * 100);
 
-const matches = (m: AuthoringQueueMessage, j: DraftJobRow): boolean =>
+const matches = (m: AuthoringQueueMessage, topicSha256: string, j: DraftJobRow): boolean =>
   j.workspace_id.toLowerCase() === m.workspaceId.toLowerCase() &&
   j.format === m.format &&
   j.skill_key === m.skillKey &&
   sameDifficulty(j.difficulty, m.difficulty) &&
-  j.count === m.count;
+  j.count === m.count &&
+  j.topic_sha256 === topicSha256;
 
 /**
  * Ends a queued or running job as failed in its own transaction. Returns false when the job is not in the job org or
@@ -72,7 +88,7 @@ export const failDraftJob = (
     await s.finish(job.id, {
       status: 'failed',
       errorCode,
-      discarded: clampDiscarded(discarded, job.count),
+      discarded: Math.max(0, discarded),
     });
     deps.log.warn('drafting.job_failed', { jobId: job.id, errorCode });
     return true;
@@ -84,20 +100,22 @@ type Claim =
   | { kind: 'mismatch' }
   | { kind: 'run'; job: DraftJobRow };
 
-const claimJob = (msg: AuthoringQueueMessage, deps: DraftingDeps): Promise<Claim> =>
-  deps.db.run(msg.orgId, async (s): Promise<Claim> => {
+const claimJob = async (msg: AuthoringQueueMessage, deps: DraftingDeps): Promise<Claim> => {
+  const topicSha256 = await draftTopicSha256(msg.topic);
+  return deps.db.run(msg.orgId, async (s): Promise<Claim> => {
     const job = await s.lockJob(msg.jobId);
     if (job === null) return { kind: 'missing' };
     if (job.status === 'completed' || job.status === 'failed' || (await s.keyExists(job.id))) {
       return { kind: 'settled' };
     }
-    if (!matches(msg, job)) {
+    if (!matches(msg, topicSha256, job)) {
       await s.finish(job.id, { status: 'failed', errorCode: 'internal', discarded: 0 });
       return { kind: 'mismatch' };
     }
     if (job.status === 'queued') await s.claim(job.id);
     return { kind: 'run', job: { ...job, status: 'running' } };
   });
+};
 
 type Drafted = { ok: true; result: DraftResult } | { ok: false; code: AiDraftErrorCode };
 
@@ -127,11 +145,19 @@ const callDrafter = async (
   }
 };
 
-/** The answer's items when it is a result of the pinned model and prompt; null otherwise (bad_output). */
+/**
+ * The answer's items when it is a result of the pinned model and prompt with at most MAX_ITEMS_PER_COUNT x count
+ * items; null otherwise (bad_output).
+ */
 const itemsOf = (result: unknown, job: DraftJobRow): readonly unknown[] | null => {
   if (typeof result !== 'object' || result === null) return null;
   const { items, modelId, promptVersion } = result as Record<string, unknown>;
-  if (!Array.isArray(items) || modelId !== job.model_id || promptVersion !== job.prompt_version) {
+  if (
+    !Array.isArray(items) ||
+    items.length > job.count * MAX_ITEMS_PER_COUNT ||
+    modelId !== job.model_id ||
+    promptVersion !== job.prompt_version
+  ) {
     return null;
   }
   return items as readonly unknown[];
@@ -176,7 +202,7 @@ const store = (
       });
     }
     const created = await s.storedDrafts(job.id);
-    const discarded = clampDiscarded(screened.discarded, job.count);
+    const discarded = screened.discarded;
     if (created > 0) {
       await s.finish(job.id, { status: 'completed', discarded });
       deps.log.info('drafting.job_completed', {

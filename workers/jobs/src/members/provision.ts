@@ -1,11 +1,17 @@
-// One member invitation (specs/m1-test-authoring.md M1-20, R2-14, R5-35, R5-56 c, §4.5, §7 E26, E27).
+// One member invitation (specs/m1-test-authoring.md M1-20, R2-14, R5-35, R5-56 c, R5-61 a, §4.5, §7 E26, E27).
 //
-// 1. Without the pepper the job fails closed (a constant error; the message is retried, the invite stays pending).
+// 1. Without a pepper of at least 32 bytes the job fails closed (a constant error; the message is retried, the invite
+//    stays pending).
 // 2. Stage 1 (one transaction as trace_admin_worker): read the invite in the job org. Unknown, or not pending: skipped
 //    (a provisioned invite is the idempotent re-delivery). HMAC(normalised address, pepper) must equal the row's
 //    email_hmac (constant-time) before anything else happens; a mismatch settles the invite as failed and never
 //    reaches the Auth API.
-// 3. Outside any transaction: the Auth admin API creates the user, or reuses it (E26).
+// 3. The Auth user (E26, auth-admin.ts): private.auth_user_id_for_invite (its own transaction, admin worker role, the
+//    job org bound) finds the user already holding the address (another org's member, or the user an earlier try
+//    created before it died) and re-checks, before any Auth call, that the invite is still pending; only on a miss
+//    does the Auth admin API create the user, outside any transaction, and a 422 email_exists looks up again. A
+//    lookup refusal (the invite is no longer pending, or more than one account holds the address) settles the invite
+//    as failed when it is still pending.
 // 4. Stage 2: private.provision_invited_member(invite, user, display name) inserts the invited membership with the
 //    invite row's roles and workspace and marks the invite provisioned (the message has no roles). A guard refusal
 //    (the inviter is no longer an admin, the user already has a membership, a bad name, the invite is no longer
@@ -25,7 +31,7 @@ export interface MembersDb {
 export interface MembersDeps {
   db: MembersDb;
   authAdmin: AuthAdmin;
-  /** MEMBER_INVITE_PEPPER (a jobs Worker secret); undefined or empty fails closed. */
+  /** MEMBER_INVITE_PEPPER (a jobs Worker secret); undefined or under PEPPER_MIN_BYTES fails closed. */
   pepper: string | undefined;
   log: Logger;
 }
@@ -33,6 +39,12 @@ export interface MembersDeps {
 export type InviteOutcome = 'provisioned' | 'failed' | 'skipped';
 
 export const PEPPER_UNAVAILABLE = 'member_invite_pepper_unavailable';
+
+/** The shortest pepper the job accepts, in UTF-8 bytes (the HMAC-SHA-256 output length). */
+export const PEPPER_MIN_BYTES = 32;
+
+const pepperOk = (pepper: string | undefined): pepper is string =>
+  pepper !== undefined && new TextEncoder().encode(pepper).length >= PEPPER_MIN_BYTES;
 
 /** SQLSTATEs of the provisioning guard's refusals (42501 TRACE_GUARD, 23505 TRACE_GUARD, 22023 TRACE_BAD_INPUT). */
 const REFUSALS = new Set(['42501', '23505', '22023']);
@@ -66,7 +78,7 @@ export const handleInviteMessage = async (
   msg: AdminQueueMessage,
   deps: MembersDeps,
 ): Promise<InviteOutcome> => {
-  if (deps.pepper === undefined || deps.pepper === '') throw new Error(PEPPER_UNAVAILABLE);
+  if (!pepperOk(deps.pepper)) throw new Error(PEPPER_UNAVAILABLE);
   const hmac = await inviteEmailHmac(msg.email, deps.pepper);
 
   const checked = await deps.db.run(msg.orgId, async (s) => {
@@ -92,7 +104,15 @@ export const handleInviteMessage = async (
     return 'failed';
   }
 
-  const userId = await deps.authAdmin.ensureUser(msg.email);
+  let userId: string;
+  try {
+    userId = await deps.authAdmin.ensureUser(msg.email, () =>
+      deps.db.run(msg.orgId, (s) => s.authUserIdForInvite(msg.inviteId, msg.email)),
+    );
+  } catch (err) {
+    if (!isGuardRefusal(err)) throw err;
+    return (await failInvite(msg, deps, 'refused')) ? 'failed' : 'skipped';
+  }
 
   try {
     await deps.db.run(msg.orgId, (s) => s.provision(msg.inviteId, userId, msg.displayName));

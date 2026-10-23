@@ -1,21 +1,7 @@
 // The queue consumers of workers/jobs/wrangler.jsonc as the tests read them (the file's text through Vite's `?raw`
-// glob; a workerd test has no file system). JSONC as wrangler reads it: line and block comments, trailing commas,
-// string-aware.
-
-declare global {
-  interface ImportMeta {
-    glob(
-      pattern: string,
-      options: { query: '?raw'; import: 'default'; eager: true },
-    ): Record<string, string>;
-  }
-}
-
-const files = import.meta.glob('../../wrangler.jsonc', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-});
+// import, as workers/edge/src/link-limit.test.ts; a workerd test has no file system). JSONC as wrangler reads it: line
+// and block comments, trailing commas, string-aware.
+import wranglerText from '../../wrangler.jsonc?raw';
 
 const stripJsonc = (text: string): string => {
   let out = '';
@@ -46,9 +32,7 @@ export interface QueueConsumerConfig {
 
 /** Every queue consumer of every env block of the jobs Worker. */
 export const wranglerConsumers = (): QueueConsumerConfig[] => {
-  const text = Object.values(files)[0];
-  if (text === undefined) throw new Error('wrangler.jsonc not found');
-  const cfg = JSON.parse(stripJsonc(text)) as {
+  const cfg = JSON.parse(stripJsonc(wranglerText)) as {
     env?: Record<string, { queues?: { consumers?: QueueConsumerConfig[] } }>;
   };
   return Object.values(cfg.env ?? {}).flatMap((e) => e.queues?.consumers ?? []);
