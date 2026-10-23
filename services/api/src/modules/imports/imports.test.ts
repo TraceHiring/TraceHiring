@@ -66,6 +66,11 @@ describe('POST …/imports/:id/complete and …/cancel', () => {
       rowsTotal: 5,
       imagesOk: 2,
     });
+    // M1-m (R5-64 c): the guard counts the images; the completion PATCH never sends images_ok.
+    const patches = db.sentUpdates.filter((u) => u.table === 'import_jobs');
+    expect(patches).toEqual([{ table: 'import_jobs', patch: { status: 'completed' } }]);
+    // No read of the job's item images either (the stored counts are read back from the update).
+    expect(db.calls.some((c) => c.table === 'item_versions')).toBe(false);
   });
 
   it('answers 409 for completing an open job (no batch yet) or an ended one', async () => {

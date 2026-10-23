@@ -262,20 +262,27 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
           ...row,
         }),
         update: (old, next, d) => {
+          // M1-m (R5-64 c): `images_ok` has no client update grant (permission denied for the column).
+          if (next.images_ok !== old.images_ok) throw new RestError(401, '42501');
           if (['completed', 'cancelled', 'failed'].includes(String(old.status))) throw guard();
           if (old.status === next.status) return next;
           if (old.status === 'open' && next.status === 'completed') throw guard();
-          const ok = tableOf(d, 'item_versions').filter((v) => v.import_job_id === old.id).length;
+          const mine = tableOf(d, 'item_versions').filter((v) => v.import_job_id === old.id);
           const bad = new Set(
             tableOf(d, 'import_row_errors')
               .filter((e) => e.import_job_id === old.id)
               .map((e) => e.row_no),
           ).size;
+          // The guard counts the distinct image keys of the job's stored items when the job ends.
+          const images = new Set(
+            mine.flatMap((v) => ((v.media as { key: string }[] | null) ?? []).map((m) => m.key)),
+          ).size;
           return {
             ...next,
-            rows_ok: ok,
+            rows_ok: mine.length,
             rows_error: bad,
-            rows_total: ok + bad,
+            rows_total: mine.length + bad,
+            images_ok: images,
             completed_at: stamp(),
           };
         },
@@ -343,6 +350,13 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
     });
     return insert<T>(table, body, query);
   };
+  // Every update patch as sent (a test checks a column the api never writes, e.g. import_jobs.images_ok).
+  const sentUpdates: { table: string; patch: Row }[] = [];
+  const update = db.rest.update.bind(db.rest);
+  db.rest.update = <T>(table: string, query: Query, patch: unknown): Promise<T[]> => {
+    sentUpdates.push({ table, patch: structuredClone(patch as Row) });
+    return update<T>(table, query, patch);
+  };
   // The fake applies `or=(…)` logic trees only: an `and=(…)` filter is moved into a one-arm `or` (first pages only).
   const select = db.rest.select.bind(db.rest);
   db.rest.select = <T>(table: string, query: Query): Promise<T[]> => {
@@ -351,7 +365,7 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
     if (rest.or !== undefined) throw new Error('fake rest: and with or');
     return select<T>(table, { ...rest, or: `(and${and})` });
   };
-  return Object.assign(db, { sentInserts });
+  return Object.assign(db, { sentInserts, sentUpdates });
 };
 
 export type A2aDb = ReturnType<typeof a2aDb>;
