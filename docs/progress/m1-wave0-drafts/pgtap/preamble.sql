@@ -43,7 +43,9 @@ begin
     ('b_admin', '00000000-0000-4000-8000-00000000000e', 'aal2'),
     ('outsider', '00000000-0000-4000-8000-000000000011', 'otp'),
     ('lib_author', '00000000-0000-4000-8000-000000000020', 'aal2'),
-    ('lib_expert', '00000000-0000-4000-8000-000000000021', 'aal2')
+    ('lib_expert', '00000000-0000-4000-8000-000000000021', 'aal2'),
+    ('pure_owner', '00000000-0000-4000-8000-000000000030', 'aal2'),
+    ('invitee', '00000000-0000-4000-8000-000000000031', 'otp')
   ) as x(who, sub, amr) where x.who = p_who;
   if v_sub is null then
     raise exception 'unknown persona %', p_who;
@@ -183,5 +185,140 @@ begin
   end if;
   insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
   return v_ver;
+end
+$f$;
+
+-- tv(key, org, workspace): a test and its draft version 1 on the operator path (the D1 seed trigger adds the draft
+-- ruleset and pins the notice). Records <key> (version) and <key>_test.
+create function pg_temp.tv(p_key text, p_org uuid, p_ws uuid) returns uuid language plpgsql as $f$
+declare v_test uuid; v_tv uuid;
+begin
+  insert into public.tests (org_id, workspace_id, name) values (p_org, p_ws, 'Test ' || p_key) returning id into v_test;
+  insert into public.test_versions (org_id, test_id, total_time_seconds, quality_cutoff)
+    values (p_org, v_test, 1800, 40) returning id into v_tv;
+  insert into pg_temp.ids values (p_key, v_tv), (p_key || '_test', v_test);
+  return v_tv;
+end
+$f$;
+-- sec(key, version key, position, format, pool, draw, weight): a section of a draft version on the operator path, with
+-- package-v2 navigation (written sections forward-only). A null pool makes an inline section. Records <key>.
+create function pg_temp.sec(p_key text, p_tv text, p_pos int, p_format text, p_pool uuid, p_draw int, p_weight numeric)
+returns uuid language plpgsql as $f$
+declare v_id uuid;
+begin
+  insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation)
+    select v.org_id, v.id, p_pos, 'Section ' || p_key, p_format::public.section_format, p_weight, p_pool, p_draw,
+      case when p_format = 'written' then 'forward_only' else 'free' end
+    from public.test_versions as v where v.id = pg_temp.id(p_tv)
+    returning id into v_id;
+  insert into pg_temp.ids values (p_key, v_id);
+  return v_id;
+end
+$f$;
+-- inline(key, section key): an inline MCQ item of a draft section and its key, on the operator path. Records <key>.
+create function pg_temp.inline(p_key text, p_sec text) returns uuid language plpgsql as $f$
+declare v_id uuid; v_org uuid; v_pos int;
+begin
+  select s.org_id into v_org from public.sections as s where s.id = pg_temp.id(p_sec);
+  select coalesce(max(i.position), 0) + 1 into v_pos from public.item_versions as i where i.section_id = pg_temp.id(p_sec);
+  insert into public.item_versions (org_id, section_id, format, position, stem, options, content_sha256)
+    values (v_org, pg_temp.id(p_sec), 'mcq', v_pos, '[synthetic] Inline ' || p_key,
+      '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', repeat('c', 64))
+    returning id into v_id;
+  insert into public.item_answer_keys (org_id, item_version_id, format, key) values (v_org, v_id, 'mcq', '{"option_id": "o1"}');
+  insert into pg_temp.ids values (p_key, v_id);
+  return v_id;
+end
+$f$;
+-- preset(version key, preset): the version's draft ruleset gets the preset's settings (the guard derives signal_settings).
+create function pg_temp.preset(p_tv text, p_preset text) returns void language plpgsql as $f$
+begin
+  update public.ruleset_versions as r set preset_key = p_preset,
+    settings = (select p.preset_values from public.integrity_presets as p where p.preset_key = p_preset and p.version = 1)
+  where r.id = (select v.ruleset_version_id from public.test_versions as v where v.id = pg_temp.id(p_tv));
+end
+$f$;
+-- publish(version key): operator-path publish with a content hash (the publish guard runs in full).
+create function pg_temp.publish(p_tv text) returns void language plpgsql as $f$
+begin
+  update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = pg_temp.id(p_tv);
+end
+$f$;
+-- session(key, version key, n): one submitted session of a published version through the real roles, in D1's order:
+-- the operator inserts the invitation; trace_api sends, verifies, consents and starts; trace_worker mirrors the session.
+-- Records <key>.
+create function pg_temp.session(p_key text, p_tv text, p_n int) returns uuid language plpgsql as $f$
+declare v_org uuid; v_ws uuid; v_test uuid; v_rs uuid; v_nv uuid;
+  v_inv uuid := gen_random_uuid(); v_cons uuid := gen_random_uuid(); v_sid uuid := gen_random_uuid();
+begin
+  perform pg_temp.op();
+  select v.org_id, v.workspace_id, v.test_id, v.ruleset_version_id, v.notice_version_id into v_org, v_ws, v_test, v_rs, v_nv
+  from public.test_versions as v where v.id = pg_temp.id(p_tv);
+  insert into public.invitations (id, org_id, workspace_id, test_id, test_version_id, candidate_label, contact_email,
+      link_token_hash, adult_confirmed_by_inviter, status, expires_at)
+    values (v_inv, v_org, v_ws, v_test, pg_temp.id(p_tv), 'Candidate 0', 'm1-c' || p_n || '@example.test',
+      encode(sha256(convert_to('m1-session-' || p_key, 'UTF8')), 'hex'), true, 'created', '2030-01-01 00:00:00+00');
+  perform pg_temp.api(v_org);
+  update public.invitations set status = 'sent' where id = v_inv;
+  update public.invitations set status = 'otp_verified', adult_self_declared = true where id = v_inv;
+  insert into public.consents (id, org_id, invitation_id, test_version_id, ruleset_version_id, notice_version_id,
+      rendered_sha256, language, event)
+    values (v_cons, v_org, v_inv, pg_temp.id(p_tv), v_rs, v_nv, repeat('d', 64), 'en', 'granted');
+  update public.invitations set session_id = v_sid where id = v_inv;
+  update public.invitations set status = 'started', started_at = '2026-10-14 10:00:00+00' where id = v_inv;
+  perform pg_temp.w('trace_worker', v_org);
+  insert into public.sessions (id, org_id, test_version_id, ruleset_version_id, invitation_id, consent_id, state,
+      submit_kind, adult_confirmed_at_start, started_at, server_deadline_at, submitted_at, mirror_seq, receipt_ref)
+    values (v_sid, v_org, pg_temp.id(p_tv), v_rs, v_inv, v_cons, 'submitted', 'candidate', true,
+      '2026-10-14 10:00:00+00', '2026-10-14 10:31:00+00', '2026-10-14 10:20:00+00', 1,
+      'RCPTM' || lpad(p_n::text, 3, '0'));
+  update public.invitations set status = 'submitted' where id = v_inv;
+  perform pg_temp.op();
+  insert into pg_temp.ids values (p_key, v_sid);
+  return v_sid;
+end
+$f$;
+-- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review (the operator path names origin, as the
+-- authoring worker's write path would; its answer key is added by the authoring worker). Records <key>, <key>_item.
+create function pg_temp.ai_draft(p_key text, p_org uuid, p_ws uuid) returns uuid language plpgsql as $f$
+declare v_item uuid; v_ver uuid;
+begin
+  perform pg_temp.op();
+  insert into public.items (org_id, workspace_id, format, skill_key) values (p_org, p_ws, 'mcq', 'verbal')
+    returning id into v_item;
+  insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, origin, content_sha256)
+    values (p_org, v_item, 'mcq', '[synthetic] AI draft ' || p_key,
+      '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', repeat('c', 64))
+    returning id into v_ver;
+  perform pg_temp.w('trace_authoring_worker', p_org);
+  insert into public.item_answer_keys (org_id, item_version_id, format, key) values (p_org, v_ver, 'mcq', '{"option_id": "o1"}');
+  perform pg_temp.op();
+  insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
+  return v_ver;
+end
+$f$;
+-- qcard(session key): the session's quality score (meets the cutoff) and public quality card, as the quality worker.
+create function pg_temp.qcard(p_sess text) returns void language plpgsql as $f$
+declare v_score uuid := gen_random_uuid(); v_tv uuid;
+begin
+  perform pg_temp.w('trace_quality_worker', pg_temp.id('A'));
+  select s.test_version_id into v_tv from public.sessions as s where s.id = pg_temp.id(p_sess);
+  insert into quality.scores (id, org_id, session_id, test_version_id, score, section_scores, quality_cutoff, meets_cutoff,
+      scoring_version, rubric_set_sha256, rubric_version_ids, grader_model_id, grader_adapter_version, computed_at)
+    values (v_score, pg_temp.id('A'), pg_temp.id(p_sess), v_tv, 80, '[{"position": 1, "weight": 100, "score": 80}]', 40,
+      true, 'd1-scoring-v1', repeat('d', 64), '{}', 'mock-grader-v1', 'mock-1', '2026-10-14 10:21:00+00');
+  insert into public.quality_cards (org_id, session_id, quality_score_id) values (pg_temp.id('A'), pg_temp.id(p_sess), v_score);
+  perform pg_temp.op();
+end
+$f$;
+-- flag(session key, rule, family, severity, untrusted): one integrity flag insert as the integrity worker; try()'s result.
+create function pg_temp.flag(p_sess text, p_rule text, p_family text, p_severity text, p_untrusted boolean) returns text language plpgsql as $f$
+declare v_r text;
+begin
+  perform pg_temp.w('trace_integrity_worker', pg_temp.id('A'));
+  v_r := pg_temp.try(format($s$insert into integrity.flags (org_id, session_id, rule_id, family, tier, severity, untrusted, raw_media, count, first_offset_ms, state, signal_seqs) values (%L, %L, %L, %L, 'T3', %L, %L, false, 1, 1000, 'pending', '{1}')$s$,
+    pg_temp.id('A'), pg_temp.id(p_sess), p_rule, p_family, p_severity, p_untrusted));
+  perform pg_temp.op();
+  return v_r;
 end
 $f$;

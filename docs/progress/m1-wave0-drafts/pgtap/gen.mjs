@@ -2,8 +2,9 @@
 // Usage: node gen.mjs <repo-root> [name ...]
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = process.argv[2];
 const only = process.argv.slice(3);
 const preamble = readFileSync(path.join(here, 'preamble.sql'), 'utf8').trimEnd();
