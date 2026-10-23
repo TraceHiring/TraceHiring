@@ -3,6 +3,11 @@
 // an unknown key is refused rather than ignored, so no band, flag or coverage value can ever reach the score.
 
 export const SCORING_VERSION = 'd1-scoring-v1';
+/**
+ * The scoring version a package v2 session records (lead decision, A3a fix round 1): the arithmetic is this file's,
+ * unchanged; the scored item set is the candidate's own draw (./v2.ts). A v1 session keeps SCORING_VERSION.
+ */
+export const SCORING_VERSION_V2 = 'm1-scoring-v1';
 
 export interface ScoreSection {
   id: string;

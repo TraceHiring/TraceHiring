@@ -136,6 +136,25 @@ select matches(pg_temp.try(format($$select private.provision_invited_member(%L, 
 select pg_temp.op();
 select is((select string_agg(r, ',' order by r) from unnest(array['anon', 'authenticated', 'service_role', 'trace_api', 'trace_worker', 'trace_quality_worker', 'trace_integrity_worker', 'trace_authoring_worker', 'trace_admin_worker', 'trace_candidate']) as r where has_function_privilege(r, 'private.provision_invited_member(uuid, uuid, text)', 'EXECUTE')), 'trace_admin_worker', 'provision: EXECUTE is granted to trace_admin_worker only');
 
+-- ===== Migration M1-g (R5-61 a, E26): the Auth user id for a pending invite in the job org =====
+select pg_temp.w('trace_admin_worker', pg_temp.id('A'));
+select is(private.auth_user_id_for_invite(pg_temp.id('i1'), '  P-Invitee@Example.TEST '), pg_temp.id('invitee'), 'E26: the admin worker finds the existing Auth user of a pending invite (trimmed, any case)');
+select is(private.auth_user_id_for_invite(pg_temp.id('i1'), 'p-nobody@example.test'), null, 'E26: no Auth user for the address gives null (the job creates one)');
+select matches(pg_temp.try(format($$select private.auth_user_id_for_invite(%L, 'p-invitee@example.test')$$, pg_temp.id('i4'))), '^42501 TRACE_GUARD: the invite is not pending in the job org', 'E26: a cancelled invite looks up nothing');
+select pg_temp.w('trace_admin_worker', pg_temp.id('B'));
+select matches(pg_temp.try(format($$select private.auth_user_id_for_invite(%L, 'p-invitee@example.test')$$, pg_temp.id('i1'))), '^42501 TRACE_GUARD: the invite is not pending in the job org', 'E26: an admin worker bound to org B looks up nothing for an org A invite');
+select pg_temp.w('trace_admin_worker', null);
+select matches(pg_temp.try(format($$select private.auth_user_id_for_invite(%L, 'p-invitee@example.test')$$, pg_temp.id('i1'))), '^42501 TRACE_GUARD: the invite is not pending in the job org', 'E26: an unbound admin worker looks up nothing');
+select pg_temp.op();
+update public.memberships set roles = '{recruiter}' where org_id = pg_temp.id('A') and user_id = (select invited_by from public.member_invites where id = pg_temp.id('i1'));
+select pg_temp.w('trace_admin_worker', pg_temp.id('A'));
+select matches(pg_temp.try(format($$select private.auth_user_id_for_invite(%L, 'p-invitee@example.test')$$, pg_temp.id('i1'))), '^42501 TRACE_GUARD: the inviter is no longer an active admin or owner', 'M1-h (A3b re-review L1): no Auth lookup, so no Auth user, once the inviter is no longer an admin');
+select pg_temp.op();
+update public.memberships set roles = '{admin}' where org_id = pg_temp.id('A') and user_id = (select invited_by from public.member_invites where id = pg_temp.id('i1'));
+select pg_temp.op();
+select is((select string_agg(r, ',' order by r) from unnest(array['anon', 'authenticated', 'service_role', 'trace_api', 'trace_worker', 'trace_quality_worker', 'trace_integrity_worker', 'trace_authoring_worker', 'trace_admin_worker', 'trace_candidate']) as r where has_function_privilege(r, 'private.auth_user_id_for_invite(uuid, text)', 'EXECUTE')), 'trace_admin_worker', 'E26: EXECUTE on the lookup is granted to trace_admin_worker only');
+select is((select prosecdef::text || '|' || provolatile::text || '|' || array_to_string(proconfig, ',') from pg_proc where oid = 'private.auth_user_id_for_invite(uuid, text)'::regprocedure), 'true|s|search_path=""', 'E26: the lookup is SECURITY DEFINER, stable, with an empty search_path');
+
 -- ===== provision_invited_member: the invited membership (roles only from the invite, R2-14) =====
 select pg_temp.w('trace_admin_worker', pg_temp.id('A'));
 select is(pg_temp.try(format($$insert into pg_temp.res select 'm1', private.provision_invited_member(%L, %L, 'Persona Invitee')$$, pg_temp.id('i1'), pg_temp.id('invitee'))), 'OK 1', 'AT-M1-26: the admin worker provisions the recruiter invite');

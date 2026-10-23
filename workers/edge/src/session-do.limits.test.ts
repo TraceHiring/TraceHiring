@@ -23,6 +23,7 @@ import {
   heartbeat,
   paste,
   postEvents,
+  serveCore,
   sessionHarness,
   startCore,
   text,
@@ -236,6 +237,7 @@ describe('the stored-byte cap (SEC-C1b-2)', () => {
     async () => {
       const h = await coreHarness();
       const { view } = await startCore(h);
+      await serveCore(h, [WRITTEN]);
       // 10 000 three-byte characters: within maxChars (UTF-16 units), about 30 KB of stored UTF-8 per event.
       const big = '€'.repeat(10_000);
       let seq = 0;
@@ -265,6 +267,8 @@ describe('the stored-byte cap (SEC-C1b-2)', () => {
         events: [text(seq + 1, WRITTEN, big.length, 0, '')],
       });
       expect(small).toMatchObject({ ok: true, ackSeq: seq + 1 });
+      // R5-59 b: the edit lands only at a served position, so it must not be refused (re-review Low).
+      expect(small).not.toHaveProperty('refusedSeqs');
       h.clock.ms += STEP_MS;
       expect((await h.core.submit(AUTH, { streamId: view.streamId, finalSeq: seq + 1 })).ok).toBe(
         true,

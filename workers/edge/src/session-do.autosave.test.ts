@@ -18,6 +18,8 @@ import {
   MCQ,
   paste,
   postEvents,
+  serveCore,
+  serveHttp,
   sessionHarness,
   SHORT,
   SHORT_MAX,
@@ -64,6 +66,7 @@ describe('SessionDO events: dedupe, high-water, gaps, streams (AT-D24)', () => {
   it('accepts contiguous events, acks the high-water mark and gives each a session-global gseq', async () => {
     const h = await coreHarness();
     const { view } = await startCore(h);
+    await serveCore(h);
     const out = await send(h, view.streamId, [
       heartbeat(1),
       text(2, WRITTEN, 0, 0, 'abc'),
@@ -77,6 +80,7 @@ describe('SessionDO events: dedupe, high-water, gaps, streams (AT-D24)', () => {
   it('a resend of seq <= hw is idempotent: no new gseq, the edit is applied once', async () => {
     const h = await coreHarness();
     const { view } = await startCore(h);
+    await serveCore(h);
     await send(h, view.streamId, [text(1, WRITTEN, 0, 0, 'ab'), text(2, WRITTEN, 2, 0, 'c')]);
     const again = await send(h, view.streamId, [
       text(1, WRITTEN, 0, 0, 'ab'),
@@ -194,6 +198,7 @@ describe('SessionDO events: dedupe, high-water, gaps, streams (AT-D24)', () => {
   it('two streams (L-14): a paste right after a reload gets the next gseq and lands in events.ndjson', async () => {
     const h = await coreHarness();
     const { view } = await startCore(h);
+    await serveCore(h);
     await send(h, view.streamId, [heartbeat(1), text(2, WRITTEN, 0, 0, 'draft'), heartbeat(3)]);
 
     const attached = await h.core.attach(AUTH);
@@ -232,6 +237,7 @@ describe('SessionDO events: dedupe, high-water, gaps, streams (AT-D24)', () => {
   it('events.ndjson never holds an answer kind or a text field (L-21)', async () => {
     const h = await coreHarness();
     const { view } = await startCore(h);
+    await serveCore(h);
     const marker = 'zq-synthetic-answer-marker';
     await send(h, view.streamId, [
       heartbeat(1),
@@ -258,6 +264,7 @@ describe('SessionDO events: dedupe, high-water, gaps, streams (AT-D24)', () => {
     const h = await sessionHarness();
     const { token, view } = await h.startSession();
     await h.request('GET', `/v1/session/items/${WRITTEN}`, { token });
+    await h.request('GET', `/v1/session/items/${MCQ}`, { token });
     await postEvents(h, token, view.streamId, [
       text(1, WRITTEN, 0, 0, 'kept'),
       choice(2, MCQ, 'a'),
@@ -282,6 +289,7 @@ describe('an invalid edit rejects the whole batch (AT-D29 maxChars, RT-13)', () 
   it('an answer.text over maxChars is 400 and nothing of the batch is kept', async () => {
     const h = await sessionHarness();
     const { token, view } = await h.startSession();
+    await serveHttp(h, token, [SHORT]);
     const good = 'x'.repeat(SHORT_MAX - 1);
     expect((await postEvents(h, token, view.streamId, [text(1, SHORT, 0, 0, good)])).status).toBe(
       200,
@@ -307,6 +315,7 @@ describe('an invalid edit rejects the whole batch (AT-D29 maxChars, RT-13)', () 
   it('exactly maxChars is accepted', async () => {
     const h = await coreHarness();
     const { view } = await startCore(h);
+    await serveCore(h);
     expect(
       await send(h, view.streamId, [text(1, SHORT, 0, 0, 'x'.repeat(SHORT_MAX))]),
     ).toMatchObject({
@@ -335,6 +344,7 @@ describe('an invalid edit rejects the whole batch (AT-D29 maxChars, RT-13)', () 
   ])('rejects %s with bad_request', async (_name, events) => {
     const h = await coreHarness();
     const { view } = await startCore(h);
+    await serveCore(h);
     expect(await send(h, view.streamId, events)).toEqual({ ok: false, error: 'bad_request' });
     expect(storedGseqs(h)).toEqual([]);
   });
@@ -430,6 +440,7 @@ describe('final answer = replay of every edit in gseq order (AT-D25)', () => {
       fc.asyncProperty(fc.array(stepArb, { minLength: 5, maxLength: 29 }), async (steps) => {
         const h = await coreHarness();
         const { view } = await startCore(h);
+        await serveCore(h);
         let streamId = view.streamId;
         const model = new Map<number, string>([
           [WRITTEN, ''],
@@ -478,6 +489,7 @@ describe('final answer = replay of every edit in gseq order (AT-D25)', () => {
   it('a drifted incremental state is caught: replay mismatch, and the replay is the final answer', async () => {
     const h = await coreHarness();
     const { view } = await startCore(h);
+    await serveCore(h);
     await send(h, view.streamId, [text(1, WRITTEN, 0, 0, 'true text')]);
     const stored = h.kv.get<{ kind: 'text'; text: string; gseq: number }>(`ans:${WRITTEN}`);
     if (stored === undefined) throw new Error('no incremental state');
@@ -491,6 +503,7 @@ describe('final answer = replay of every edit in gseq order (AT-D25)', () => {
   it('a client len check that disagrees with the server text is recorded as replay mismatch (context)', async () => {
     const h = await coreHarness();
     const { view } = await startCore(h);
+    await serveCore(h);
     const withLen = { ...text(1, WRITTEN, 0, 0, 'abc'), len: 4 } as ClientEvent;
     expect(await send(h, view.streamId, [withLen])).toMatchObject({ ok: true });
     await submitCore(h, view.streamId, 1);

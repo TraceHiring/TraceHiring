@@ -1,6 +1,7 @@
 // The versioned client-signal catalog (spec §4.6, §5.2). The client sends neither tier nor validated: the integrity
 // job stamps each signal from the catalog of the message's signalCatalogVersion, and `capturedFamilies` is the
-// catalog's family list. Every client signal is T3 (rule 3). `validated` mirrors rule table v1
+// catalog's family list minus each family whose every kind the ruleset's signal settings switch off (M1 R5-23 a,
+// R5-52 f; D1 rulesets switch none off). Every client signal is T3 (rule 3). `validated` mirrors rule table v1
 // (docs/progress/d1-wave0-drafts/m3/d1-v1.json): only paste/drop and untrusted_input can raise the band;
 // tab_hidden and fullscreen_exit are context only (D1-6). A test cross-checks both against the rule table and the
 // ClientSignal contract.

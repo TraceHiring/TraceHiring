@@ -19,6 +19,7 @@ import {
   choice,
   paste,
   RULESET,
+  serveCore,
   sessionHarness,
   startCore,
   TEST_VERSION,
@@ -36,8 +37,9 @@ const mirrorState = (h: CoreHarness) =>
 /** Starts, saves a few events and submits; returns the stream id. */
 const runAndSubmit = async (h: CoreHarness) => {
   const { view } = await startCore(h);
+  await serveCore(h, [MCQ, WRITTEN]);
   h.clock.ms += 1000;
-  await h.core.events(AUTH, {
+  const saved = await h.core.events(AUTH, {
     streamId: view.streamId,
     events: [
       heartbeat(1),
@@ -46,6 +48,8 @@ const runAndSubmit = async (h: CoreHarness) => {
       paste(4, WRITTEN, 7),
     ],
   });
+  // R5-59 b: both answers land (their positions were served), so final.json is not trivially empty.
+  expect(saved).not.toHaveProperty('refusedSeqs');
   h.clock.ms += 1000;
   const out = await h.core.submit(AUTH, { streamId: view.streamId, finalSeq: 4 });
   if (!out.ok) throw new Error(`submit refused: ${out.error}`);

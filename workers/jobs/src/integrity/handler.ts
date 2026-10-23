@@ -12,6 +12,9 @@
 // A card guard error because a quality card landed between the gate read and the awaiting insert aborts the
 // transaction: it is thrown as `integrity_retry`, so the message is retried and the next run takes the final path.
 // Rule 1: no score, no quality type; an integrity result never touches a quality card.
+// Package v2 messages run this stage unchanged (it reads no item data). A result stored under another engine version
+// (a D1 awaiting card under band-engine-1) is never overwritten: the flip fails with integrity_input_changed and the
+// message reaches the DLQ (spec m1 R5-52 f names no other behaviour; the repair is an open lead question).
 import type { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
 import { jobKey, type EvidenceReader, type SqlTx } from '@trace/shared/jobs';
 import { callBand, flagRows, ruleTableOf, signalSettingsOf, timelineRows } from './band-call.js';

@@ -355,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(107);
+select plan(115);
 -- Jobs: d1 (recruiter, A1, count 2), d2 (owner, A1, fails), d3 (admin, A1, running), d5 (admin, A1, stays queued),
 -- dw (workspace recruiter, A2). Items of the drafts are written by the authoring worker with fixed ids c8…01-04.
 
@@ -529,5 +529,21 @@ select pg_temp.op();
 select is((select provolatile::text from pg_proc where oid = 'private.ai_draft_job_has_room(uuid,uuid)'::regprocedure), 'v', 'M1: ai_draft_job_has_room is volatile (it takes a row lock)');
 select matches(pg_get_functiondef('private.ai_draft_job_has_room(uuid,uuid)'::regprocedure), 'for no key update', 'M1: the cap locks the job row before it counts, so two deliveries cannot both take the last slot and a job never ends over its count');
 select matches(pg_get_functiondef('private.ai_draft_job_running(uuid,uuid,uuid)'::regprocedure), 'for no key update', 'M1: the running check locks the job row in the same mode as the cap (no lock upgrade), so no draft or key lands after the job ended');
+
+-- ===== Migration M1-g (R5-61 b, c): a completed job has keyed drafts; the discard count is not capped (R5-51 d) =====
+select pg_temp.op();
+insert into public.ai_draft_jobs (id, org_id, workspace_id, requested_by, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values
+  ('a8000000-0000-4000-8000-0000000000f1', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 1, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1'),
+  ('a8000000-0000-4000-8000-0000000000f2', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1');
+select pg_temp.w('trace_authoring_worker', pg_temp.id('A'));
+select is(pg_temp.try($$update public.ai_draft_jobs set status = 'running' where id in ('a8000000-0000-4000-8000-0000000000f1', 'a8000000-0000-4000-8000-0000000000f2')$$), 'OK 2', 'M1-g: the worker claims jobs f1 and f2');
+select matches(pg_temp.try($$update public.ai_draft_jobs set status = 'completed' where id = 'a8000000-0000-4000-8000-0000000000f1'$$), '^42501 TRACE_GUARD: a completed drafting job has keyed drafts', 'M1-g (DB review A3b L5): a job with no draft cannot complete');
+select is(pg_temp.try($$update public.ai_draft_jobs set status = 'failed', error_code = 'no_draft_passed', drafts_discarded = 5 where id = 'a8000000-0000-4000-8000-0000000000f1'$$), 'OK 1', 'M1-g (R5-51 d): drafts_discarded counts every failed attempt, beyond count');
+select is(pg_temp.try($$insert into public.items (id, org_id, workspace_id, format, skill_key) values ('c8000000-0000-4000-8000-0000000000f2', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal')$$), 'OK 1', 'M1-g: the worker writes a draft item for job f2');
+select is(pg_temp.try($$insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, ai_draft_job_id, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c8000000-0000-4000-8000-0000000000f2', 'mcq', '[synthetic] AI draft without its key', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'a8000000-0000-4000-8000-0000000000f2', repeat('c', 64))$$), 'OK 1', 'M1-g: the worker writes the draft version, no key yet');
+select matches(pg_temp.try($$update public.ai_draft_jobs set status = 'completed' where id = 'a8000000-0000-4000-8000-0000000000f2'$$), '^42501 TRACE_GUARD: a completed drafting job has keyed drafts', 'M1-g (DB review A3b L5): a job whose draft has no key cannot complete');
+select is(pg_temp.try($$insert into public.item_answer_keys (org_id, item_version_id, format, key) select org_id, id, 'mcq', '{"option_id": "o1"}' from public.item_versions where ai_draft_job_id = 'a8000000-0000-4000-8000-0000000000f2'$$), 'OK 1', 'M1-g: the worker keys the draft');
+select is(pg_temp.try($$update public.ai_draft_jobs set status = 'completed' where id = 'a8000000-0000-4000-8000-0000000000f2'$$), 'OK 1', 'M1-g: with its keyed draft, job f2 completes');
+select pg_temp.op();
 select * from finish();
 rollback;
