@@ -210,49 +210,48 @@ function parseRequest(raw: unknown): DraftRequest {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new DraftRequestError('not_object');
   }
-  const q = raw as Record<string, unknown>;
-  if (q.format !== 'mcq' && q.format !== 'written') throw new DraftRequestError('bad_format');
-  if (typeof q.skill !== 'string' || !SKILL_KEY.test(q.skill)) {
-    throw new DraftRequestError('bad_skill');
-  }
+  // Each field is read exactly once, then only the locals are checked and used: a getter that changes its answer
+  // between a check and a use cannot slip a different value past the checks.
+  const { format, skill, difficulty, count, topic } = raw as Record<string, unknown>;
+  if (format !== 'mcq' && format !== 'written') throw new DraftRequestError('bad_format');
+  if (typeof skill !== 'string' || !SKILL_KEY.test(skill)) throw new DraftRequestError('bad_skill');
   if (
-    typeof q.difficulty !== 'number' ||
-    !Number.isFinite(q.difficulty) ||
-    q.difficulty < 0 ||
-    q.difficulty > 1
+    typeof difficulty !== 'number' ||
+    !Number.isFinite(difficulty) ||
+    difficulty < 0 ||
+    difficulty > 1
   ) {
     throw new DraftRequestError('bad_difficulty');
   }
-  if (typeof q.count !== 'number' || !Number.isInteger(q.count) || q.count < 1 || q.count > 10) {
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > 10) {
     throw new DraftRequestError('bad_count');
   }
-  if (typeof q.topic !== 'string') throw new DraftRequestError('bad_topic');
-  return {
-    format: q.format,
-    skill: q.skill,
-    difficulty: q.difficulty,
-    count: q.count,
-    topic: q.topic,
-  };
+  if (typeof topic !== 'string') throw new DraftRequestError('bad_topic');
+  return { format, skill, difficulty, count, topic };
 }
 
 export class MockLlmDrafter implements LlmDrafter {
-  private readonly seed: number;
+  // ES private fields: a draft() on an object that never ran the constructor (Object.create, a foreign `this`)
+  // fails the brand check, so the production guard cannot be skipped.
+  readonly #env: 'dev' | 'staging';
+  readonly #seed: number;
 
   /** `env` must be 'dev' or 'staging'. `seed` (default 1) is part of the pure function; it is not a secret. */
   constructor(env: unknown, opts?: { seed?: number }) {
     assertMockDrafterEnv(env);
     const seed = opts?.seed ?? 1;
     if (!Number.isSafeInteger(seed)) throw new DraftRequestError('bad_seed');
-    this.seed = seed;
+    this.#env = env;
+    this.#seed = seed;
   }
 
   draft(req: DraftRequest, opts?: { signal?: AbortSignal }): Promise<DraftResult> {
     try {
+      assertMockDrafterEnv(this.#env);
       opts?.signal?.throwIfAborted();
       const { format, skill, difficulty, count } = parseRequest(req);
       // The topic is validated as a string and then dropped: it is data and never reaches the output.
-      const r = mulberry32(hash32(`${this.seed}|${format}|${skill}|${difficulty}`));
+      const r = mulberry32(hash32(`${this.#seed}|${format}|${skill}|${difficulty}`));
       const tier = tierOf(difficulty);
       const used = new Set<string>();
       const items: DraftedItem[] = [];
