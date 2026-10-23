@@ -4,3 +4,4 @@ export * from './contracts.js';
 export * from './health.js';
 export * from './log/index.js';
 export * from './version.js';
+export * from './candidate-summary.js';
