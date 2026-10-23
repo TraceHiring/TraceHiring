@@ -7,6 +7,10 @@
 -- that merge it is re-timestamped after the newest D1 migration, and every function it replaces (item_versions_guard,
 -- item_answer_keys_guard) is re-derived from the newest D1 body.
 --
+-- First reviews folded in place (provisional file, R5-30): SEC-M1-1 (copies drop correctOptionId), SEC-M1-2 (the
+-- authoring worker reads no key), SEC-M1-3 (worker writes need a running drafting job), SEC-M1-4 (attested key review),
+-- SEC-M1-5 (image keys under the item's org), DB-M1-6 (no truncate of bank keys and variants), DB-M1-10 (indexes).
+--
 -- Nothing here reads or names quality.* or integrity.* (I-M1-10, MT-5). Error contract (as D1):
 --   guard / freeze refusal       42501 'TRACE_GUARD: <reason>'
 --   missing parent row           23503 'TRACE_GUARD: <parent> not found'
@@ -137,10 +141,13 @@ as $$
           select 1 from jsonb_array_elements(p_spec -> 'options') as o
           where jsonb_typeof(o -> 'id') is distinct from 'string' or jsonb_typeof(o -> 'text') is distinct from 'string'
         )
-        and jsonb_typeof(p_spec -> 'correctOptionId') = 'string'
-        and exists (
-          select 1 from jsonb_array_elements(p_spec -> 'options') as o where o ->> 'id' = p_spec ->> 'correctOptionId'
-        )
+        -- SEC-M1-1: a library copy stores its spec without correctOptionId (the key of every variant); the table CHECK
+        -- item_versions_param_spec_key requires it on every other row.
+        and (not (p_spec ? 'correctOptionId') or (
+          jsonb_typeof(p_spec -> 'correctOptionId') = 'string'
+          and exists (
+            select 1 from jsonb_array_elements(p_spec -> 'options') as o where o ->> 'id' = p_spec ->> 'correctOptionId'
+          )))
         and jsonb_typeof(p_spec -> 'count') = 'number'
         and (p_spec ->> 'count')::numeric between 5 and 200
       else false
@@ -292,6 +299,10 @@ alter table public.item_versions
   add constraint item_versions_ai_draft_bank check (origin <> 'ai_draft' or section_id is null),
   add constraint item_versions_parameterised
     check (not is_parameterised or (format = 'mcq' and param_spec is not null)),
+  -- SEC-M1-1 (I-M1-5): the spec of a library copy never carries correctOptionId (the key of every variant, which org
+  -- roles can read), and every other spec names it.
+  add constraint item_versions_param_spec_key
+    check (param_spec is null or ((origin = 'library') <> (param_spec ? 'correctOptionId'))),
   add constraint item_versions_library_source check (origin <> 'library' or source_item_version_id is not null),
   add constraint item_versions_import_row check ((import_row_no is null) or (import_job_id is not null));
 create unique index item_versions_bank_version_no on public.item_versions (org_id, item_id, version_no)
@@ -303,6 +314,9 @@ create unique index item_versions_import_row on public.item_versions (org_id, im
 alter table public.item_versions add constraint item_versions_org_id_id_workspace_key unique (org_id, id, workspace_id);
 create index item_versions_item_idx on public.item_versions (org_id, item_id);
 create index item_versions_bank_status_idx on public.item_versions (org_id, workspace_id, status) where section_id is null;
+-- DB-M1-10: the library copy trigger counts an org's copies of the UTC day for its cap.
+create index item_versions_library_copy_day_idx on public.item_versions (org_id, origin, created_at)
+  where origin = 'library';
 
 -- ---------------------------------------------------------------------------------------------
 -- item_answer_keys widened (R2-4): bank keys have no test; library-sourced keys are invisible to every org role (I-M1-5)
@@ -370,6 +384,9 @@ create table public.item_exposure_events (
 );
 create index item_exposure_events_item_idx on public.item_exposure_events (org_id, item_id);
 create index item_exposure_events_source_idx on public.item_exposure_events (source_item_id);
+-- DB-M1-10: the staff policy reads by workspace. One row per served item grows with every session: partitioning this
+-- table (by served_at, as audit_log) is a later scale task, not an M1 one.
+create index item_exposure_events_workspace_idx on public.item_exposure_events (org_id, workspace_id);
 alter table public.item_exposure_events enable row level security;
 
 create function private.item_exposure_append_only()
@@ -454,8 +471,9 @@ create index library_copy_requests_workspace_idx on public.library_copy_requests
 alter table public.library_copy_requests enable row level security;
 
 -- ---------------------------------------------------------------------------------------------
--- Drafting and import hooks for the item_versions guard. Migration M1-c creates ai_draft_jobs and import_jobs and
--- replaces these two bodies; until then no AI draft or import row can be written by an app or worker role.
+-- Drafting and import hooks for the items, item_versions and item_answer_keys guards. Migration M1-c creates
+-- ai_draft_jobs and import_jobs and replaces these three bodies; until then no AI draft or import row can be written by
+-- an app or worker role.
 -- ---------------------------------------------------------------------------------------------
 create function private.ai_draft_job_running(p_org uuid, p_workspace uuid, p_job uuid)
 returns boolean
@@ -467,6 +485,18 @@ as $$
   select false
 $$;
 revoke execute on function private.ai_draft_job_running(uuid, uuid, uuid) from public, anon, authenticated, service_role;
+
+-- SEC-M1-3 (R5-35): the authoring worker creates an item only while a drafting job of that org and workspace runs.
+create function private.ai_draft_job_running_in(p_org uuid, p_workspace uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select false
+$$;
+revoke execute on function private.ai_draft_job_running_in(uuid, uuid) from public, anon, authenticated, service_role;
 
 create function private.import_job_open(p_org uuid, p_workspace uuid, p_job uuid)
 returns boolean
@@ -492,6 +522,11 @@ set search_path = ''
 as $$
 begin
   if tg_op = 'INSERT' then
+    -- SEC-M1-3 (R5-35): the authoring worker writes only for a running drafting job of the same org and workspace.
+    if current_setting('role') = 'trace_authoring_worker'
+      and not private.ai_draft_job_running_in(new.org_id, new.workspace_id) then
+      raise exception 'TRACE_GUARD: the authoring worker writes only for a running drafting job' using errcode = '42501';
+    end if;
     if not private.skill_key_exists(new.skill_key) then
       raise exception 'TRACE_GUARD: skill not found' using errcode = '23503';
     end if;
@@ -582,6 +617,24 @@ $$;
 revoke execute on function private.item_version_ready(uuid, uuid, public.section_format, boolean, numeric)
   from public, anon, authenticated, service_role;
 
+-- SEC-M1-5: every image key of an item lies under the item's own org prefix (item-media/<org_id>/…); a library copy may
+-- keep the library org's prefix. A malformed list is left for media_refs_valid's CHECK (23514).
+create function private.item_media_in_org(p_media jsonb, p_org uuid, p_library boolean)
+returns boolean
+language sql
+stable
+set search_path = ''
+as $$
+  select jsonb_typeof(p_media) is distinct from 'array' or not exists (
+    select 1
+    from jsonb_array_elements(p_media) as m
+    cross join lateral (select substring(m ->> 'key' from '^item-media/([0-9a-f-]{36})/') as k) as x
+    where x.k is not null and x.k <> p_org::text
+      and not (p_library and x.k = coalesce(private.library_org_id()::text, ''))
+  )
+$$;
+revoke execute on function private.item_media_in_org(jsonb, uuid, boolean) from public, anon, authenticated, service_role;
+
 create or replace function private.item_versions_guard()
 returns trigger
 language plpgsql
@@ -636,6 +689,9 @@ begin
       if exists (select 1 from public.items as i where i.org_id = new.org_id and i.id = new.item_id) then
         raise exception 'TRACE_GUARD: an inline item cannot take a bank item identity' using errcode = '42501';
       end if;
+      if not private.item_media_in_org(new.media, new.org_id, false) then
+        raise exception 'TRACE_GUARD: an item image belongs to the item''s org' using errcode = '42501';
+      end if;
       new.status := 'approved';
       new.approved_by := null;
       new.approved_at := null;
@@ -669,6 +725,9 @@ begin
       or new.import_row_no is distinct from old.import_row_no
       or new.source_item_version_id is distinct from old.source_item_version_id then
       raise exception 'TRACE_GUARD: an inline item has no review state, variants or provenance' using errcode = '42501';
+    end if;
+    if new.media is distinct from old.media and not private.item_media_in_org(new.media, new.org_id, false) then
+      raise exception 'TRACE_GUARD: an item image belongs to the item''s org' using errcode = '42501';
     end if;
     if new.rubric_version_id is not null and new.rubric_version_id is distinct from old.rubric_version_id then
       perform 1 from public.rubric_versions as r
@@ -733,6 +792,9 @@ begin
     ) then
       raise exception 'TRACE_GUARD: a library copy names an approved library item' using errcode = '42501';
     end if;
+    if not private.item_media_in_org(new.media, new.org_id, new.origin = 'library') then
+      raise exception 'TRACE_GUARD: an item image belongs to the item''s org' using errcode = '42501';
+    end if;
     new.approved_by := null;
     new.approved_at := null;
     new.reviewed_by := null;
@@ -774,6 +836,34 @@ begin
     or new.reviewed_by is distinct from old.reviewed_by or new.key_reviewed_by is distinct from old.key_reviewed_by;
 
   if new.status = old.status then
+    -- SEC-M1-4 (ABH-6, M1-3): in the library the answer-key review is an attested action of its own: a library member
+    -- other than the author records it on the in-review version by setting key_reviewed_by from null to themselves,
+    -- changing nothing else. The approval then requires it and cannot set it.
+    if old.status = 'in_review' and new.org_id = v_lib and not v_content
+      and old.key_reviewed_by is null and new.key_reviewed_by is not null
+      and new.approved_by is not distinct from old.approved_by and new.approved_at is not distinct from old.approved_at
+      and new.reviewed_by is not distinct from old.reviewed_by then
+      if not v_op then
+        if new.key_reviewed_by is distinct from v_uid then
+          raise exception 'TRACE_GUARD: the key reviewer records their own review' using errcode = '42501';
+        end if;
+        if not (new.workspace_id = any (private.my_workspace_ids('{org_owner,admin,recruiter,reviewer}'))) then
+          raise exception 'TRACE_GUARD: an approver role in the item workspace is required' using errcode = '42501';
+        end if;
+      end if;
+      if new.key_reviewed_by is not distinct from old.created_by then
+        raise exception 'TRACE_GUARD: a library item needs a reviewer and a key reviewer other than its author'
+          using errcode = '42501';
+      end if;
+      if not exists (
+        select 1 from public.memberships as m
+        where m.org_id = v_lib and m.user_id = new.key_reviewed_by and m.status = 'active'
+          and m.roles && '{org_owner,admin,recruiter,reviewer}'::public.org_role[]
+      ) then
+        raise exception 'TRACE_GUARD: the key reviewer is an active library member' using errcode = '42501';
+      end if;
+      return new;
+    end if;
     -- I-M1-3: content is immutable once a version leaves draft; an edit is a new version (Q23).
     if old.status <> 'draft' and (v_content or v_approval) then
       raise exception 'TRACE_GUARD: an item version is frozen once it leaves draft' using errcode = '42501';
@@ -783,6 +873,10 @@ begin
     end if;
     if new.skill_key is distinct from old.skill_key and not private.skill_key_exists(new.skill_key) then
       raise exception 'TRACE_GUARD: skill not found' using errcode = '23503';
+    end if;
+    if new.media is distinct from old.media
+      and not private.item_media_in_org(new.media, new.org_id, new.origin = 'library') then
+      raise exception 'TRACE_GUARD: an item image belongs to the item''s org' using errcode = '42501';
     end if;
     if new.rubric_version_id is not null and new.rubric_version_id is distinct from old.rubric_version_id then
       perform 1 from public.rubric_versions as r
@@ -822,6 +916,10 @@ begin
     end if;
     perform private.item_version_ready(new.org_id, new.id, new.format, new.is_parameterised, new.difficulty);
     if not v_op then
+      -- SEC-M1-4: the key review is recorded by its reviewer in an update of its own, before the approval.
+      if new.key_reviewed_by is distinct from old.key_reviewed_by then
+        raise exception 'TRACE_GUARD: the key review is recorded in its own update' using errcode = '42501';
+      end if;
       new.approved_by := v_uid;
       new.approved_at := now();
       if new.org_id = v_lib then
@@ -834,7 +932,7 @@ begin
       new.approved_at := coalesce(new.approved_at, now());
     end if;
     -- ABH-6 expert review in the library: the reviewer and the key reviewer are active library members other than the
-    -- author.
+    -- author (the key reviewer recorded before the approval, SEC-M1-4).
     if new.org_id = v_lib then
       if new.reviewed_by is null or new.key_reviewed_by is null
         or new.reviewed_by is not distinct from old.created_by or new.key_reviewed_by is not distinct from old.created_by then
@@ -925,16 +1023,25 @@ declare
   v_options jsonb;
   v_item_status public.item_status;
   v_origin text;
+  v_job uuid;
   v_item uuid := case when tg_op = 'DELETE' then old.item_version_id else new.item_version_id end;
   v_org uuid := case when tg_op = 'DELETE' then old.org_id else new.org_id end;
 begin
-  select i.section_id, i.test_version_id, i.test_id, i.workspace_id, i.options, i.status, i.origin
-    into v_section, v_tv, v_test, v_ws, v_options, v_item_status, v_origin
+  select i.section_id, i.test_version_id, i.test_id, i.workspace_id, i.options, i.status, i.origin, i.ai_draft_job_id
+    into v_section, v_tv, v_test, v_ws, v_options, v_item_status, v_origin, v_job
   from public.item_versions as i where i.org_id = v_org and i.id = v_item for share;
   if not found then
     raise exception 'TRACE_GUARD: item version not found' using errcode = '23503';
   end if;
-  if v_section is not null then
+  if current_setting('role') = 'trace_authoring_worker' then
+    -- SEC-M1-3 (R5-35, §6.4): the authoring worker only adds the key of an in-review AI draft whose drafting job of the
+    -- same org and workspace is running; never a draft's, an inline item's or any other key.
+    if tg_op <> 'INSERT' or v_section is not null or v_origin is distinct from 'ai_draft'
+      or v_item_status is distinct from 'in_review' or not private.ai_draft_job_running(v_org, v_ws, v_job) then
+      raise exception 'TRACE_GUARD: the authoring worker keys only an AI draft of its running job'
+        using errcode = '42501';
+    end if;
+  elsif v_section is not null then
     -- Inline item: D1's freeze on the test version (R3-11).
     select v.status into v_status
     from public.test_versions as v where v.org_id = v_org and v.id = v_tv for share;
@@ -946,11 +1053,10 @@ begin
       raise exception 'TRACE_GUARD: an inline answer key needs its test' using errcode = '23514';
     end if;
   else
-    -- Bank item: keys change only while the version is a draft; the authoring worker adds the key of its own
-    -- in-review AI draft (§6.4).
+    -- Bank item: keys change only while the version is a draft. The authoring worker's path is above; the operator path
+    -- may add the missing key of an in-review AI draft (fixtures, as the worker would).
     if not (v_item_status = 'draft'
-      or (tg_op = 'INSERT' and current_setting('role') = 'trace_authoring_worker'
-          and v_origin = 'ai_draft' and v_item_status = 'in_review')) then
+      or (tg_op = 'INSERT' and private.is_operator() and v_origin = 'ai_draft' and v_item_status = 'in_review')) then
       raise exception 'TRACE_GUARD: the item version is frozen' using errcode = '42501';
     end if;
   end if;
@@ -1079,6 +1185,29 @@ revoke execute on function private.item_variant_keys_guard() from public, anon, 
 create trigger item_variant_keys_guard before insert or update or delete on public.item_variant_keys
   for each row execute function private.item_variant_keys_guard();
 alter table public.item_variant_keys enable always trigger item_variant_keys_guard;
+
+-- DB-M1-6 (R5-33, I-M1-2): a published snapshot references variants, variant keys and bank answer keys, so no role, the
+-- owner included, truncates them (row triggers do not fire on TRUNCATE).
+create function private.bank_no_truncate()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  raise exception 'TRACE_GUARD: bank content is never truncated' using errcode = '42501';
+end
+$$;
+revoke execute on function private.bank_no_truncate() from public, anon, authenticated, service_role;
+create trigger item_variants_no_truncate before truncate on public.item_variants
+  for each statement execute function private.bank_no_truncate();
+create trigger item_variant_keys_no_truncate before truncate on public.item_variant_keys
+  for each statement execute function private.bank_no_truncate();
+create trigger item_answer_keys_no_truncate before truncate on public.item_answer_keys
+  for each statement execute function private.bank_no_truncate();
+alter table public.item_variants enable always trigger item_variants_no_truncate;
+alter table public.item_variant_keys enable always trigger item_variant_keys_no_truncate;
+alter table public.item_answer_keys enable always trigger item_answer_keys_no_truncate;
 
 -- pools ------------------------------------------------------------------------------------------
 create function private.pools_guard()
@@ -1264,10 +1393,13 @@ begin
     insert into public.items (org_id, workspace_id, format, skill_key)
       values (new.org_id, new.workspace_id, v_src.format, v_src.skill_key)
       returning id into v_item;
+    -- SEC-M1-1 (I-M1-5): the spec is copied without correctOptionId, the key of every variant; the variant keys arrive
+    -- library_sourced, readable by the quality worker only.
     insert into public.item_versions (org_id, item_id, format, stem, options, rubric_version_id, skill_key, difficulty,
         language, is_parameterised, param_spec, media, source_item_version_id, origin, content_sha256)
       values (new.org_id, v_item, v_src.format, v_src.stem, v_src.options, v_rubric, v_src.skill_key, v_src.difficulty,
-        v_src.language, v_src.is_parameterised, v_src.param_spec, v_src.media, v_src.id, 'library', v_src.content_sha256)
+        v_src.language, v_src.is_parameterised, v_src.param_spec - 'correctOptionId', v_src.media, v_src.id, 'library',
+        v_src.content_sha256)
       returning id into v_new;
     insert into public.item_answer_keys (org_id, item_version_id, format, key, library_sourced)
       select new.org_id, v_new, k.format, k.key, true
@@ -1342,7 +1474,8 @@ as $$
 $$;
 revoke execute on function private.library_viewer_ok(uuid, text, text[], boolean) from public, anon, authenticated, service_role;
 
--- Stems and metadata of approved library items; never a key, never an option id (LibraryItemCard, §5).
+-- Stems and metadata of approved library items; never a key, never an option id, never the param_spec (LibraryItemCard,
+-- §5; SEC-M1-1).
 create function private.library_browse(
   p_viewer uuid,
   p_aal text,
@@ -1493,9 +1626,8 @@ create policy item_answer_keys_update_staff on public.item_answer_keys for updat
 create policy item_answer_keys_delete_staff on public.item_answer_keys for delete to authenticated
   using (not library_sourced
     and workspace_id = any ((select private.my_workspace_ids('{org_owner,admin,recruiter}'))::uuid[]));
-grant select, insert (org_id, item_version_id, format, key) on public.item_answer_keys to trace_authoring_worker;
-create policy item_answer_keys_select_authoring_worker on public.item_answer_keys for select to trace_authoring_worker
-  using (org_id = (select private.job_org_id()));
+-- SEC-M1-2: the authoring worker only inserts the key of its AI draft (no RETURNING, no upsert), so it reads no key.
+grant insert (org_id, item_version_id, format, key) on public.item_answer_keys to trace_authoring_worker;
 create policy item_answer_keys_insert_authoring_worker on public.item_answer_keys for insert to trace_authoring_worker
   with check (org_id = (select private.job_org_id()));
 
