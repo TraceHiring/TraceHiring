@@ -2,6 +2,8 @@
 // nothing of scores, bands or SQL. Per message it runs three injected stages in order,
 // mirror -> quality -> integrity, and settles the message:
 //   - invalid message: ack and log (constant event, no payload); retrying could never fix it;
+//   - v1 or v2 (spec m1 R5-8): both parse; a v2 message that breaks a cross-field invariant (checkMirrorV2) runs no
+//     stage and is retried, so it reaches the DLQ after 5 tries, logged and reported by its code only;
 //   - mirror fails: nothing else runs, retry();
 //   - quality fails: integrity still runs (it finds no quality card), then retry();
 //   - integrity fails: retry();
@@ -9,7 +11,12 @@
 // Each stage is idempotent under its own key, so a retry re-runs only what is missing. After the
 // queue's max_retries (5) the message goes to the DLQ. Stage errors are logged by stage name and ids
 // only and reported through reportError (serialised and redacted); a message body never reaches a log.
-import { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
+import {
+  MirrorInvariantError,
+  SessionMirrorMessage,
+  checkMirrorV2,
+  type SessionMirrorMessageV2,
+} from '@trace/shared/contracts/candidate';
 import { reportError, type ErrorReporter, type Logger } from '@trace/shared/log';
 
 export type StageName = 'mirror' | 'quality' | 'integrity';
@@ -72,6 +79,28 @@ const attempt = async (
   }
 };
 
+/**
+ * The v2 cross-field invariants (checkMirrorV2). A violation is logged and reported by its constant code only: no
+ * id, no payload (the DLQ keeps the message itself for the operator). Never throws.
+ */
+const invariantsHold = (message: SessionMirrorMessageV2, deps: ConsumerDeps): boolean => {
+  try {
+    checkMirrorV2(message);
+    return true;
+  } catch (err) {
+    const code = err instanceof MirrorInvariantError ? err.code : 'unknown';
+    deps.log.error('queue.mirror_invariant', { invariant: code });
+    if (deps.reporter !== undefined) {
+      reportError(
+        deps.reporter,
+        err instanceof MirrorInvariantError ? err : new Error('mirror v2 invariant: unknown'),
+        deps.release === undefined ? undefined : { release: deps.release },
+      );
+    }
+    return false;
+  }
+};
+
 /** Sessions handled side by side in one batch. Each runs one stage at a time, which holds one DB socket and reads
  * R2 one object at a time, so three sessions hold at most six DB and R2 connections (an error report's fetch may
  * queue behind them; review of 48f6e8d, M1; D1R-SEC-1). */
@@ -127,11 +156,14 @@ export const processBatch = async (
       raw.ack();
       continue;
     }
-    if (parsed.data.v === 2) {
-      // M1 Wave 0 (spec m1 R5-8): v2 parses, but these v1 stages would drop its draws; until stream A3 stores
-      // them, retry it (5 tries, then the DLQ) so no session is scored from a partial mirror.
-      deps.log.error('queue.message_v2_unsupported', { sessionId: parsed.data.sessionId });
-      raw.retry();
+    if (parsed.data.v === 2 && !invariantsHold(parsed.data, deps)) {
+      // Spec m1 R5-8, R5-42: a v2 message that parses but breaks a cross-field invariant is retried, then reaches
+      // the DLQ after max_retries, with an error report; the session stays in the DO and R2 for repair.
+      try {
+        raw.retry();
+      } catch {
+        // Nothing more to do: the platform redelivers an unsettled message.
+      }
       continue;
     }
     const lane = lanes.get(parsed.data.sessionId) ?? [];

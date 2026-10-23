@@ -11,8 +11,11 @@ export const SQL = {
   session:
     'select id::text as id, test_version_id::text as test_version_id, ruleset_version_id::text as ruleset_version_id, ' +
     'state from public.sessions where org_id = $1::uuid and id = $2::uuid',
-  cutoff:
-    'select quality_cutoff::int as quality_cutoff from public.test_versions where org_id = $1::uuid and id = $2::uuid',
+  // The pinned version's cutoff and package version: each path requires its own package (v1 = 1, v2 = 2), so a message
+  // of one package on a version of the other fails closed (quality_bad_package), never scored by the wrong rule.
+  version:
+    'select quality_cutoff::int as quality_cutoff, package_version::int as package_version ' +
+    'from public.test_versions where org_id = $1::uuid and id = $2::uuid',
   sections:
     'select id::text as id, position::int as position, weight::text as weight from public.sections ' +
     'where org_id = $1::uuid and test_version_id = $2::uuid order by position',
@@ -31,6 +34,36 @@ export const SQL = {
     'select r.id::text as id, r.criteria::text as criteria, r.content_sha256 from public.rubric_versions as r ' +
     'where r.org_id = $1::uuid and r.id in (select i.rubric_version_id from public.item_versions as i ' +
     'where i.org_id = $1::uuid and i.test_version_id = $2::uuid and i.rubric_version_id is not null)',
+  // Package v2 (spec m1 R5-19, R5-47). Inline sections still load by test_version_id (items, answerKeys above); pool
+  // items, their keys (the served variant's for a parameterised item) and rubrics load through session_items.
+  sectionsV2:
+    'select id::text as id, position::int as position, weight::text as weight, draw_count::int as draw_count ' +
+    'from public.sections where org_id = $1::uuid and test_version_id = $2::uuid order by position',
+  drawn:
+    'select si.id::text as id, si.item_version_id::text as item_version_id, si.section_id::text as section_id, ' +
+    'si.position::int as position, si.item_variant_id::text as item_variant_id, i.format::text as format, i.stem, ' +
+    'i.rubric_version_id::text as rubric_version_id from public.session_items as si ' +
+    'join public.item_versions as i on i.org_id = si.org_id and i.id = si.item_version_id ' +
+    'join public.sections as s on s.org_id = si.org_id and s.id = si.section_id ' +
+    'where si.org_id = $1::uuid and si.session_id = $2::uuid and s.draw_count is not null ' +
+    'order by s.position, si.position, si.id',
+  drawnKeys:
+    "select k.item_version_id::text as item_version_id, k.key ->> 'option_id' as option_id " +
+    'from public.item_answer_keys as k join public.session_items as si ' +
+    'on si.org_id = k.org_id and si.item_version_id = k.item_version_id ' +
+    'where k.org_id = $1::uuid and si.session_id = $2::uuid and si.item_variant_id is null',
+  variantKeys:
+    "select vk.item_variant_id::text as item_variant_id, vk.key ->> 'option_id' as option_id " +
+    'from public.item_variant_keys as vk join public.session_items as si ' +
+    'on si.org_id = vk.org_id and si.item_variant_id = vk.item_variant_id ' +
+    'where vk.org_id = $1::uuid and si.session_id = $2::uuid',
+  rubricsV2:
+    'select r.id::text as id, r.criteria::text as criteria, r.content_sha256 from public.rubric_versions as r ' +
+    'where r.org_id = $1::uuid and r.id in (select i.rubric_version_id from public.item_versions as i ' +
+    'where i.org_id = $1::uuid and i.test_version_id = $2::uuid and i.rubric_version_id is not null ' +
+    'union select i.rubric_version_id from public.session_items as si join public.item_versions as i ' +
+    'on i.org_id = si.org_id and i.id = si.item_version_id where si.org_id = $1::uuid and si.session_id = $3::uuid ' +
+    'and i.rubric_version_id is not null)',
   served:
     'select id::text as id, item_version_id::text as item_version_id from public.session_items ' +
     'where org_id = $1::uuid and session_id = $2::uuid',
@@ -137,16 +170,30 @@ export const loadSession = async (
 ): Promise<SessionRow | null> =>
   (await tx.query<SessionRow>(SQL.session, [orgId, sessionId]))[0] ?? null;
 
+/** The pinned version's cutoff, refused unless the version is of the message's package (fails closed). */
+const loadVersion = async (
+  tx: SqlTx,
+  orgId: string,
+  testVersionId: string,
+  packageVersion: 1 | 2,
+): Promise<{ quality_cutoff: number }> => {
+  const row = (
+    await tx.query<{ quality_cutoff: number | null; package_version: number | null }>(SQL.version, [
+      orgId,
+      testVersionId,
+    ])
+  )[0];
+  if (row === undefined || row.quality_cutoff === null) throw new Error('quality_no_cutoff');
+  if (row.package_version !== packageVersion) throw new Error('quality_bad_package');
+  return { quality_cutoff: row.quality_cutoff };
+};
+
 export const loadContent = async (
   tx: SqlTx,
   orgId: string,
   testVersionId: string,
 ): Promise<Content> => {
-  const cutoffRow = (
-    await tx.query<{ quality_cutoff: number | null }>(SQL.cutoff, [orgId, testVersionId])
-  )[0];
-  if (cutoffRow === undefined || cutoffRow.quality_cutoff === null)
-    throw new Error('quality_no_cutoff');
+  const cutoffRow = await loadVersion(tx, orgId, testVersionId, 1);
   const sections = await tx.query<SectionRow>(SQL.sections, [orgId, testVersionId]);
   const items = await tx.query<ItemRow>(SQL.items, [orgId, testVersionId]);
   const keys = await tx.query<{ item_version_id: string; option_id: string | null }>(
@@ -164,6 +211,89 @@ export const loadContent = async (
     sections,
     items,
     answerKeys,
+    rubrics: new Map(rubrics.map((r) => [r.id, r])),
+  };
+};
+
+export interface SectionRowV2 extends SectionRow {
+  draw_count: number | null;
+}
+export interface DrawnRow {
+  id: string;
+  item_version_id: string;
+  section_id: string;
+  position: number;
+  item_variant_id: string | null;
+  format: string;
+  stem: string;
+  rubric_version_id: string | null;
+}
+
+export interface ContentV2 {
+  cutoff: number;
+  sections: SectionRowV2[];
+  /** Inline items, by test_version_id exactly as D1. */
+  inline: ItemRow[];
+  /** The candidate's drawn pool items (session_items, served or not). */
+  drawn: DrawnRow[];
+  /** item_answer_keys by item version id (inline items and drawn items that are not parameterised). */
+  answerKeys: Map<string, string>;
+  /** item_variant_keys by variant id (the served variants of drawn parameterised items). */
+  variantKeys: Map<string, string>;
+  rubrics: Map<string, RubricRow>;
+}
+
+const keyMap = (
+  rows: readonly { id: string; option_id: string | null }[],
+  into = new Map<string, string>(),
+): Map<string, string> => {
+  for (const k of rows) {
+    if (typeof k.option_id !== 'string') throw new Error('quality_bad_key');
+    into.set(k.id, k.option_id);
+  }
+  return into;
+};
+
+/** A package v2 version's content for one session (spec m1 R5-19): inline by version, pool items by the draw. */
+export const loadContentV2 = async (
+  tx: SqlTx,
+  orgId: string,
+  testVersionId: string,
+  sessionId: string,
+): Promise<ContentV2> => {
+  const version = await loadVersion(tx, orgId, testVersionId, 2);
+  const sections = await tx.query<SectionRowV2>(SQL.sectionsV2, [orgId, testVersionId]);
+  const inline = await tx.query<ItemRow>(SQL.items, [orgId, testVersionId]);
+  const drawn = await tx.query<DrawnRow>(SQL.drawn, [orgId, sessionId]);
+  const inlineKeys = await tx.query<{ item_version_id: string; option_id: string | null }>(
+    SQL.answerKeys,
+    [orgId, testVersionId],
+  );
+  const drawnKeys = await tx.query<{ item_version_id: string; option_id: string | null }>(
+    SQL.drawnKeys,
+    [orgId, sessionId],
+  );
+  const variantKeys = await tx.query<{ item_variant_id: string; option_id: string | null }>(
+    SQL.variantKeys,
+    [orgId, sessionId],
+  );
+  const rubrics = await tx.query<RubricRow>(SQL.rubricsV2, [orgId, testVersionId, sessionId]);
+  const answerKeys = keyMap(
+    inlineKeys.map((k) => ({ id: k.item_version_id, option_id: k.option_id })),
+  );
+  keyMap(
+    drawnKeys.map((k) => ({ id: k.item_version_id, option_id: k.option_id })),
+    answerKeys,
+  );
+  return {
+    cutoff: version.quality_cutoff,
+    sections,
+    inline,
+    drawn,
+    answerKeys,
+    variantKeys: keyMap(
+      variantKeys.map((k) => ({ id: k.item_variant_id, option_id: k.option_id })),
+    ),
     rubrics: new Map(rubrics.map((r) => [r.id, r])),
   };
 };

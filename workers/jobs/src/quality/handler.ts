@@ -2,6 +2,12 @@
 // transaction the consumer opens and commits. Reads the session's responses and the pinned test version's sections,
 // items, keys, rubrics and cutoff; grades written answers through the injected LlmGrader; then writes grader runs,
 // the score, the public quality card, reports.quality_card_id and the `quality_score` key, all in this transaction.
+// Package v2 (spec m1 R5-19, R5-47): inline sections as D1; a pool section counts its draw_count slots, filled from
+// the candidate's own session_items, with keys loaded through them (the served variant's key for a parameterised
+// item) and options scored by id (./v2.ts). Before anything is scored, the message's served positions and pool section
+// ids are checked against the pinned version (R5-59 a, ./v2.ts checkServedLayout). The arithmetic is unchanged; a v2
+// session records SCORING_VERSION_V2 (`m1-scoring-v1`), a v1 session SCORING_VERSION (`d1-scoring-v1`). Each path
+// requires the version's package to be its own (v1 = 1, v2 = 2), else `quality_bad_package`.
 // Rule 1: nothing here reads or receives integrity data; the score function has no such parameter.
 // Errors are constant codes; no answer text, score or id reaches a thrown message.
 import type { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
@@ -10,7 +16,13 @@ import { QualityCardRow } from '@trace/shared/contracts/d1';
 import { jobKey, type SqlTx } from '@trace/shared/jobs';
 import type { LlmGrader } from '@trace/vendors';
 import { scoreMcq } from './mcq.js';
-import { SCORING_VERSION, computeAnswerQuality, meetsCutoff, parseWeight } from './score.js';
+import {
+  SCORING_VERSION,
+  SCORING_VERSION_V2,
+  computeAnswerQuality,
+  meetsCutoff,
+  parseWeight,
+} from './score.js';
 import {
   attachCard,
   insertGraderRun,
@@ -18,11 +30,24 @@ import {
   keyExists,
   loadAnswers,
   loadContent,
+  loadContentV2,
   loadSession,
   upsertCard,
   upsertScore,
+  type Content,
   type GraderRunInsert,
+  type ItemRow,
+  type RubricRow,
+  type SectionRow,
 } from './store.js';
+import {
+  checkServedLayout,
+  mcqKeyOf,
+  planScoredItems,
+  type LayoutMessage,
+  type PlanEntry,
+  type PlanItem,
+} from './v2.js';
 import { gradeWritten, rubricSnapshot } from './written.js';
 
 export interface QualityDeps {
@@ -52,6 +77,72 @@ export const rubricSetSha256 = (contentHashes: readonly string[]): Promise<strin
 
 const SectionScores = QualityCardRow.shape.section_scores;
 
+/** What the scoring loop reads: the sections with weights, the scored entries in order, keys and rubrics. */
+interface ScoredSet {
+  cutoff: number;
+  sections: readonly SectionRow[];
+  entries: readonly PlanEntry[];
+  answerKeys: ReadonlyMap<string, string>;
+  variantKeys: ReadonlyMap<string, string>;
+  rubrics: ReadonlyMap<string, RubricRow>;
+}
+
+const planItem = (i: ItemRow): PlanItem => ({
+  itemVersionId: i.id,
+  sectionId: i.section_id,
+  format: i.format,
+  stem: i.stem,
+  rubricVersionId: i.rubric_version_id,
+  variantId: null,
+});
+
+/** Package v1 (D1, unchanged): every item of the pinned version, in the D1 query's order, keyed by item version. */
+const scoredSetV1 = (content: Content): ScoredSet => ({
+  cutoff: content.cutoff,
+  sections: content.sections,
+  entries: content.items.map((i) => ({ id: i.id, sectionId: i.section_id, item: planItem(i) })),
+  answerKeys: content.answerKeys,
+  variantKeys: new Map(),
+  rubrics: content.rubrics,
+});
+
+/**
+ * Package v2 (spec m1 R5-19, R5-47): inline sections as D1, pool sections by draw_count slots. The message's layout is
+ * checked against the version first (R5-59 a), so nothing is scored from a served row out of place.
+ */
+const scoredSetV2 = async (
+  tx: SqlTx,
+  orgId: string,
+  testVersionId: string,
+  sessionId: string,
+  message: LayoutMessage,
+): Promise<ScoredSet> => {
+  const content = await loadContentV2(tx, orgId, testVersionId, sessionId);
+  const sections = content.sections.map((s) => ({ id: s.id, drawCount: s.draw_count }));
+  checkServedLayout(sections, content.inline.map(planItem), message);
+  const entries = planScoredItems(
+    sections,
+    content.inline.map(planItem),
+    content.drawn.map((d) => ({
+      itemVersionId: d.item_version_id,
+      sectionId: d.section_id,
+      format: d.format,
+      stem: d.stem,
+      rubricVersionId: d.rubric_version_id,
+      variantId: d.item_variant_id,
+      position: d.position,
+    })),
+  );
+  return {
+    cutoff: content.cutoff,
+    sections: content.sections,
+    entries,
+    answerKeys: content.answerKeys,
+    variantKeys: content.variantKeys,
+    rubrics: content.rubrics,
+  };
+};
+
 const runQualityUnsafe = async (
   message: SessionMirrorMessage,
   deps: QualityDeps,
@@ -72,24 +163,33 @@ const runQualityUnsafe = async (
   }
   if (session.state === 'in_progress') return fail('quality_session_open');
 
-  const content = await loadContent(tx, orgId, session.test_version_id);
+  const content =
+    message.v === 2
+      ? await scoredSetV2(tx, orgId, session.test_version_id, sessionId, message)
+      : scoredSetV1(await loadContent(tx, orgId, session.test_version_id));
   const { servedItem, answers } = await loadAnswers(tx, orgId, sessionId);
 
-  // Every item of the pinned version counts; an item never served or never answered scores 0.
+  // v1: every item of the pinned version counts. v2 (R5-19): inline sections as D1, pool sections by their
+  // draw_count slots. An item never served or never answered, and an empty slot, scores 0.
   const itemScores: { id: string; sectionId: string; score: number }[] = [];
   const runs: GraderRunInsert[] = [];
   const usedRubrics = new Map<string, string>();
-  for (const item of content.items) {
-    const answer = answers.get(item.id);
+  for (const entry of content.entries) {
+    const item = entry.item;
+    if (item === null) {
+      itemScores.push({ id: entry.id, sectionId: entry.sectionId, score: 0 });
+      continue;
+    }
+    const answer = answers.get(item.itemVersionId);
     let score = 0;
     if (item.format === 'mcq') {
-      const correct = content.answerKeys.get(item.id);
-      if (correct === undefined) return fail('quality_bad_key');
+      const correct = mcqKeyOf(item, content.answerKeys, content.variantKeys);
       if (answer !== undefined && answer.answer_kind !== 'choice')
         return fail('quality_bad_response');
+      // By option id: the served option order never changes the score.
       score = scoreMcq(answer?.final_choice, correct);
     } else if (item.format === 'written') {
-      const rubricId = item.rubric_version_id;
+      const rubricId = item.rubricVersionId;
       const rubric = rubricId === null ? undefined : content.rubrics.get(rubricId);
       if (rubricId === null || rubric === undefined) return fail('quality_bad_rubric');
       usedRubrics.set(rubricId, rubric.content_sha256);
@@ -98,11 +198,11 @@ const runQualityUnsafe = async (
       const graded = await gradeWritten(
         grader,
         rubricSnapshot(rubricId, rubric.criteria),
-        { id: item.id, promptText: item.stem },
+        { id: item.itemVersionId, promptText: item.stem },
         answer?.final_text,
       );
       score = graded.score;
-      const sessionItemId = servedItem.get(item.id);
+      const sessionItemId = servedItem.get(item.itemVersionId);
       if (graded.run !== null) {
         if (sessionItemId === undefined) return fail('quality_bad_response');
         runs.push({
@@ -120,7 +220,7 @@ const runQualityUnsafe = async (
     } else {
       return fail('quality_bad_item');
     }
-    itemScores.push({ id: item.id, sectionId: item.section_id, score });
+    itemScores.push({ id: entry.id, sectionId: entry.sectionId, score });
   }
 
   const result = computeAnswerQuality({
@@ -148,7 +248,7 @@ const runQualityUnsafe = async (
     sectionScoresJson: JSON.stringify(sectionScores.data),
     cutoff: content.cutoff,
     meetsCutoff: meets,
-    scoringVersion: SCORING_VERSION,
+    scoringVersion: message.v === 2 ? SCORING_VERSION_V2 : SCORING_VERSION,
     rubricSetSha256: await rubricSetSha256([...usedRubrics.values()]),
     rubricVersionIdsJson: JSON.stringify(rubricIds),
     graderModelId,

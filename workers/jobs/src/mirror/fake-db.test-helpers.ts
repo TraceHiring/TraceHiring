@@ -129,6 +129,69 @@ export const mirrorHandlers: Record<string, Handler> = {
     }
     return [];
   },
+  // session_items guard v2 (migration m1_tests, R5-39 a, R5-43, DB-M1-4) for a package v2 session: the section is
+  // named and the item is in its published snapshot; an inline row is stored served; a pool row sits at a draw
+  // position 1..draw_count and the section holds at most draw_count rows; a parameterised item comes as a variant.
+  [SQL.insertItemsV2]: (db, [org, s, rows]) => {
+    const session = table(db, 'sessions').find((r) => r['id'] === s);
+    if (session === undefined) throw new Error('23503 session');
+    const version = table(db, 'test_versions').find((r) => r['id'] === session['test_version_id']);
+    for (const x of JSON.parse(String(rows)) as Row[]) {
+      const item = table(db, 'item_versions').find((r) => r['id'] === x['item_version_id']);
+      if (item === undefined) throw new Error('23503 item version');
+      if (Number(version?.['package_version'] ?? 1) !== 2) {
+        if (x['served_at'] === null) guard('a version 1 item is stored when served');
+        if (x['item_variant_id'] !== null || x['option_order'] !== null) guard('version 1 extras');
+        if (item['test_version_id'] !== session['test_version_id'])
+          guard('item of another version');
+      } else {
+        if (x['section_id'] == null) guard('a version 2 item names its section');
+        const inSnapshot = table(db, 'section_pool_snapshot').some(
+          (sp) =>
+            sp['test_version_id'] === session['test_version_id'] &&
+            sp['section_id'] === x['section_id'] &&
+            sp['item_version_id'] === x['item_version_id'],
+        );
+        if (!inSnapshot) guard('the item is not in the published snapshot of its section');
+        const section = table(db, 'sections').find((r) => r['id'] === x['section_id']);
+        const draw = section?.['draw_count'] ?? null;
+        if (draw === null && x['served_at'] === null) guard('an inline item is stored when served');
+        if (draw !== null) {
+          if (Number(x['position']) > Number(draw)) guard('outside the draw');
+          const held = table(db, 'session_items').filter(
+            (r) => r['session_id'] === s && r['section_id'] === x['section_id'],
+          ).length;
+          if (held >= Number(draw)) guard('the draw is full');
+        }
+        if ((x['item_variant_id'] !== null) !== (item['is_parameterised'] === true))
+          guard('a parameterised item is served as one of its variants');
+        if (
+          x['item_variant_id'] !== null &&
+          !table(db, 'item_variants').some(
+            (v) =>
+              v['id'] === x['item_variant_id'] && v['item_version_id'] === x['item_version_id'],
+          )
+        ) {
+          throw new Error('23503 variant');
+        }
+      }
+      insertUnique(db, 'session_items', { id: fakeId(db), org_id: org, session_id: s, ...x }, [
+        ['org_id', 'session_id', 'item_version_id'],
+        ['org_id', 'session_id', 'section_id', 'position'],
+      ]);
+    }
+    return [];
+  },
+  [SQL.itemsV2]: (db, [org, s]) =>
+    visible(db, 'session_items', org)
+      .filter((r) => r['session_id'] === s)
+      .map((r) => ({
+        id: r['id'],
+        item_version_id: r['item_version_id'],
+        section_id: r['section_id'],
+        position: r['position'],
+        served: r['served_at'] != null,
+      })),
   [SQL.items]: (db, [org, s]) =>
     visible(db, 'session_items', org)
       .filter((r) => r['session_id'] === s)
@@ -139,6 +202,10 @@ export const mirrorHandlers: Record<string, Handler> = {
       })),
   [SQL.insertResponses]: (db, [org, s, submittedAt, rows]) => {
     for (const x of JSON.parse(String(rows)) as Row[]) {
+      // responses guard v2 (R5-43): an item that was not served has no response.
+      const item = table(db, 'session_items').find((r) => r['id'] === x['session_item_id']);
+      if (item === undefined) throw new Error('23503 session item');
+      if (item['served_at'] == null) guard('an item that was not served has no response');
       // As Postgres: the jsonb cast refuses \u0000 (22P05) and a lone surrogate escape (22P02), quoting the input.
       const text = typeof x['final_text'] === 'string' ? x['final_text'] : '';
       if (text.includes('\u0000')) {
