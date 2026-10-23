@@ -11,17 +11,26 @@ import { type ErrorReporter } from '@trace/shared/log';
 import { createHttpApp, NO_STORE } from '@trace/workers-http';
 import type { Hono } from 'hono';
 import { createAssignmentsRoutes } from './modules/assignments/routes.js';
+import { createIntegritySettingsRoutes } from './modules/integrity-settings/routes.js';
 import { createInvitationsRoutes, deliveryFromEnv } from './modules/invitations/routes.js';
 import { createMediaRoutes, mediaFromEnv } from './modules/media/routes.js';
+import { adminQueueFromEnv, createMembersRoutes, pepperFromEnv } from './modules/members/routes.js';
 import { createOutboxRoutes, outboxReaderFromEnv } from './modules/outbox/routes.js';
 import { createReportIntegrityRoutes } from './modules/report-integrity/routes.js';
 import { createReportQualityRoutes } from './modules/report-quality/routes.js';
 import { createReportsRoutes } from './modules/reports/routes.js';
+import { referenceFromEnv } from './modules/templates/reference.js';
+import { createTemplatesRoutes, type LibraryLimiter } from './modules/templates/routes.js';
+import { createTestDraftRoutes } from './modules/tests/draft-routes.js';
 import { cardSource, createOrgDeps, type OrgDeps } from './modules/tests/org-context.js';
 import { createTestsRoutes, packagesFromEnv } from './modules/tests/routes.js';
 import { ORG_CORS_PATH, orgCors } from './org-cors.js';
 
 const SERVICE = 'api';
+
+/** M1 R5-56 g: the per-user library limit (LIBRARY_LIMITER, 60 a minute), or null when unbound (the route answers 503). */
+export const libraryLimiterFromEnv = (env: Env): LibraryLimiter | null =>
+  env.LIBRARY_LIMITER ?? null;
 
 export interface AppDeps {
   /** Where errors go. M0a injects noopErrorReporter; the Sentry adapter replaces it before D1. */
@@ -46,7 +55,21 @@ export const createApp = (deps: AppDeps): Hono<{ Bindings: Env }> => {
 
   // Security review N1: CORS for the recruiter origin on the org routes only, registered before them.
   app.use(ORG_CORS_PATH, orgCors);
-  app.route('/', createTestsRoutes({ org, packages: packagesFromEnv }));
+  app.route(
+    '/',
+    createTestsRoutes({ org, packages: packagesFromEnv, reference: referenceFromEnv }),
+  );
+  // M1 A2b (spec m1 R2-18, R5-63): authoring drafts and versions, integrity settings, templates, member invites.
+  app.route(
+    '/',
+    createTestDraftRoutes({ org, packages: packagesFromEnv, reference: referenceFromEnv }),
+  );
+  app.route('/', createIntegritySettingsRoutes({ org, reference: referenceFromEnv }));
+  app.route(
+    '/',
+    createTemplatesRoutes({ org, reference: referenceFromEnv, limiter: libraryLimiterFromEnv }),
+  );
+  app.route('/', createMembersRoutes({ org, pepper: pepperFromEnv, queue: adminQueueFromEnv }));
   app.route('/', createAssignmentsRoutes(org));
   app.route('/', createInvitationsRoutes({ org, delivery: deliveryFromEnv }));
   app.route('/', createOutboxRoutes({ org, reader: outboxReaderFromEnv }));

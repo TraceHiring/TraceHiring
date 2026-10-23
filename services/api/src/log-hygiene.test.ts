@@ -213,7 +213,8 @@ describe('api log hygiene, static (AT-D32)', () => {
 
 describe('api log hygiene, org routes (AT-D32)', () => {
   it('covers every org route of the inventory', () => {
-    expect(ORG_ROUTES).toHaveLength(18);
+    // 18 D1 org routes + 13 M1 A2b routes (route-inventory.test.ts ALLOWED minus /health and /media/:jti).
+    expect(ORG_ROUTES).toHaveLength(31);
   });
 
   it('a bug inside an org route logs and reports none of the request or error contents', async () => {

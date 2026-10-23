@@ -79,6 +79,15 @@
           { "binding": "ADMIN_QUEUE", "queue": "trace-admin-dev" },
         ],
       },
+      // M1 R5-56 g: the per-user library read limit (60 a minute, key = user id), shared by
+      // GET …/library/items and POST …/tests/from-template. One namespace per env.
+      "ratelimits": [
+        {
+          "name": "LIBRARY_LIMITER",
+          "namespace_id": "1201",
+          "simple": { "limit": 60, "period": 60 },
+        },
+      ],
     },
     "staging": {
       "name": "trace-api-staging",
@@ -116,6 +125,13 @@
           { "binding": "ADMIN_QUEUE", "queue": "trace-admin-staging" },
         ],
       },
+      "ratelimits": [
+        {
+          "name": "LIBRARY_LIMITER",
+          "namespace_id": "1202",
+          "simple": { "limit": 60, "period": 60 },
+        },
+      ],
       // Config trace-staging-api-login (scripts/lib/hyperdrive.mjs); the id is public and works only in this account.
       "hyperdrive": [{ "binding": "API_DB", "id": "1063006219694669b2a7417f307164fd" }],
     },

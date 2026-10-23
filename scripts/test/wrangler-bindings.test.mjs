@@ -65,7 +65,11 @@ const EXPECTED = {
       'SUPABASE_PUBLISHABLE_KEY',
     ],
     crons: undefined,
-    ratelimits: [],
+    // M1 R5-56 g: the per-user library read limit (60 a minute), shared by GET …/library/items and
+    // POST …/tests/from-template; one namespace per env.
+    ratelimits: [
+      { name: 'LIBRARY_LIMITER', namespace_id: '<lib>', simple: { limit: 60, period: 60 } },
+    ],
   },
   jobs: {
     durableObjects: {},
@@ -102,8 +106,15 @@ const EXPECTED = {
 
 /** ADR-032: the LINK_LIMITER namespace id per env (unique, so dev and staging never share counters). */
 const NAMESPACE = { dev: '1101', staging: '1102' };
+/** M1 R5-56 g: the LIBRARY_LIMITER namespace id per env (unique across Workers and envs). */
+const LIBRARY_NAMESPACE = { dev: '1201', staging: '1202' };
 const sub = (value, env) =>
-  JSON.parse(JSON.stringify(value).replaceAll('<env>', env).replaceAll('<ns>', NAMESPACE[env]));
+  JSON.parse(
+    JSON.stringify(value)
+      .replaceAll('<env>', env)
+      .replaceAll('<ns>', NAMESPACE[env])
+      .replaceAll('<lib>', LIBRARY_NAMESPACE[env]),
+  );
 const block = (worker, env) => CONFIGS[worker].env[env];
 const names = (list, key) => (list ?? []).map((entry) => entry[key]);
 const sorted = (list) => [...list].sort();
