@@ -42,7 +42,6 @@ const setup = async (opts: { keys?: TestKeys; now?: number } = {}) => {
     signer: async () => keys.signer,
     verifyKeys: async () => keys.keys,
     outbox,
-    packageTitle: async () => 'Synthetic Test',
     now: () => opts.now ?? NOW,
     newId: () => {
       id += 1;

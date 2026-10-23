@@ -8,7 +8,8 @@
 // - A named preset must carry exactly that preset's values (read from the library catalog as trace_api); other values
 //   are stored as custom (preset null).
 // - A written section with a navigation takes the settings' paste_written (DB-M1-1), so the candidate's paste rule and
-//   the band input come from one setting.
+//   the band input come from one setting; a section without a navigation takes the default (R5-63 b).
+// - A named preset is stored with the catalog version whose values were checked; custom stores none (fix round 1 #9).
 // - The view of a draft shows an admin lock's value in place of the stored one (E16: the stored value can be neither
 //   saved nor published; A5c review M2); a published version shows its frozen values (E17).
 // - Admin locks: admin role only (counts at aal2, ADR-029); DELETE answers 204 with no body (R5-53 c).
@@ -44,6 +45,7 @@ import {
 } from '../tests/org-context.js';
 import type { ReferenceSource } from '../templates/reference.js';
 import { LOCK_COLS, LockRowSchema, applyLocks, loadLocks, type SettingValues } from './locks.js';
+import { applySettingsToSections } from './settings-write.js';
 
 export interface IntegritySettingsDeps {
   org: OrgDeps;
@@ -139,12 +141,15 @@ export const createIntegritySettingsRoutes = (
       if (version.status !== 'draft' || version.ruleset_version_id === null) {
         return orgFail('conflict');
       }
+      let presetVersion: number | null = null;
       if (req.presetKey !== null) {
         const reference = deps.reference(c.env) ?? orgFail('unavailable');
         const preset = (await reference.settingsCatalog(ctx.caller, orgId)).presets[req.presetKey];
         if (preset === undefined) return orgFail('unavailable');
         // A preset names a set of values; values that differ are custom (preset null), never mislabelled.
         if (!sameValues(preset.values, req.values)) return orgFail('bad_request');
+        // Fix round 1 #9: the version whose values were just checked is stored with the key.
+        presetVersion = preset.version;
       }
       const updated = await ctx.rest.update(
         'ruleset_versions',
@@ -154,21 +159,12 @@ export const createIntegritySettingsRoutes = (
           published_at: 'is.null',
           select: 'id',
         },
-        { preset_key: req.presetKey, preset_version: null, settings: req.values },
+        { preset_key: req.presetKey, preset_version: presetVersion, settings: req.values },
       );
       if (updated.length !== 1) return orgFail('conflict');
-      // DB-M1-1: every written v2 section takes the paste rule of the settings (D1 sections, navigation null, stay).
-      await ctx.rest.update(
-        'sections',
-        {
-          org_id: eq(orgId),
-          test_version_id: eq(version.id),
-          format: 'eq.written',
-          navigation: 'not.is.null',
-          select: 'id',
-        },
-        { paste_rule: req.values.paste_written },
-      );
+      // R5-63 b and DB-M1-1: with settings the draft is package v2, so a section without a navigation takes the
+      // default, and every written section takes the paste rule of the settings.
+      await applySettingsToSections(ctx, orgId, version.id, req.values.paste_written);
       return answer(IntegritySettingsView, await viewOf(ctx, orgId, testId));
     }),
   );

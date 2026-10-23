@@ -156,6 +156,13 @@ const storedCriteria = (
   }));
 const criteriaHash = (criteria: readonly StoredCriterion[]) => sha256Hex(canonicalJson(criteria));
 
+/**
+ * The navigation a section gets when its draft has settings and it names none (lead decision R5-63 b): multiple
+ * choice is free, written is forward only (as the templates and the v2 editor default them).
+ */
+export const defaultNavigation = (format: 'mcq' | 'written'): 'free' | 'forward_only' =>
+  format === 'mcq' ? 'free' : 'forward_only';
+
 export interface SaveOptions {
   /** The ruleset's stored settings, or null (a D1 draft). Written v2 sections take its paste_written. */
   settings: Readonly<Record<string, unknown>> | null;
@@ -188,8 +195,11 @@ export const buildSavePayload = async (
   if (totalTimeSeconds < 60 || totalTimeSeconds > 7200) return orgFail('bad_request');
   const sections = await Promise.all(
     req.sections.map(async (s) => {
+      // R5-63 b: a draft with settings is package v2, where the publish guard refuses a null navigation; such a
+      // section takes the default, so the draft is never unpublishable for that reason.
+      const navigation = s.navigation ?? (settings === null ? null : defaultNavigation(s.format));
       let pasteRule = s.pasteRule;
-      if (s.format === 'written' && s.navigation !== null && pasteWritten !== null) {
+      if (s.format === 'written' && navigation !== null && pasteWritten !== null) {
         if (pasteRule !== undefined && pasteRule !== pasteWritten) return orgFail('bad_request');
         pasteRule = pasteWritten as 'blocked' | 'allowed_logged';
       }
@@ -239,7 +249,7 @@ export const buildSavePayload = async (
         ...(s.drawCount === undefined ? {} : { drawCount: s.drawCount }),
         shuffleItems: s.shuffleItems,
         shuffleOptions: s.shuffleOptions,
-        navigation: s.navigation,
+        navigation,
         ...(pasteRule === undefined ? {} : { pasteRule }),
         ...(s.blueprint === undefined ? {} : { blueprint: s.blueprint }),
         items,

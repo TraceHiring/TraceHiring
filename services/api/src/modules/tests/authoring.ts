@@ -281,6 +281,13 @@ const RulesetRowSchema = z.object({
   id: uuid,
   settings: z.record(z.string(), z.unknown()).nullable(),
   preset_key: z.enum(['strict', 'standard', 'open_book']).nullable(),
+  // The preset's catalog version (fix round 1 #9); null for custom or no settings.
+  preset_version: z
+    .number()
+    .int()
+    .min(1)
+    .nullish()
+    .transform((v) => v ?? null),
   catalog_version: z.string().nullable(),
   published_at: time.nullable(),
 });
@@ -294,7 +301,7 @@ export const findRuleset = async (
 ): Promise<RulesetRow | null> => {
   if (rulesetId === null) return null;
   const rows = await rest.select('ruleset_versions', {
-    select: 'id,settings,preset_key,catalog_version,published_at',
+    select: 'id,settings,preset_key,preset_version,catalog_version,published_at',
     org_id: `eq.${orgId}`,
     id: `eq.${rulesetId}`,
   });

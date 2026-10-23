@@ -9,7 +9,9 @@
 // - A template creates the job, the test and its draft: each available blueprint section becomes a pool section (a pool
 //   named after it, filled through `library_copy_requests` with up to 10x the section's draw of approved library items
 //   of its skill and format, R2-8); voice and typing sections are skipped and returned as a note (M1-16, E18); the
-//   template's preset with the org's admin locks applied is stored as the draft's settings (R5-34); weights sum to 100.
+//   template's preset with the org's admin locks applied is stored as the draft's settings (R5-34) with the preset's
+//   catalog version; weights sum to 100. It spends the caller's library budget first (the injected LibraryLimiter,
+//   R5-56 g), and on any failure after its first write it archives the job and the test it created (fix round 1 #10).
 import {
   BlueprintProposeRequest,
   BlueprintProposeResponse,
@@ -22,7 +24,8 @@ import {
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { sha256Hex } from '../candidate/encoding.js';
-import { applyLocks, loadLocks } from '../integrity-settings/locks.js';
+import { loadLocks } from '../integrity-settings/locks.js';
+import { pinPresetVersion, presetWithLocks } from '../integrity-settings/settings-write.js';
 import { parseRows } from '../tests/authoring.js';
 import { PUBLISHERS, draftViewOf } from '../tests/draft-routes.js';
 import { buildSavePayload } from '../tests/draft.js';
@@ -47,10 +50,20 @@ import {
   type TemplateRef,
 } from './reference.js';
 
+/**
+ * The per-user library read limit (R5-56 g: 60 a minute per user, the same budget as `GET …/library/items`). The
+ * shape of a Workers rate-limit binding, so the lead can bind one directly; the key is the caller's user id.
+ */
+export interface LibraryLimiter {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+}
+
 export interface TemplatesDeps {
   org: OrgDeps;
   /** Library reads as trace_api, or null when no database path is bound (503). */
   reference(env: Env): ReferenceSource | null;
+  /** The library read limiter, or null when unbound (from-template answers 503: it reads the library). */
+  limiter(env: Env): LibraryLimiter | null;
 }
 
 /** §6.1: the best template is proposed at or above 15% of its keywords. */
@@ -223,6 +236,33 @@ const copyIntoWorkspace = async (
   return out;
 };
 
+/**
+ * Archives the job and the test a failed from-template call created (best effort, as POST …/tests archives a test
+ * whose draft insert failed): neither stays live, and the original failure is answered.
+ */
+const archiveCreated = async (
+  ctx: OrgContext,
+  orgId: string,
+  made: { jobId: string | null; testId: string | null },
+): Promise<void> => {
+  const at = new Date().toISOString();
+  for (const [table, id] of [
+    ['tests', made.testId],
+    ['jobs', made.jobId],
+  ] as const) {
+    if (id === null) continue;
+    try {
+      await ctx.rest.update(
+        table,
+        { id: eq(id), org_id: eq(orgId), archived_at: 'is.null', select: 'id' },
+        { archived_at: at },
+      );
+    } catch {
+      // The failure answer stands; a list hides a test without a usable draft anyway.
+    }
+  }
+};
+
 /** Equal integer weights summing to 100 (the first sections take the remainder). */
 const weightsOf = (n: number): number[] =>
   Array.from({ length: n }, (_, i) => Math.floor(100 / n) + (i < 100 % n ? 1 : 0));
@@ -284,6 +324,10 @@ export const createTemplatesRoutes = (deps: TemplatesDeps): Hono<{ Bindings: Env
       await requireRole(ctx.rest, ctx.caller, orgId, PUBLISHERS);
       const req = parseBody(CreateTestFromTemplateRequest, await readJson(c.req.raw));
       const reference = deps.reference(c.env) ?? orgFail('unavailable');
+      // Fix round 1 #10: a template reads the library, so it spends the caller's library budget first (R5-56 g).
+      const limiter = deps.limiter(c.env) ?? orgFail('unavailable');
+      if (!(await limiter.limit({ key: ctx.caller.userId })).success)
+        return orgFail('rate_limited');
       const template =
         (await usableTemplates(ctx, orgId, reference)).find(
           (t) => t.templateKey === req.templateKey && t.version === req.templateVersion,
@@ -304,151 +348,166 @@ export const createTemplatesRoutes = (deps: TemplatesDeps): Hono<{ Bindings: Env
       // The template's preset with the org's locks (R5-34); read before any write.
       const catalog = await reference.settingsCatalog(ctx.caller, orgId);
       const preset = catalog.presets[template.presetKey] ?? orgFail('unavailable');
-      const settings = applyLocks(preset.values, await loadLocks(ctx.rest, orgId));
+      const settings = presetWithLocks(
+        template.presetKey,
+        preset,
+        await loadLocks(ctx.rest, orgId),
+      );
 
-      // M1-17, E19: only the JD's hash and the match permille are kept.
-      const jdText = req.jdText ?? '';
-      const [job] = parseRows(
-        z.object({ id: z.uuid() }),
-        await ctx.rest.insert(
-          'jobs',
-          {
-            org_id: orgId,
-            workspace_id: workspaceId,
-            title: req.jobTitle,
-            role_template_version_id: template.id,
-            jd_sha256: jdText === '' ? null : await sha256Hex(jdText),
-            template_match_permille:
-              jdText === '' ? null : matchPermille(tokensOf(jdText), template.keywords),
-          },
-          { select: 'id' },
-        ),
-      );
-      if (job === undefined) return orgFail('not_found');
-      const [test] = parseRows(
-        z.object({ id: z.uuid() }),
-        await ctx.rest.insert(
-          'tests',
-          { org_id: orgId, workspace_id: workspaceId, name: req.jobTitle, job_id: job.id },
-          { select: 'id' },
-        ),
-      );
-      if (test === undefined) return orgFail('not_found');
-      const [version] = parseRows(
-        z.object({ id: z.uuid() }),
-        await ctx.rest.insert(
-          'test_versions',
-          {
-            org_id: orgId,
-            test_id: test.id,
-            total_time_seconds: template.blueprint.totalTimeSeconds,
-            quality_cutoff: DEFAULT_CUTOFF,
-          },
-          { select: 'id' },
-        ),
-      );
-      if (version === undefined) return orgFail('not_found');
-
-      const available = template.blueprint.sections.filter(
-        (s): s is typeof s & { format: 'mcq' | 'written' } =>
-          s.available && (s.format === 'mcq' || s.format === 'written'),
-      );
-      const skippedSections = template.blueprint.sections
-        .filter((s) => !s.available || (s.format !== 'mcq' && s.format !== 'written'))
-        .map((s) => ({ title: s.title, format: s.format }));
-      const weights = weightsOf(available.length);
-      const sections: SaveTestDraftRequest['sections'] = [];
-      for (const [i, s] of available.entries()) {
-        const [pool] = parseRows(
+      // Fix round 1 #10: every write after the first one is undone the way POST …/tests undoes a failed create
+      // (DB review r3 m-4): on any failure the job and the test are archived (best effort) before the answer.
+      const made: { jobId: string | null; testId: string | null } = { jobId: null, testId: null };
+      try {
+        // M1-17, E19: only the JD's hash and the match permille are kept.
+        const jdText = req.jdText ?? '';
+        const [job] = parseRows(
           z.object({ id: z.uuid() }),
           await ctx.rest.insert(
-            'pools',
+            'jobs',
             {
               org_id: orgId,
               workspace_id: workspaceId,
-              name: s.title,
-              format: s.format,
-              skill_key: s.skillKey,
+              title: req.jobTitle,
+              role_template_version_id: template.id,
+              jd_sha256: jdText === '' ? null : await sha256Hex(jdText),
+              template_match_permille:
+                jdText === '' ? null : matchPermille(tokensOf(jdText), template.keywords),
             },
             { select: 'id' },
           ),
         );
-        if (pool === undefined) return orgFail('not_found');
-        const found = await libraryItems(
-          reference,
-          ctx,
-          orgId,
-          s.skillKey,
-          s.format,
-          POOL_FACTOR * s.drawCount,
-        );
-        const local =
-          found.length === 0
-            ? []
-            : await copyIntoWorkspace(
-                ctx,
-                orgId,
-                workspaceId,
-                found.map((f) => f.libraryItemVersionId),
-              );
-        if (local.length > 0) {
+        if (job === undefined) return orgFail('not_found');
+        made.jobId = job.id;
+        const [test] = parseRows(
+          z.object({ id: z.uuid() }),
           await ctx.rest.insert(
-            'pool_items',
-            [...new Set(local)].map((id) => ({
-              org_id: orgId,
-              pool_id: pool.id,
-              item_version_id: id,
-            })),
-            { select: 'item_version_id' },
-          );
-        }
-        sections.push({
-          mode: 'pool',
-          format: s.format,
-          name: s.title,
-          weight: weights[i] ?? 1,
-          items: [],
-          poolId: pool.id,
-          drawCount: s.drawCount,
-          shuffleItems: s.format === 'mcq',
-          shuffleOptions: s.format === 'mcq',
-          navigation: s.format === 'mcq' ? 'free' : 'forward_only',
-        });
-      }
-      const payload = await buildSavePayload(
-        {
-          name: req.jobTitle,
-          durationMinutes: Math.min(
-            120,
-            Math.max(5, Math.round(template.blueprint.totalTimeSeconds / 60)),
+            'tests',
+            { org_id: orgId, workspace_id: workspaceId, name: req.jobTitle, job_id: job.id },
+            { select: 'id' },
           ),
-          qualityCutoff: DEFAULT_CUTOFF,
-          sections,
-        },
-        {
-          settings: null,
-          rubrics: new Map(),
-          write: {
-            presetKey: settings.changed ? null : template.presetKey,
-            settings: settings.values,
+        );
+        if (test === undefined) return orgFail('not_found');
+        made.testId = test.id;
+        const [version] = parseRows(
+          z.object({ id: z.uuid(), ruleset_version_id: z.uuid().nullable() }),
+          await ctx.rest.insert(
+            'test_versions',
+            {
+              org_id: orgId,
+              test_id: test.id,
+              total_time_seconds: template.blueprint.totalTimeSeconds,
+              quality_cutoff: DEFAULT_CUTOFF,
+            },
+            { select: 'id,ruleset_version_id' },
+          ),
+        );
+        if (version === undefined) return orgFail('not_found');
+
+        const available = template.blueprint.sections.filter(
+          (s): s is typeof s & { format: 'mcq' | 'written' } =>
+            s.available && (s.format === 'mcq' || s.format === 'written'),
+        );
+        const skippedSections = template.blueprint.sections
+          .filter((s) => !s.available || (s.format !== 'mcq' && s.format !== 'written'))
+          .map((s) => ({ title: s.title, format: s.format }));
+        const weights = weightsOf(available.length);
+        const sections: SaveTestDraftRequest['sections'] = [];
+        for (const [i, s] of available.entries()) {
+          const [pool] = parseRows(
+            z.object({ id: z.uuid() }),
+            await ctx.rest.insert(
+              'pools',
+              {
+                org_id: orgId,
+                workspace_id: workspaceId,
+                name: s.title,
+                format: s.format,
+                skill_key: s.skillKey,
+              },
+              { select: 'id' },
+            ),
+          );
+          if (pool === undefined) return orgFail('not_found');
+          const found = await libraryItems(
+            reference,
+            ctx,
+            orgId,
+            s.skillKey,
+            s.format,
+            POOL_FACTOR * s.drawCount,
+          );
+          const local =
+            found.length === 0
+              ? []
+              : await copyIntoWorkspace(
+                  ctx,
+                  orgId,
+                  workspaceId,
+                  found.map((f) => f.libraryItemVersionId),
+                );
+          if (local.length > 0) {
+            await ctx.rest.insert(
+              'pool_items',
+              [...new Set(local)].map((id) => ({
+                org_id: orgId,
+                pool_id: pool.id,
+                item_version_id: id,
+              })),
+              { select: 'item_version_id' },
+            );
+          }
+          sections.push({
+            mode: 'pool',
+            format: s.format,
+            name: s.title,
+            weight: weights[i] ?? 1,
+            items: [],
+            poolId: pool.id,
+            drawCount: s.drawCount,
+            shuffleItems: s.format === 'mcq',
+            shuffleOptions: s.format === 'mcq',
+            navigation: s.format === 'mcq' ? 'free' : 'forward_only',
+          });
+        }
+        const payload = await buildSavePayload(
+          {
+            name: req.jobTitle,
+            durationMinutes: Math.min(
+              120,
+              Math.max(5, Math.round(template.blueprint.totalTimeSeconds / 60)),
+            ),
+            qualityCutoff: DEFAULT_CUTOFF,
+            sections,
           },
-        },
-      );
-      payload.totalTimeSeconds = template.blueprint.totalTimeSeconds;
-      try {
-        await rpcOf(ctx.rest)('save_test_draft', {
-          p_test_version: version.id,
-          p_payload: payload,
-        });
+          {
+            settings: null,
+            rubrics: new Map(),
+            write: { presetKey: settings.presetKey, settings: settings.settings },
+          },
+        );
+        payload.totalTimeSeconds = template.blueprint.totalTimeSeconds;
+        try {
+          await rpcOf(ctx.rest)('save_test_draft', {
+            p_test_version: version.id,
+            p_payload: payload,
+          });
+          // Fix round 1 #9: the preset's catalog version next to its key (save_test_draft stores none).
+          if (version.ruleset_version_id !== null) {
+            await pinPresetVersion(ctx, orgId, version.ruleset_version_id, settings);
+          }
+        } catch (err) {
+          if (err instanceof RestError) return orgFail(restErrorCode(err));
+          throw err;
+        }
+        return answer(
+          CreateTestFromTemplateResponse,
+          { draft: await draftViewOf(ctx, orgId, test.id), skippedSections },
+          201,
+        );
       } catch (err) {
-        if (err instanceof RestError) return orgFail(restErrorCode(err));
+        await archiveCreated(ctx, orgId, made);
         throw err;
       }
-      return answer(
-        CreateTestFromTemplateResponse,
-        { draft: await draftViewOf(ctx, orgId, test.id), skippedSections },
-        201,
-      );
     }),
   );
 

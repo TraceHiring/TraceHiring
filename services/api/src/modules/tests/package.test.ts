@@ -464,7 +464,7 @@ describe('two publishers of one v2 draft (fix round 1 #1, E2): the stored packag
           reached();
           await gate;
         };
-        loser = s.publish();
+        loser = Promise.resolve(s.publish());
         await atWrite;
       }
       return original(old, next, d);
@@ -553,6 +553,8 @@ describe('a locked org: a draft with settings never keeps a null navigation (fix
       org_id: ORG,
       setting_key: 'paste_written',
       locked_value: 'blocked',
+      locked_by: null,
+      locked_at: '2026-10-17T09:00:00.000+00:00',
     });
     const { call } = testsApp(db, fakeBucket(), undefined, {
       reference: () => ({

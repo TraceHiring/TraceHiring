@@ -17,10 +17,11 @@ import {
   TestListResponse,
   UpdateTestDraftRequest,
 } from '@trace/shared/contracts/d1';
-import { PresetKey, TestDraftView } from '@trace/shared/contracts/m1';
+import { TestDraftView } from '@trace/shared/contracts/m1';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { applyLocks, loadLocks } from '../integrity-settings/locks.js';
+import { loadLocks } from '../integrity-settings/locks.js';
+import { applySettingsToSections, lockedStandard } from '../integrity-settings/settings-write.js';
 import type { ReferenceSource } from '../templates/reference.js';
 import {
   TEST_COLS,
@@ -64,13 +65,31 @@ export interface TestRouteDeps {
 export const packagesFromEnv = (env: Env): PackageBucket | null => {
   const bucket = env.PACKAGES;
   if (bucket === undefined) return null;
+  const options = (sha256: string) => ({
+    sha256,
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: { sha256 },
+  });
   return {
     put: async (key, text, sha256) => {
-      await bucket.put(key, text, {
-        sha256,
-        httpMetadata: { contentType: 'application/json' },
-        customMetadata: { sha256 },
-      });
+      await bucket.put(key, text, options(sha256));
+    },
+    head: async (key) => {
+      const object = await bucket.head(key);
+      return {
+        etag: object?.etag ?? null,
+        uploadedMs: object === null ? null : object.uploaded.getTime(),
+        readAtMs: Date.now(),
+      };
+    },
+    // Fix round 1 #1: R2 refuses the write (put answers null) when the object changed since `seen`: another etag, or
+    // the same bytes uploaded later; an object that was absent must not have been uploaded since the read.
+    putIfUnchanged: async (key, text, sha256, seen) => {
+      const onlyIf: R2Conditional =
+        seen.etag === null || seen.uploadedMs === null
+          ? { uploadedBefore: new Date(seen.readAtMs) }
+          : { etagMatches: seen.etag, uploadedBefore: new Date(seen.uploadedMs + 1) };
+      return (await bucket.put(key, text, { ...options(sha256), onlyIf })) !== null;
     },
     getText: async (key) => {
       const object = await bucket.get(key);
@@ -94,23 +113,29 @@ const seedLockedSettings = async (
   env: Env,
   ctx: OrgContext,
   orgId: string,
+  versionId: string,
   rulesetId: string | null,
 ): Promise<void> => {
   if (rulesetId === null) return;
   try {
-    const locks = await loadLocks(ctx.rest, orgId);
-    if (locks.length === 0) return;
-    const reference = deps.reference?.(env) ?? null;
-    if (reference === null) return;
-    const catalog = await reference.settingsCatalog(ctx.caller, orgId);
-    const standard = catalog.presets[PresetKey.enum.standard];
-    if (standard === undefined) return;
-    const locked = applyLocks(standard.values, locks);
+    const write = await lockedStandard(
+      deps.reference?.(env) ?? null,
+      ctx,
+      orgId,
+      await loadLocks(ctx.rest, orgId),
+    );
+    if (write === null) return;
     await ctx.rest.update(
       'ruleset_versions',
       { id: eq(rulesetId), org_id: eq(orgId), published_at: 'is.null', select: 'id' },
-      { preset_key: locked.changed ? null : 'standard', settings: locked.values },
+      {
+        preset_key: write.presetKey,
+        preset_version: write.presetVersion,
+        settings: write.settings,
+      },
     );
+    // R5-63 b: the draft now has settings (a new draft has no section yet; kept for every save path).
+    await applySettingsToSections(ctx, orgId, versionId, write.settings.paste_written);
   } catch {
     // The draft stands without settings; publish stays refused until they are saved (fail closed).
   }
@@ -204,6 +229,7 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
       if (test === undefined) return orgFail('not_found');
       // The L-8 trigger creates the draft's ruleset row and pins the org's notice; no api code touches integrity.*.
       let rulesetId: string | null = null;
+      let versionId: string | null = null;
       try {
         const [created] = parseRows(
           z.object({ id: z.uuid(), ruleset_version_id: z.uuid().nullable() }),
@@ -219,6 +245,7 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
           ),
         );
         rulesetId = created?.ruleset_version_id ?? null;
+        versionId = created?.id ?? null;
       } catch (err) {
         // DB review r3 m-4: the two inserts are not one transaction. A test without a draft could never be edited
         // (GET and PUT need a version), so archive it before answering the failure (best effort).
@@ -233,7 +260,8 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
         }
         throw err;
       }
-      await seedLockedSettings(deps, c.env, ctx, orgId, rulesetId);
+      if (versionId !== null)
+        await seedLockedSettings(deps, c.env, ctx, orgId, versionId, rulesetId);
       return answer(TestDraftView, await draftViewOf(ctx, orgId, test.id), 201);
     }),
   );

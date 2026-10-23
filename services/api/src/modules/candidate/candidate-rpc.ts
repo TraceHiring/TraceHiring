@@ -69,7 +69,6 @@ export const depsFromEnv = (env: Env): CandidateCall => {
   const privateJwk = env.CANDIDATE_TOKEN_PRIVATE_JWK;
   const publicJwk = env.CANDIDATE_TOKEN_PUBLIC_JWK;
   const outbox = createDemoOutbox(env, outboxNamespace(env));
-  const packages = env.PACKAGES;
   const deps: CandidateDeps = {
     store: createSqlCandidateStore(handle.db),
     signer: async () =>
@@ -87,28 +86,9 @@ export const depsFromEnv = (env: Env): CandidateCall => {
     now: () => Date.now(),
     newId: () => crypto.randomUUID(),
     newNonce: DEFAULT_NONCE,
-    ...(packages === undefined ? {} : { packageTitle: packageTitleOf(packages) }),
   };
   return { deps, close: () => handle.close() };
 };
-
-/** The part of the PACKAGES bucket the title read needs. */
-export interface PackageReader {
-  get(key: string): Promise<{ json(): Promise<unknown> } | null>;
-}
-
-/**
- * The display title of a published package (spec m1 M1-12: v1 and v2 both carry `title`; the rest of the package is
- * the SessionDO's). Null when the object is missing or has no usable title (display data only).
- */
-export const packageTitleOf =
-  (packages: PackageReader) =>
-  async (testVersionId: string): Promise<string | null> => {
-    const object = await packages.get(`packages/${testVersionId}.json`);
-    if (object === null) return null;
-    const title = z.object({ title: z.string().min(1).max(200) }).safeParse(await object.json());
-    return title.success ? title.data.title : null;
-  };
 
 const loggerFor = (env: Env): Logger => {
   let version = 'dev';

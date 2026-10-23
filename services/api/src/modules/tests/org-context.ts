@@ -25,6 +25,7 @@ export type OrgErrorCode =
   | 'bad_request'
   | 'unauthorized'
   | 'aal2_required'
+  | 'forbidden'
   | 'not_found'
   | 'conflict'
   | 'cutoff_required'
@@ -44,6 +45,9 @@ export const ORG_ERROR_STATUS: Record<
   bad_request: 400,
   unauthorized: 401,
   aal2_required: 403,
+  // M1 (R2-14, fix round 1 #7): a caller who may see the org refused an action only an owner may take (an admin
+  // inviting an owner).
+  forbidden: 403,
   not_found: 404,
   conflict: 409,
   cutoff_required: 422,
@@ -424,7 +428,16 @@ export const restErrorCode = (err: unknown): OrgErrorCode => {
     switch (err.guard) {
       case 'setting_locked':
       case 'settings_required':
+      case 'always_locked':
         return 'setting_locked';
+      // Fix round 1 #7: the refusals below name a request the caller may see but not make; never a 404.
+      case 'owner_invite':
+        return 'forbidden';
+      case 'setting_not_allowed':
+      case 'item_in_two_sections':
+        return 'bad_request';
+      case 'digest_required':
+        return 'draft_incomplete';
       case 'version_frozen':
       case 'snapshot_changed':
         return 'conflict';

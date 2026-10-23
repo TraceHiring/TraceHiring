@@ -6,7 +6,12 @@
 import { SaveTestDraftRequest, TestDraftView } from '@trace/shared/contracts/m1';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { applyLocks, loadLocks } from '../integrity-settings/locks.js';
+import { applyLocks, loadLocks, type SettingValues } from '../integrity-settings/locks.js';
+import {
+  lockedStandard,
+  pinPresetVersion,
+  type SettingsWrite,
+} from '../integrity-settings/settings-write.js';
 import {
   findRuleset,
   findTest,
@@ -136,9 +141,28 @@ export const createTestDraftRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env
       const sourceContent = await loadContent(ctx.rest, orgId, source.id);
       const sourceView = toDraftView(test, source, sourceContent);
 
+      // The settings to write, read before any write: the source's, with any admin lock added since (E16; a moved
+      // value makes the preset custom); for a source without settings in an org with locks, the Standard preset with
+      // the locks (R5-34, fix round 1 #4). A named preset keeps its catalog version (fix round 1 #9).
+      const locks = await loadLocks(ctx.rest, orgId);
+      let write: SettingsWrite | null = null;
+      if (sourceRuleset?.settings !== null && sourceRuleset?.settings !== undefined) {
+        const locked = applyLocks(sourceRuleset.settings as SettingValues, locks);
+        write = locked.changed
+          ? { presetKey: null, presetVersion: null, settings: locked.values }
+          : {
+              presetKey: sourceRuleset.preset_key,
+              presetVersion:
+                sourceRuleset.preset_key === null ? null : sourceRuleset.preset_version,
+              settings: locked.values,
+            };
+      } else {
+        write = await lockedStandard(deps.reference?.(c.env) ?? null, ctx, orgId, locks);
+      }
+
       // The new draft: the D1 seed trigger pins a new ruleset and the org's notice.
       const [created] = parseRows(
-        z.object({ id: z.uuid() }),
+        z.object({ id: z.uuid(), ruleset_version_id: z.uuid().nullable() }),
         await ctx.rest.insert(
           'test_versions',
           {
@@ -147,23 +171,10 @@ export const createTestDraftRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env
             total_time_seconds: source.total_time_seconds,
             quality_cutoff: source.quality_cutoff,
           },
-          { select: 'id' },
+          { select: 'id,ruleset_version_id' },
         ),
       );
       if (created === undefined) return orgFail('not_found');
-
-      // The source's settings, with any admin lock added since (E16); a moved value makes the preset custom.
-      let write: { presetKey: string | null; settings: Record<string, unknown> } | undefined;
-      if (sourceRuleset?.settings !== null && sourceRuleset?.settings !== undefined) {
-        const locked = applyLocks(
-          sourceRuleset.settings as Parameters<typeof applyLocks>[0],
-          await loadLocks(ctx.rest, orgId),
-        );
-        write = {
-          presetKey: locked.changed ? null : sourceRuleset.preset_key,
-          settings: locked.values,
-        };
-      }
       // The content as a save request. Paste rules are left to the settings (DB-M1-1); the total time is the source's.
       const req: SaveTestDraftRequest = {
         name: sourceView.test.name,
@@ -181,7 +192,9 @@ export const createTestDraftRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env
       const payload = await buildSavePayload(req, {
         settings: null,
         rubrics: sourceContent.rubrics,
-        ...(write === undefined ? {} : { write }),
+        ...(write === null
+          ? {}
+          : { write: { presetKey: write.presetKey, settings: write.settings } }),
       });
       payload.totalTimeSeconds = source.total_time_seconds;
       try {
@@ -189,6 +202,10 @@ export const createTestDraftRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env
           p_test_version: created.id,
           p_payload: payload,
         });
+        // save_test_draft stores preset_version null; the version whose values were used is stored next to the key.
+        if (write !== null && created.ruleset_version_id !== null) {
+          await pinPresetVersion(ctx, orgId, created.ruleset_version_id, write);
+        }
       } catch (err) {
         return saveFailure(err);
       }

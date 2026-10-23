@@ -22,7 +22,7 @@ const mount = (org: OrgDeps) => {
   });
   app.route('/', createTestDraftRoutes({ org, packages: () => null }));
   app.route('/', createIntegritySettingsRoutes({ org, reference: () => null }));
-  app.route('/', createTemplatesRoutes({ org, reference: () => null }));
+  app.route('/', createTemplatesRoutes({ org, reference: () => null, limiter: () => null }));
   app.route('/', createMembersRoutes({ org, pepper: () => null, queue: () => null }));
   return app;
 };

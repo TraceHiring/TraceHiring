@@ -28,7 +28,11 @@ import {
   type OrgDeps,
 } from '../tests/org-context.js';
 import { cursorOf, keysetQuery, pageOf } from '../tests/rest-keyset.js';
-import { inviteEmailHmac, normaliseInviteEmail } from './email-hmac.js';
+import {
+  inviteEmailHmac,
+  normaliseInviteEmail,
+  pepperStrongEnough,
+} from '@trace/shared/invite-email';
 
 /** The trace-admin queue producer (`ADMIN_QUEUE`, trace-admin-<env>). */
 export interface InviteQueue {
@@ -43,12 +47,10 @@ export interface MembersDeps {
   queue(env: Env): InviteQueue | null;
 }
 
-/** A pepper shorter than this is treated as unset (fail closed). */
-const MIN_PEPPER_LENGTH = 16;
-
+/** The pepper, or null when unset or under PEPPER_MIN_BYTES UTF-8 bytes (one rule with the jobs; fail closed). */
 export const pepperFromEnv = (env: Env): string | null => {
   const value = (env as unknown as { MEMBER_INVITE_PEPPER?: unknown }).MEMBER_INVITE_PEPPER;
-  return typeof value === 'string' && value.length >= MIN_PEPPER_LENGTH ? value : null;
+  return typeof value === 'string' && pepperStrongEnough(value) ? value : null;
 };
 
 export const adminQueueFromEnv = (env: Env): InviteQueue | null => {
@@ -110,8 +112,9 @@ export const createMembersRoutes = (deps: MembersDeps): Hono<{ Bindings: Env }> 
       ) {
         return orgFail('bad_request');
       }
+      // Fix round 1 #2: the shared minimum (32 UTF-8 bytes), checked before any write.
       const pepper = deps.pepper(c.env);
-      if (pepper === null || pepper.length < MIN_PEPPER_LENGTH) return orgFail('unavailable');
+      if (pepper === null || !pepperStrongEnough(pepper)) return orgFail('unavailable');
       const queue = deps.queue(c.env) ?? orgFail('unavailable');
       const email = normaliseInviteEmail(req.email);
       const [row] = parseRows(
@@ -120,7 +123,7 @@ export const createMembersRoutes = (deps: MembersDeps): Hono<{ Bindings: Env }> 
           'member_invites',
           {
             org_id: orgId,
-            email_hmac: await inviteEmailHmac(pepper, email),
+            email_hmac: await inviteEmailHmac(email, pepper),
             roles: req.roles,
             workspace_id: req.workspaceId ?? null,
           },

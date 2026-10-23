@@ -6,6 +6,12 @@
 // retried (rebuild each time, at most 3 retries, then 409). After the UPDATE the package is rebuilt from the frozen rows
 // (the snapshot's item set) and compared; any difference retires the version (500, fail closed; the SessionDO verifies
 // the hash too).
+//
+// Two publishers of one v2 draft (fix round 1 #1, E2): the package bytes depend on the exposure counts read at build,
+// so a loser's bytes can differ from the winner's and cannot be rebuilt from the frozen rows. Each attempt therefore
+// reads the object's state first, then checks the version is still a draft, and writes only if the object is still
+// the one it read (R2 `onlyIf`); the winner rewrites the frozen bytes after its UPDATE, which moves the upload time,
+// so a write prepared before that rewrite is refused. A refused write is 409 and never touches the version.
 import { PublishTestRequest, PublishTestResponse } from '@trace/shared/contracts/d1';
 import { sha256Hex } from '../candidate/encoding.js';
 import {
@@ -36,10 +42,24 @@ import {
   type PackageV2Problem,
 } from './package-v2.js';
 
+/** What one read of the package object saw: its etag and upload time (null when absent), and when it was read. */
+export interface PackageState {
+  etag: string | null;
+  uploadedMs: number | null;
+  readAtMs: number;
+}
+
 /** The R2 package bucket as the publish step uses it (`PACKAGES`, trace-packages-<env>). */
 export interface PackageBucket {
   /** Writes the bytes; R2 checks the upload against `sha256`. */
   put(key: string, text: string, sha256: string): Promise<void>;
+  /** The object's state now (no body read). */
+  head(key: string): Promise<PackageState>;
+  /**
+   * Writes the bytes only if the object is still the one `seen` describes: absent and not written since the read, or
+   * the same etag uploaded no later than then (R2 `onlyIf`). False when another write landed in between.
+   */
+  putIfUnchanged(key: string, text: string, sha256: string, seen: PackageState): Promise<boolean>;
   getText(key: string): Promise<string | null>;
 }
 
@@ -133,6 +153,16 @@ const publishV2 = async (
 ): Promise<Response> => {
   const key = packageKey(draft.id);
   for (let attempt = 0; ; attempt += 1) {
+    // Fix round 1 #1: the object's state is read before the draft check and the build, so a write that lands after
+    // this read (another publisher, or the winner's final rewrite) makes this attempt's conditional put fail.
+    let seen: PackageState;
+    try {
+      seen = await bucket.head(key);
+    } catch {
+      return orgFail('unavailable');
+    }
+    const current = await findVersion(ctx.rest, orgId, testId, draft.id);
+    if (current?.status !== 'draft') return orgFail('conflict');
     // Rebuilt from the live rows on every attempt (R5-56 d).
     const test = (await findTest(ctx.rest, orgId, testId)) ?? orgFail('not_found');
     const content = await loadContent(ctx.rest, orgId, draft.id);
@@ -140,11 +170,14 @@ const publishV2 = async (
     const live = await loadLiveSource(ctx.rest, orgId, content);
     const built = await buildPackageV2(test, draft, ruleset, live);
     if (!built.ok) return orgFail(problemCode(built.problem));
+    let written: boolean;
     try {
-      await bucket.put(key, built.text, built.sha256);
+      written = await bucket.putIfUnchanged(key, built.text, built.sha256, seen);
     } catch {
       return orgFail('unavailable');
     }
+    // Another publisher wrote since this attempt's read: never overwrite it; the version is untouched (E2).
+    if (!written) return orgFail('conflict');
     let published: unknown[];
     try {
       published = await ctx.rest.update(
@@ -173,8 +206,9 @@ const publishV2 = async (
     const exposure = new Map(built.pkg.items.map((i) => [i.itemVersionId, i.exposureAtPublish]));
     const [frozen] = parseRows(VersionRowSchema, published);
     if (frozen === undefined) {
-      // This attempt lost the race (spec review r3a #2). Its put may have landed after the winner's check: restore
-      // the frozen package when this attempt's rebuild of the frozen rows matches the stored hash.
+      // This attempt lost the race (spec review r3a #2) after its conditional put landed (before the winner's final
+      // rewrite, which then replaces it). Restore the frozen package when this attempt's rebuild of the frozen rows
+      // matches the stored hash (best effort; the SessionDO's hash check refuses a mismatched package).
       try {
         const now = await findVersion(ctx.rest, orgId, testId, draft.id);
         if (now?.status === 'published' && now.content_sha256 !== null) {
@@ -198,7 +232,9 @@ const publishV2 = async (
       return await retire(ctx, orgId, frozen);
     }
     try {
-      await ensureStored(bucket, key, again.text, again.sha256);
+      // Always rewritten (fix round 1 #1): the frozen bytes are the truth, and the new upload time refuses any write a
+      // losing publisher prepared from an earlier read.
+      await bucket.put(key, again.text, again.sha256);
     } catch {
       return await retire(ctx, orgId, frozen);
     }
