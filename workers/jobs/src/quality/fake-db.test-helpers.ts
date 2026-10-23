@@ -57,10 +57,6 @@ export const qualityHandlers: Record<string, Handler> = {
         ruleset_version_id: r['ruleset_version_id'],
         state: r['state'],
       })),
-  [SQL.cutoff]: (db, [org, tv]) =>
-    table(db, 'test_versions')
-      .filter((r) => r['org_id'] === org && db.jobOrg === org && r['id'] === tv)
-      .map((r) => ({ quality_cutoff: r['quality_cutoff'] })),
   [SQL.sections]: (db, [org, tv]) =>
     visible(db, 'sections', org)
       .filter((r) => r['test_version_id'] === tv)
@@ -107,7 +103,7 @@ export const qualityHandlers: Record<string, Handler> = {
       .map((r) => ({ id: r['id'], criteria: r['criteria'], content_sha256: r['content_sha256'] }));
   },
   // Package v2 (spec m1 R5-19): the same joins as the SQL, over plain rows.
-  [SQL.versionV2]: (db, [org, tv]) =>
+  [SQL.version]: (db, [org, tv]) =>
     visible(db, 'test_versions', org)
       .filter((r) => r['id'] === tv)
       .map((r) => ({

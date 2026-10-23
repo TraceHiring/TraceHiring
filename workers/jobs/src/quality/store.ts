@@ -11,8 +11,11 @@ export const SQL = {
   session:
     'select id::text as id, test_version_id::text as test_version_id, ruleset_version_id::text as ruleset_version_id, ' +
     'state from public.sessions where org_id = $1::uuid and id = $2::uuid',
-  cutoff:
-    'select quality_cutoff::int as quality_cutoff from public.test_versions where org_id = $1::uuid and id = $2::uuid',
+  // The pinned version's cutoff and package version: each path requires its own package (v1 = 1, v2 = 2), so a message
+  // of one package on a version of the other fails closed (quality_bad_package), never scored by the wrong rule.
+  version:
+    'select quality_cutoff::int as quality_cutoff, package_version::int as package_version ' +
+    'from public.test_versions where org_id = $1::uuid and id = $2::uuid',
   sections:
     'select id::text as id, position::int as position, weight::text as weight from public.sections ' +
     'where org_id = $1::uuid and test_version_id = $2::uuid order by position',
@@ -33,9 +36,6 @@ export const SQL = {
     'where i.org_id = $1::uuid and i.test_version_id = $2::uuid and i.rubric_version_id is not null)',
   // Package v2 (spec m1 R5-19, R5-47). Inline sections still load by test_version_id (items, answerKeys above); pool
   // items, their keys (the served variant's for a parameterised item) and rubrics load through session_items.
-  versionV2:
-    'select quality_cutoff::int as quality_cutoff, package_version::int as package_version ' +
-    'from public.test_versions where org_id = $1::uuid and id = $2::uuid',
   sectionsV2:
     'select id::text as id, position::int as position, weight::text as weight, draw_count::int as draw_count ' +
     'from public.sections where org_id = $1::uuid and test_version_id = $2::uuid order by position',
@@ -170,16 +170,30 @@ export const loadSession = async (
 ): Promise<SessionRow | null> =>
   (await tx.query<SessionRow>(SQL.session, [orgId, sessionId]))[0] ?? null;
 
+/** The pinned version's cutoff, refused unless the version is of the message's package (fails closed). */
+const loadVersion = async (
+  tx: SqlTx,
+  orgId: string,
+  testVersionId: string,
+  packageVersion: 1 | 2,
+): Promise<{ quality_cutoff: number }> => {
+  const row = (
+    await tx.query<{ quality_cutoff: number | null; package_version: number | null }>(SQL.version, [
+      orgId,
+      testVersionId,
+    ])
+  )[0];
+  if (row === undefined || row.quality_cutoff === null) throw new Error('quality_no_cutoff');
+  if (row.package_version !== packageVersion) throw new Error('quality_bad_package');
+  return { quality_cutoff: row.quality_cutoff };
+};
+
 export const loadContent = async (
   tx: SqlTx,
   orgId: string,
   testVersionId: string,
 ): Promise<Content> => {
-  const cutoffRow = (
-    await tx.query<{ quality_cutoff: number | null }>(SQL.cutoff, [orgId, testVersionId])
-  )[0];
-  if (cutoffRow === undefined || cutoffRow.quality_cutoff === null)
-    throw new Error('quality_no_cutoff');
+  const cutoffRow = await loadVersion(tx, orgId, testVersionId, 1);
   const sections = await tx.query<SectionRow>(SQL.sections, [orgId, testVersionId]);
   const items = await tx.query<ItemRow>(SQL.items, [orgId, testVersionId]);
   const keys = await tx.query<{ item_version_id: string; option_id: string | null }>(
@@ -247,15 +261,7 @@ export const loadContentV2 = async (
   testVersionId: string,
   sessionId: string,
 ): Promise<ContentV2> => {
-  const version = (
-    await tx.query<{ quality_cutoff: number | null; package_version: number | null }>(
-      SQL.versionV2,
-      [orgId, testVersionId],
-    )
-  )[0];
-  if (version === undefined || version.quality_cutoff === null)
-    throw new Error('quality_no_cutoff');
-  if (version.package_version !== 2) throw new Error('quality_bad_package');
+  const version = await loadVersion(tx, orgId, testVersionId, 2);
   const sections = await tx.query<SectionRowV2>(SQL.sectionsV2, [orgId, testVersionId]);
   const inline = await tx.query<ItemRow>(SQL.items, [orgId, testVersionId]);
   const drawn = await tx.query<DrawnRow>(SQL.drawn, [orgId, sessionId]);

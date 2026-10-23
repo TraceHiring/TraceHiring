@@ -95,6 +95,11 @@ describe('quality v2: the scored item set is the candidate own set (R5-19, R5-47
     const section = table(w.db, 'sections').find((s) => s['id'] === Q2.sP);
     if (section === undefined) throw new Error('no section');
     section['draw_count'] = 2;
+    // The message agrees with draw_count 2 (b2, b1 at slots 3-4), so the stored rows themselves are what is refused.
+    const draw = w.message.draws[0];
+    if (draw === undefined) throw new Error('no draw');
+    draw.itemVersionIds = [Q2.b2, Q2.b1];
+    draw.itemVariantIds = [Q2.v2b, null];
     await expect(run(w.db, w.message)).rejects.toThrow(/^quality_bad_draw$/);
     expect(table(w.db, 'scores')).toHaveLength(0);
   });

@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SCORING_VERSION,
+  SCORING_VERSION_V2,
   computeAnswerQuality,
   meetsCutoff,
   parseWeight,
@@ -33,6 +34,7 @@ const item = (n: number, sectionId: string, score: number): ScoreItem => ({
 describe('quality score vectors (AT-D15)', () => {
   it('names its scoring version', () => {
     expect(SCORING_VERSION).toBe('d1-scoring-v1');
+    expect(SCORING_VERSION_V2).toBe('m1-scoring-v1');
   });
 
   it('scores an MCQ by exact key only, with no negative marking', () => {

@@ -4,7 +4,10 @@
 // the score, the public quality card, reports.quality_card_id and the `quality_score` key, all in this transaction.
 // Package v2 (spec m1 R5-19, R5-47): inline sections as D1; a pool section counts its draw_count slots, filled from
 // the candidate's own session_items, with keys loaded through them (the served variant's key for a parameterised
-// item) and options scored by id (./v2.ts). The arithmetic and SCORING_VERSION are unchanged.
+// item) and options scored by id (./v2.ts). Before anything is scored, the message's served positions and pool section
+// ids are checked against the pinned version (R5-59 a, ./v2.ts checkServedLayout). The arithmetic is unchanged; a v2
+// session records SCORING_VERSION_V2 (`m1-scoring-v1`), a v1 session SCORING_VERSION (`d1-scoring-v1`). Each path
+// requires the version's package to be its own (v1 = 1, v2 = 2), else `quality_bad_package`.
 // Rule 1: nothing here reads or receives integrity data; the score function has no such parameter.
 // Errors are constant codes; no answer text, score or id reaches a thrown message.
 import type { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
@@ -13,7 +16,13 @@ import { QualityCardRow } from '@trace/shared/contracts/d1';
 import { jobKey, type SqlTx } from '@trace/shared/jobs';
 import type { LlmGrader } from '@trace/vendors';
 import { scoreMcq } from './mcq.js';
-import { SCORING_VERSION, computeAnswerQuality, meetsCutoff, parseWeight } from './score.js';
+import {
+  SCORING_VERSION,
+  SCORING_VERSION_V2,
+  computeAnswerQuality,
+  meetsCutoff,
+  parseWeight,
+} from './score.js';
 import {
   attachCard,
   insertGraderRun,
@@ -31,7 +40,14 @@ import {
   type RubricRow,
   type SectionRow,
 } from './store.js';
-import { mcqKeyOf, planScoredItems, type PlanEntry, type PlanItem } from './v2.js';
+import {
+  checkServedLayout,
+  mcqKeyOf,
+  planScoredItems,
+  type LayoutMessage,
+  type PlanEntry,
+  type PlanItem,
+} from './v2.js';
 import { gradeWritten, rubricSnapshot } from './written.js';
 
 export interface QualityDeps {
@@ -90,16 +106,22 @@ const scoredSetV1 = (content: Content): ScoredSet => ({
   rubrics: content.rubrics,
 });
 
-/** Package v2 (spec m1 R5-19, R5-47): inline sections as D1, pool sections by draw_count slots. */
+/**
+ * Package v2 (spec m1 R5-19, R5-47): inline sections as D1, pool sections by draw_count slots. The message's layout is
+ * checked against the version first (R5-59 a), so nothing is scored from a served row out of place.
+ */
 const scoredSetV2 = async (
   tx: SqlTx,
   orgId: string,
   testVersionId: string,
   sessionId: string,
+  message: LayoutMessage,
 ): Promise<ScoredSet> => {
   const content = await loadContentV2(tx, orgId, testVersionId, sessionId);
+  const sections = content.sections.map((s) => ({ id: s.id, drawCount: s.draw_count }));
+  checkServedLayout(sections, content.inline.map(planItem), message);
   const entries = planScoredItems(
-    content.sections.map((s) => ({ id: s.id, drawCount: s.draw_count })),
+    sections,
     content.inline.map(planItem),
     content.drawn.map((d) => ({
       itemVersionId: d.item_version_id,
@@ -143,7 +165,7 @@ const runQualityUnsafe = async (
 
   const content =
     message.v === 2
-      ? await scoredSetV2(tx, orgId, session.test_version_id, sessionId)
+      ? await scoredSetV2(tx, orgId, session.test_version_id, sessionId, message)
       : scoredSetV1(await loadContent(tx, orgId, session.test_version_id));
   const { servedItem, answers } = await loadAnswers(tx, orgId, sessionId);
 
@@ -226,7 +248,7 @@ const runQualityUnsafe = async (
     sectionScoresJson: JSON.stringify(sectionScores.data),
     cutoff: content.cutoff,
     meetsCutoff: meets,
-    scoringVersion: SCORING_VERSION,
+    scoringVersion: message.v === 2 ? SCORING_VERSION_V2 : SCORING_VERSION,
     rubricSetSha256: await rubricSetSha256([...usedRubrics.values()]),
     rubricVersionIdsJson: JSON.stringify(rubricIds),
     graderModelId,
