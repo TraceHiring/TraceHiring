@@ -132,6 +132,20 @@ const ORG_ROUTES: [string, string][] = [
   ['GET', `/v1/orgs/${ORG}/review/reports`],
   ['POST', `/v1/orgs/${ORG}/reports/${REPORT}/start-photo-link`],
   ['GET', `/v1/orgs/${ORG}/demo-outbox`],
+  // M1 A2b (spec m1 R2-18).
+  ['PUT', `/v1/orgs/${ORG}/tests/${TEST}/draft`],
+  ['POST', `/v1/orgs/${ORG}/tests/${TEST}/versions`],
+  ['GET', `/v1/orgs/${ORG}/tests/${TEST}/integrity`],
+  ['PUT', `/v1/orgs/${ORG}/tests/${TEST}/integrity`],
+  ['GET', `/v1/orgs/${ORG}/settings/integrity-locks`],
+  ['POST', `/v1/orgs/${ORG}/settings/integrity-locks`],
+  ['DELETE', `/v1/orgs/${ORG}/settings/integrity-locks/paste_written`],
+  ['GET', `/v1/orgs/${ORG}/templates`],
+  ['POST', `/v1/orgs/${ORG}/blueprints/propose`],
+  ['POST', `/v1/orgs/${ORG}/tests/from-template`],
+  ['POST', `/v1/orgs/${ORG}/members/invites`],
+  ['GET', `/v1/orgs/${ORG}/members/invites`],
+  ['DELETE', `/v1/orgs/${ORG}/members/invites/${MEMBER}`],
 ];
 
 /** A bare api app (the shared error handler and logger) around one sub-router, for the deeper failure paths. */

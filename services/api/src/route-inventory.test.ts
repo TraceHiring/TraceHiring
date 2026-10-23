@@ -31,6 +31,20 @@ const ALLOWED = [
   'POST /v1/orgs/:p/reports/:p/start-photo-link',
   'GET /v1/orgs/:p/demo-outbox',
   'ALL /media/:p',
+  // M1 A2b (spec m1 R2-18; the list in modules/tests/m1-routes-mount.test.ts A2B_NEW_ROUTES).
+  'PUT /v1/orgs/:p/tests/:p/draft',
+  'POST /v1/orgs/:p/tests/:p/versions',
+  'GET /v1/orgs/:p/tests/:p/integrity',
+  'PUT /v1/orgs/:p/tests/:p/integrity',
+  'GET /v1/orgs/:p/settings/integrity-locks',
+  'POST /v1/orgs/:p/settings/integrity-locks',
+  'DELETE /v1/orgs/:p/settings/integrity-locks/:p',
+  'GET /v1/orgs/:p/templates',
+  'POST /v1/orgs/:p/blueprints/propose',
+  'POST /v1/orgs/:p/tests/from-template',
+  'POST /v1/orgs/:p/members/invites',
+  'GET /v1/orgs/:p/members/invites',
+  'DELETE /v1/orgs/:p/members/invites/:p',
 ].sort();
 
 const FORBIDDEN = /reject|decision|decide|confirm|overturn|appeal|notice|shortlist/i;

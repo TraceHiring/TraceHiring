@@ -173,6 +173,8 @@ const setup = (
     locks?: boolean;
     ref?: boolean;
     limiter?: ReturnType<typeof limiterOf>;
+    /** No limiter bound (the env has no rate-limit binding). */
+    unboundLimiter?: boolean;
   } = {},
 ) => {
   const db = authoringDb();
@@ -200,7 +202,7 @@ const setup = (
     createTemplatesRoutes({
       org: { context: async () => ({ caller: callerOf(), rest: db.rest }) },
       reference: () => (opts.ref === false ? null : ref),
-      limiter: () => limiter,
+      limiter: () => (opts.unboundLimiter === true ? null : limiter),
     }),
   );
   const call = (method: string, path: string, body?: unknown) =>
@@ -415,6 +417,14 @@ describe('POST …/tests/from-template: limiter, clean failure, preset version (
     expect(await res.text()).toBe('{"error":{"code":"rate_limited"}}');
     expect(spent.db.calls.filter((c) => c.method !== 'select')).toEqual([]);
     expect(spent.ref.browsed).toEqual([]);
+  });
+
+  it('an unbound limiter answers 503 before any write (fail closed, never "allow")', async () => {
+    const s = setup({ unboundLimiter: true });
+    const res = await s.call('POST', '/tests/from-template', body);
+    expect(res.status).toBe(503);
+    expect(s.db.calls.filter((c) => c.method !== 'select')).toEqual([]);
+    expect(s.ref.browsed).toEqual([]);
   });
 
   it('library_cap mid-way archives the job and the test it created (no live test or job left)', async () => {
