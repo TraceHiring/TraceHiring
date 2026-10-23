@@ -29,7 +29,32 @@ export interface RuleTableRow {
   coverage_floor_permille: number;
   coverage_photo_missing_factor_permille: number;
   rules: string;
+  /** The pinned ruleset's `signal_settings` (jsonb as text; M1 R5-52 f): handed to the engine as stored. */
+  signal_settings: string;
 }
+
+export type SignalSettings = Readonly<Record<string, { enabled: boolean }>>;
+
+/**
+ * The pinned ruleset's signal settings as stored (R5-52 f; never `{}` in place of them). Anything but a JSON object
+ * fails closed; the values are checked by the engine (`{enabled: boolean}` only, else bad input).
+ */
+export const signalSettingsOf = (row: RuleTableRow): SignalSettings => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.signal_settings) as unknown;
+  } catch {
+    return fail('integrity_bad_signal_settings');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return fail('integrity_bad_signal_settings');
+  }
+  return parsed as SignalSettings;
+};
+
+/** A kind is enabled unless its key is present with `enabled: false` (R5-23 b). */
+const isDisabled = (settings: SignalSettings, kind: string): boolean =>
+  Object.hasOwn(settings, kind) && settings[kind]?.enabled === false;
 
 /** The rule table of integrity.band_rule_versions as the engine's RuleTable; label `d1-v<n>` (L-7). */
 export const ruleTableOf = (row: RuleTableRow): RuleTable => {
@@ -62,18 +87,25 @@ export const callBand = async (
   coverage: { activeMs: number; coveredMs: number },
   signalCatalogVersion: string,
   photoMissing: boolean,
+  signalSettings: SignalSettings,
 ): Promise<BandCall> => {
-  let families: readonly string[];
+  let catalog: ReturnType<typeof signalCatalog>;
   try {
-    families = signalCatalog(signalCatalogVersion).families;
+    catalog = signalCatalog(signalCatalogVersion);
   } catch {
     return fail('integrity_unknown_catalog');
   }
+  // R5-23 a: evidence strength never counts a family whose every catalog kind the settings switch off.
+  const kinds = Object.entries(catalog.signals);
+  const families = catalog.families.filter((family) =>
+    kinds.some(([kind, entry]) => entry.family === family && !isDisabled(signalSettings, kind)),
+  );
   const input: BandInput = {
     events: signals.map((s) => s.event),
     coverage: { activeMs: coverage.activeMs, coveredMs: coverage.coveredMs },
-    capturedFamilies: [...families],
+    capturedFamilies: families,
     photoMissing,
+    signalSettings,
   };
   let output: BandOutput;
   try {

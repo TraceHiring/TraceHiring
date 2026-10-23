@@ -1,5 +1,8 @@
 // computeBand (specs/d1-demo-slice.md §5.2): deterministic, integer arithmetic only, no I/O, no clock, no randomness.
 // Order (founder 2026-10-14, "evidence wins", R-3): flags first, coverage only blocks Clear.
+//   0. (band-engine-2, M1 R5-7, R5-23 b, R5-52 e) An event whose kind `signalSettings` switches off (key present with
+//      `enabled: false`) is context only, marked `disabledBySettings`, and never matches a rule. With every kind
+//      enabled the output equals band-engine-1's except engineVersion (AT-M1-17).
 //   1. Only validated rules produce flags; a match of an unvalidated rule is context.
 //   2. strong_concern if a flag is T1/T2, or `untrusted`, or T3 `rawMedia` with an event carrying a mediaRef.
 //   3. else review if a T3 flag is medium/hard, or the validated T3 flags span two or more families.
@@ -24,7 +27,7 @@ import type {
   SignalEvent,
 } from './types.js';
 
-export const BAND_ENGINE_VERSION = 'band-engine-1';
+export const BAND_ENGINE_VERSION = 'band-engine-2';
 
 /** At most this many gseq values are kept per flag (§5.2). */
 export const MAX_SIGNAL_SEQS = 50;
@@ -44,7 +47,9 @@ export type BandInputErrorCode =
   | 'bad_captured_families'
   | 'bad_events'
   | 'bad_event'
-  | 'duplicate_seq';
+  | 'duplicate_seq'
+  /** A signalSettings map or value that is not exactly `{enabled: boolean}` (R5-52 e). */
+  | 'bad_input';
 
 export class BandInputError extends Error {
   readonly code: BandInputErrorCode;
@@ -55,7 +60,13 @@ export class BandInputError extends Error {
   }
 }
 
-const INPUT_KEYS = ['events', 'coverage', 'capturedFamilies', 'photoMissing'] as const;
+const INPUT_KEYS = [
+  'events',
+  'coverage',
+  'capturedFamilies',
+  'photoMissing',
+  'signalSettings',
+] as const;
 const COVERAGE_KEYS = ['activeMs', 'coveredMs'] as const;
 const EVENT_REQUIRED = ['seq', 'atMs', 'kind', 'attrs'] as const;
 const EVENT_OPTIONAL = ['durationMs', 'mediaRef'] as const;
@@ -85,6 +96,26 @@ interface CheckedInput {
   coveredMs: number;
   capturedFamilies: string[];
   photoMissing: boolean;
+  /** Kinds switched off by signalSettings. A Set of own keys: no kind resolves through Object.prototype. */
+  disabled: Set<string>;
+}
+
+/** signalSettings: a plain object whose every own value is exactly `{enabled: boolean}`; returns the disabled kinds. */
+function checkSignalSettings(raw: unknown): Set<string> {
+  const path = '$.signalSettings';
+  if (!isPlainObject(raw)) throw new BandInputError('bad_input', path);
+  const disabled = new Set<string>();
+  for (const key of Object.keys(raw)) {
+    const value: unknown = Object.getOwnPropertyDescriptor(raw, key)?.value;
+    if (!isPlainObject(value)) throw new BandInputError('bad_input', path);
+    const keys = Object.keys(value);
+    const enabled: unknown = Object.getOwnPropertyDescriptor(value, 'enabled')?.value;
+    if (keys.length !== 1 || keys[0] !== 'enabled' || typeof enabled !== 'boolean') {
+      throw new BandInputError('bad_input', path);
+    }
+    if (!enabled) disabled.add(key);
+  }
+  return disabled;
 }
 
 function checkEvent(raw: unknown, path: string): SignalEvent {
@@ -125,7 +156,7 @@ function checkEvent(raw: unknown, path: string): SignalEvent {
 function checkInput(raw: unknown): CheckedInput {
   if (!isPlainObject(raw)) throw new BandInputError('not_object', '$');
   checkKeys(raw, INPUT_KEYS, [], '$');
-  const { events, coverage, capturedFamilies, photoMissing } = raw;
+  const { events, coverage, capturedFamilies, photoMissing, signalSettings } = raw;
   if (!isPlainObject(coverage)) throw new BandInputError('bad_coverage', '$.coverage');
   checkKeys(coverage, COVERAGE_KEYS, [], '$.coverage');
   const { activeMs, coveredMs } = coverage;
@@ -167,6 +198,7 @@ function checkInput(raw: unknown): CheckedInput {
     coveredMs,
     capturedFamilies: families,
     photoMissing,
+    disabled: checkSignalSettings(signalSettings),
   };
 }
 
@@ -223,6 +255,20 @@ export function computeBand(table: RuleTable, input: BandInput): BandOutput {
   const matched = new Map<string, SignalEvent[]>();
   const context: ContextItem[] = [];
   for (const event of events) {
+    // Step 0: a switched-off kind is the context item of an event that matches no rule, marked (R5-52 e).
+    if (checked.disabled.has(event.kind)) {
+      const item: ContextItem = {
+        kind: event.kind,
+        seq: event.seq,
+        atMs: event.atMs,
+        observed: observedOf([event]),
+      };
+      if (event.kind === CONNECTIVITY_KIND) item.family = CONNECTIVITY_FAMILY;
+      if (event.durationMs !== undefined) item.durationMs = event.durationMs;
+      item.disabledBySettings = true;
+      context.push(item);
+      continue;
+    }
     let flagged = false;
     let firstUnvalidated: Rule | undefined;
     for (const rule of rules.rules) {

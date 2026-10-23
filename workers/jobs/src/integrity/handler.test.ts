@@ -76,7 +76,7 @@ describe('integrity bands from browser facts (AT-D5)', () => {
     ]);
     expect(table(w.db, 'results')[0]).toMatchObject({
       band: 'review',
-      engine_version: 'band-engine-1',
+      engine_version: 'band-engine-2',
       evidence_strength: '1.00',
       coverage_permille: 1000,
       coverage_floor_permille: 700,

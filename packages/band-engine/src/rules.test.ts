@@ -207,7 +207,13 @@ const input = (
   events: SignalEvent[],
   coverage: { activeMs: number; coveredMs: number } = { activeMs: 1_200_000, coveredMs: 1_200_000 },
   photoMissing = false,
-): BandInput => ({ events, coverage, capturedFamilies: FAMILIES, photoMissing });
+): BandInput => ({
+  events,
+  coverage,
+  capturedFamilies: FAMILIES,
+  photoMissing,
+  signalSettings: {},
+});
 
 describe('computeBand on rule table v1 (D1 examples, AT-D5, AT-D6)', () => {
   it('no event, full coverage -> clear', () => {
@@ -532,6 +538,7 @@ const full = (events: SignalEvent[]): BandInput => ({
   events,
   coverage: { activeMs: 1_000, coveredMs: 1_000 },
   capturedFamilies: ['a', 'b'],
+  signalSettings: {},
   photoMissing: false,
 });
 const sev = (seq: number, kind: string, extra: Partial<SignalEvent> = {}): SignalEvent => ({

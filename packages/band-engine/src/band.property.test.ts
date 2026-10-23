@@ -108,6 +108,8 @@ const arbInput: fc.Arbitrary<BandInput> = fc.record({
   coverage: arbCoverage,
   capturedFamilies: fc.subarray([...FAMILY_POOL, 'other_family']),
   photoMissing: fc.boolean(),
+  // Every kind enabled (R5-23 b): P1-P10 keep their band-engine-1 meaning; settings.property.test.ts varies them.
+  signalSettings: fc.constant({}),
 });
 
 const withoutContext = (out: BandOutput): Partial<BandOutput> => {

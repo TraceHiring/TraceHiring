@@ -14,6 +14,7 @@ import {
   sha256HexBytes,
 } from '../src/integrity/load.js';
 import {
+  ALL_SIGNALS_ENABLED,
   D1_RULES as rules,
   MemoryEvidence,
   heartbeat,
@@ -97,6 +98,7 @@ const measure = async (label: string, text: string, lines: number) => {
     coverage_floor_permille: rules.coverageFloorPermille,
     coverage_photo_missing_factor_permille: rules.coveragePhotoMissingFactorPermille,
     rules: JSON.stringify(rules.rules),
+    signal_settings: JSON.stringify(ALL_SIGNALS_ENABLED),
   });
 
   gc?.();
@@ -106,7 +108,14 @@ const measure = async (label: string, text: string, lines: number) => {
   const t0 = performance.now();
   const signals = await loadSignals(evidence, message);
   const afterLoad = used() - base;
-  const band = await callBand(table, signals, message.coverage, message.signalCatalogVersion, true);
+  const band = await callBand(
+    table,
+    signals,
+    message.coverage,
+    message.signalCatalogVersion,
+    true,
+    ALL_SIGNALS_ENABLED,
+  );
   const flags = flagRows(table, band.output);
   const timeline = timelineRows(band.output, signals);
   const param = JSON.stringify(

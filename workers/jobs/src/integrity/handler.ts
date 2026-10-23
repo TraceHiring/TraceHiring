@@ -14,7 +14,7 @@
 // Rule 1: no score, no quality type; an integrity result never touches a quality card.
 import type { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
 import { jobKey, type EvidenceReader, type SqlTx } from '@trace/shared/jobs';
-import { callBand, flagRows, ruleTableOf, timelineRows } from './band-call.js';
+import { callBand, flagRows, ruleTableOf, signalSettingsOf, timelineRows } from './band-call.js';
 import { isPhotoMissing, loadSignals } from './load.js';
 import {
   attachCard,
@@ -110,6 +110,7 @@ const runIntegrityUnsafe = async (
     message.coverage,
     message.signalCatalogVersion,
     photoMissing,
+    signalSettingsOf(ruleRow),
   );
 
   let resultId: string;

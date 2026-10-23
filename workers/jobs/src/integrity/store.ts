@@ -20,7 +20,8 @@ export const SQL = {
     'select b.id::text as id, b.version_no::int as version_no, to_jsonb(b.families)::text as families, ' +
     'b.coverage_floor_permille::int as coverage_floor_permille, ' +
     'b.coverage_photo_missing_factor_permille::int as coverage_photo_missing_factor_permille, ' +
-    'b.rules::text as rules from public.ruleset_versions as r join integrity.band_rule_versions as b ' +
+    'b.rules::text as rules, r.signal_settings::text as signal_settings ' +
+    'from public.ruleset_versions as r join integrity.band_rule_versions as b ' +
     'on b.org_id = r.org_id and b.id = r.band_rule_version_id where r.org_id = $1::uuid and r.id = $2::uuid',
   card:
     'select id::text as id, review_state from public.integrity_cards where org_id = $1::uuid ' +
