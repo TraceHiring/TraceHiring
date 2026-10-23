@@ -6,13 +6,20 @@
 // R2 read, so a redelivery after success never depends on R2) -> invitation revoked/expired/blocked_age:
 // `mirror_dead_invitation` (retried, then the DLQ for an operator look) -> the invitation's session id must be the
 // message's -> the consent row must exist for the message's consentId, invitation and ruleset -> both adult answers
-// (rule 9) -> hash-check final.json and the start photo (R2) -> sessions, session_items, responses, media_objects
-// (verified photo only), reports, invitation `submitted`, key.
+// (rule 9) -> package v2: the served layout against the pinned version (R5-62 b, below) -> hash-check final.json
+// and the start photo (R2) -> sessions, session_items, responses, media_objects (verified photo only), reports,
+// invitation `submitted`, key.
 //
 // Package v2 (spec m1 R5-19, R5-42, R5-47, R5-59 a): the session_items rows are built by ./draws.ts before anything is
 // read (one per drawn pool item at its draw position, served facts merged; inline rows as D1) and inserted in one
 // statement; answers still map to items only through served[] (position -> item), so an answer at a position with
-// no served row is `mirror_final_invalid` (retry, then the DLQ).
+// no served row is `mirror_final_invalid` (retry, then the DLQ). Before anything is written (and after the key, so a
+// re-delivery of a mirrored session still returns there), the served slots and the pool section list are checked
+// against the pinned version's layout, read with the M1-i column grants (../quality/layout.ts: a pure check with no
+// score or key, the one implementation the quality stage repeats): a served row at another item's slot, or a pool
+// section missing from poolSectionIds, is `mirror_bad_served_position` / `mirror_bad_draws` (retry, then the DLQ),
+// and nothing is stored. Two different bodies for one session can therefore never be scored from the first body's
+// mapping (R5-62 b).
 //
 // The job writes the rows itself rather than through private.mirror_session because the carried C1b binding needs
 // a photo the head check refused to be dropped while the message still names it, and mirror_session refuses a
@@ -21,6 +28,7 @@ import { isStorableText, type SessionMirrorMessage } from '@trace/shared/contrac
 import { jobKey, type EvidenceReader, type SqlTx } from '@trace/shared/jobs';
 import { sessionItemsV2 } from './draws.js';
 import { readFinalAnswers, sha256Hex, verifiedPhoto } from './evidence.js';
+import { MIRROR_LAYOUT_CODES, checkServedLayout } from '../quality/layout.js';
 import {
   consentExists,
   insertKey,
@@ -28,6 +36,7 @@ import {
   insertReport,
   insertResponses,
   keyExists,
+  loadLayout,
   lockInvitation,
   submitInvitation,
   upsertItems,
@@ -134,6 +143,12 @@ const runMirrorUnsafe = async (message: SessionMirrorMessage, deps: MirrorDeps):
   }
   if (invitation.adult_self_declared !== true || invitation.adult_confirmed_by_inviter === false) {
     return fail('mirror_not_adult');
+  }
+
+  // Package v2 (R5-59 a, R5-62 b): the served layout against the pinned version, before anything is written.
+  if (message.v === 2) {
+    const layout = await loadLayout(tx, orgId, message.testVersionId);
+    checkServedLayout(layout.sections, layout.inline, message, MIRROR_LAYOUT_CODES);
   }
 
   // Spec F5: R2 is read only now, after the key check, so a redelivery after success never depends on it.

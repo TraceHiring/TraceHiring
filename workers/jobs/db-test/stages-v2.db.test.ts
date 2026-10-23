@@ -494,6 +494,18 @@ const mainPlan = (): Plan => {
   };
 };
 
+/** The main draw with p2 (draw index 0) and p1 (draw index 1) served at each other's slots; one answer, at slot 1. */
+const swappedPlan = (): Plan => {
+  const plan = mainPlan();
+  const p2 = plan.served.find((r) => r.itemVersionId === v.p2);
+  const p1 = plan.served.find((r) => r.itemVersionId === v.p1);
+  if (p1 === undefined || p2 === undefined) throw new Error('no rows');
+  p2.position = SLOT.sP + 1;
+  p1.position = SLOT.sP;
+  plan.choices = [{ position: SLOT.sP, choice: 'o2' }];
+  return plan;
+};
+
 // ---- what the stages wrote ----------------------------------------------------------------------------------------
 
 const items = (session: string) =>
@@ -705,7 +717,8 @@ describe('package v2 through the three stages (AT-M1-21; R5-19, R5-41, R5-42, R5
 });
 
 describe('package v2 refusals: nothing commits', () => {
-  it('(7) a draw longer than draw_count is refused by the guard (42501)', async () => {
+  it('(7) a draw longer than draw_count is refused by the mirror layout check (R5-62 b)', async () => {
+    // The session_items guard (42501, rls_m1_serving) stays behind the check as defence in depth.
     const plan = mainPlan();
     plan.draws = [
       {
@@ -716,7 +729,7 @@ describe('package v2 refusals: nothing commits', () => {
       { sectionId: v.sQ, itemVersionIds: [v.pq], itemVariantIds: [v.pqv2] },
     ];
     const s = await startSession(plan);
-    expect(await codeOf(mirror(s))).toEqual({ message: 'mirror_failed', code: '42501' });
+    expect(await codeOf(mirror(s))).toEqual({ message: 'mirror_bad_draws', code: undefined });
     await expectNothing(s);
   });
 
@@ -748,24 +761,73 @@ describe('package v2 refusals: nothing commits', () => {
     expect((await qualityRows(s.session)).scores).toEqual([]);
   });
 
-  it('R5-59 a: swapped pool served positions are stored by the mirror but never scored', async () => {
-    const plan = mainPlan();
-    const p2 = plan.served.find((r) => r.itemVersionId === v.p2);
-    const p1 = plan.served.find((r) => r.itemVersionId === v.p1);
-    if (p1 === undefined || p2 === undefined) throw new Error('no rows');
-    p2.position = SLOT.sP + 1;
-    p1.position = SLOT.sP;
-    plan.choices = [{ position: SLOT.sP, choice: 'o2' }];
-    const s = await startSession(plan);
-    await mirror(s);
-    await expect(quality(s)).rejects.toThrow(/^quality_bad_served_position$/);
+  it('R5-59 a, R5-62 b: swapped pool served positions are refused by the mirror and never scored', async () => {
+    const s = await startSession(swappedPlan());
+    expect(await codeOf(mirror(s))).toEqual({
+      message: 'mirror_bad_served_position',
+      code: undefined,
+    });
+    await expectNothing(s);
+    await expect(quality(s)).rejects.toThrow(/^quality_session_missing$/);
     expect(await qualityRows(s.session)).toEqual({ scores: [], runs: [], cards: [] });
   });
 
-  it('R5-59 a: a pool section missing from poolSectionIds is never scored', async () => {
+  it('R5-59 a, R5-62 b: a pool section missing from poolSectionIds is refused by the mirror', async () => {
     const s = await startSession({ ...mainPlan(), poolSectionIds: [v.sP, v.sQ] });
-    await mirror(s);
-    await expect(quality(s)).rejects.toThrow(/^quality_bad_draws$/);
+    expect(await codeOf(mirror(s))).toEqual({ message: 'mirror_bad_draws', code: undefined });
+    await expectNothing(s);
     expect((await qualityRows(s.session)).scores).toEqual([]);
+  });
+
+  it('R5-62 b: swapped then corrected re-delivery never scores the swapped body', async () => {
+    const s = await startSession(swappedPlan());
+    expect(await codeOf(mirror(s))).toEqual({
+      message: 'mirror_bad_served_position',
+      code: undefined,
+    });
+    await expectNothing(s);
+
+    // The corrected body of the same session (same final.json): p2 back at slot 1, p1 at slot 2.
+    if (s.message.v !== 2) throw new Error('expected a v2 message');
+    const corrected: Session = {
+      ...s,
+      message: {
+        ...s.message,
+        served: s.message.served.map((r) =>
+          r.itemVersionId === v.p2
+            ? { ...r, position: SLOT.sP }
+            : r.itemVersionId === v.p1
+              ? { ...r, position: SLOT.sP + 1 }
+              : r,
+        ),
+      },
+    };
+    await mirror(corrected);
+    const snap = await snapshot(s.session);
+    expect(snap.keys.map((k) => k['scope'])).toEqual(['session_mirror']);
+    expect(snap.invitation).toEqual([{ status: 'submitted' }]);
+
+    // Defence in depth: the swapped body reaching the quality stage is still refused there, and scores nothing.
+    await expect(quality(s)).rejects.toThrow(/^quality_bad_served_position$/);
+    expect((await qualityRows(s.session)).scores).toEqual([]);
+
+    // The corrected body scores normally: its one answer (o2 at slot 1) is p2's, keyed o2. sP: p2 100, p1 0, p3 0
+    // -> 3333; sQ served, unanswered; sN never entered; sI ii1 served, unanswered. round(40 x 33.33 / 100) = 13.
+    await quality(corrected);
+    const qr = await qualityRows(s.session);
+    expect(qr.scores).toEqual([
+      expect.objectContaining({
+        score: 13,
+        meets_cutoff: false,
+        scoring_version: 'm1-scoring-v1',
+        section_scores: [
+          expect.objectContaining({ sectionId: v.sP, scoreHundredths: 3333 }),
+          expect.objectContaining({ sectionId: v.sQ, scoreHundredths: 0 }),
+          expect.objectContaining({ sectionId: v.sN, scoreHundredths: 0 }),
+          expect.objectContaining({ sectionId: v.sI, scoreHundredths: 0 }),
+        ],
+      }),
+    ]);
+    expect(qr.cards).toEqual([expect.objectContaining({ score: 13 })]);
   });
 });

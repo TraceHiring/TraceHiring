@@ -3,8 +3,10 @@
 // mapped only through served[], malformed messages refused before any write, and exactly-once on re-delivery.
 import { describe, expect, it } from 'vitest';
 import { sessionItemsV2 } from './draws.js';
+import type { SqlParam, SqlTx } from '@trace/shared/jobs';
 import { inTx, mirrorHandlers, table } from './fake-db.test-helpers.js';
 import { runMirror } from './handler.js';
+import type { SessionMirrorMessageV2 } from '@trace/shared/contracts/candidate';
 import {
   SEED_P,
   SEED_W,
@@ -221,7 +223,9 @@ describe('mirror stage v2 (AT-M1-21)', () => {
     expect(table(w.db, 'sessions')).toHaveLength(0);
   });
 
-  it('a draw longer than the section draw count is refused by the guard, and nothing commits', async () => {
+  it('a draw longer than the section draw count is refused by the layout check, and nothing commits', async () => {
+    // R5-62 b: the mirror's layout check refuses it before any write; the session_items guard (42501, proven in
+    // rls_m1_serving) stays behind it.
     const w = await sessionWorldV2({
       patch: (m) => ({
         ...m,
@@ -232,7 +236,7 @@ describe('mirror stage v2 (AT-M1-21)', () => {
         })),
       }),
     });
-    await expect(run(w)).rejects.toThrow(/^mirror_failed$/);
+    await expect(run(w)).rejects.toThrow(/^mirror_bad_draws$/);
     expect(table(w.db, 'session_items')).toHaveLength(0);
   });
 
@@ -273,5 +277,146 @@ describe('mirror stage v2 (AT-M1-21)', () => {
       { item: V2.iA1, section: V2.sA, position: 1, served: '2026-10-15T09:01:00.000Z', ...none },
       { item: V2.iA2, section: V2.sA, position: 2, served: '2026-10-15T09:02:00.000Z', ...none },
     ]);
+  });
+});
+
+// R5-62 b: the mirror checks the served slots and the pool section list against the pinned version's layout (M1-i
+// columns only) after the idempotency key and before anything is written, so a body with another item's slot is
+// never stored, and a later corrected body is the only one that can be scored.
+describe('mirror stage v2: the layout check before any write (R5-62 b, R5-59 a)', () => {
+  /** Every statement of one run, in order. */
+  const logged = async (w: SessionWorldV2, message: SessionMirrorMessageV2 = w.message) => {
+    const log: string[] = [];
+    const outcome = await inTx(w.db, message.orgId, mirrorHandlers, (tx) => {
+      const spy: SqlTx = {
+        query: <R extends object>(text: string, params?: readonly SqlParam[]) => {
+          log.push(text);
+          return tx.query<R>(text, params);
+        },
+      };
+      return runMirror(message, { tx: spy, evidence: w.evidence });
+    }).then(
+      () => 'ok',
+      (err: unknown) => (err as Error).message,
+    );
+    return { log, outcome };
+  };
+  const isLayoutRead = (text: string) =>
+    /^select\b/.test(text) && /\bfrom public\.(sections|item_versions)\b/.test(text);
+  const nothingWritten = (w: SessionWorldV2) => {
+    for (const name of [
+      'sessions',
+      'session_items',
+      'responses',
+      'media_objects',
+      'reports',
+      'idempotency_keys',
+    ]) {
+      expect(table(w.db, name)).toHaveLength(0);
+    }
+    expect(table(w.db, 'invitations')[0]?.['status']).toBe('started');
+  };
+  /** b2 (draw index 0, slot 3) and b1 (draw index 1, slot 4) served at each other's slots. */
+  const swapped = (m: SessionMirrorMessageV2): SessionMirrorMessageV2 => ({
+    ...m,
+    served: m.served.map((s) =>
+      s.itemVersionId === V2.b2
+        ? { ...s, position: 4 }
+        : s.itemVersionId === V2.b1
+          ? { ...s, position: 3 }
+          : s,
+    ),
+  });
+
+  it('swapped pool served positions are refused and nothing is written', async () => {
+    const w = await sessionWorldV2({ patch: swapped });
+    const { outcome } = await logged(w);
+    expect(outcome).toBe('mirror_bad_served_position');
+    nothingWritten(w);
+  });
+
+  it('a pool section of the version missing from poolSectionIds is refused and nothing is written', async () => {
+    // sW is a pool section of the version, never entered: the message must still name it.
+    const w = await sessionWorldV2({ patch: (m) => ({ ...m, poolSectionIds: [V2.sP] }) });
+    const { outcome } = await logged(w);
+    expect(outcome).toBe('mirror_bad_draws');
+    nothingWritten(w);
+  });
+
+  it('a served inline item outside its section slots is refused and nothing is written', async () => {
+    // sA owns slots 1-2; slot 6 is sW's.
+    const w = await sessionWorldV2({
+      patch: (m) => ({
+        ...m,
+        served: m.served.map((s) => (s.itemVersionId === V2.iA2 ? { ...s, position: 6 } : s)),
+      }),
+      answers: (all) => all.map((a) => (a.position === 2 ? { ...a, position: 6 } : a)),
+    });
+    const { outcome } = await logged(w);
+    expect(outcome).toBe('mirror_bad_served_position');
+    nothingWritten(w);
+  });
+
+  it('a valid v2 message reads the layout after the key and before the first write, then mirrors', async () => {
+    const w = await sessionWorldV2({ writtenEntered: true });
+    const { log, outcome } = await logged(w);
+    expect(outcome).toBe('ok');
+    const layout = log.flatMap((t, i) => (isLayoutRead(t) ? [i] : []));
+    expect(layout).toHaveLength(2);
+    const keyAt = log.findIndex((t) => t.includes('from public.idempotency_keys'));
+    const firstWrite = log.findIndex((t) => /^(insert|update)\b/.test(t));
+    expect(keyAt).toBeGreaterThanOrEqual(0);
+    expect(Math.min(...layout)).toBeGreaterThan(keyAt);
+    expect(Math.max(...layout)).toBeLessThan(firstWrite);
+    expect(table(w.db, 'idempotency_keys')).toHaveLength(1);
+    expect(table(w.db, 'session_items')).toHaveLength(6);
+  });
+
+  it('a re-delivery after success returns at the key, before the layout read, even with another body', async () => {
+    const w = await sessionWorldV2();
+    expect((await logged(w)).outcome).toBe('ok');
+    const before = structuredClone(w.db.tables);
+    const again = await logged(w);
+    expect(again.outcome).toBe('ok');
+    expect(again.log.some(isLayoutRead)).toBe(false);
+    const other = await logged(w, swapped(w.message));
+    expect(other.outcome).toBe('ok');
+    expect(other.log.some(isLayoutRead)).toBe(false);
+    expect(w.db.tables).toEqual(before);
+  });
+
+  it('a v1 message reads no layout (D1 unchanged)', async () => {
+    const w = await sessionWorldV2({
+      packageVersion: 1,
+      answers: (all) => all.filter((a) => a.position <= 2),
+    });
+    const { poolSectionIds: _p, draws: _d, served, ...rest } = w.message;
+    void _p;
+    void _d;
+    const v1 = {
+      ...rest,
+      v: 1 as const,
+      served: served
+        .filter((s) => s.sectionId === V2.sA)
+        .map((s) => ({
+          position: s.position,
+          itemVersionId: s.itemVersionId,
+          servedAt: s.servedAt,
+        })),
+    };
+    const log: string[] = [];
+    await inTx(w.db, v1.orgId, mirrorHandlers, (tx) =>
+      runMirror(v1, {
+        tx: {
+          query: <R extends object>(text: string, params?: readonly SqlParam[]) => {
+            log.push(text);
+            return tx.query<R>(text, params);
+          },
+        },
+        evidence: w.evidence,
+      }),
+    );
+    expect(log.some(isLayoutRead)).toBe(false);
+    expect(table(w.db, 'idempotency_keys')).toHaveLength(1);
   });
 });

@@ -5,9 +5,11 @@
 // Package v2 (spec m1 R5-19, R5-47): inline sections as D1; a pool section counts its draw_count slots, filled from
 // the candidate's own session_items, with keys loaded through them (the served variant's key for a parameterised
 // item) and options scored by id (./v2.ts). Before anything is scored, the message's served positions and pool section
-// ids are checked against the pinned version (R5-59 a, ./v2.ts checkServedLayout). The arithmetic is unchanged; a v2
-// session records SCORING_VERSION_V2 (`m1-scoring-v1`), a v1 session SCORING_VERSION (`d1-scoring-v1`). Each path
-// requires the version's package to be its own (v1 = 1, v2 = 2), else `quality_bad_package`.
+// ids are checked against the pinned version again (R5-59 a, ./layout.ts; the mirror checked them before it
+// stored anything, R5-62 b, so this is defence in depth against a different body for the same session). The
+// arithmetic is unchanged; a v2 session records SCORING_VERSION_V2 (`m1-scoring-v1`), a v1 session SCORING_VERSION
+// (`d1-scoring-v1`). Each path requires the version's package to be its own (v1 = 1, v2 = 2), else
+// `quality_bad_package`.
 // Rule 1: nothing here reads or receives integrity data; the score function has no such parameter.
 // Errors are constant codes; no answer text, score or id reaches a thrown message.
 import type { SessionMirrorMessage } from '@trace/shared/contracts/candidate';
@@ -40,14 +42,8 @@ import {
   type RubricRow,
   type SectionRow,
 } from './store.js';
-import {
-  checkServedLayout,
-  mcqKeyOf,
-  planScoredItems,
-  type LayoutMessage,
-  type PlanEntry,
-  type PlanItem,
-} from './v2.js';
+import { QUALITY_LAYOUT_CODES, checkServedLayout, type LayoutMessage } from './layout.js';
+import { mcqKeyOf, planScoredItems, type PlanEntry, type PlanItem } from './v2.js';
 import { gradeWritten, rubricSnapshot } from './written.js';
 
 export interface QualityDeps {
@@ -119,7 +115,7 @@ const scoredSetV2 = async (
 ): Promise<ScoredSet> => {
   const content = await loadContentV2(tx, orgId, testVersionId, sessionId);
   const sections = content.sections.map((s) => ({ id: s.id, drawCount: s.draw_count }));
-  checkServedLayout(sections, content.inline.map(planItem), message);
+  checkServedLayout(sections, content.inline.map(planItem), message, QUALITY_LAYOUT_CODES);
   const entries = planScoredItems(
     sections,
     content.inline.map(planItem),
