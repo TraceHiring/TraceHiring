@@ -32,7 +32,7 @@ import {
   replaceDraft,
   toDetail,
 } from './authoring.js';
-import { parseBody, readJson } from './http.js';
+import { answer, parseBody, readJson } from './http.js';
 import { requireRole, type Role } from './membership.js';
 import {
   LIST_LIMIT,
@@ -43,7 +43,6 @@ import {
   eq,
   handleOrg,
   orgFail,
-  orgJson,
   pathId,
   type OrgContext,
   type OrgDeps,
@@ -89,16 +88,6 @@ const DEFAULT_CUTOFF = 40;
 
 const cutoffValid = (value: unknown): boolean =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100;
-
-/** Every answer is parsed against its contract first; a row that does not fit is `unavailable`, never echoed. */
-const answer = <T>(
-  schema: { safeParse(v: unknown): { success: true; data: T } | { success: false } },
-  body: unknown,
-  status = 200,
-): Response => {
-  const out = schema.safeParse(body);
-  return out.success ? orgJson(out.data, status) : orgFail('unavailable');
-};
 
 const detailOf = async (ctx: OrgContext, orgId: string, testId: string) => {
   const test = (await findTest(ctx.rest, orgId, testId)) ?? orgFail('not_found');

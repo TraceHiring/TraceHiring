@@ -29,7 +29,11 @@ export type OrgErrorCode =
   | 'conflict'
   | 'cutoff_required'
   | 'draft_incomplete'
+  | 'setting_locked'
+  | 'pool_too_small'
+  | 'package_too_large'
   | 'rate_limited'
+  | 'library_cap'
   | 'internal'
   | 'unavailable';
 
@@ -46,7 +50,15 @@ export const ORG_ERROR_STATUS: Record<
   // Publish of a draft the guard trigger would refuse (no section, an empty section, an mcq item without a valid key,
   // a written item without a rubric).
   draft_incomplete: 422,
+  // M1 (§6.6, E16, R5-34): a setting differs from the org's admin lock, or a locked org's draft has no settings.
+  setting_locked: 409,
+  // M1 E4: a pool section draws more than its pool's approved items.
+  pool_too_small: 422,
+  // M1 E22: the package is over 5 MB or 5,000 items.
+  package_too_large: 422,
   rate_limited: 429,
+  // M1 E8: the library daily copy cap (stream A2a).
+  library_cap: 429,
   // Publish failed closed after the guarded UPDATE (spec §6.2: the rebuilt package hash differed; the version is
   // retired).
   internal: 500,
@@ -248,19 +260,86 @@ export interface Rest {
   insert<T = Record<string, unknown>>(table: string, body: unknown, query?: Query): Promise<T[]>;
   update<T = Record<string, unknown>>(table: string, query: Query, patch: unknown): Promise<T[]>;
   remove<T = Record<string, unknown>>(table: string, query: Query): Promise<T[]>;
+  /**
+   * Calls a `public` function through PostgREST as the caller (`POST /rest/v1/rpc/<fn>`, named arguments). Only the
+   * INVOKER functions of M1-18 are reachable (RLS, guards and `auth.uid()` apply); the JSON value it returns.
+   * Optional so the D1 modules' own Rest fakes stay valid; call it through `rpcOf`.
+   */
+  rpc?<T = unknown>(fn: string, args: Readonly<Record<string, unknown>>): Promise<T>;
 }
 
-/** A PostgREST failure: the HTTP status and the Postgres SQLSTATE (when PostgREST names one); never its message. */
+/** The caller's `rpc`, or 503 `unavailable` when this Rest has none (a fake of a D1 module). */
+export const rpcOf = (
+  rest: Rest,
+): (<T = unknown>(fn: string, args: Readonly<Record<string, unknown>>) => Promise<T>) => {
+  const rpc = rest.rpc;
+  if (rpc === undefined) return orgFail('unavailable');
+  return <T>(fn: string, args: Readonly<Record<string, unknown>>) =>
+    rpc.call(rest, fn, args) as Promise<T>;
+};
+
+/**
+ * The guard refusals the api reacts to (`TRACE_GUARD: <text>` raised by the M1 migrations), each a constant key. The
+ * text is matched in full against this closed table; it is never stored, returned or logged. An unknown guard text is
+ * `other`; a message that is not a guard refusal is no key at all.
+ */
+const GUARD_TEXTS = {
+  'the package was built from another snapshot': 'snapshot_changed',
+  'publish needs the snapshot digest': 'digest_required',
+  'a published test version is frozen': 'version_frozen',
+  'the test version is frozen': 'version_frozen',
+  'setting locked by admin': 'setting_locked',
+  'settings required while admin locks exist': 'settings_required',
+  'this setting is always locked': 'always_locked',
+  'setting value not allowed': 'setting_not_allowed',
+  'the pool has fewer approved items than the section draws': 'pool_too_small',
+  'a version holds at most 5,000 items': 'package_too_large',
+  'an item may appear in only one section': 'item_in_two_sections',
+  'library copy cap reached': 'library_cap',
+  'only approved library items can be copied': 'library_not_approved',
+  'an item version is frozen once it leaves draft': 'item_frozen',
+  'the item version is frozen': 'item_frozen',
+  'item status change not allowed': 'item_status_change',
+  'an approver role in the item workspace is required': 'approver_required',
+  'an archived pool takes no items': 'pool_archived',
+  'the import job is not open': 'import_not_open',
+  'only an owner invites an owner': 'owner_invite',
+  'a settled invite is final': 'invite_settled',
+} as const;
+export type GuardKey = (typeof GUARD_TEXTS)[keyof typeof GUARD_TEXTS] | 'other';
+
+const GUARD_PREFIX = 'TRACE_GUARD: ';
+
+/** The constant key of a PostgREST error message, or null when it is not a `TRACE_GUARD:` refusal. */
+export const guardKeyOf = (message: unknown): GuardKey | null => {
+  if (typeof message !== 'string' || !message.startsWith(GUARD_PREFIX)) return null;
+  const text = message.slice(GUARD_PREFIX.length);
+  return Object.hasOwn(GUARD_TEXTS, text) ? GUARD_TEXTS[text as keyof typeof GUARD_TEXTS] : 'other';
+};
+
+/**
+ * A PostgREST failure: the HTTP status, the Postgres SQLSTATE (when PostgREST names one) and the constant guard key
+ * (when it is a `TRACE_GUARD:` refusal); never its message, details or hint.
+ */
 export class RestError extends Error {
   readonly status: number;
   readonly sqlstate: string | null;
-  constructor(status: number, sqlstate: string | null) {
+  readonly guard: GuardKey | null;
+  constructor(status: number, sqlstate: string | null, guard: GuardKey | null = null) {
     super('rest_failed');
     this.name = 'RestError';
     this.status = status;
     this.sqlstate = sqlstate;
+    this.guard = guard;
   }
 }
+
+/**
+ * R5-56 d, R5-60 e: the publish digest refusal, retryable after a rebuild. 40001 alone is the generic serialization
+ * code, so the guard text must match too.
+ */
+export const isSnapshotConflict = (err: unknown): boolean =>
+  err instanceof RestError && err.sqlstate === '40001' && err.guard === 'snapshot_changed';
 
 const TABLE = /^[a-z_]{1,64}$/;
 
@@ -273,26 +352,24 @@ export interface RestOptions {
 export const createRest = (opts: RestOptions, caller: OrgCaller): Rest => {
   const base = `${opts.supabaseUrl.replace(/\/+$/, '')}/rest/v1`;
   const doFetch = unbound(opts.fetch);
-  const call = async <T>(
+  const send = async (
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
-    table: string,
+    path: string,
     query: Query,
-    body?: unknown,
-  ): Promise<T[]> => {
-    if (!TABLE.test(table)) throw new RestError(400, null);
+    body: unknown,
+    representation: boolean,
+  ): Promise<string> => {
     const qs = new URLSearchParams(query).toString();
     const headers: Record<string, string> = {
       apikey: opts.publishableKey,
       authorization: `Bearer ${caller.jwt}`,
       accept: 'application/json',
     };
-    if (method !== 'GET') {
-      headers['content-type'] = 'application/json';
-      headers.prefer = 'return=representation';
-    }
+    if (method !== 'GET') headers['content-type'] = 'application/json';
+    if (representation) headers.prefer = 'return=representation';
     let res: Response;
     try {
-      res = await doFetch(`${base}/${table}${qs === '' ? '' : `?${qs}`}`, {
+      res = await doFetch(`${base}/${path}${qs === '' ? '' : `?${qs}`}`, {
         method,
         headers,
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -302,15 +379,26 @@ export const createRest = (opts: RestOptions, caller: OrgCaller): Rest => {
     }
     if (!res.ok) {
       let sqlstate: string | null = null;
+      let guard: GuardKey | null = null;
       try {
-        const err = (await res.json()) as { code?: unknown };
+        const err = (await res.json()) as { code?: unknown; message?: unknown };
         if (typeof err.code === 'string' && /^[0-9A-Z]{5}$/.test(err.code)) sqlstate = err.code;
+        guard = guardKeyOf(err.message);
       } catch {
         // no body
       }
-      throw new RestError(res.status, sqlstate);
+      throw new RestError(res.status, sqlstate, guard);
     }
-    const text = await res.text();
+    return await res.text();
+  };
+  const call = async <T>(
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    table: string,
+    query: Query,
+    body?: unknown,
+  ): Promise<T[]> => {
+    if (!TABLE.test(table)) throw new RestError(400, null);
+    const text = await send(method, table, query, body, method !== 'GET');
     if (text === '') return [];
     const parsed = JSON.parse(text) as unknown;
     return (Array.isArray(parsed) ? parsed : [parsed]) as T[];
@@ -320,6 +408,11 @@ export const createRest = (opts: RestOptions, caller: OrgCaller): Rest => {
     insert: (table, body, query = {}) => call('POST', table, query, body),
     update: (table, query, patch) => call('PATCH', table, query, patch),
     remove: (table, query) => call('DELETE', table, query),
+    rpc: async <T>(fn: string, args: Readonly<Record<string, unknown>>): Promise<T> => {
+      if (!TABLE.test(fn)) throw new RestError(400, null);
+      const text = await send('POST', `rpc/${fn}`, {}, args, false);
+      return (text === '' ? null : JSON.parse(text)) as T;
+    },
   };
 };
 
@@ -327,6 +420,23 @@ export const createRest = (opts: RestOptions, caller: OrgCaller): Rest => {
 export const restErrorCode = (err: unknown): OrgErrorCode => {
   if (err instanceof OrgError) return err.code;
   if (err instanceof RestError) {
+    // M1 guard refusals with their own answer (the guard key, never its text).
+    switch (err.guard) {
+      case 'setting_locked':
+      case 'settings_required':
+        return 'setting_locked';
+      case 'version_frozen':
+      case 'snapshot_changed':
+        return 'conflict';
+      case 'pool_too_small':
+        return 'pool_too_small';
+      case 'package_too_large':
+        return 'package_too_large';
+      case 'library_cap':
+        return 'library_cap';
+      default:
+        break;
+    }
     if (err.sqlstate === '23505') return 'conflict';
     // A foreign key or guard naming a parent the caller cannot see (a test or membership of another org).
     if (err.sqlstate === '23503') return 'not_found';

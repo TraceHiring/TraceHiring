@@ -13,6 +13,7 @@ import {
   OrgError,
   restErrorCode,
   RestError,
+  rpcOf,
 } from './org-context.js';
 import { fakeDb } from './rest.test-helpers.js';
 import { cursorOf, keysetQuery, PAGE_SIZE, pageOf } from './rest-keyset.js';
@@ -41,7 +42,7 @@ describe('createRest().rpc', () => {
       { supabaseUrl: `${SUPA}/`, publishableKey: 'sb_publishable_test', fetch: fakeFetch },
       caller,
     );
-    const out = await rest.rpc('save_test_draft', { p_test_version: 'x', p_payload: { a: 1 } });
+    const out = await rpcOf(rest)('save_test_draft', { p_test_version: 'x', p_payload: { a: 1 } });
     expect(out).toEqual({ sections: 2, items: 3 });
     expect(seen[0]?.url).toBe(`${SUPA}/rest/v1/rpc/save_test_draft`);
     expect(seen[0]?.init?.method).toBe('POST');
@@ -69,7 +70,7 @@ describe('createRest().rpc', () => {
       caller,
     );
     for (const name of ['../tests', 'Save', 'save-draft', '', 'a'.repeat(65)]) {
-      expect(await failOf(rest.rpc(name, {}))).toBeInstanceOf(RestError);
+      expect(await failOf(rpcOf(rest)(name, {}))).toBeInstanceOf(RestError);
     }
     expect(fetched).toBe(0);
   });
@@ -88,13 +89,13 @@ describe('createRest().rpc', () => {
       },
       caller,
     );
-    const err = await failOf(rest.rpc('save_test_draft', {}));
+    const err = await failOf(rpcOf(rest)('save_test_draft', {}));
     expect(err).toBeInstanceOf(RestError);
     const e = err as RestError;
     expect(e.sqlstate).toBe('40001');
     expect(e.guard).toBe('snapshot_changed');
     expect(e.message).toBe('rest_failed');
-    expect(JSON.stringify(e)).not.toContain('snapshot');
+    expect(JSON.stringify(e)).not.toContain('built from');
     expect(Object.values(e).join(' ')).not.toContain('TRACE_GUARD');
     expect(isSnapshotConflict(e)).toBe(true);
   });
@@ -108,7 +109,7 @@ describe('createRest().rpc', () => {
       },
       caller,
     );
-    const err = (await failOf(rest.rpc('save_test_draft', {}))) as RestError;
+    const err = (await failOf(rpcOf(rest)('save_test_draft', {}))) as RestError;
     expect([err.status, err.sqlstate, err.guard]).toEqual([502, null, null]);
     expect(restErrorCode(err)).toBe('unavailable');
   });
