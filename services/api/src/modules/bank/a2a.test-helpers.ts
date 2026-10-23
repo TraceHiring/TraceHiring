@@ -309,6 +309,16 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
     },
     functions,
   );
+  // Every insert body as sent, so a test can check what the api never sends (a client id, an origin).
+  const sentInserts: { table: string; body: Row[] }[] = [];
+  const insert = db.rest.insert.bind(db.rest);
+  db.rest.insert = <T>(table: string, body: unknown, query?: Query): Promise<T[]> => {
+    sentInserts.push({
+      table,
+      body: structuredClone((Array.isArray(body) ? body : [body]) as Row[]),
+    });
+    return insert<T>(table, body, query);
+  };
   // The fake applies `or=(…)` logic trees only: an `and=(…)` filter is moved into a one-arm `or` (first pages only).
   const select = db.rest.select.bind(db.rest);
   db.rest.select = <T>(table: string, query: Query): Promise<T[]> => {
@@ -317,7 +327,7 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
     if (rest.or !== undefined) throw new Error('fake rest: and with or');
     return select<T>(table, { ...rest, or: `(and${and})` });
   };
-  return db;
+  return Object.assign(db, { sentInserts });
 };
 
 export type A2aDb = ReturnType<typeof a2aDb>;

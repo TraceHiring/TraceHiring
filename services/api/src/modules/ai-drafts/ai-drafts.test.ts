@@ -7,6 +7,16 @@ import { AiDraftJobView, AuthoringQueueMessage } from '@trace/shared/contracts/m
 import { scrubDraftTopic } from '@trace/shared/item-hash';
 import { DRAFT_PROMPT_VERSION, MOCK_DRAFTER_MODEL_ID, MOCK_DRAFTER_PROVIDER } from '@trace/vendors';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// A2a security S2: the scrubber is the lead's; a test may make it return a topic the message refuses.
+const scrub = vi.hoisted(() => ({ override: null as string | null }));
+vi.mock('@trace/shared/item-hash', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@trace/shared/item-hash')>();
+  return {
+    ...actual,
+    scrubDraftTopic: (topic: string) => scrub.override ?? actual.scrubDraftTopic(topic),
+  };
+});
 import { sha256Hex } from '../candidate/encoding.js';
 import { a2aDb, callerOf, codeOf, harness, ORG, WS, WS2 } from '../bank/a2a.test-helpers.js';
 import { createAiDraftsRoutes, type AuthoringQueue } from './routes.js';
@@ -45,6 +55,7 @@ const request = (patch: Record<string, unknown> = {}) => ({
 let logs: unknown[] = [];
 beforeEach(() => {
   logs = [];
+  scrub.override = null;
   for (const m of ['log', 'info', 'warn', 'error', 'debug'] as const) {
     vi.spyOn(console, m).mockImplementation((...a: unknown[]) => void logs.push(a));
   }
@@ -71,8 +82,12 @@ describe('POST …/bank/ai-drafts', () => {
       prompt_version: DRAFT_PROMPT_VERSION,
     });
     // The client never chooses the job id (R5-51 f): the insert carries none.
-    const insert = db.calls.find((c) => c.method === 'insert' && c.table === 'ai_draft_jobs');
-    expect(insert).toBeDefined();
+    const inserts = db.sentInserts.filter((c) => c.table === 'ai_draft_jobs');
+    expect(inserts).toHaveLength(1);
+    for (const sentRow of inserts[0]?.body ?? []) {
+      expect(Object.keys(sentRow)).not.toContain('id');
+      expect(Object.keys(sentRow)).not.toContain('topic');
+    }
     expect(Object.keys(row ?? {})).not.toContain('topic');
     expect(sent).toEqual([
       AuthoringQueueMessage.parse({
@@ -110,6 +125,29 @@ describe('POST …/bank/ai-drafts', () => {
     const r2 = await down.call('POST', '/bank/ai-drafts', request());
     expect(r2.status).toBe(503);
     expect(await codeOf(r2)).toBe('unavailable');
+  });
+
+  it('parses the queue message before the job insert: a message it refuses answers 400 and writes no job (S2, R5-64 m)', async () => {
+    const { db, call, sent } = setup();
+    scrub.override = 'x'.repeat(501);
+    const res = await call('POST', '/bank/ai-drafts', request());
+    expect(res.status).toBe(400);
+    expect(await codeOf(res)).toBe('bad_request');
+    expect(db.tables.ai_draft_jobs).toEqual([]);
+    expect(db.calls.some((c) => c.table === 'ai_draft_jobs')).toBe(false);
+    expect(sent).toEqual([]);
+    scrub.override = `${String.fromCharCode(0xd800)} lone`;
+    const lone = await call('POST', '/bank/ai-drafts', request());
+    expect(lone.status).toBe(400);
+    expect(db.tables.ai_draft_jobs).toEqual([]);
+  });
+
+  it('sends the message built before the insert, with the stored job id', async () => {
+    const { db, call, sent } = setup();
+    const res = await call('POST', '/bank/ai-drafts', request());
+    expect(res.status).toBe(201);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.jobId).toBe(db.tables.ai_draft_jobs?.[0]?.id);
   });
 
   it('refuses a bad request and a reviewer', async () => {
