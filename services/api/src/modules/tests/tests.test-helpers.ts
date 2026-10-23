@@ -197,6 +197,7 @@ export const authoringDb = (): AuthoringDb => {
     item: idMaker('17'),
     itemIdentity: idMaker('1d'),
     rubric: idMaker('7b'),
+    lock: idMaker('0d'),
   };
   const savePayloads: unknown[] = [];
   const db = fakeDb(
@@ -306,7 +307,9 @@ export const authoringDb = (): AuthoringDb => {
         },
       },
       rubric_versions: { insert: (row) => ({ id: ids.rubric(), ...row }) },
-      org_integrity_locks: {},
+      org_integrity_locks: {
+        insert: (row) => ({ id: ids.lock(), locked_by: USER, locked_at: T0, ...row }),
+      },
     },
     {
       // public.save_test_draft (M1-c), as the SQL body: version first (the guard refuses a published one), the test
