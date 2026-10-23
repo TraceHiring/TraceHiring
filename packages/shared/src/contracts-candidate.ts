@@ -476,6 +476,19 @@ type CatalogSignalName = keyof typeof SIGNAL_CATALOG.signals;
 const CatalogSignalName = z.enum(
   Object.keys(SIGNAL_CATALOG.signals) as [CatalogSignalName, ...CatalogSignalName[]],
 );
+/** R5-24 (sections CHECKs, §3.3): a written section is forward-only and has a paste rule; no other section has one. */
+const sectionRulesOk = (section: {
+  format: 'mcq' | 'written';
+  navigation: 'free' | 'forward_only';
+  pasteRule?: 'blocked' | 'allowed_logged' | undefined;
+}) =>
+  section.format === 'written'
+    ? section.navigation === 'forward_only' && section.pasteRule !== undefined
+    : section.pasteRule === undefined;
+const SECTION_RULES_MESSAGE =
+  'a written section is forward-only with a paste rule; no other has one';
+const uniqueStrata = (strata: readonly { skillKey: string; difficultyBand: number }[]) =>
+  new Set(strata.map((st) => `${st.skillKey}:${st.difficultyBand}`)).size === strata.length;
 const PackageStratum = z.strictObject({
   skillKey: SkillKey,
   difficultyBand: DifficultyBand,
@@ -505,6 +518,7 @@ export const TestPackageV2 = z
           id: Uuid,
           title: z.string().min(1).max(120),
           position: Position,
+          format: ItemKind,
           timeLimitSeconds: z.int().min(60).max(7200).optional(),
           navigation: Navigation,
           shuffleItems: z.boolean(),
@@ -540,6 +554,9 @@ export const TestPackageV2 = z
             .optional(),
           skillKey: SkillKey,
           difficultyBand: DifficultyBand,
+          // Served count frozen at publish (section_pool_snapshot.exposure_at_publish, R3-2): the draw weight is
+          // 1 / (1 + exposureAtPublish) (§6.5). The DO never passes it to the candidate.
+          exposureAtPublish: z.int().min(0),
           variants: z
             .array(
               z.strictObject({
@@ -576,10 +593,15 @@ export const TestPackageV2 = z
       issue(['items'], 'an item version appears once');
     }
     const bySection = new Map(pkg.sections.map((s) => [s.id, [] as typeof pkg.items]));
+    const formatOf = new Map(pkg.sections.map((s) => [s.id, s.format]));
     pkg.items.forEach((item, index) => {
       const list = bySection.get(item.sectionId);
       if (list === undefined) issue(['items', index, 'sectionId'], 'unknown section');
       else list.push(item);
+      const format = formatOf.get(item.sectionId);
+      if (format !== undefined && format !== item.kind) {
+        issue(['items', index, 'kind'], 'item kind differs from its section format');
+      }
       const shapeOk =
         item.kind === 'mcq'
           ? item.options !== undefined && item.maxChars === undefined
@@ -588,6 +610,7 @@ export const TestPackageV2 = z
     });
     let served = 0;
     pkg.sections.forEach((section, s) => {
+      if (!sectionRulesOk(section)) issue(['sections', s], SECTION_RULES_MESSAGE);
       const eligible = bySection.get(section.id) ?? [];
       if (eligible.length === 0) issue(['sections', s], 'a section has items');
       if (section.draw === null) {
@@ -599,6 +622,9 @@ export const TestPackageV2 = z
         issue(['sections', s, 'draw', 'count'], 'the draw exceeds the eligible items');
       }
       const strata = section.draw.strata;
+      if (!uniqueStrata(strata)) {
+        issue(['sections', s, 'draw', 'strata'], 'one stratum per skill and difficulty band');
+      }
       if (strata.length > 0 && strata.reduce((n, st) => n + st.count, 0) !== section.draw.count) {
         issue(['sections', s, 'draw', 'strata'], 'the strata must add up to the draw count');
       }
@@ -662,8 +688,9 @@ export const SessionViewV2 = z
           id: Uuid,
           title: z.string().min(1).max(120),
           position: Position,
+          format: ItemKind,
           navigation: Navigation,
-          pasteRule: PasteRule,
+          pasteRule: PasteRule.optional(),
           state: z.enum(['not_entered', 'open', 'closed']),
           deadlineAt: Time.optional(),
         }),
@@ -691,12 +718,22 @@ export const SessionViewV2 = z
       .max(100),
     receipt: Receipt.optional(),
   })
-  .refine(
-    (view) => view.items.every((item) => view.sections.some((s) => s.id === item.sectionId)),
-    {
-      message: 'unknown section',
-    },
-  );
+  .superRefine((view, ctx) => {
+    view.sections.forEach((section, s) => {
+      if (!sectionRulesOk(section)) {
+        ctx.addIssue({ code: 'custom', path: ['sections', s], message: SECTION_RULES_MESSAGE });
+      }
+    });
+    view.items.forEach((item, i) => {
+      if (!view.sections.some((s) => s.id === item.sectionId)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['items', i, 'sectionId'],
+          message: 'unknown section',
+        });
+      }
+    });
+  });
 export type SessionViewV2 = z.infer<typeof SessionViewV2>;
 
 export const SessionStartResV2 = z.union([
@@ -706,6 +743,19 @@ export const SessionStartResV2 = z.union([
 export type SessionStartResV2 = z.infer<typeof SessionStartResV2>;
 export const SessionAttachResV2 = z.strictObject({ view: SessionViewV2 });
 export type SessionAttachResV2 = z.infer<typeof SessionAttachResV2>;
+
+/**
+ * `GET /v1/session/items/:pos?afterSeq=n` (R5-45): in a forward-only section the DO serves the next position only
+ * once its accepted high-water mark reaches `afterSeq`, else 409 `out_of_order` with `ackSeq`. Query text, digits only.
+ */
+export const ItemGetQuery = z.strictObject({
+  afterSeq: z
+    .string()
+    .regex(/^[0-9]{1,15}$/)
+    .transform(Number)
+    .optional(),
+});
+export type ItemGetQuery = z.infer<typeof ItemGetQuery>;
 
 // ---- The one mirror message (SessionDO -> trace-session-mirror queue and R2 mirror.json; §4.4) ----------------------
 
@@ -774,8 +824,9 @@ export type SessionMirrorMessageV1 = z.infer<typeof SessionMirrorMessageV1>;
  * The v2 mirror (package v2 sessions; R5-19, R5-42). Served rows gain their section, variant, option order and draw
  * seed hash; `draws` lists, per entered pool section, the drawn item versions in draw order with a parallel list of
  * variant ids (null for an item that is not parameterised). `poolSectionIds` names every pool section of the test
- * version, so the contract can refuse a served pool item missing from its section's draw (R5-42): such a message is
- * malformed and follows D1's retry -> DLQ path (R5-8). Positions are checked by the jobs code, not here.
+ * version. The schema is structural only (strict shapes, bounds): D1's consumer acks a schema failure with no retry,
+ * so the cross-field invariants live in `checkMirrorV2`, which the mirror stage runs so that a violation retries and
+ * reaches the DLQ with an error report (R5-8, R5-42). Positions are checked by the jobs code.
  */
 export const SessionMirrorMessageV2 = SessionMirrorMessageV1.extend({
   v: z.literal(2),
@@ -802,40 +853,65 @@ export const SessionMirrorMessageV2 = SessionMirrorMessageV1.extend({
       }),
     )
     .max(10),
-}).superRefine((msg, ctx) => {
-  const issue = (path: (string | number)[], message: string) =>
-    ctx.addIssue({ code: 'custom', path, message });
-  const pool = new Set(msg.poolSectionIds);
-  if (pool.size !== msg.poolSectionIds.length) issue(['poolSectionIds'], 'duplicate section');
-  const drawOf = new Map<string, { itemVersionIds: string[]; itemVariantIds: (string | null)[] }>();
-  msg.draws.forEach((draw, d) => {
-    if (!pool.has(draw.sectionId)) issue(['draws', d, 'sectionId'], 'not a pool section');
-    if (drawOf.has(draw.sectionId)) issue(['draws', d, 'sectionId'], 'one draw per section');
-    if (draw.itemVariantIds.length !== draw.itemVersionIds.length) {
-      issue(['draws', d, 'itemVariantIds'], 'one variant entry per drawn item');
-    }
-    if (new Set(draw.itemVersionIds).size !== draw.itemVersionIds.length) {
-      issue(['draws', d, 'itemVersionIds'], 'an item is drawn once');
-    }
-    drawOf.set(draw.sectionId, draw);
-  });
-  msg.served.forEach((row, s) => {
-    if (row.optionOrder !== undefined && new Set(row.optionOrder).size !== row.optionOrder.length) {
-      issue(['served', s, 'optionOrder'], 'option order is a permutation');
-    }
-    if (!pool.has(row.sectionId)) return;
-    const draw = drawOf.get(row.sectionId);
-    const at = draw === undefined ? -1 : draw.itemVersionIds.indexOf(row.itemVersionId);
-    if (draw === undefined || at < 0) {
-      issue(['served', s, 'itemVersionId'], 'a served pool item is missing from its draw');
-      return;
-    }
-    if ((row.itemVariantId ?? null) !== draw.itemVariantIds[at]) {
-      issue(['served', s, 'itemVariantId'], 'the served variant differs from the drawn one');
-    }
-  });
 });
 export type SessionMirrorMessageV2 = z.infer<typeof SessionMirrorMessageV2>;
+
+export const MIRROR_INVARIANT_CODES = [
+  'duplicate_pool_section',
+  'draw_not_pool_section',
+  'duplicate_draw',
+  'variant_ids_not_parallel',
+  'item_drawn_twice',
+  'too_many_drawn',
+  'option_order_not_permutation',
+  'served_missing_from_draw',
+  'served_variant_mismatch',
+] as const;
+export type MirrorInvariantCode = (typeof MIRROR_INVARIANT_CODES)[number];
+
+/** A v2 mirror message that parses but breaks a cross-field invariant. The message names the code only. */
+export class MirrorInvariantError extends Error {
+  readonly code: MirrorInvariantCode;
+  constructor(code: MirrorInvariantCode) {
+    super(`mirror v2 invariant: ${code}`);
+    this.name = 'MirrorInvariantError';
+    this.code = code;
+  }
+}
+
+/**
+ * The cross-field invariants of a parsed v2 mirror message; throws MirrorInvariantError on the first one broken.
+ * Every served item of a pool section is in that section's draw with the drawn variant (R5-42); draws belong to pool
+ * sections, one per section, with a variant entry per item and no repeat; at most 100 items are drawn in total (R5-9).
+ */
+export function checkMirrorV2(msg: SessionMirrorMessageV2): void {
+  const fail = (code: MirrorInvariantCode): never => {
+    throw new MirrorInvariantError(code);
+  };
+  const pool = new Set(msg.poolSectionIds);
+  if (pool.size !== msg.poolSectionIds.length) fail('duplicate_pool_section');
+  const drawOf = new Map<string, SessionMirrorMessageV2['draws'][number]>();
+  let drawn = 0;
+  for (const draw of msg.draws) {
+    if (!pool.has(draw.sectionId)) fail('draw_not_pool_section');
+    if (drawOf.has(draw.sectionId)) fail('duplicate_draw');
+    if (draw.itemVariantIds.length !== draw.itemVersionIds.length) fail('variant_ids_not_parallel');
+    if (new Set(draw.itemVersionIds).size !== draw.itemVersionIds.length) fail('item_drawn_twice');
+    drawOf.set(draw.sectionId, draw);
+    drawn += draw.itemVersionIds.length;
+  }
+  if (drawn > 100) fail('too_many_drawn');
+  for (const row of msg.served) {
+    if (row.optionOrder !== undefined && new Set(row.optionOrder).size !== row.optionOrder.length) {
+      fail('option_order_not_permutation');
+    }
+    if (!pool.has(row.sectionId)) continue;
+    const draw = drawOf.get(row.sectionId);
+    const at = draw === undefined ? -1 : draw.itemVersionIds.indexOf(row.itemVersionId);
+    if (draw === undefined || at < 0) return fail('served_missing_from_draw');
+    if ((row.itemVariantId ?? null) !== draw.itemVariantIds[at]) fail('served_variant_mismatch');
+  }
+}
 
 /** What `workers/jobs` parses (R5-8): v1 and v2, accepted before the edge emits v2 (deploy api -> jobs -> edge). */
 export const SessionMirrorMessage = z.discriminatedUnion('v', [

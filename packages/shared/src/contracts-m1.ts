@@ -417,6 +417,12 @@ export const SectionDraft = z
       if (total !== section.drawCount)
         issue('blueprint', 'the strata must add up to the draw count');
     }
+    if (section.blueprint !== undefined) {
+      const pairs = section.blueprint.strata.map((s) => `${s.skillKey}:${s.difficultyBand}`);
+      if (new Set(pairs).size !== pairs.length) {
+        issue('blueprint', 'one stratum per skill and difficulty band');
+      }
+    }
   });
 export type SectionDraft = z.infer<typeof SectionDraft>;
 
@@ -440,16 +446,19 @@ export type SaveTestDraftRequest = z.infer<typeof SaveTestDraftRequest>;
 
 // ---- Integrity settings (§6.6, screen 04) --------------------------------------------------------------------------
 
-/** The full settings map of the catalog: every setting, each from its own value list. */
+/**
+ * The full settings map of the catalog: every setting, each from its own value list. `presetKey` is null for custom
+ * settings (ruleset_versions.preset_key null; audited as test.integrity_settings {preset_key: null}).
+ */
 export const IntegritySettingsRequest = z.strictObject({
-  presetKey: PresetKey,
+  presetKey: PresetKey.nullable(),
   values: settingValues(),
 });
 export type IntegritySettingsRequest = z.infer<typeof IntegritySettingsRequest>;
 
 export const IntegritySettingsView = z
   .strictObject({
-    presetKey: PresetKey,
+    presetKey: PresetKey.nullable(),
     values: settingValues(),
     locked: z.strictObject(
       Object.fromEntries(

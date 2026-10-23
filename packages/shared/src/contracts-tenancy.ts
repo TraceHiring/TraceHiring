@@ -262,7 +262,7 @@ export const AuditDetails = {
   'integrity_lock.create': z.object({ setting_key: LockableSettingKey }).strict(),
   'integrity_lock.delete': z.object({ setting_key: LockableSettingKey }).strict(),
   'test.integrity_settings': z
-    .object({ preset_key: PresetKey, catalog_version: IntegrityCatalogVersion })
+    .object({ preset_key: PresetKey.nullable(), catalog_version: IntegrityCatalogVersion })
     .strict(),
   'test.new_version': z.object({ version_no: z.int().min(1) }).strict(),
   'import.complete': z
