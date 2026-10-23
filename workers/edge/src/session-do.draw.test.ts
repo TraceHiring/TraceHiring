@@ -504,9 +504,11 @@ describe('answers only to served positions (R5-59 b)', () => {
       [1, true],
       [2, false],
     ]);
-    expect((await view(h)).answers).toEqual([{ position: 1, choice: 'b' }]);
+    const after = await view(h);
+    expect(after.answers).toEqual([{ position: 1, choice: 'b' }]);
 
-    await h.core.submit(AUTH, { streamId: v.streamId, finalSeq: 2 });
+    // The attach above opened a new stream (nothing sent on it yet).
+    expect((await h.core.submit(AUTH, { streamId: after.streamId, finalSeq: 0 })).ok).toBe(true);
     expect(finalPositions(h)).toEqual([1]);
     expect(SessionMirrorMessageV2.parse(h.queue.sent[0]).replay).toBe('ok');
   });

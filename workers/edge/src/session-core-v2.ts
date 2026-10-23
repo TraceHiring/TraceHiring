@@ -8,9 +8,12 @@
 // each (≤ 512 KB even if every unit takes two bytes). A single variant is ≤ 4,000 + 6 × 500 characters, so a part
 // always fits. Nothing else in the object grows with the package.
 //
-// Positions. The candidate's positions follow the sections in `position` order: a section takes `draw.count` slots
-// (pool) or one per item (inline), so a never-entered section still has its positions (its slots score 0, R5-19).
-// The k-th slot of a section is the k-th item of its stored draw.
+// Positions (R5-59 a: two positions). The candidate's position is session-wide: it follows the sections in `position`
+// order, a section takes `draw.count` slots (pool) or one per item (inline), so a never-entered section still has its
+// positions (its slots score 0, R5-19). The k-th slot of a section (k from 0) is the k-th item of its stored draw, at
+// position `first + k`. This session-wide position is the one in the view, `served[].position` of the mirror,
+// `final.json` and `events.ndjson`. The draw position of a pool item is 1 + k, its index in the section's
+// `draws[].itemVersionIds` (`session_items.position`, R5-42); the edge never sends it, the jobs derive it.
 //
 // Sections (§4.6). Untimed versions (no section timer): every section opens at test start and closes at its
 // `section.finish`, the test deadline or submit. Timed versions run in position order: section 1 opens at test start,
@@ -57,6 +60,8 @@ export interface V2Header {
   title: string;
   durationSeconds: number;
   signalCatalogVersion: string;
+  /** The signal kinds the package captures (R2-12, R5-59 c): the DO acks but never stores any other kind. */
+  captureSignals: PackageV2['captureSignals'];
   timed: boolean;
   sections: V2SectionMeta[];
   /** Positions in the session (≤ 100, TestPackageV2's refine). */
@@ -73,7 +78,12 @@ export interface StoredDraw {
   items: DrawnItem[];
   /** For each drawn item, its index among the section's stored items. */
   itemIndex: number[];
-  /** sha256 hex of the draw seed (mirrored as `drawSeedSha256`; the seed itself never leaves the object). */
+  /**
+   * sha256 hex of the draw seed, mirrored as `drawSeedSha256` (only the hash is mirrored). The seed is not a secret
+   * (R5-59 f): it is deterministic and derivable from the session and section ids (`drawSeed`, R5-52 b), so a draw
+   * can be replayed for audit. Predicting a draw also needs the pool, so secrecy relies on the pool not leaking; a
+   * random per-session salt is a deferred hardening (§13, owner M8).
+   */
   seedSha256: string;
 }
 
@@ -131,6 +141,7 @@ export const headerOf = (pkg: PackageV2): V2Header => {
     title: pkg.title,
     durationSeconds: pkg.durationSeconds,
     signalCatalogVersion: pkg.signalCatalogVersion,
+    captureSignals: [...pkg.captureSignals],
     timed: ordered.some((s) => s.timeLimitSeconds !== undefined),
     sections,
     total: next - 1,

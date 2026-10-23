@@ -440,11 +440,11 @@ export class SessionCore implements SessionApi {
   // ---- package v2: draws, slots and the section clock (§4.6, §6.5) -------------------------------------------------
 
   /** The drawn slot at a position, or undefined (outside the session, or its section not drawn). */
-  #slot(header: V2Header, position: number, pending?: Map<number, StoredDraw>): Slot | undefined {
+  #slot(header: V2Header, position: number): Slot | undefined {
     const s = sectionOfPosition(header, position);
     const meta = header.sections[s];
     if (meta === undefined) return undefined;
-    const draw = pending?.get(s) ?? readDraw(this.#kv, s);
+    const draw = readDraw(this.#kv, s);
     if (draw === undefined) return undefined;
     const k = position - meta.first;
     const drawn = draw.items[k];
@@ -486,6 +486,11 @@ export class SessionCore implements SessionApi {
       }
     }
     return highest;
+  }
+
+  /** The active stream's accepted high-water mark (refused-but-acknowledged events count, R5-45). */
+  #hw(meta: Meta): number {
+    return this.#kv.get<StreamRow>(K.stream(meta.activeStreamId))?.hw ?? 0;
   }
 
   /** Counts one request in a fixed window; a refusal carries the wait. */
@@ -861,19 +866,23 @@ export class SessionCore implements SessionApi {
   }
 
   /**
-   * One v2 position (§4.6, R5-20, R5-45): only in an open section (a closed one is 410 `section_closed`; one not yet
-   * entered, or a position outside the session, is 400). A forward-only section serves its highest served position
-   * again, refuses any position below it (410) and serves only the next one, and that only once the active stream's
-   * accepted high-water mark reaches `afterSeq` (else 409 `out_of_order` with `ackSeq`), so the edits of item N the
-   * client enqueued before asking for N+1 are never refused. The first serve stamps `served_at`.
+   * One v2 position (§4.6, R5-20, R5-45): only in an open section (a closed one is 410 `section_closed`; a position
+   * outside the session is 400). A section not yet entered is 409 `out_of_order` with `ackSeq` while `afterSeq` is
+   * ahead of the active stream's accepted high-water mark (the GET overtook a queued `section.finish`, R5-59 d), else
+   * 400. A forward-only section serves its highest served position again, refuses any position below it (410) and
+   * serves only the next one, and that only once the high-water mark reaches `afterSeq` (else 409 `out_of_order` with
+   * `ackSeq`), so the edits of item N the client enqueued before asking for N+1 are never refused. The first serve
+   * stamps `served_at`.
    */
   #itemV2(meta: Meta, position: number, afterSeq: number, now: number): ItemResult {
     const { header, clocks } = this.#sync(meta, now);
     const s = sectionOfPosition(header, position);
     const section = header.sections[s];
     const clock = clocks[s];
-    if (section === undefined || clock === undefined || clock.state === 'not_entered') {
-      return refuse('bad_request');
+    if (section === undefined || clock === undefined) return refuse('bad_request');
+    if (clock.state === 'not_entered') {
+      const hw = this.#hw(meta);
+      return afterSeq > hw ? refuse('out_of_order', { ackSeq: hw }) : refuse('bad_request');
     }
     if (clock.state === 'closed') return refuse('section_closed');
     const served = this.#served();
@@ -883,7 +892,7 @@ export class SessionCore implements SessionApi {
       const next = highest === null ? section.first : highest + 1;
       if (position > next) return refuse('bad_request');
       if (position === next) {
-        const hw = this.#kv.get<StreamRow>(K.stream(meta.activeStreamId))?.hw ?? 0;
+        const hw = this.#hw(meta);
         if (afterSeq > hw) return refuse('out_of_order', { ackSeq: hw });
       }
     }
@@ -964,7 +973,9 @@ export class SessionCore implements SessionApi {
    * One batch on the active stream, in one transaction: `seq <= hw` is an idempotent resend (no new `gseq`); the next
    * must be `hw + 1`; the first gap stops the batch (409 `out_of_order`, `ackSeq = hw`, the events before it kept);
    * each accepted event takes the next `gseq`. An event that is not valid for the session (an unknown item, a splice
-   * outside the text, a text over `maxChars`) rejects the whole batch (400) and nothing of it is kept (RT-13).
+   * outside the text, a text over `maxChars`) rejects the whole batch (400) and nothing of it is kept (RT-13). An
+   * answer at a position the DO has not served is acknowledged and recorded as refused, v1 and v2 alike (R5-59 b).
+   * In a v2 session a signal kind outside the package's `captureSignals` is acknowledged and never stored (R5-59 c).
    */
   async events(
     auth: SessionAuth,
@@ -1004,6 +1015,7 @@ export class SessionCore implements SessionApi {
   ): EventsResult {
     const nav = meta.pkgV === 2 ? this.#navigator(meta, now) : null;
     const items = nav === null ? this.#items(this.#pkg()) : null;
+    const served = this.#served();
     const refusedSeqs: number[] = [];
     const answers = new Map<number, AnswerState | undefined>();
     const answerOf = (position: number): AnswerState | undefined => {
@@ -1036,13 +1048,27 @@ export class SessionCore implements SessionApi {
         }
         tokens -= 1;
       }
+      if (body.kind === 'signal' && nav !== null && !nav.captures(body.sig)) {
+        // Data minimisation (§6.7, R2-12, R5-59 c): acknowledged like a thinned heartbeat, never stored.
+        hw = seq;
+        continue;
+      }
       const next = gseq + 1;
       let refused = false;
       if (isAnswer(body)) {
-        const item = nav === null ? items?.get(body.item) : nav.answer(body.item);
+        const known = nav === null ? (items?.has(body.item) ?? false) : nav.has(body.item);
+        if (!known) throw new BatchRejected();
+        // Only a position the DO has served takes an answer, v1 and v2 alike (R5-59 b): final.json then never names
+        // a position the mirror's served[] lacks.
+        const item =
+          served[String(body.item)] === undefined
+            ? 'refused'
+            : nav === null
+              ? items?.get(body.item)
+              : nav.answer(body.item);
         if (item === undefined) throw new BatchRejected();
         if (item === 'refused') {
-          // Acknowledged and recorded, never applied (R5-20).
+          // Acknowledged and recorded, never applied (R5-20, R5-59 b).
           refused = true;
           refusedSeqs.push(seq);
         } else {
@@ -1097,11 +1123,8 @@ export class SessionCore implements SessionApi {
         ...(nav === null ? {} : { finishes: nav.finishes }),
       };
       this.#kv.put<Meta>(K.meta, next);
-      if (nav !== null) {
-        for (const [s, draw] of nav.pending) this.#kv.put(K2.draw(s), draw);
-        // A finish in this batch may have opened the next section: drawn now, before its first serve.
-        this.#sync(next, now);
-      }
+      // A finish in this batch may have opened the next section: drawn now, before its first serve.
+      if (nav !== null) this.#sync(next, now);
     }
     if (gap) return refuse('out_of_order', { ackSeq: hw });
     return {
@@ -1116,23 +1139,24 @@ export class SessionCore implements SessionApi {
 
   /**
    * The navigation rules of one v2 batch (§4.6, R5-20), at the DO time the batch arrived. `answer` gives the slot an
-   * edit is checked against, `'refused'` for a section not entered, finished, or past its deadline + GRACE_MS, or for a
-   * position below the highest served one of a forward-only section, or undefined for a position outside the session.
-   * `finish` closes an open section (a closed or unentered one is left as it is); false for an unknown section. Draws a
-   * section opened by a finish in this batch lazily into `pending`, which the caller stores with the batch.
+   * edit at a served position is checked against (the caller refuses an unserved one first, R5-59 b), `'refused'` for
+   * a section not entered, finished, or past its deadline + GRACE_MS, or for a position below the highest served one
+   * of a forward-only section, or undefined for a position outside the session. `finish` closes an open section (a
+   * closed or unentered one is left as it is); false for an unknown section. `captures` says whether the package
+   * captures a signal kind (R5-59 c).
    */
   #navigator(meta: Meta, now: number) {
     const header = readHeader(this.#kv);
     const finishes: Record<string, number> = { ...(meta.finishes ?? {}) };
-    const pending = new Map<number, StoredDraw>();
     const served = this.#served();
     const clocksNow = () => sectionClocks(header, { ...this.#times(meta), finishes }, now);
     let clocks = clocksNow();
     const cache = new Map<number, AnswerItem | undefined>();
+    const captured = new Set<string>(header.captureSignals);
     return {
       finishes,
-      pending,
       has: (position: number): boolean => position >= 1 && position <= header.total,
+      captures: (sig: string): boolean => captured.has(sig),
       finish: (sectionId: string): boolean => {
         const s = header.sections.findIndex((m) => m.section.id === sectionId);
         if (s < 0) return false;
@@ -1154,10 +1178,8 @@ export class SessionCore implements SessionApi {
           if (highest !== null && position < highest) return 'refused';
         }
         if (!cache.has(position)) {
-          if (!pending.has(s) && readDraw(this.#kv, s) === undefined) {
-            pending.set(s, computeDraw(this.#kv, section));
-          }
-          const slot = this.#slot(header, position, pending);
+          // A served position's section was drawn before its first serve (R5-19).
+          const slot = this.#slot(header, position);
           cache.set(position, slot === undefined ? undefined : answerItemOf(slot.content));
         }
         return cache.get(position);
@@ -1236,6 +1258,9 @@ export class SessionCore implements SessionApi {
     const replayOk =
       replayed !== null && sameAnswers(replayed, incremental) && meta.lenMismatch === false;
     const finalAnswers = replayed ?? incremental;
+    // Defence in depth (R5-59 b): an answer at a position the DO never served is dropped, so final.json only names
+    // positions in the mirror's served[] (the jobs map every answer to an item through it).
+    const served = this.#served();
     const endAt = Math.min(now, meta.deadlineAt);
     const coverage = computeCoverage(meta.startedAt, endAt, this.#events());
     const next: Meta = {
@@ -1249,7 +1274,9 @@ export class SessionCore implements SessionApi {
       gaps: coverage.gaps,
       mirror: { state: 'pending', attempts: 0, nextAt: now, leaseUntil: null },
     };
-    for (const [position, answer] of finalAnswers) this.#kv.put(K.final(position), answer);
+    for (const [position, answer] of finalAnswers) {
+      if (served[String(position)] !== undefined) this.#kv.put(K.final(position), answer);
+    }
     this.#kv.put(K.meta, next);
     return next;
   }
@@ -1324,7 +1351,14 @@ export class SessionCore implements SessionApi {
   /**
    * The v2 parts of the mirror (R5-19, R5-42): served rows with their section, variant, served option order and draw
    * seed hash; every pool section of the version; and the stored draw of every entered pool section, in draw order
-   * with a parallel list of variant ids. Positions are the candidate's positions (those of final.json).
+   * with a parallel list of variant ids.
+   *
+   * Two positions (R5-59 a). `served[].position` is the candidate's session-wide position, the one of final.json and
+   * events.ndjson: sections in `position` order, a pool section takes `draw.count` slots and an inline one a slot per
+   * item, and the k-th drawn item of a section (k from 0) sits at that section's first slot + k. The draw position of
+   * a pool item is 1 + its index in that section's `draws[].itemVersionIds` (at most its draw count); that is what
+   * `session_items.position` stores (R5-42), never `served[].position`. The jobs map an answer to an item only
+   * through `served[]` (position -> item version, section).
    */
   #mirrorV2(served: Record<string, number>) {
     const header = readHeader(this.#kv);
