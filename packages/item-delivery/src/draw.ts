@@ -15,29 +15,13 @@
 // A malformed section throws DrawError. The package refine (TestPackageV2) and the publish guard refuse those cases
 // upstream; in particular a stratum with fewer matching items than its quota is `stratum_too_small` here.
 import type { TestPackageV2 } from '@trace/shared/contracts/candidate';
+import { DrawError } from './errors.js';
+import { sfc32, uniform01, uniformInt, type Prng } from './prng.js';
+
+export { DrawError, type DrawErrorCode } from './errors.js';
 
 export type PackageSection = TestPackageV2['sections'][number];
 export type PackageItem = TestPackageV2['items'][number];
-
-export type DrawErrorCode =
-  | 'bad_seed'
-  | 'bad_exposure'
-  | 'no_items'
-  | 'duplicate_item'
-  | 'draw_too_large'
-  | 'strata_mismatch'
-  | 'duplicate_stratum'
-  | 'stratum_too_small';
-
-/** A section the draw cannot serve. The message names the code only, never ids or content. */
-export class DrawError extends Error {
-  readonly code: DrawErrorCode;
-  constructor(code: DrawErrorCode) {
-    super(`draw: ${code}`);
-    this.name = 'DrawError';
-    this.code = code;
-  }
-}
 
 /** One served item, in served order. Plain data: the DO stores it as JSON. */
 export interface DrawnItem {
@@ -66,45 +50,7 @@ export function drawWeight(exposureAtPublish: number): number {
   return 1 / (1 + exposureAtPublish);
 }
 
-// ---- PRNG -----------------------------------------------------------------------------------------------------------
-
-interface Prng {
-  next(): number;
-}
-
-function sfc32(seed: Uint8Array): Prng {
-  if (!(seed instanceof Uint8Array) || seed.length < 16) throw new DrawError('bad_seed');
-  const word = (i: number) =>
-    ((seed[i]! << 24) | (seed[i + 1]! << 16) | (seed[i + 2]! << 8) | seed[i + 3]!) >>> 0;
-  let a = word(0);
-  let b = word(4);
-  let c = word(8);
-  let d = word(12);
-  const next = (): number => {
-    // The reference C: tmp = a + b + counter++; a = b ^ (b >> 9); b = c + (c << 3); c = rotl(c, 21) + tmp.
-    const t = (((a + b) | 0) + d) | 0;
-    d = (d + 1) | 0;
-    a = b ^ (b >>> 9);
-    b = (c + (c << 3)) | 0;
-    c = (((c << 21) | (c >>> 11)) + t) | 0;
-    return t >>> 0;
-  };
-  for (let i = 0; i < 12; i += 1) next();
-  return { next };
-}
-
-/** A uniform integer in [0, n) for 1 <= n <= 2^32, by rejection (no modulo bias). */
-function uniformInt(rng: Prng, n: number): number {
-  const limit = Math.floor(2 ** 32 / n) * n;
-  for (;;) {
-    const r = rng.next();
-    if (r < limit) return r % n;
-  }
-}
-
-/** A uniform number in [0, 1) with 53 random bits (two outputs). */
-const uniform01 = (rng: Prng): number =>
-  ((rng.next() >>> 5) * 67108864 + (rng.next() >>> 6)) / 9007199254740992;
+// ---- Shuffles and weighted picks (the stream is prng.ts) ---------------------------------------------------------
 
 function shuffle<T>(rng: Prng, list: T[]): void {
   for (let i = list.length - 1; i > 0; i -= 1) {

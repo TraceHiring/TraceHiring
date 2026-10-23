@@ -4,4 +4,5 @@
 export const ITEM_DELIVERY_PACKAGE = '@trace/item-delivery';
 
 export { DrawError, drawSection, drawSeed, drawWeight } from './draw.js';
+export { difficultyBand } from './difficulty-band.js';
 export type { DrawErrorCode, DrawnItem, PackageItem, PackageSection, SectionDraw } from './draw.js';
