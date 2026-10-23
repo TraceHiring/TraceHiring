@@ -10,6 +10,10 @@ export const LOGIN_ROLES = Object.freeze([
   Object.freeze({ login: 'jobs_mirror_login', role: 'trace_worker' }),
   Object.freeze({ login: 'jobs_quality_login', role: 'trace_quality_worker' }),
   Object.freeze({ login: 'jobs_integrity_login', role: 'trace_integrity_worker' }),
+  // M1 R5-11 (specs/m1-test-authoring.md DC-M1-6): the AI drafting job and the member provisioning job. Their
+  // NOLOGIN roles come from migration M1-a; the logins are generated here, never by a migration.
+  Object.freeze({ login: 'jobs_authoring_login', role: 'trace_authoring_worker' }),
+  Object.freeze({ login: 'jobs_admin_login', role: 'trace_admin_worker' }),
 ]);
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -21,7 +25,7 @@ const KID = /^d1-\d{4}-(?:0[1-9]|1[0-2])$/;
 const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
 
 /**
- * The SQL that (re)creates the four login roles with the given passwords, run as `postgres` on the local stack
+ * The SQL that (re)creates the six login roles with the given passwords, run as `postgres` on the local stack
  * (roles are cluster-global and survive `db reset`, so an earlier run's roles are dropped first). The text goes to
  * psql on stdin, never on a command line. Throws (naming the login only) on a password that is not plain hex.
  */
@@ -44,7 +48,7 @@ export function loginRolesSql(passwords) {
   return lines.join('\n');
 }
 
-/** The SQL that removes the four login roles again at the end of a run. */
+/** The SQL that removes the six login roles again at the end of a run. */
 export function dropLoginRolesSql() {
   return [
     'begin;',
@@ -110,7 +114,8 @@ export async function candidateTokenKeys(subtle, kid) {
 /**
  * The values per Worker (spec §4.2 bindings table; each Worker's Env): api gets its database login, the signing key,
  * the verify list, the media-link key and the local Supabase URL and publishable key; edge gets only the public key
- * list (it holds no secret and no database credential); jobs gets its three stage logins.
+ * list (it holds no secret and no database credential); jobs gets its five logins (the three D1 stages, then the
+ * M1 drafting and member provisioning jobs, R5-11).
  */
 export function workerSecrets({ stack, passwords, keys, hmacKey }) {
   if (typeof hmacKey !== 'string' || hmacKey.length < 32) {
@@ -132,6 +137,8 @@ export function workerSecrets({ stack, passwords, keys, hmacKey }) {
       JOBS_MIRROR_DB_URL: url('jobs_mirror_login'),
       JOBS_QUALITY_DB_URL: url('jobs_quality_login'),
       JOBS_INTEGRITY_DB_URL: url('jobs_integrity_login'),
+      JOBS_AUTHORING_DB_URL: url('jobs_authoring_login'),
+      JOBS_ADMIN_DB_URL: url('jobs_admin_login'),
     },
   };
 }

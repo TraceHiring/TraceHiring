@@ -229,24 +229,31 @@ checks that CA (ADR-031 amendment 1). One config per login, one binding per conf
 | `jobs_mirror_login` | `trace_worker` | `trace-staging-jobs-mirror-login` | `JOBS_MIRROR_DB` | `trace-jobs-staging` (`workers/jobs`) |
 | `jobs_quality_login` | `trace_quality_worker` | `trace-staging-jobs-quality-login` | `JOBS_QUALITY_DB` | `trace-jobs-staging` (`workers/jobs`) |
 | `jobs_integrity_login` | `trace_integrity_worker` | `trace-staging-jobs-integrity-login` | `JOBS_INTEGRITY_DB` | `trace-jobs-staging` (`workers/jobs`) |
+| `jobs_authoring_login` (M1) | `trace_authoring_worker` | `trace-staging-jobs-authoring-login` | `JOBS_AUTHORING_DB` | `trace-jobs-staging` (`workers/jobs`) |
+| `jobs_admin_login` (M1) | `trace_admin_worker` | `trace-staging-jobs-admin-login` | `JOBS_ADMIN_DB` | `trace-jobs-staging` (`workers/jobs`) |
+
+The two M1 rows (specs/m1-test-authoring.md R5-11) are new: the first run after M1 creates their configs and
+rotates the other four. Send the two printed ids to the lead; until they are committed, `check-deploy-vars`
+refuses every staging deploy.
 
 It also sets `MEDIA_LINK_HMAC_KEY` (64 random hex characters) on the api Worker, and deletes the old database
-URL secrets (`API_DB_URL` on api; `JOBS_MIRROR_DB_URL`, `JOBS_QUALITY_DB_URL`, `JOBS_INTEGRITY_DB_URL` on jobs)
+URL secrets (`API_DB_URL` on api; `JOBS_MIRROR_DB_URL`, `JOBS_QUALITY_DB_URL`, `JOBS_INTEGRITY_DB_URL`,
+`JOBS_AUTHORING_DB_URL`, `JOBS_ADMIN_DB_URL` on jobs)
 where a Worker still holds them: they are retired on staging, and the deploy's `check-staging-secrets` step fails
 while one is left. It does **not** set `CANDIDATE_TOKEN_PRIVATE_JWK` (see the key pair section above) and it never
 touches the edge Worker, which holds no secret.
 
 You run it on your own computer, **after the first staging deploy** and before the D1 staging smoke (step 4 of
 "First staging deploy" above). It makes new random passwords, gives them to Postgres, then writes them into the
-four Hyperdrive configs. It never prints, logs or saves a password, a key, the Cloudflare token or your database
+six Hyperdrive configs. It never prints, logs or saves a password, a key, the Cloudflare token or your database
 URL.
 
 Good to know:
 
-- Workers Free allows 10 Hyperdrive configs per account; this uses 4.
+- Workers Free allows 10 Hyperdrive configs per account; this uses 6.
 - Caching is disabled on every config: a cached answer could be served to another role or org.
 - Each config may open at most 5 connections to the database.
-- A re-run makes new passwords and updates the same four configs (matched by name); it never makes a second set.
+- A re-run makes new passwords and updates the same six configs (matched by name); it never makes a second set.
 
 ### Before you start
 

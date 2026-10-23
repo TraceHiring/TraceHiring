@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { WORKERS_OBSERVABILITY, parseJsonc } from '../check-boundaries.mjs';
-import { hyperdriveProblems } from '../lib/hyperdrive.mjs';
+import { PENDING_BINDINGS, hyperdriveProblems } from '../lib/hyperdrive.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const load = (dir) => parseJsonc(readFileSync(path.join(REPO, dir, 'wrangler.jsonc'), 'utf8'));
@@ -166,9 +166,20 @@ describe.each(Object.keys(EXPECTED))('%s wrangler.jsonc (spec §4.2)', (worker) 
   // ADR-031 amendment 1 (revision 4o): staging reaches Postgres only through one Hyperdrive binding per login role;
   // dev and the top level have none (the local stack uses the loopback URL secrets). The founder created the four
   // configs on 2026-10-22 and their ids are committed, so staging must carry them, exact (the deploy's
-  // check-deploy-vars applies the same rule).
+  // check-deploy-vars applies the same rule). M1 R5-11 (DC-M1-6) adds JOBS_AUTHORING_DB and JOBS_ADMIN_DB, whose
+  // configs the founder creates at the next staging go-ahead: until then they are PENDING_BINDINGS and absent here,
+  // and the deploy check (no allowPending) refuses a staging deploy without them.
   it('carries exactly the Hyperdrive bindings of scripts/lib/hyperdrive.mjs, staging only', () => {
-    expect(hyperdriveProblems(worker, CONFIGS[worker], { requireStaging: true })).toEqual([]);
+    expect(
+      hyperdriveProblems(worker, CONFIGS[worker], { requireStaging: true, allowPending: true }),
+    ).toEqual([]);
+  });
+
+  it('commits no binding that is still marked pending (empty PENDING_BINDINGS once the ids land)', () => {
+    for (const env of ENVS) {
+      const bound = names(block(worker, env).hyperdrive, 'binding');
+      for (const b of PENDING_BINDINGS) expect(bound, `env.${env}`).not.toContain(b);
+    }
   });
 
   it('keeps observability exactly as rule 8 requires, with no env override', () => {

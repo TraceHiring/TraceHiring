@@ -194,8 +194,11 @@ export function main({ deps = { spawnSync, randomBytes, stdout: process.stdout }
     );
   } else {
     const r = parseChecks(apply.stdout, [...checkNames('create'), ...checkNames('alter')]);
-    if (r.ok) say('apply OK (create path and alter path, 32 checks, rolled back)');
-    else {
+    if (r.ok) {
+      say(
+        `apply OK (create path and alter path, ${2 * checkNames('create').length} checks, rolled back)`,
+      );
+    } else {
       failures += 1;
       say(`apply FAILED (${r.failed})`);
     }

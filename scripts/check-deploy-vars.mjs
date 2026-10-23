@@ -18,7 +18,8 @@
 // ADR-031 amendment 1 (d1 revision 4o): it also reads the three wrangler.jsonc files and fails unless the staging
 // blocks carry exactly the Hyperdrive bindings of scripts/lib/hyperdrive.mjs with well-formed, distinct config ids
 // (the Workers reach staging Postgres only through them; the ids are committed after the founder creates the
-// configs), so a dispatch without them stops before any migration or deploy.
+// configs), so a dispatch without them stops before any migration or deploy. That includes the two M1 jobs logins
+// (JOBS_AUTHORING_DB, JOBS_ADMIN_DB; specs/m1-test-authoring.md R5-11): PENDING_BINDINGS never applies here.
 // A violation names the variable and the problem and never prints a value (a value that fails here
 // may be a secret). It holds no secret itself and calls nothing: it only reads process.env and the wrangler files.
 import { readFileSync } from 'node:fs';

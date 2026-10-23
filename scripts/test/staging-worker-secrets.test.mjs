@@ -359,12 +359,14 @@ describe('stagingLoginRolesSql', () => {
 
   it('holds only SCRAM verifiers, never a plain password', () => {
     for (const pw of Object.values(passwords)) expect(sql).not.toContain(pw);
-    expect(sql.match(/'SCRAM-SHA-256\$4096:/g)).toHaveLength(8);
+    // Two per login (the create and the alter branch), six logins (M1 R5-11 added two).
+    expect(sql.match(/'SCRAM-SHA-256\$4096:/g)).toHaveLength(2 * LOGIN_ROLES.length);
+    expect(LOGIN_ROLES).toHaveLength(6);
   });
 
   it('gives each login its own verifier', () => {
     const verifiers = new Set(sql.match(/SCRAM-SHA-256\$[^']+/g));
-    expect(verifiers.size).toBe(4);
+    expect(verifiers.size).toBe(6);
   });
 
   it.each([
@@ -539,7 +541,7 @@ describe('wranglerSnippets', () => {
       {
         worker: 'jobs',
         file: 'workers/jobs/wrangler.jsonc',
-        line: `"hyperdrive": [{ "binding": "JOBS_MIRROR_DB", "id": "${ids.JOBS_MIRROR_DB}" }, { "binding": "JOBS_QUALITY_DB", "id": "${ids.JOBS_QUALITY_DB}" }, { "binding": "JOBS_INTEGRITY_DB", "id": "${ids.JOBS_INTEGRITY_DB}" }]`,
+        line: `"hyperdrive": [{ "binding": "JOBS_MIRROR_DB", "id": "${ids.JOBS_MIRROR_DB}" }, { "binding": "JOBS_QUALITY_DB", "id": "${ids.JOBS_QUALITY_DB}" }, { "binding": "JOBS_INTEGRITY_DB", "id": "${ids.JOBS_INTEGRITY_DB}" }, { "binding": "JOBS_AUTHORING_DB", "id": "${ids.JOBS_AUTHORING_DB}" }, { "binding": "JOBS_ADMIN_DB", "id": "${ids.JOBS_ADMIN_DB}" }]`,
       },
     ]);
   });
@@ -592,10 +594,17 @@ describe('PLAN, RETIRED_SECRETS and the Hyperdrive plan', () => {
     }
   });
 
-  it('retires exactly the four database URL secrets, none of them on the allow-list', () => {
+  it('retires exactly the six database URL secrets, none of them on the allow-list', () => {
+    // M1 R5-11: the two new local-only twins are never a staging secret either; a leftover one is deleted.
     expect(RETIRED_SECRETS).toEqual({
       api: ['API_DB_URL'],
-      jobs: ['JOBS_MIRROR_DB_URL', 'JOBS_QUALITY_DB_URL', 'JOBS_INTEGRITY_DB_URL'],
+      jobs: [
+        'JOBS_MIRROR_DB_URL',
+        'JOBS_QUALITY_DB_URL',
+        'JOBS_INTEGRITY_DB_URL',
+        'JOBS_AUTHORING_DB_URL',
+        'JOBS_ADMIN_DB_URL',
+      ],
     });
     expect(Object.isFrozen(RETIRED_SECRETS)).toBe(true);
     for (const [worker, names] of Object.entries(RETIRED_SECRETS)) {
@@ -620,13 +629,13 @@ describe('PLAN, RETIRED_SECRETS and the Hyperdrive plan', () => {
 });
 
 describe('generateValues', () => {
-  it('makes four 32-byte hex passwords, a 32-byte hex HMAC key and 16-byte salts', () => {
+  it('makes six 32-byte hex passwords, a 32-byte hex HMAC key and 16-byte salts', () => {
     let n = 0;
     const randomBytes = (size) => Buffer.alloc(size, ++n);
     const v = generateValues(randomBytes);
     expect(Object.keys(v.passwords).sort()).toEqual(LOGIN_ROLES.map((r) => r.login).sort());
     for (const pw of Object.values(v.passwords)) expect(pw).toMatch(/^[0-9a-f]{64}$/);
-    expect(new Set(Object.values(v.passwords)).size).toBe(4);
+    expect(new Set(Object.values(v.passwords)).size).toBe(6);
     expect(v.hmacKey).toMatch(/^[0-9a-f]{64}$/);
     for (const s of Object.values(v.salts)) expect(s.length).toBe(16);
   });
@@ -798,11 +807,11 @@ const entryOf = (name) => HYPERDRIVE_PLAN.find((p) => p.config === name);
 const BOTH_RETIRED = '[{"name":"API_DB_URL"},{"name":"JOBS_MIRROR_DB_URL"}]';
 
 describe('main', () => {
-  it('with --yes: checks, proves Cloudflare access, rotates the passwords, writes the four configs and the key', async () => {
+  it('with --yes: checks, proves Cloudflare access, rotates the passwords, writes the six configs and the key', async () => {
     const h = harness();
     expect(await main({ argv: YES, deps: h.deps })).toBe(0);
     // psql probe, both Workers listed, the token, the config list (nothing changed so far), one psql transaction
-    // (runSql probes again), the four configs, the HMAC key; no delete (no retired secret was listed)
+    // (runSql probes again), the six configs, the HMAC key; no delete (no retired secret was listed)
     expect(h.events).toEqual([
       'probe',
       'list',
@@ -811,6 +820,8 @@ describe('main', () => {
       'GET',
       'probe',
       'psql',
+      'POST',
+      'POST',
       'POST',
       'POST',
       'POST',
@@ -837,6 +848,8 @@ describe('main', () => {
       ['POST', BASE],
       ['POST', BASE],
       ['PUT', `${BASE}/${idOf(10)}`],
+      ['POST', BASE],
+      ['POST', BASE],
       ['POST', BASE],
     ]);
     for (const f of h.fetches) {
@@ -866,6 +879,8 @@ describe('main', () => {
       ['POST', BASE, 'trace-staging-jobs-mirror-login'],
       ['POST', BASE, 'trace-staging-jobs-quality-login'],
       ['POST', BASE, 'trace-staging-jobs-integrity-login'],
+      ['POST', BASE, 'trace-staging-jobs-authoring-login'],
+      ['POST', BASE, 'trace-staging-jobs-admin-login'],
     ]);
   });
 
@@ -888,7 +903,7 @@ describe('main', () => {
       const salt = Buffer.from(/\$4096:([^$]+)\$/.exec(m[1])[1], 'base64');
       expect(scramSha256Verifier(pw, salt)).toBe(m[1]);
     }
-    expect(new Set(h.writes().map((f) => f.body.origin.password)).size).toBe(4);
+    expect(new Set(h.writes().map((f) => f.body.origin.password)).size).toBe(6);
   });
 
   it('passes --sslmode verify-ca and the direct host through to every config', async () => {
@@ -981,6 +996,8 @@ describe('main', () => {
       JOBS_MIRROR_DB: idOf(10),
       JOBS_QUALITY_DB: idOf(2),
       JOBS_INTEGRITY_DB: idOf(3),
+      JOBS_AUTHORING_DB: idOf(4),
+      JOBS_ADMIN_DB: idOf(5),
     };
     for (const p of HYPERDRIVE_PLAN) {
       expect(text).toContain(
@@ -1250,6 +1267,8 @@ describe('main', () => {
       expect(writesOf(h, 'trace-staging-jobs-mirror-login')).toHaveLength(4);
       expect(writesOf(h, 'trace-staging-jobs-quality-login')).toHaveLength(3);
       expect(writesOf(h, 'trace-staging-jobs-integrity-login')).toHaveLength(0);
+      expect(writesOf(h, 'trace-staging-jobs-authoring-login')).toHaveLength(0);
+      expect(writesOf(h, 'trace-staging-jobs-admin-login')).toHaveLength(0);
       expect(h.err.join('')).toMatch(/wait 5 minutes/i);
     });
 
@@ -1532,7 +1551,7 @@ describe('main', () => {
       put: () => ({ status: 1, stdout: '', stderr: 'latest version not deployed' }),
     });
     expect(await main({ argv: YES, deps: h.deps })).toBe(1);
-    expect(h.writes()).toHaveLength(4);
+    expect(h.writes()).toHaveLength(6);
     expect(h.deletes()).toHaveLength(0);
     const text = h.err.join('');
     expect(text).toContain('MEDIA_LINK_HMAC_KEY');

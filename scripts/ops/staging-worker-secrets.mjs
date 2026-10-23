@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Operator script: the four staging database login roles, the four staging Hyperdrive configs that hold them, and
+// Operator script: the six staging database login roles, the six staging Hyperdrive configs that hold them, and
 // the one database-free api secret (specs/d1-demo-slice.md §3 "Roles", §7.1 secrets and the check-staging-secrets
-// allow-list, §8 DC-D7; ADR-031 amendment 1, d1 revision 4o; scripts/lib/hyperdrive.mjs).
+// allow-list, §8 DC-D7; ADR-031 amendment 1, d1 revision 4o; scripts/lib/hyperdrive.mjs). M1 R5-11 (DC-M1-6) added
+// jobs_authoring_login and jobs_admin_login: a run after M1 creates their two configs and rotates the D1 four.
 //   TRACE_OPERATOR_DB_URL=... node scripts/ops/staging-worker-secrets.mjs --env staging \
 //     --ca-certificate-id <id> [--sslmode verify-full|verify-ca] [--dry-run | --yes]
 // Why Hyperdrive: a Worker's own TLS client trusts only public roots, and Supabase Postgres presents a certificate
@@ -11,7 +12,7 @@
 // role (MT-14), caching disabled (a cached read would cross role and org scoping). The *_DB_URL secrets are retired
 // on staging; local dev keeps them (local hosts only).
 // Run by the founder on their own computer, AFTER the first staging deploy (the Workers must exist), with wrangler
-// logged in (OAuth `wrangler login`, or CLOUDFLARE_API_TOKEN). A re-run rotates: new passwords, then the same four
+// logged in (OAuth `wrangler login`, or CLOUDFLARE_API_TOKEN). A re-run rotates: new passwords, then the same six
 // configs updated in place.
 //   1. Checks, before anything changes: --env staging only; --ca-certificate-id is a UUID; --sslmode is verify-full
 //      (default) or verify-ca, never require; TRACE_OPERATOR_DB_URL is the staging project's Supabase session pooler
@@ -23,7 +24,7 @@
 //      fallback "yes" in a non-interactive context), and the names it lists are kept for step 6; the Cloudflare
 //      token comes from `wrangler auth token --json` (stdout, never printed or put on a command line); then the
 //      account's Hyperdrive configs are listed, which proves the token, the account and Hyperdrive access.
-//   2. Generates four 32-byte hex passwords and a 32-byte hex media-link HMAC key (services/api importHmacKey takes
+//   2. Generates six 32-byte hex passwords and a 32-byte hex media-link HMAC key (services/api importHmacKey takes
 //      the string, at least 32 characters), in memory only.
 //   3. One psql transaction as postgres, SQL on stdin, ON_ERROR_STOP=1 (lib.mjs runSql): refuses (TR001) if a
 //      trace_* role is missing (migrations not applied); per login creates the role (`login noinherit`) or sets a new
@@ -125,11 +126,18 @@ export const PLAN = Object.freeze([
 
 /**
  * The database URL secrets retired on staging (ADR-031 amendment 1, d1 revision 4o): step 6 deletes each one the
- * Worker still holds, because check-staging-secrets refuses them.
+ * Worker still holds, because check-staging-secrets refuses them. The two M1 twins (R5-11) were never a staging
+ * secret; they are listed so that one set there by mistake is deleted the same way.
  */
 export const RETIRED_SECRETS = Object.freeze({
   api: Object.freeze(['API_DB_URL']),
-  jobs: Object.freeze(['JOBS_MIRROR_DB_URL', 'JOBS_QUALITY_DB_URL', 'JOBS_INTEGRITY_DB_URL']),
+  jobs: Object.freeze([
+    'JOBS_MIRROR_DB_URL',
+    'JOBS_QUALITY_DB_URL',
+    'JOBS_INTEGRITY_DB_URL',
+    'JOBS_AUTHORING_DB_URL',
+    'JOBS_ADMIN_DB_URL',
+  ]),
 });
 
 // Fail at load if the plan ever leaves the allow-list, reaches edge, keeps a retired name or misses a login.
@@ -690,8 +698,8 @@ function planLines(target, cli) {
         `       ${workerOf(worker).workerName} (${workerOf(worker).dir}): ${names.join(', ')}`,
     ),
     '  Not touched: CANDIDATE_TOKEN_PRIVATE_JWK and trace-edge-staging (no secret).',
-    '  A re-run makes new passwords and updates the same four configs; between steps 1 and 2 the configs hold the',
-    '  old passwords for tens of seconds (four config updates in a row, each one tests the database connection).',
+    '  A re-run makes new passwords and updates the same six configs; between steps 1 and 2 the configs hold the',
+    '  old passwords for tens of seconds (six config updates in a row, each one tests the database connection).',
   ];
 }
 
@@ -808,7 +816,7 @@ export async function main({ argv, deps = realScriptDeps() }) {
       // No SQLSTATE: the connection dropped, psql was killed or timed out. The commit may or may not have run.
       return fail(
         1,
-        `the database call ended without a SQL error (connection lost, psql exit or timeout), so the outcome is unknown: the login passwords may have changed, and then the four Hyperdrive configs (${configs.join(', ')}) are stale and MEDIA_LINK_HMAC_KEY is not set yet. Re-run with --yes (it sets new passwords and updates every config and the secret again)`,
+        `the database call ended without a SQL error (connection lost, psql exit or timeout), so the outcome is unknown: the login passwords may have changed, and then the six Hyperdrive configs (${configs.join(', ')}) are stale and MEDIA_LINK_HMAC_KEY is not set yet. Re-run with --yes (it sets new passwords and updates every config and the secret again)`,
       );
     }
     return fail(1, `${describeFailure(db)}; the transaction rolled back, nothing was changed`);
@@ -874,7 +882,7 @@ export async function main({ argv, deps = realScriptDeps() }) {
       if (failed(r)) {
         return fail(
           1,
-          `setting ${s.name} on ${w.workerName} failed (the four Hyperdrive configs are done). Fix the cause (wrangler whoami; a Worker whose latest version is not deployed) and re-run with --yes`,
+          `setting ${s.name} on ${w.workerName} failed (the six Hyperdrive configs are done). Fix the cause (wrangler whoami; a Worker whose latest version is not deployed) and re-run with --yes`,
         );
       }
       say(`${TAG}: set ${s.name} on ${w.workerName}`);

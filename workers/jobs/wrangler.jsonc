@@ -76,6 +76,9 @@
       },
       "triggers": { "crons": ["* * * * *"] },
       // Configs trace-staging-jobs-{mirror,quality,integrity}-login (scripts/lib/hyperdrive.mjs); public ids.
+      // M1 R5-11: JOBS_AUTHORING_DB and JOBS_ADMIN_DB (trace-staging-jobs-{authoring,admin}-login) follow, last
+      // and in that order, once the founder has created the configs; until then they are PENDING_BINDINGS and
+      // check-deploy-vars refuses a staging deploy.
       "hyperdrive": [
         { "binding": "JOBS_MIRROR_DB", "id": "784e4dee7f0c4119b482340d48f6089d" },
         { "binding": "JOBS_QUALITY_DB", "id": "29d5817a3e7f42c5ab5433f56ce0e4d5" },

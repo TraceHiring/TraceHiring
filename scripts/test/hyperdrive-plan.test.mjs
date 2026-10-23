@@ -9,6 +9,7 @@ import {
   HYPERDRIVE_PLAN,
   HYPERDRIVE_SSLMODES,
   ORIGIN_CONNECTION_LIMIT,
+  PENDING_BINDINGS,
   allHyperdriveProblems,
   bindingsFor,
   hyperdriveProblems,
@@ -24,11 +25,20 @@ const jobsOk = () =>
     { binding: 'JOBS_MIRROR_DB', id: id(2) },
     { binding: 'JOBS_QUALITY_DB', id: id(3) },
     { binding: 'JOBS_INTEGRITY_DB', id: id(4) },
+    { binding: 'JOBS_AUTHORING_DB', id: id(5) },
+    { binding: 'JOBS_ADMIN_DB', id: id(6) },
   ]);
+/** The D1 jobs bindings only: the committed state while the M1 configs are pending (R5-11). */
+const jobsD1 = () => {
+  const cfg = jobsOk();
+  cfg.env.staging.hyperdrive = cfg.env.staging.hyperdrive.slice(0, 3);
+  return cfg;
+};
 const STRICT = { requireStaging: true };
+const PENDING_OK = { requireStaging: true, allowPending: true };
 
 describe('HYPERDRIVE_PLAN', () => {
-  it('gives each login role exactly one config and one binding, api one and jobs three', () => {
+  it('gives each login role exactly one config and one binding, api one and jobs five', () => {
     expect(HYPERDRIVE_PLAN.map((p) => p.login).sort()).toEqual(
       LOGIN_ROLES.map((r) => r.login).sort(),
     );
@@ -37,8 +47,46 @@ describe('HYPERDRIVE_PLAN', () => {
       'JOBS_MIRROR_DB',
       'JOBS_QUALITY_DB',
       'JOBS_INTEGRITY_DB',
+      'JOBS_AUTHORING_DB',
+      'JOBS_ADMIN_DB',
     ]);
     expect(bindingsFor('edge')).toEqual([]);
+  });
+
+  it('maps the M1 logins to their bindings and configs (M1 R5-11, DC-M1-6)', () => {
+    const m1 = HYPERDRIVE_PLAN.filter((p) => p.login.startsWith('jobs_a'));
+    expect(m1).toEqual([
+      {
+        worker: 'jobs',
+        binding: 'JOBS_AUTHORING_DB',
+        login: 'jobs_authoring_login',
+        config: 'trace-staging-jobs-authoring-login',
+      },
+      {
+        worker: 'jobs',
+        binding: 'JOBS_ADMIN_DB',
+        login: 'jobs_admin_login',
+        config: 'trace-staging-jobs-admin-login',
+      },
+    ]);
+  });
+
+  it('stays within the Free plan limit of 10 Hyperdrive configs (ADR-031 amendment 1)', () => {
+    expect(HYPERDRIVE_PLAN.length).toBeLessThanOrEqual(10);
+  });
+
+  it('marks pending only planned bindings, at the end of their Worker list (frozen)', () => {
+    expect([...PENDING_BINDINGS]).toEqual(['JOBS_AUTHORING_DB', 'JOBS_ADMIN_DB']);
+    expect(Object.isFrozen(PENDING_BINDINGS)).toBe(true);
+    for (const worker of ['api', 'jobs']) {
+      const list = bindingsFor(worker).map((p) => p.binding);
+      const firstPending = list.findIndex((b) => PENDING_BINDINGS.includes(b));
+      if (firstPending < 0) continue;
+      expect(list.slice(firstPending).every((b) => PENDING_BINDINGS.includes(b))).toBe(true);
+    }
+    for (const b of PENDING_BINDINGS) {
+      expect(HYPERDRIVE_PLAN.some((p) => p.binding === b)).toBe(true);
+    }
   });
 
   it('names every config trace-staging-<login> and every binding uniquely', () => {
@@ -73,6 +121,28 @@ describe('hyperdriveProblems', () => {
     expect(hyperdriveProblems('edge', { env: { dev: {}, staging: {} } }, STRICT)).toEqual([]);
   });
 
+  it('while M1 configs are pending, accepts their absence only when allowPending is set', () => {
+    expect(hyperdriveProblems('jobs', jobsD1(), PENDING_OK)).toEqual([]);
+    expect(hyperdriveProblems('jobs', jobsOk(), PENDING_OK)).toEqual([]);
+    // The deploy never sets allowPending: a staging deploy without every id is refused.
+    expect(hyperdriveProblems('jobs', jobsD1(), STRICT)).toEqual([
+      'jobs: env.staging.hyperdrive must be exactly [JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB, JOBS_AUTHORING_DB, JOBS_ADMIN_DB] in this order',
+    ]);
+    // Only the pending ones may be missing, and only all of them: a D1 binding is never optional.
+    const noQuality = jobsOk();
+    noQuality.env.staging.hyperdrive.splice(1, 1);
+    const half = jobsOk();
+    half.env.staging.hyperdrive.pop();
+    for (const cfg of [noQuality, half]) {
+      expect(hyperdriveProblems('jobs', cfg, PENDING_OK)).toEqual([
+        'jobs: env.staging.hyperdrive must be exactly [JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB, JOBS_AUTHORING_DB, JOBS_ADMIN_DB] in this order (or without the pending JOBS_AUTHORING_DB, JOBS_ADMIN_DB)',
+      ]);
+    }
+    expect(
+      hyperdriveProblems('api', { env: { dev: {}, staging: { hyperdrive: [] } } }, PENDING_OK),
+    ).toEqual(['api: env.staging.hyperdrive must be exactly [API_DB] in this order']);
+  });
+
   it('before the configs exist, accepts a staging block without hyperdrive unless the deploy requires it', () => {
     const none = { env: { dev: {}, staging: {} } };
     expect(hyperdriveProblems('api', none, { requireStaging: false })).toEqual([]);
@@ -94,7 +164,7 @@ describe('hyperdriveProblems', () => {
     expect(
       hyperdriveProblems('jobs', staging([{ binding: 'JOBS_MIRROR_DB', id: id(2) }]), STRICT),
     ).toEqual([
-      'jobs: env.staging.hyperdrive must be exactly [JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB] in this order',
+      'jobs: env.staging.hyperdrive must be exactly [JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB, JOBS_AUTHORING_DB, JOBS_ADMIN_DB] in this order',
     ]);
     expect(
       hyperdriveProblems('api', staging([{ binding: 'HYPERDRIVE', id: id(1) }]), STRICT),

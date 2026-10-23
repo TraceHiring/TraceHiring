@@ -12,6 +12,7 @@ import {
   main,
   parseJwkSet,
 } from '../check-deploy-vars.mjs';
+import { PENDING_BINDINGS } from '../lib/hyperdrive.mjs';
 
 const PUBLIC_KEY = {
   kty: 'EC',
@@ -39,6 +40,9 @@ const GOOD_CONFIGS = () => ({
           { binding: 'JOBS_MIRROR_DB', id: hid(2) },
           { binding: 'JOBS_QUALITY_DB', id: hid(3) },
           { binding: 'JOBS_INTEGRITY_DB', id: hid(4) },
+          // M1 R5-11 (DC-M1-6): the drafting and member provisioning logins.
+          { binding: 'JOBS_AUTHORING_DB', id: hid(5) },
+          { binding: 'JOBS_ADMIN_DB', id: hid(6) },
         ],
       },
     },
@@ -344,8 +348,33 @@ describe('main', () => {
     const errs = [];
     expect(main({ env: GOOD(), configs, out: () => {}, err: (l) => errs.push(l) })).toBe(1);
     expect(errs.join('\n')).toMatch(
-      /jobs: env.staging has no hyperdrive bindings \(JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB\)/,
+      /jobs: env.staging has no hyperdrive bindings \(JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB, JOBS_AUTHORING_DB, JOBS_ADMIN_DB\)/,
     );
+  });
+
+  // M1 R5-11: the two M1 ids exist only after the founder runs staging-worker-secrets.mjs; until they are committed,
+  // the deploy refuses (the repository's own bindings test accepts them as pending, the deploy never does).
+  it('exits 1 when only the D1 Hyperdrive bindings are present (the M1 ids are required)', () => {
+    const configs = GOOD_CONFIGS();
+    configs.jobs.env.staging.hyperdrive = configs.jobs.env.staging.hyperdrive.slice(0, 3);
+    const errs = [];
+    expect(main({ env: GOOD(), configs, out: () => {}, err: (l) => errs.push(l) })).toBe(1);
+    expect(errs.join('\n')).toMatch(
+      /jobs: env.staging.hyperdrive must be exactly \[JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB, JOBS_AUTHORING_DB, JOBS_ADMIN_DB\] in this order$/m,
+    );
+  });
+
+  it('refuses the repository configs while any Hyperdrive binding is still pending', () => {
+    const errs = [];
+    const code = main({
+      env: GOOD(),
+      configs: loadWranglerConfigs(),
+      out: () => {},
+      err: (l) => errs.push(l),
+    });
+    if (PENDING_BINDINGS.length === 0) return;
+    expect(code).toBe(1);
+    expect(errs.join('\n')).toMatch(/jobs: env.staging.hyperdrive must be exactly \[/);
   });
 
   it('exits 1 on a malformed or shared Hyperdrive id, naming the binding only', () => {

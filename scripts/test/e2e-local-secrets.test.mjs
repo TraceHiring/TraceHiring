@@ -34,6 +34,9 @@ describe('LOGIN_ROLES', () => {
       { login: 'jobs_mirror_login', role: 'trace_worker' },
       { login: 'jobs_quality_login', role: 'trace_quality_worker' },
       { login: 'jobs_integrity_login', role: 'trace_integrity_worker' },
+      // M1 R5-11 (DC-M1-6): the AI drafting job and the member provisioning job.
+      { login: 'jobs_authoring_login', role: 'trace_authoring_worker' },
+      { login: 'jobs_admin_login', role: 'trace_admin_worker' },
     ]);
   });
 });
@@ -50,7 +53,7 @@ describe('loginRolesSql', () => {
       expect(sql).toContain(`create role ${login} login noinherit password '${pw[login]}';\n`);
       expect(sql).toContain(`grant ${role} to ${login} with inherit false, set true;\n`);
     }
-    // Nothing but the four logins and their one role each.
+    // Nothing but the six logins and their one role each.
     expect(lines).toHaveLength(2 + 3 * LOGIN_ROLES.length);
   });
 
@@ -75,7 +78,7 @@ describe('loginRolesSql', () => {
 });
 
 describe('dropLoginRolesSql', () => {
-  it('drops the four logins (if they exist) in one transaction', () => {
+  it('drops the six logins (if they exist) in one transaction', () => {
     expect(dropLoginRolesSql()).toBe(
       [
         'begin;',
@@ -207,6 +210,8 @@ describe('workerSecrets', () => {
     // The edge holds no secret and no database credential: the public key list only (L-10, D1-3).
     expect(s.edge).toEqual({ CANDIDATE_TOKEN_PUBLIC_JWK: i.keys.publicJwkList });
     expect(Object.keys(s.jobs).sort()).toEqual([
+      'JOBS_ADMIN_DB_URL',
+      'JOBS_AUTHORING_DB_URL',
       'JOBS_INTEGRITY_DB_URL',
       'JOBS_MIRROR_DB_URL',
       'JOBS_QUALITY_DB_URL',
@@ -233,6 +238,10 @@ describe('workerSecrets', () => {
     expect(user(s.jobs.JOBS_QUALITY_DB_URL)).toBe('jobs_quality_login');
     expect(user(s.jobs.JOBS_INTEGRITY_DB_URL)).toBe('jobs_integrity_login');
     expect(pass(s.jobs.JOBS_INTEGRITY_DB_URL)).toBe(i.passwords.jobs_integrity_login);
+    expect(user(s.jobs.JOBS_AUTHORING_DB_URL)).toBe('jobs_authoring_login');
+    expect(pass(s.jobs.JOBS_AUTHORING_DB_URL)).toBe(i.passwords.jobs_authoring_login);
+    expect(user(s.jobs.JOBS_ADMIN_DB_URL)).toBe('jobs_admin_login');
+    expect(pass(s.jobs.JOBS_ADMIN_DB_URL)).toBe(i.passwords.jobs_admin_login);
   });
 
   it('refuses a short media-link key (the api needs at least 32 characters)', async () => {

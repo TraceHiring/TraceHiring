@@ -66,6 +66,18 @@ describe('scenario SQL', () => {
   it('verifiersOf finds one verifier per login', () => {
     expect(Object.keys(verifiersOf(first)).sort()).toEqual(LOGIN_ROLES.map((r) => r.login).sort());
   });
+
+  it('checks the M1 logins too (R5-11): each holds only its own trace_* role', () => {
+    const sql = applyScenarioSql(first, second);
+    for (const [login, role] of [
+      ['jobs_authoring_login', 'trace_authoring_worker'],
+      ['jobs_admin_login', 'trace_admin_worker'],
+    ]) {
+      expect(checkNames('create')).toContain(`create:grant:${login}`);
+      expect(sql).toContain(`bool_and(r.rolname = '${role}'`);
+      expect(sql).toContain(`where l.rolname = '${login}'`);
+    }
+  });
 });
 
 describe('parseChecks and sqlstateOf', () => {
@@ -128,7 +140,8 @@ describe('main (scripted spawn)', () => {
       );
       expect(c.args.join(' ')).not.toMatch(/SCRAM|create role/);
     }
-    expect(r.out).toMatch(/apply OK/);
+    // Four checks per login and run, six logins (M1 R5-11), two runs.
+    expect(r.out).toMatch(/apply OK \(create path and alter path, 48 checks, rolled back\)/);
     expect(r.out).toMatch(/TR001 guard OK/);
     expect(r.out).toMatch(/TR002 guard OK/);
     expect(r.out).not.toMatch(/SCRAM-SHA-256/);
