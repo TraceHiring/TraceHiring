@@ -32,7 +32,7 @@ export interface ItemShape {
 }
 
 const optionsOf = (n: number) =>
-  Array.from({ length: n }, (_, i) => ({ id: `o${i}`, text: `[synthetic] option ${i}` }));
+  Array.from({ length: n }, (_, i) => ({ id: `o${i}`, label: `[synthetic] option ${i}` }));
 
 export function item(n: number, shape: ItemShape = {}): PackageItem {
   const kind = shape.kind ?? 'mcq';
