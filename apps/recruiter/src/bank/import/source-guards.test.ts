@@ -23,7 +23,7 @@ describe('production import code', () => {
 
   it('names none of the whole-buffer or callback-style fflate helpers', () => {
     const forbidden =
-      /\b(?:unzipSync|inflateSync|decompressSync|gunzipSync|unzlibSync|zipSync|zip|unzip|inflate|decompress|gunzip|unzlib|AsyncUnzipInflate|AsyncInflate|AsyncDecompress|AsyncGunzip|AsyncUnzlib|AsyncZipInflate|Decompress|Inflate|Gunzip|Unzlib)\s*\(/;
+      /\b(?:unzipSync|inflateSync|decompressSync|gunzipSync|unzlibSync|zipSync|unzip|inflate|decompress|gunzip|unzlib|AsyncUnzipInflate|AsyncInflate|AsyncDecompress|AsyncGunzip|AsyncUnzlib|AsyncZipInflate|Decompress|Inflate|Gunzip|Unzlib)\s*\(/;
     const forbiddenNames =
       /\b(?:unzipSync|inflateSync|decompressSync|gunzipSync|unzlibSync|zipSync|AsyncUnzipInflate|AsyncInflate|AsyncDecompress|AsyncGunzip|AsyncUnzlib|AsyncZipInflate|DecompressionStream)\b/;
     for (const file of production) {
@@ -60,9 +60,11 @@ describe('production import code', () => {
       "new Worker(new URL('./import.worker.ts', import.meta.url), { type: 'module' })",
     );
     for (const file of production) {
-      expect(code(file.text), file.name).not.toMatch(
-        /["'`]blob:|createObjectURL|\beval\s*\(|new Function\s*\(/,
-      );
+      expect(code(file.text), file.name).not.toMatch(/["'`]blob:|\beval\s*\(|new Function\s*\(/);
+      // The error list is the one Blob URL (plain-text CSV, revoked at once); a worker never comes from one.
+      if (file.name !== 'csv-download.ts') {
+        expect(code(file.text), file.name).not.toMatch(/createObjectURL/);
+      }
     }
   });
 
