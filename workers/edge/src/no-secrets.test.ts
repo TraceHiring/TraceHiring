@@ -66,9 +66,14 @@ const SERVER_ONLY = [
 const DB_CLIENT_IMPORT =
   /\bfrom\s+['"](?:postgres|pg|@supabase\/[^'"]*|@neondatabase\/[^'"]*)['"]|\bimport\s*\(\s*['"](?:postgres|pg|@supabase\/)/;
 
-/** The same rule as check-boundaries rule 11: every PACKAGES use is `.get(`, `.head(` or a type declaration. */
-const PACKAGES_USE = /\bPACKAGES\b/g;
-const PACKAGES_ALLOWED = /^PACKAGES(?:\??\.(?:get|head)\s*\(|\??\s*:)/;
+/**
+ * The same rule as check-boundaries rule 11: every PACKAGES and ITEM_MEDIA (M1 R5-10) use is `.get(`, `.head(` or a
+ * type declaration.
+ */
+const READ_ONLY_BUCKETS = ['PACKAGES', 'ITEM_MEDIA'] as const;
+const useOf = (name: string): RegExp => new RegExp(`\\b${name}\\b`, 'g');
+const allowedOf = (name: string): RegExp =>
+  new RegExp(`^${name}(?:\\??\\.(?:get|head)\\s*\\(|\\??\\s*:)`);
 
 type Finding = { path: string; problem: string };
 
@@ -82,10 +87,13 @@ const scan = (sources: Record<string, string>): Finding[] => {
     for (const re of SERVER_ONLY)
       if (re.test(text)) out.push({ path, problem: 'server-only name' });
     if (DB_CLIENT_IMPORT.test(text)) out.push({ path, problem: 'database client import' });
-    for (const m of text.matchAll(PACKAGES_USE)) {
-      if (!PACKAGES_ALLOWED.test(text.slice(m.index))) {
-        out.push({ path, problem: 'PACKAGES write or alias' });
-        break;
+    for (const name of READ_ONLY_BUCKETS) {
+      const allowed = allowedOf(name);
+      for (const m of text.matchAll(useOf(name))) {
+        if (!allowed.test(text.slice(m.index))) {
+          out.push({ path, problem: `${name} write or alias` });
+          break;
+        }
       }
     }
   }
@@ -122,6 +130,13 @@ describe('the edge holds no secret (AT-D31, edge part)', () => {
       './alias.ts': 'const p = env.PACKAGES; await p.put("k", b);',
       './destructure.ts': 'const { PACKAGES } = env;',
       './bracket.ts': 'await env.PACKAGES["put"]("k", b);',
+      // M1 R5-10: ITEM_MEDIA is read only too.
+      './media-put.ts': 'await env.ITEM_MEDIA.put("k", body);',
+      './media-delete.ts': 'await env.ITEM_MEDIA.delete("k");',
+      './media-list.ts': 'await env.ITEM_MEDIA.list();',
+      './media-alias.ts': 'const m = env.ITEM_MEDIA; await m.put("k", b);',
+      './media-destructure.ts': 'const { ITEM_MEDIA } = env;',
+      './media-bracket.ts': 'await env.ITEM_MEDIA["put"]("k", b);',
     };
     const found = scan(synthetic);
     const paths = [...new Set(found.map((f) => f.path))].sort();
@@ -133,6 +148,8 @@ describe('the edge holds no secret (AT-D31, edge part)', () => {
     expect(
       scan({
         './ok.ts': 'await env.PACKAGES.get(k); await env.PACKAGES?.head(k); PACKAGES: R2Bucket;',
+        './media-ok.ts':
+          'await env.ITEM_MEDIA.get(k); await env.ITEM_MEDIA?.head(k); ITEM_MEDIA?: R2Bucket;',
       }),
     ).toEqual([]);
   });

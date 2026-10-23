@@ -243,6 +243,12 @@ where a Worker still holds them: they are retired on staging, and the deploy's `
 while one is left. It does **not** set `CANDIDATE_TOKEN_PRIVATE_JWK` (see the key pair section above) and it never
 touches the edge Worker, which holds no secret.
 
+The M1 member provisioning secrets (specs/m1-test-authoring.md R5-12) are allow-listed but not set by this
+script or by `scripts/e2e-local.mjs` yet: `MEMBER_INVITE_PEPPER` (api and jobs, one value for both) and
+`SUPABASE_SECRET_KEY_JOBS` (jobs only). Their readers arrive in M1 Wave 2: stream A2 (the api `members` module)
+reads the pepper, and stream A3 (the jobs member provisioning job) reads both. The lead wires the generation and
+setting of these values in this script and in the local stack together with those streams.
+
 You run it on your own computer, **after the first staging deploy** and before the D1 staging smoke (step 4 of
 "First staging deploy" above). It makes new random passwords, gives them to Postgres, then writes them into the
 six Hyperdrive configs. It never prints, logs or saves a password, a key, the Cloudflare token or your database
