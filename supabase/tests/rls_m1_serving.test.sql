@@ -355,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(54);
+select plan(63);
 -- Fixtures (operator path): pool P (mcq, workspace A1) = approved s1..s8, the parameterised pq (two variants) and cp1, a
 -- copy of the library item lib1; s9 is approved but in no pool; ai1 is an AI draft in review. Version v2 (Standard):
 -- section sp draws 3 from P, section si is inline with ii1. Version v1: D1-style inline section with iv1.
@@ -520,5 +520,20 @@ select pg_temp.sec('sp3', 'v3', 1, 'mcq', 'd1000000-0000-4000-8000-0000000000e1'
 select pg_temp.preset('v3', 'standard');
 select is(pg_temp.try($$select pg_temp.publish('v3')$$), 'OK 1', 'R3-2: a second version of the pool publishes');
 select is((select string_agg(k || '=' || sp.exposure_at_publish, ',' order by k) from unnest(array['s1', 's2', 's3', 'cp1']) as k join public.section_pool_snapshot as sp on sp.item_version_id = pg_temp.id(k) and sp.test_version_id = pg_temp.id('v3')), 'cp1=1,s1=1,s2=0,s3=1', 'R3-2: exposure_at_publish freezes each item''s served count (drawn-only s2 counts 0)');
+
+-- ===== Migration M1-i (R5-62 b): trace_worker reads only the layout columns of sections and item_versions =====
+select pg_temp.w('trace_worker', pg_temp.id('A'));
+select ok((select count(*) from (select id, org_id, test_version_id, position, draw_count from public.sections) as s) > 0, 'M1-i: trace_worker bound to org A reads the section layout columns');
+select ok((select count(*) from (select id, org_id, section_id, test_version_id from public.item_versions where section_id is not null) as v) > 0, 'M1-i: trace_worker bound to org A reads the inline item placement columns');
+select matches(pg_temp.try('select name from public.sections'), '^42501 permission denied', 'M1-i: trace_worker cannot read a section name');
+select matches(pg_temp.try('select stem from public.item_versions'), '^42501 permission denied', 'M1-i: trace_worker cannot read item content');
+select matches(pg_temp.try('select options from public.item_versions'), '^42501 permission denied', 'M1-i: trace_worker cannot read options');
+select matches(pg_temp.try($$update public.sections set position = position$$), '^42501 permission denied', 'M1-i: trace_worker cannot update sections');
+select pg_temp.w('trace_worker', pg_temp.id('B'));
+select is((select count(*)::int from public.sections where org_id = pg_temp.id('A')), 0, 'M1-i: trace_worker bound to org B sees no org A section');
+select is((select count(*)::int from public.item_versions where org_id = pg_temp.id('A')), 0, 'M1-i: trace_worker bound to org B sees no org A item version');
+select pg_temp.w('trace_worker', null);
+select is((select count(*)::int from public.sections), 0, 'M1-i: an unbound trace_worker sees no section');
+select pg_temp.op();
 select * from finish();
 rollback;
