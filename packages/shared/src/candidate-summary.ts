@@ -10,7 +10,8 @@
 // private.derive_signal_settings). A setting switches its mapped signals whatever its "runs from" (R5-39 d); settings
 // that map no D1 signal (the M4, M3b and Phase 2 ones) run nothing, so they add no line.
 //
-// Copy rules: rule 7 terms never appear; the summary may over-state but never under-state what is recorded, so every
+// Copy rules: rule 7 terms never appear, nor D1's recruiter guard words (ANYWHERE_WORDS, COMBINED, NEVER_BUILD in
+// apps/recruiter/src/d1-guards.test.tsx), because the recruiter integrity step shows these lines too; the summary may over-state but never under-state what is recorded, so every
 // captured signal has a line, and the always-on D1 records (start photo, answers and edits, connection signal; see
 // apps/candidate/src/copy.ts) are listed whatever the settings. Nothing here claims camera, microphone or identity
 // checks. Changing any line, its order or the mapping is a new CANDIDATE_SUMMARY_VERSION.
@@ -72,8 +73,8 @@ const TEXT = {
   fullscreen: 'We record when you leave full screen.',
   heartbeat: 'We record a regular signal that the page is still connected.',
   review:
-    'A person checks these events only if your answers put you on the shortlist. ' +
-    'No event rejects you on its own.',
+    "A person looks at these records only if your answers score above the employer's cutoff. " +
+    'A record never decides your result by itself.',
 } as const;
 
 const CATALOG_ORDER = Object.keys(SIGNAL_CATALOG.signals) as CatalogSignal[];
