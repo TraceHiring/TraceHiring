@@ -179,6 +179,64 @@ describe('scheduled()', () => {
   });
 });
 
+describe('scheduled(): the stranded drafting-job sweep (R5-64 m)', () => {
+  const withDraftSweep = (draftSweep: (env: Env) => Promise<number>) =>
+    createQueueHandlers({
+      reporter: { capture() {} },
+      stages: okStages,
+      pendingStages: () => Promise.resolve([]),
+      draftSweep,
+    });
+
+  it('runs on every cron tick with the env of the call, beside the mirror sweep', async () => {
+    const b = bindings();
+    const seen: Env[] = [];
+    const handlers = withDraftSweep((env) => {
+      seen.push(env);
+      return Promise.resolve(0);
+    });
+    const env = envWith({ MIRROR_QUEUE: b.queue, EVIDENCE: b.evidence });
+    const { ctx, pending } = execution();
+
+    await handlers.scheduled(controller, env, ctx);
+
+    expect(seen).toEqual([env]);
+    expect(pending).toHaveLength(1);
+  });
+
+  it('still runs when the mirror bindings are missing; the tick then rejects with the constant error', async () => {
+    let ran = 0;
+    const handlers = withDraftSweep(() => {
+      ran += 1;
+      return Promise.resolve(0);
+    });
+    const { ctx } = execution();
+
+    await expect(handlers.scheduled(controller, envWith({}), ctx)).rejects.toThrow(
+      BINDING_UNAVAILABLE,
+    );
+    expect(ran).toBe(1);
+  });
+
+  it('a failed drafting sweep rejects the tick after the mirror sweep has run', async () => {
+    const message = validMessage();
+    const b = bindings({ [mirrorKey(ORG_ID, SESSION_ID)]: JSON.stringify(message) });
+    const handlers = createQueueHandlers({
+      reporter: { capture() {} },
+      stages: okStages,
+      pendingStages: () => Promise.resolve([pendingRow]),
+      draftSweep: () => Promise.reject(new Error('db down')),
+    });
+    const { ctx, pending } = execution();
+
+    await expect(
+      handlers.scheduled(controller, envWith({ MIRROR_QUEUE: b.queue, EVIDENCE: b.evidence }), ctx),
+    ).rejects.toThrow('db down');
+    expect(b.sent).toHaveLength(1);
+    await expect(Promise.all(pending)).resolves.toBeDefined();
+  });
+});
+
 describe('stages and the sweep database part built per invocation env (lead wiring, spec §11)', () => {
   it('a stages factory receives the env of the queue() call', async () => {
     const seen: Env[] = [];

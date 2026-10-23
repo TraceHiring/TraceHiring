@@ -62,6 +62,12 @@ describe('STAGE_DB: one login secret and one worker role per stage (MT-14, L-29)
         role: 'trace_authoring_worker',
       },
       admin: { binding: 'JOBS_ADMIN_DB', secret: 'JOBS_ADMIN_DB_URL', role: 'trace_admin_worker' },
+      // R5-64 m: the stranded drafting-job sweep reads every org on the authoring login, as the authoring worker.
+      authoring_sweep: {
+        binding: 'JOBS_AUTHORING_DB',
+        secret: 'JOBS_AUTHORING_DB_URL',
+        role: 'trace_authoring_worker',
+      },
     });
     const roles = new Set(
       (['mirror', 'quality', 'integrity', 'authoring', 'admin'] as const).map(
@@ -100,6 +106,26 @@ describe('createStageDb', () => {
     const db = createStageDb('sweep', fakeBegin(rec), () => REQ);
     await db.withOrg(null, async () => undefined);
     expect(rec.statements[1]?.params).toEqual(['', REQ]);
+  });
+
+  it('the drafting sweep may run without an org (it fails stranded jobs of every org, R5-64 m)', async () => {
+    const rec = fresh();
+    const db = createStageDb('authoring_sweep', fakeBegin(rec), () => REQ);
+    await db.withOrg(null, async () => undefined);
+    expect(rec.statements).toEqual([
+      { text: 'set local role trace_authoring_worker', params: [] },
+      {
+        text: "select set_config('trace.job_org_id', $1, true), set_config('trace.request_id', $2, true)",
+        params: ['', REQ],
+      },
+    ]);
+  });
+
+  it('the authoring stage itself still refuses a missing org', async () => {
+    const rec = fresh();
+    const db = createStageDb('authoring', fakeBegin(rec), () => REQ);
+    await expect(db.withOrg(null, async () => undefined)).rejects.toThrow('bad_org');
+    expect(rec.statements).toEqual([]);
   });
 
   it('a stage other than the sweep refuses a missing org', async () => {
