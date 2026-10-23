@@ -10,6 +10,7 @@ import type {
 import type { LlmGrader } from '@trace/vendors';
 import { integrityHandlers } from '../integrity/fake-db.test-helpers.js';
 import {
+  ALL_SIGNALS_ENABLED,
   D1_RULES as rules,
   MemoryEvidence,
   heartbeat,
@@ -150,6 +151,7 @@ export const sessionWorld = async (opts: SessionWorldOptions = {}): Promise<Sess
     org_id: org,
     id: W.ruleset,
     band_rule_version_id: W.bandRules,
+    signal_settings: ALL_SIGNALS_ENABLED,
   });
   table(db, 'band_rule_versions').push({
     org_id: org,
