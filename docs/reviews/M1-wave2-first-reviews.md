@@ -104,3 +104,16 @@ has no SELECT privilege"); M1-l (`d1342de` red, `4fca331`) drops it and adds `pr
 Full serial verify green on `4fca331` (rls 3716, catalog 150). Findings: Low 1 `testTitle` relies only on the
 `api_org_id()` binding → documented in the store header (must run inside `inOrg`); Info 2 the `library/items` consumer of
 `LIBRARY_LIMITER` lands with A2a; Info 3 `ratelimits` on staging is confirmed only by the next staging dispatch (ADR-032).
+
+## A2a api (`620065a..08b27ce`, branch `m1/a2a-api-bank`) — Opus first reviews
+Writer (Opus): red `b0ab28a` (72 failing), api 55 files / 596 tests, typecheck + lint clean. Lead ask 1 done `0eb91ac`
+(item-variants `crypto.subtle`).
+**Security: APPROVE WITH FIXES** (no rule 1-9 issue):
+- Low S1 — `pathId` keeps an upper-case org UUID; the image PUT writes `item-media/{UPPER}/…` outside the org prefix, then
+  answers 503 (erasure/retention by prefix misses it). Fix: lower-case in `pathId` (all modules) + test.
+- Low S2 — `scrubDraftTopic` can lengthen a topic and `.slice(0, 500)` can cut a surrogate; the message then fails
+  `AuthoringQueueMessage` after the job insert → job stuck `queued` (no org role may fail it). Fix: parse the message
+  before the insert; cut by code point (shared, lead); a sweep `queued` → `failed` (`enqueue_failed`) for any enqueue failure.
+- Notes — `import_item_batch`/`save_item_variants` INVOKER + authenticated EXECUTE make the api's hash/variant checks
+  advisory (same org only; R2-5); image sniff checks headers only (serve with fixed type + nosniff); no per-job image cap;
+  `POST …/bank/ai-drafts` unlimited (cost exposure when ABH-87 lands a real LLM).
