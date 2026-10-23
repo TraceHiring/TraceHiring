@@ -485,6 +485,17 @@ as $$
   select false
 $$;
 revoke execute on function private.ai_draft_job_running(uuid, uuid, uuid) from public, anon, authenticated, service_role;
+-- The job's draft cap (its count), checked when a draft is inserted only: its key is added after the draft is counted.
+create function private.ai_draft_job_has_room(p_org uuid, p_job uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select false
+$$;
+revoke execute on function private.ai_draft_job_has_room(uuid, uuid) from public, anon, authenticated, service_role;
 
 -- SEC-M1-3 (R5-35): the authoring worker creates an item only while a drafting job of that org and workspace runs.
 create function private.ai_draft_job_running_in(p_org uuid, p_workspace uuid)
@@ -779,7 +790,8 @@ begin
         raise exception 'TRACE_GUARD: an AI draft is not parameterised' using errcode = '42501';
       end if;
       -- R5-35: the authoring worker writes only for a running drafting job of the same org and workspace.
-      if not v_op and not private.ai_draft_job_running(new.org_id, new.workspace_id, new.ai_draft_job_id) then
+      if not v_op and not (private.ai_draft_job_running(new.org_id, new.workspace_id, new.ai_draft_job_id)
+                           and private.ai_draft_job_has_room(new.org_id, new.ai_draft_job_id)) then
         raise exception 'TRACE_GUARD: an AI draft needs its running drafting job' using errcode = '42501';
       end if;
       new.status := 'in_review';

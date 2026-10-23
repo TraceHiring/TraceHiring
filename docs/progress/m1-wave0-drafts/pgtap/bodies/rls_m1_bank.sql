@@ -106,11 +106,14 @@ select pg_temp.op();
 select is((select (test_id = 'e1000000-0000-4000-8000-000000000001')::text || '|' || status::text from public.item_versions where stem = '[synthetic] Inline one'), 'true|approved', 'inline I: test filled from the section; an inline item is approved with its version (R5-28 c inline proof)');
 select is((select count(*)::int from public.item_versions where section_id is not null and test_id is null), 0, 'inline I: no inline row exists without its test');
 
--- ===== trace_authoring_worker writes (R5-35, DB-M1-5, SEC-M1-2, SEC-M1-3). No drafting job can be running before
--- migration M1-c creates ai_draft_jobs, so every worker write is refused here; M1-c adds the allowed cases. =====
+-- ===== trace_authoring_worker writes (R5-35, DB-M1-5, SEC-M1-2, SEC-M1-3). No drafting job of org A is running here,
+-- so every worker write is refused. =====
 insert into public.items (id, org_id, workspace_id, format, skill_key) values
   ('c3000000-0000-4000-8000-000000000001', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal');
--- The operator path names the drafting job id (no ai_draft_jobs row exists before M1-c; M1-c adds the FK and the job).
+-- The operator path names a drafting job that is queued, never running (M1-c's FK needs the row), so every worker write
+-- below is still refused; rls_m1_ai_drafts has the allowed cases against a running job.
+insert into public.ai_draft_jobs (id, org_id, workspace_id, requested_by, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values
+  ('c3900000-0000-4000-8000-000000000001', pg_temp.id('A'), pg_temp.id('A1'), pg_temp.id('owner'), 'mcq', 'verbal', 0.50, 1, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1');
 insert into public.item_versions (id, org_id, item_id, format, stem, options, skill_key, difficulty, origin, ai_draft_job_id, content_sha256) values
   ('c3100000-0000-4000-8000-000000000001', pg_temp.id('A'), 'c3000000-0000-4000-8000-000000000001', 'mcq', '[synthetic] AI draft without its key',
    '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', 'c3900000-0000-4000-8000-000000000001', repeat('c', 64));

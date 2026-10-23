@@ -352,7 +352,7 @@ create function pg_temp.m1_functions() returns text[] language sql as $f$
     'ai_draft_job_running_in', 'item_media_in_org', 'bank_no_truncate', 'sealed_settings_catalogs', 'settings_catalog_sealed',
     'import_jobs_guard', 'import_jobs_audit', 'import_row_errors_guard', 'ai_draft_jobs_guard', 'ai_draft_jobs_audit',
     'save_item_variants', 'import_item_batch', 'save_test_draft', 'member_invites_guard', 'member_invites_audit',
-    'provision_invited_member']
+    'provision_invited_member', 'ai_draft_job_has_room']
 $f$;
 grant execute on function pg_temp.m1_functions() to public;
 -- held(role): the M1 tables and functions the role holds any privilege on (table, any column, EXECUTE), sorted.
@@ -435,24 +435,24 @@ select is((select string_agg(t, ',' order by t) from unnest(pg_temp.m1_tables())
 
 -- ===== RLS personas: a hiring manager and an outsider read nothing =====
 select pg_temp.u('hm');
-select is(pg_temp.visible(), 'skill_taxonomy=- items=0 item_variants=0 item_variant_keys=0 item_exposure_events=0 pools=0 pool_items=0 library_copy_requests=0 role_templates=0 jobs=0 section_pool_snapshot=0 integrity_setting_defs=- integrity_presets=- org_integrity_locks=0 v_item_exposure=0 v_item_bank_quant_share=0', 'a hiring manager of org A reads no M1 row');
+select is(pg_temp.visible(), 'skill_taxonomy=- items=0 item_variants=0 item_variant_keys=0 item_exposure_events=0 pools=0 pool_items=0 library_copy_requests=0 role_templates=0 jobs=0 section_pool_snapshot=0 integrity_setting_defs=- integrity_presets=- org_integrity_locks=0 v_item_exposure=0 v_item_bank_quant_share=0 import_jobs=0 import_row_errors=0 ai_draft_jobs=0 member_invites=0', 'a hiring manager of org A reads no M1 row');
 select pg_temp.u('outsider');
-select is(pg_temp.visible(), 'skill_taxonomy=- items=0 item_variants=0 item_variant_keys=0 item_exposure_events=0 pools=0 pool_items=0 library_copy_requests=0 role_templates=0 jobs=0 section_pool_snapshot=0 integrity_setting_defs=- integrity_presets=- org_integrity_locks=0 v_item_exposure=0 v_item_bank_quant_share=0', 'a user with no membership reads no M1 row');
+select is(pg_temp.visible(), 'skill_taxonomy=- items=0 item_variants=0 item_variant_keys=0 item_exposure_events=0 pools=0 pool_items=0 library_copy_requests=0 role_templates=0 jobs=0 section_pool_snapshot=0 integrity_setting_defs=- integrity_presets=- org_integrity_locks=0 v_item_exposure=0 v_item_bank_quant_share=0 import_jobs=0 import_row_errors=0 ai_draft_jobs=0 member_invites=0', 'a user with no membership reads no M1 row');
 select pg_temp.u('owner');
-select is(pg_temp.visible(), 'skill_taxonomy=- items=4 item_variants=1 item_variant_keys=1 item_exposure_events=1 pools=1 pool_items=2 library_copy_requests=1 role_templates=1 jobs=1 section_pool_snapshot=2 integrity_setting_defs=- integrity_presets=- org_integrity_locks=1 v_item_exposure=1 v_item_bank_quant_share=1', 'control: the owner reads the fixtures (so the zeros above are denials)');
+select is(pg_temp.visible(), 'skill_taxonomy=- items=4 item_variants=1 item_variant_keys=1 item_exposure_events=1 pools=1 pool_items=2 library_copy_requests=1 role_templates=1 jobs=1 section_pool_snapshot=2 integrity_setting_defs=- integrity_presets=- org_integrity_locks=1 v_item_exposure=1 v_item_bank_quant_share=1 import_jobs=0 import_row_errors=0 ai_draft_jobs=0 member_invites=0', 'control: the owner reads the fixtures (so the zeros above are denials)');
 select pg_temp.op();
 
 -- ===== Direct calls by the candidate roles =====
 set local role trace_candidate;
-select is(pg_temp.visible(), 'skill_taxonomy=- items=- item_variants=- item_variant_keys=- item_exposure_events=- pools=- pool_items=- library_copy_requests=- role_templates=- jobs=- section_pool_snapshot=- integrity_setting_defs=- integrity_presets=- org_integrity_locks=- v_item_exposure=- v_item_bank_quant_share=-', 'trace_candidate: every M1 table and view is permission denied');
+select is(pg_temp.visible(), 'skill_taxonomy=- items=- item_variants=- item_variant_keys=- item_exposure_events=- pools=- pool_items=- library_copy_requests=- role_templates=- jobs=- section_pool_snapshot=- integrity_setting_defs=- integrity_presets=- org_integrity_locks=- v_item_exposure=- v_item_bank_quant_share=- import_jobs=- import_row_errors=- ai_draft_jobs=- member_invites=-', 'trace_candidate: every M1 table and view is permission denied');
 select matches(pg_temp.try($$select * from private.library_browse(null, null, null, null, null, null, null, null, 10)$$), '^42501 permission denied', 'trace_candidate: library_browse is denied');
 select matches(pg_temp.try($$select private.library_reference(null, null, null, 'templates')$$), '^42501 permission denied', 'trace_candidate: library_reference is denied');
 reset role;
 set local role anon;
-select is(pg_temp.visible(), 'skill_taxonomy=- items=- item_variants=- item_variant_keys=- item_exposure_events=- pools=- pool_items=- library_copy_requests=- role_templates=- jobs=- section_pool_snapshot=- integrity_setting_defs=- integrity_presets=- org_integrity_locks=- v_item_exposure=- v_item_bank_quant_share=-', 'anon: every M1 table and view is permission denied');
+select is(pg_temp.visible(), 'skill_taxonomy=- items=- item_variants=- item_variant_keys=- item_exposure_events=- pools=- pool_items=- library_copy_requests=- role_templates=- jobs=- section_pool_snapshot=- integrity_setting_defs=- integrity_presets=- org_integrity_locks=- v_item_exposure=- v_item_bank_quant_share=- import_jobs=- import_row_errors=- ai_draft_jobs=- member_invites=-', 'anon: every M1 table and view is permission denied');
 reset role;
 set local role service_role;
-select is(pg_temp.visible(), 'skill_taxonomy=- items=- item_variants=- item_variant_keys=- item_exposure_events=- pools=- pool_items=- library_copy_requests=- role_templates=- jobs=- section_pool_snapshot=- integrity_setting_defs=- integrity_presets=- org_integrity_locks=- v_item_exposure=- v_item_bank_quant_share=-', 'service_role: every M1 table and view is permission denied');
+select is(pg_temp.visible(), 'skill_taxonomy=- items=- item_variants=- item_variant_keys=- item_exposure_events=- pools=- pool_items=- library_copy_requests=- role_templates=- jobs=- section_pool_snapshot=- integrity_setting_defs=- integrity_presets=- org_integrity_locks=- v_item_exposure=- v_item_bank_quant_share=- import_jobs=- import_row_errors=- ai_draft_jobs=- member_invites=-', 'service_role: every M1 table and view is permission denied');
 reset role;
 select * from finish();
 rollback;
