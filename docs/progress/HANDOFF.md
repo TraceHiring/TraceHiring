@@ -10,9 +10,9 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
 
 ## Where we are (verified this chat)
 - Milestone **M1 · Test authoring**, phase **BUILD**: Wave 0 and **Wave 1 are done**; next is **BUILD 3 = Wave 2 (A2, A3, A4)**. Spec `specs/m1-test-authoring.md` rev 5 (rows R5-1…R5-55; R5-52 e/f amended in `74b6b2c`).
-- `m1/integration` code tip **`4364a33`** (+ this handoff). `d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged. Tree clean.
+- `m1/integration` code tip **`30b3156`** (`4364a33` + the CI budget test fix; + this handoff). `d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged. Tree clean.
 - **Full verify green on `4364a33`** (14:33 IST): typecheck 0, lint 0, `pnpm -r --workspace-concurrency=1 test` 0 (5,696 tests in 14 packages), `vitest run --root scripts` 0 (2828 passed / 2 skipped), build 0. `pnpm test:rls` green on `228b635` (rls 3638 / catalog 150, jobs real-DB tests incl. the new signal-settings case); A5a after it is recruiter-only.
-- Linux CI (PR TraceHiring/TraceHiring#14): the run on `228b635` had static **red** (item-variants contract-reserved names, fixed in `e1c0bb9`); rls, migrations, security green. **CI on `4364a33` was pushed at handoff: check it first** (`gh pr checks 14 --repo TraceHiring/TraceHiring`).
+- Linux CI (PR TraceHiring/TraceHiring#14): the run on `228b635` had static **red** (item-variants contract-reserved names, fixed in `e1c0bb9`); rls, migrations, security green. CI on `4364a33`: static red on a 2 s wall-clock budget in the new docx nesting test (2.28 s on a loaded runner), migrations and security green; budget raised to 8 s in `30b3156`. **CI on `30b3156` was running at handoff: check it first** (`gh pr checks 14 --repo TraceHiring/TraceHiring`).
 
 ## Done this chat (tests first; Opus first reviews, fixes test first, confirming re-reviews)
 - **A5c** merged `03a56c8` (`m1/a5c-fix-1` @ `63b8061`): Opus confirming re-review CONFIRMED WITH NOTES; FromTemplateRoute takes the branch version; registries + `authoring`, `settings`.
@@ -24,7 +24,7 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
 `m1/a1-packages` `ed548d4` · `m1/a5a-fix-1` `ba5ef3c` (`m1/a5a-import` `fb2dd59` superseded) · `m1/a5b-fix-1` `f70638c` (`m1/a5b-bank-library` `259579e` superseded) · `m1/a5c-fix-1` `63b8061`. Do not delete them.
 
 ## Next step (one precise action list)
-1. **CI on `4364a33`**: `gh pr checks 14`; fix any Linux failure first (AUTOPILOT §6).
+1. **CI on `30b3156`**: `gh pr checks 14`; fix any Linux failure first (AUTOPILOT §6).
 2. **BUILD 3 = Wave 2** per spec §11.3/§11.4: a read-only Sonnet pre-flight for A2 (services/api M1 modules + the editor wiring), A3 (workers/jobs) and A4 (per §11.3), then lead scaffolding, writers in parallel (<= 4, strict directories, `git reset --hard <SHA>`), Opus first reviews, fixes test first, confirming re-reviews, `test:rls`, full serial verify, CI. Use the notes below.
 3. Small follow-ups (fold into Wave 2 or a lead commit, test first): **A5a Low** (re-review): cross-check each central-directory entry's local-header offset and compressed size against the streamed record (`apps/recruiter/src/bank/import/zip-core.ts` ~223-288), else a stored decoy can be imported while Office shows another `document.xml`; **DC-M1-2** (built recruiter app under the real CSP: worker + Blob downloads) still to run.
 
