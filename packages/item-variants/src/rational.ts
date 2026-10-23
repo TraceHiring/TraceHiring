@@ -1,6 +1,7 @@
 // Exact rational arithmetic on bigint (specs/m1-test-authoring.md §6.3). A value is a numerator and a denominator,
 // always reduced with a positive denominator, so equal values have equal representations and compare with ===.
-// Pure: no I/O, no clock, no randomness.
+// Pure: no I/O, no clock, no randomness. Every operation charges the generation's work meter (work.ts) by size.
+import { charge } from './work.js';
 
 export interface Rational {
   readonly n: bigint;
@@ -20,16 +21,27 @@ export class RationalError extends Error {
 }
 
 /**
- * Numerators and denominators stay within 1024 bits (about 308 decimal digits). A quant item never needs more, and
- * the bound keeps nested powers such as `((2^6)^6)^6` from exhausting memory: a bigger value rejects the tuple.
+ * Numerators and denominators stay within 256 bits (about 77 decimal digits; review round 1 lowered it from 1024).
+ * A quant item never needs more, and the bound keeps nested powers such as `((2^6)^6)^6` cheap: a bigger value
+ * rejects the tuple.
  */
-export const MAX_BITS = 1024;
+export const MAX_BITS = 256;
 
 const babs = (x: bigint): bigint => (x < 0n ? -x : x);
 const bitLength = (x: bigint): number => (x === 0n ? 0 : babs(x).toString(2).length);
 
+/**
+ * Work units of one operation on operands of up to `bits` bits (the meter, work.ts): max(1, w^2) for w 64-bit words,
+ * since bigint multiplication and Euclid's gcd grow about quadratically with size.
+ */
+const opUnits = (bits: number): number => {
+  const w = Math.ceil(bits / 64);
+  return Math.max(1, w * w);
+};
+
 /** Greatest common divisor of |a| and |b|; gcd(0, 0) = 0. */
 export function bigGcd(a: bigint, b: bigint): bigint {
+  charge(opUnits(Math.max(bitLength(a), bitLength(b))));
   let x = babs(a);
   let y = babs(b);
   while (y !== 0n) {
@@ -49,6 +61,11 @@ export function rational(n: bigint, d: bigint = 1n): Rational {
     num = -num;
     den = -den;
   }
+  // The unreduced operands can be twice MAX_BITS (a cross product) or six times (a power); refuse those before the
+  // gcd so its cost stays bounded, then charge the meter by the operands' size.
+  const inBits = Math.max(bitLength(num), bitLength(den));
+  if (inBits > 8 * MAX_BITS) throw new RationalError('too_large');
+  charge(opUnits(inBits));
   const g = bigGcd(num, den);
   if (g > 1n) {
     num /= g;
@@ -131,6 +148,7 @@ export function toFixed(a: Rational, places: number): string {
 /** a printed exactly with the fewest decimals, or null when it needs more than `maxPlaces` (e.g. 1/3). */
 export function toExactDecimal(a: Rational, maxPlaces: number): string | null {
   for (let p = 0; p <= maxPlaces; p += 1) {
+    charge(opUnits(Math.max(bitLength(a.n), bitLength(a.d))));
     if ((a.n * 10n ** BigInt(p)) % a.d === 0n) return toFixed(a, p);
   }
   return null;

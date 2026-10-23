@@ -6,7 +6,17 @@
 //   {{x:2}}  fixed 2 decimals ("0.33"); never "-0.00"
 //   {{x:%}}  x times 100 printed exactly as for {{x}}, then "%" ("12.5%")
 // A text value (a `choice` param with string values) is inserted as written and takes no format.
-import { mul, rational, toExactDecimal, toFixed, type Rational } from './rational.js';
+// A value too large to scale for printing (the size bound, rational.ts) is RenderRejection `too_large`, never a
+// thrown RationalError (review round 1). Rendering charges the work meter per placeholder and per character.
+import {
+  RationalError,
+  mul,
+  rational,
+  toExactDecimal,
+  toFixed,
+  type Rational,
+} from './rational.js';
+import { charge, textUnits } from './work.js';
 
 export type TemplateFormat =
   | { readonly kind: 'plain' }
@@ -29,7 +39,7 @@ export class TemplateError extends Error {
   }
 }
 
-export type RenderRejectCode = 'not_terminating' | 'unknown_name' | 'format_on_text';
+export type RenderRejectCode = 'not_terminating' | 'unknown_name' | 'format_on_text' | 'too_large';
 
 /** The tuple cannot be rendered (for example 1/3 with no format). */
 export class RenderRejection extends Error {
@@ -107,6 +117,7 @@ export function renderTemplate(
   let out = '';
   for (const part of parts) {
     if ('text' in part) {
+      charge(textUnits(part.text.length));
       out += part.text;
       continue;
     }
@@ -114,20 +125,29 @@ export function renderTemplate(
     if (v === undefined) throw new RenderRejection('unknown_name');
     if (typeof v === 'string') {
       if (part.format.kind !== 'plain') throw new RenderRejection('format_on_text');
+      charge(textUnits(v.length));
       out += v;
       continue;
     }
-    switch (part.format.kind) {
-      case 'plain':
-        out += exact(v);
-        break;
-      case 'fixed':
-        out += toFixed(v, part.format.places);
-        break;
-      case 'percent':
-        out += `${exact(mul(v, rational(100n)))}%`;
-        break;
-    }
+    const s = formatNumber(v, part.format);
+    charge(textUnits(s.length));
+    out += s;
   }
   return out;
+}
+
+function formatNumber(v: Rational, format: TemplateFormat): string {
+  try {
+    switch (format.kind) {
+      case 'plain':
+        return exact(v);
+      case 'fixed':
+        return toFixed(v, format.places);
+      case 'percent':
+        return `${exact(mul(v, rational(100n)))}%`;
+    }
+  } catch (error) {
+    if (error instanceof RationalError) throw new RenderRejection('too_large');
+    throw error;
+  }
 }

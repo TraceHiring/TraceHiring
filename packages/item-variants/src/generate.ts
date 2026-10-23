@@ -9,8 +9,11 @@
 // Then derived values in dependency order (ties by name), then the constraints, then stem and options are rendered.
 // A tuple is rejected when a constraint is false, an expression divides by zero (or another EvalRejection), a
 // template cannot render, two options render equal (after trimming and collapsing whitespace), a text is empty or
-// too long, or the rendered stem and options repeat an earlier variant. Generation stops at `count` variants, or
-// fails with variant_generation_failed after 50 x count tuples in total.
+// too long, its stored JSON exceeds a database byte limit (options 8192, params 2048: octet_length of the jsonb
+// text, as mcq_options_valid and the item_variants CHECK measure it), or the rendered stem and options repeat an
+// earlier variant. Generation stops at `count` variants, or fails with variant_generation_failed: reason `attempts`
+// after 50 x count tuples in total, or reason `work_budget` when the deterministic work meter (work.ts) runs out
+// for one tuple or for the whole generation (review round 1, security High). Nothing throws for an accepted spec.
 //
 // The answer key: options keep the parent's option ids, so a variant's key is the parent's correctOptionId; the
 // equal-option rejection guarantees the key's rendered text differs from every distractor.
@@ -26,7 +29,7 @@ import {
   type ExprErrorCode,
 } from './expr.js';
 import { sfc32, uniformBelow, type Prng } from './prng.js';
-import { rational, type Rational } from './rational.js';
+import { RationalError, rational, type Rational } from './rational.js';
 import {
   RenderRejection,
   TemplateError,
@@ -37,12 +40,30 @@ import {
   type TemplatePart,
   type TemplateValue,
 } from './template.js';
+import { WorkBudgetExceeded, charge, runMetered, textUnits, type Meter } from './work.js';
 
 /** §6.3: a spec fails after this many tuples per requested variant. */
 export const MAX_ATTEMPTS_PER_VARIANT = 50;
 
+/**
+ * Work units one tuple may spend (draw, derived values, constraints, rendering, checks). The realistic maximal spec
+ * of limits.test.ts (a 3,800-character stem, 8 params, 8 derived values, 8 constraints) spends about 2,200 per
+ * tuple; the review's adversarial tuple spends far more and is stopped on its first tuple.
+ */
+export const TUPLE_WORK_BUDGET = 20_000;
+/**
+ * Work units a whole generation may spend, the bound on the CPU any accepted spec can cost: several times what the
+ * realistic maximal spec needs at count 200 (measured in the A1 review-round-1 report: roughly 0.5 s of Node CPU
+ * at most for bigint-heavy specs, far less for ordinary ones).
+ */
+export const GENERATION_WORK_BUDGET = 2_000_000;
+
 const MAX_STEM = 4000;
 const MAX_OPTION = 500;
+/** mcq_options_valid (d1_authoring.sql): octet_length(p_options::text) <= 8192. */
+const MAX_OPTIONS_BYTES = 8192;
+/** item_variants.params CHECK (m1_bank.sql): octet_length(params::text) <= 2048. */
+const MAX_PARAMS_BYTES = 2048;
 
 export type SpecErrorReason =
   | 'invalid_shape'
@@ -86,6 +107,8 @@ export type GenerateResult =
   | {
       readonly ok: false;
       readonly code: 'variant_generation_failed';
+      /** `attempts`: 50 x count tuples tried; `work_budget`: the work meter ran out. */
+      readonly reason: 'attempts' | 'work_budget';
       readonly accepted: number;
       readonly attempts: number;
     };
@@ -220,6 +243,24 @@ export function validateParamSpec(spec: unknown): SpecCheck {
 
 const normalise = (text: string) => text.trim().replace(/\s+/g, ' ');
 
+/**
+ * The jsonb text Postgres prints for a JSON value (`x::text`): ", " and ": " separators and JSON string escapes
+ * (the same escapes as JSON.stringify). Key order differs from jsonb's, which does not change the length.
+ */
+function jsonbText(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(jsonbText).join(', ')}]`;
+  if (typeof value === 'object' && value !== null) {
+    const parts = Object.keys(value).map(
+      (k) => `${JSON.stringify(k)}: ${jsonbText(Object.getOwnPropertyDescriptor(value, k)!.value)}`,
+    );
+    return `{${parts.join(', ')}}`;
+  }
+  return JSON.stringify(value);
+}
+const UTF8 = new TextEncoder();
+/** octet_length(value::text), the measure of the database CHECKs. */
+const jsonbTextBytes = (value: unknown): number => UTF8.encode(jsonbText(value)).length;
+
 function drawParams(c: Compiled, rng: Prng): Map<string, number | string> {
   const drawn = new Map<string, number | string>();
   for (const name of c.paramNames) {
@@ -267,9 +308,18 @@ function tryTuple(
     stem = renderTemplate(c.stem, values);
     options = c.options.map((o) => ({ id: o.id, text: renderTemplate(o.parts, values) }));
   } catch (error) {
-    if (error instanceof EvalRejection || error instanceof RenderRejection) return undefined;
+    // RationalError is mapped by evaluate and renderTemplate already; it is caught here too so that no arithmetic
+    // refusal can escape generateVariants for an accepted spec (review round 1, security Medium).
+    if (
+      error instanceof EvalRejection ||
+      error instanceof RenderRejection ||
+      error instanceof RationalError
+    ) {
+      return undefined;
+    }
     throw error;
   }
+  charge(textUnits(stem.length + options.reduce((n, o) => n + o.text.length, 0)) * 2);
   if (normalise(stem) === '' || stem.length > MAX_STEM) return undefined;
   const texts = options.map((o) => normalise(o.text));
   if (texts.some((t, i) => t === '' || options[i]!.text.length > MAX_OPTION)) return undefined;
@@ -277,6 +327,8 @@ function tryTuple(
   const params: Record<string, number | string> = {};
   for (const [name, v] of drawn)
     Object.defineProperty(params, name, { value: v, enumerable: true });
+  if (jsonbTextBytes(options) > MAX_OPTIONS_BYTES) return undefined;
+  if (jsonbTextBytes(params) > MAX_PARAMS_BYTES) return undefined;
   return {
     variant: { variantNo, params, stem, options, correctOptionId: c.spec.correctOptionId },
     key: JSON.stringify([normalise(stem), texts]),
@@ -306,26 +358,35 @@ export function generateVariants(spec: ParamSpec, seeds: readonly Uint8Array[]):
   const variants: GeneratedVariant[] = [];
   const seen = new Set<string>();
   let attempts = 0;
-  for (let k = 1; k <= count; k += 1) {
-    const rng = prngs[k - 1]!;
-    for (;;) {
-      if (attempts >= budget) {
-        return {
-          ok: false,
-          code: 'variant_generation_failed',
-          accepted: variants.length,
-          attempts,
-        };
+  const meter: Meter = { generation: GENERATION_WORK_BUDGET, tuple: TUPLE_WORK_BUDGET };
+  const failed = (reason: 'attempts' | 'work_budget'): GenerateResult => ({
+    ok: false,
+    code: 'variant_generation_failed',
+    reason,
+    accepted: variants.length,
+    attempts,
+  });
+  try {
+    return runMetered(meter, () => {
+      for (let k = 1; k <= count; k += 1) {
+        const rng = prngs[k - 1]!;
+        for (;;) {
+          if (attempts >= budget) return failed('attempts');
+          attempts += 1;
+          meter.tuple = TUPLE_WORK_BUDGET;
+          const got = tryTuple(c, rng, k);
+          if (got === undefined || seen.has(got.key)) continue;
+          seen.add(got.key);
+          variants.push(got.variant);
+          break;
+        }
       }
-      attempts += 1;
-      const got = tryTuple(c, rng, k);
-      if (got === undefined || seen.has(got.key)) continue;
-      seen.add(got.key);
-      variants.push(got.variant);
-      break;
-    }
+      return { ok: true, variants };
+    });
+  } catch (error) {
+    if (error instanceof WorkBudgetExceeded) return failed('work_budget');
+    throw error;
   }
-  return { ok: true, variants };
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

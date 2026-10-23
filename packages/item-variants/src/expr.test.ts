@@ -87,7 +87,9 @@ describe('parseExpression accepts the §6.3 grammar', () => {
     const longest = `${'1+'.repeat(99)}11`;
     expect(longest.length).toBe(200);
     // A flat sum is deep too (the depth is the tree's height), so the length check is tried on a shallow shape.
-    expect(parseCode(`a + ${'1'.repeat(196)}`, 'value')).toBe('accepted');
+    const longArgs = Array.from({ length: 8 }, () => 'abcdefghijklmnop').join(', ');
+    expect(`min(${longArgs}) + ${'1'.repeat(50)}`.length).toBe(200);
+    expect(parseCode(`min(${longArgs}) + ${'1'.repeat(50)}`, 'value')).toBe('accepted');
     expect(parseCode(nested(MAX_EXPR_DEPTH - 1), 'value')).toBe('accepted');
   });
 });
@@ -101,6 +103,7 @@ describe('parseExpression refuses everything else with a typed error', () => {
     ['   ', 'value', 'empty'],
     [`${'1+'.repeat(100)}1`, 'value', 'too_long'],
     ['1.1234567', 'value', 'bad_number'],
+    ['1'.repeat(100), 'value', 'bad_number'],
     ['1.', 'value', 'bad_number'],
     ['1..2', 'value', 'bad_number'],
     ['.5', 'value', 'bad_char'],

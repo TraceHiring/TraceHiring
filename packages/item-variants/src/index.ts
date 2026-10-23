@@ -17,7 +17,9 @@ export type { CompareOp, EvalRejectCode, Expr, ExprErrorCode, ExprMode } from '.
 export { RenderRejection, TemplateError, parseTemplate, renderTemplate } from './template.js';
 export type { RenderRejectCode, TemplateFormat, TemplatePart, TemplateValue } from './template.js';
 export {
+  GENERATION_WORK_BUDGET,
   MAX_ATTEMPTS_PER_VARIANT,
+  TUPLE_WORK_BUDGET,
   generateVariants,
   generateVariantsFor,
   validateParamSpec,

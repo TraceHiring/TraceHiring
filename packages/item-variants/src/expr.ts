@@ -292,7 +292,15 @@ class Parser {
 
   private prefix(): Expr {
     const tok = this.take();
-    if (tok.k === 'num') return { t: 'num', v: parseDecimal(tok.text) };
+    if (tok.k === 'num') {
+      try {
+        return { t: 'num', v: parseDecimal(tok.text) };
+      } catch (error) {
+        // A literal beyond the size bound (rational.ts MAX_BITS) is a parse error, never a thrown RationalError.
+        if (error instanceof RationalError) throw new ExprError('bad_number', tok.at);
+        throw error;
+      }
+    }
     if (tok.k === 'name') {
       if (tok.text === 'not') {
         this.constraintOnly(tok.at);
