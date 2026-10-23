@@ -62,8 +62,9 @@ export async function mountScreen(
   const settle = async (): Promise<void> => {
     for (let i = 0; i < 6; i += 1) {
       await act(async () => {
+        // setImmediate, so a test that fakes setTimeout (polling) can still settle.
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
+          setImmediate(resolve);
         });
       });
     }
