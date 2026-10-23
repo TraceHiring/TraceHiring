@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ApprovalsRoute } from './ApprovalsRoute';
 import { failure, fakeApi, info, USER_ID } from './testing/api.test-helpers';
 import { mountScreen, type Mounted } from './testing/dom.test-helpers';
-import { cursorFor, mcqDetail, summary } from './testing/fixtures.test-helpers';
+import { cursorFor, mcqDetail, summary, uid } from './testing/fixtures.test-helpers';
 
 let mounted: Mounted | null = null;
 afterEach(() => {
@@ -115,6 +115,43 @@ describe('ApprovalsRoute', () => {
       decision: 'not_approved',
     });
     expect(mounted.text()).toContain('Sent back.');
+  });
+
+  it('shows the draft checks line for an AI draft and not for a hand-written item (§6.2)', async () => {
+    const { api } = setup();
+    mounted = await mountQueue(api);
+    await mounted.click(mounted.button(/^Open: \[synthetic\] Drafted waiting item/));
+    const line = 'This draft passed the duplicate, readability and placeholder checks.';
+    expect(mounted.text()).toContain(line);
+    await mounted.click(mounted.button(/^Open: \[synthetic\] First waiting item/));
+    expect(mounted.text()).not.toContain('passed the duplicate');
+  });
+
+  it('refuses to approve a version other than the queued one and calls nothing', async () => {
+    const { api, calls } = fakeApi((call) => {
+      if (call.path === '/bank/items') return { body: { items: QUEUE, nextCursor: null } };
+      if (call.method === 'GET') {
+        return {
+          body: mcqDetail(1, { status: 'in_review', itemVersionId: uid(9999), versionNo: 2 }),
+        };
+      }
+      return undefined;
+    });
+    mounted = await mountQueue(api);
+    await mounted.click(mounted.button(/^Open: \[synthetic\] First waiting item/));
+    expect(mounted.text()).toContain('This item changed after it was queued.');
+    expect(mounted.maybeButton('Approve')).toBeNull();
+    expect(mounted.maybeButton('Send back')).toBeNull();
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
+  });
+
+  it('approves the fetched version when it is the queued one', async () => {
+    const { api, calls } = setup();
+    mounted = await mountQueue(api);
+    await mounted.click(mounted.button(/^Open: \[synthetic\] First waiting item/));
+    expect(mounted.text()).not.toContain('changed after it was queued');
+    await mounted.click(mounted.button('Approve'));
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
   });
 
   it('says that self-approval is logged when the approver wrote the item', async () => {

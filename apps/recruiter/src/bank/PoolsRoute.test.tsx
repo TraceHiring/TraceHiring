@@ -3,7 +3,7 @@
 // pools, add approved items and remove items one by one (no selection, no bulk bar), see which tests draw from a
 // pool (usedByDraws, with the count when the list is cut off) and the gap to the 10x rule for drives.
 import { afterEach, describe, expect, it } from 'vitest';
-import { PoolsRoute } from './PoolsRoute';
+import { PoolsRoute, driveGapText } from './PoolsRoute';
 import { failure, fakeApi, info } from './testing/api.test-helpers';
 import { mountScreen, pick, type Mounted } from './testing/dom.test-helpers';
 import { cursorFor, pool, summary, uid } from './testing/fixtures.test-helpers';
@@ -267,5 +267,33 @@ describe('managing the items of a pool', () => {
     expect(mounted.container.querySelector('input[type="checkbox"]')).toBeNull();
     expect(mounted.container.querySelector('[aria-selected], [role="checkbox"]')).toBeNull();
     expect(mounted.text()).not.toMatch(/bulk|select all/i);
+  });
+});
+
+describe('the drive gap when the list of tests is cut off (R5-54 a)', () => {
+  const draws = Array.from({ length: 50 }, (_, i) => ({ testId: uid(100 + i), drawCount: 4 }));
+
+  it('does not call a pool large enough for tests it cannot see', () => {
+    const cut = pool(1, { approvedCount: 400, usedByDraws: draws, usedByDrawsTotal: 51 });
+    const text = driveGapText(cut) ?? '';
+    expect(text).not.toContain('Large enough for drives');
+    expect(text).toContain('Large enough for the 50 tests shown');
+    expect(text).toContain('1 more test is not shown');
+  });
+
+  it('keeps the plain wording when every test is listed', () => {
+    const whole = pool(1, { approvedCount: 400, usedByDraws: draws, usedByDrawsTotal: 50 });
+    expect(driveGapText(whole)).toBe('Large enough for drives (10 times the largest draw, 4)');
+  });
+
+  it('shows the cut-off wording on the pool list', async () => {
+    const cut = pool(1, { approvedCount: 400, usedByDraws: draws, usedByDrawsTotal: 60 });
+    const { api } = fakeApi((call) =>
+      call.path === '/pools' ? { body: { pools: [cut], nextCursor: null } } : undefined,
+    );
+    mounted = await mountPools(api);
+    expect(mounted.text()).toContain('Showing 50 of 60');
+    expect(mounted.text()).toContain('10 more tests are not shown');
+    expect(mounted.text()).not.toContain('Large enough for drives');
   });
 });

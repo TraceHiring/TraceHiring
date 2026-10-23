@@ -140,6 +140,58 @@ describe('the job status', () => {
     expect(mounted.text()).toContain('Not found, or you do not have access.');
   });
 
+  it.each([
+    [403, 'forbidden', 'You do not have access to do that.'],
+    [403, 'aal2_required', 'Two-step sign-in is needed'],
+  ])('stops polling on %s %s', async (status, code, words) => {
+    const { api, calls } = fakeApi(() => failure(status, code));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    mounted = await mountDrafts(api, `/bank/ai-drafts?job=${aiJob().id}`);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await mounted.settle();
+    expect(calls).toHaveLength(1);
+    expect(mounted.text()).toContain(words);
+  });
+
+  it('stops polling when the answer is not a job', async () => {
+    const { api, calls } = fakeApi(() => ({ body: { nonsense: true } }));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    mounted = await mountDrafts(api, `/bank/ai-drafts?job=${aiJob().id}`);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await mounted.settle();
+    expect(calls).toHaveLength(1);
+    expect(mounted.text()).toContain('Something went wrong. Try again.');
+  });
+
+  it('stops after a maximum number of polls and says the job is still running', async () => {
+    const { api, calls } = fakeApi(() => ({ body: aiJob({ status: 'running' }) }));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    mounted = await mountDrafts(api, `/bank/ai-drafts?job=${aiJob().id}`);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+    });
+    await mounted.settle();
+    const reads = calls.length;
+    expect(reads).toBeGreaterThan(10);
+    expect(reads).toBeLessThanOrEqual(100);
+    expect(mounted.text()).toContain('Running');
+    expect(mounted.text()).toContain('still running. Refresh this page later');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(calls).toHaveLength(reads);
+  });
+
+  it('does not show the still-running line for a job that finished in time', async () => {
+    const { api } = fakeApi(() => ({ body: aiJob({ status: 'completed', draftsCreated: 1 }) }));
+    mounted = await mountDrafts(api, `/bank/ai-drafts?job=${aiJob().id}`);
+    expect(mounted.text()).not.toContain('still running');
+  });
+
   it('ignores a job parameter that is not an id', async () => {
     const { api, calls } = fakeApi(() => undefined);
     mounted = await mountDrafts(api, '/bank/ai-drafts?job=not-an-id');
