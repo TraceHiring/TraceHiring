@@ -144,7 +144,11 @@
         "system_list_policy",
         "or_arm_without_caller",
         "caller_only_null_tested",
-        "caller_unbound"
+        "caller_unbound",
+        "caller_bound_elsewhere",
+        "nested_or_arm_without_caller",
+        "case_branch_without_caller",
+        "coalesce_arg_without_caller"
       ]
     },
     {

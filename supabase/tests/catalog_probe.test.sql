@@ -2,11 +2,12 @@
 -- table appears. Inside this rolled-back transaction a throwaway table, sequence and function is created as
 -- postgres in each of the four in-scope schemas. Each assertion also reports any probe object that is missing,
 -- so it can never pass vacuously. Hand-written; not generated.
--- Assertions 5 to 14 are MT-11 controls (W3b database review finding 7, catalog pass C review E2, M0b review
--- M0B-DB-2 and its re-review, D1 helpers), 15 to 17 prove, one dynamic-SQL shape at a time, what MT-5b counts as
--- naming a schema, and 18 proves what MT-7 counts as changing the search path (catalog pass C review E1). See below.
+-- Assertions 5 to 16 are MT-11 controls (W3b database review finding 7, catalog pass C review E2, M0b review
+-- M0B-DB-2 and its re-review, D1 helpers, M0b FR-1 in M1), 17 to 19 prove, one dynamic-SQL shape at a time, what
+-- MT-5b counts as naming a schema, and 20 proves what MT-7 counts as changing the search path (catalog pass C
+-- review E1). See below.
 begin;
-select plan(18);
+select plan(20);
 
 create table public.mt_4b_t (id int);
 create table private.mt_4b_t (id int);
@@ -207,6 +208,104 @@ for update
 to trace_worker
 using ((select private.job_org_id()) is not null)
 with check ((select private.job_org_id()) is not null);
+-- M0b FR-1 (M1 Wave 0): a caller call counts only when the innermost comparison around it (or the sub-select it
+-- feeds) also reads a column of the policy's table, and the clause is followed through AND, OR, NOT, CASE and
+-- COALESCE. The shapes below must each hit the named branch; the fixtures cover one shape per new branch.
+alter table public.mt_11_note add column status text;
+alter table public.mt_11_note add column test_id uuid;
+alter table public.mt_11_note add column user_id uuid;
+alter table public.mt_11_note add column workspace_id uuid;
+create policy mt_11_note_uid_self on public.mt_11_note
+for select
+to authenticated
+using (deleted_at is null and (select auth.uid()) = (select auth.uid()));
+create policy mt_11_note_not_and on public.mt_11_note
+for select
+to authenticated
+using (not (deleted_at is not null and owner_id = (select auth.uid())));
+create policy mt_11_note_in_const on public.mt_11_note
+for select
+to authenticated
+using (
+  org_id in (select m.org_id from public.memberships as m where (select auth.jwt() ->> 'role') = 'authenticated')
+);
+create policy mt_11_note_in_other on public.mt_11_note
+for select
+to authenticated
+using (deleted_at is null and (select auth.uid()) in (select m.user_id from public.memberships as m));
+create policy mt_11_note_case_uid on public.mt_11_note
+for select
+to authenticated
+using (case when owner_id = (select auth.uid()) then true else deleted_at is null end);
+create policy mt_11_note_coalesce_uid on public.mt_11_note
+for select
+to authenticated
+using (coalesce(owner_id = (select auth.uid()), true));
+create policy mt_11_note_nested_or_uid on public.mt_11_note
+for select
+to authenticated
+using (status = 'draft' and (owner_id = (select auth.uid()) or deleted_at is null));
+-- ... and these compliant shapes must give no row.
+create policy mt_11_note_org_admin on public.mt_11_note
+for select
+to authenticated
+using (org_id = any((select private.my_org_ids('{admin}'::public.org_role[]))::uuid[]));
+create policy mt_11_note_user on public.mt_11_note
+for select
+to authenticated
+using (user_id = (select auth.uid()));
+create policy mt_11_note_ws_draft on public.mt_11_note
+for select
+to authenticated
+using (
+  workspace_id = any((select private.my_workspace_ids('{org_owner,admin,recruiter}'::public.org_role[]))::uuid[])
+  and status = 'draft'
+);
+create policy mt_11_note_case_closed on public.mt_11_note
+for select
+to authenticated
+using (case when owner_id = (select auth.uid()) then deleted_at is null else false end);
+create policy mt_11_note_case_no_else on public.mt_11_note
+for select
+to authenticated
+using (case when owner_id = (select auth.uid()) then true end);
+create policy mt_11_note_coalesce_false on public.mt_11_note
+for select
+to authenticated
+using (coalesce(owner_id = (select auth.uid()), false));
+create policy mt_11_note_nested_or_bound on public.mt_11_note
+for select
+to authenticated
+using (
+  deleted_at is null
+  and (owner_id = (select auth.uid()) or org_id = any((select private.my_org_ids('{admin}'::public.org_role[]))::uuid[]))
+);
+create policy mt_11_note_not_or on public.mt_11_note
+for select
+to authenticated
+using (not (deleted_at is not null or owner_id is distinct from (select auth.uid())));
+create policy mt_11_note_uid_in_correlated on public.mt_11_note
+for select
+to authenticated
+using ((select auth.uid()) in (select m.user_id from public.memberships as m where m.org_id = mt_11_note.org_id));
+create policy mt_11_note_in_nested on public.mt_11_note
+for select
+to authenticated
+using (
+  test_id in (
+    select t.id
+    from public.tests as t
+    where t.workspace_id in (select m.workspace_id from public.memberships as m where m.user_id = (select auth.uid()))
+  )
+);
+create policy mt_11_note_caller_roles on public.mt_11_note
+for select
+to authenticated
+using ('admin'::public.org_role = any((select private.caller_roles(org_id))::public.org_role[]));
+create policy mt_11_note_job_coalesce_false on public.mt_11_note
+for select
+to trace_worker
+using (coalesce(org_id = (select private.job_org_id()), false) and deleted_at is null);
 create temp view mt_11_run as
 -- MT-11 copy begin
 -- MT-11 (spec specs/m0-foundations.md §8.5, separate per-operation policies, CLAUDE.md): a policy on an in-scope
@@ -819,6 +918,46 @@ select isnt_empty(
   where v.object = 'mt_11_note_job_org_open on public.mt_11_note'
   $q$,
   'MT-11: a worker policy that only checks job_org_id() for null still hits (D1 positive control)'
+);
+select is_empty(
+  $q$
+  select e.object, e.branch
+  from (
+    values
+      ('mt_11_note_uid_self on public.mt_11_note', 'caller_unbound'),
+      ('mt_11_note_not_and on public.mt_11_note', 'nested_or_arm_without_caller'),
+      ('mt_11_note_in_const on public.mt_11_note', 'caller_unbound'),
+      ('mt_11_note_in_other on public.mt_11_note', 'caller_bound_elsewhere'),
+      ('mt_11_note_case_uid on public.mt_11_note', 'case_branch_without_caller'),
+      ('mt_11_note_coalesce_uid on public.mt_11_note', 'coalesce_arg_without_caller'),
+      ('mt_11_note_nested_or_uid on public.mt_11_note', 'nested_or_arm_without_caller')
+  ) as e (object, branch)
+  except
+  select v.object, v.branch
+  from mt_11_run as v
+  $q$,
+  'MT-11: each FR-1 shape hits its branch (unbound, bound elsewhere, NOT, IN, CASE, COALESCE, nested OR)'
+);
+select is_empty(
+  $q$
+  select v.branch, v.object, v.detail
+  from mt_11_run as v
+  where v.object in (
+      'mt_11_note_org_admin on public.mt_11_note',
+      'mt_11_note_user on public.mt_11_note',
+      'mt_11_note_ws_draft on public.mt_11_note',
+      'mt_11_note_case_closed on public.mt_11_note',
+      'mt_11_note_case_no_else on public.mt_11_note',
+      'mt_11_note_coalesce_false on public.mt_11_note',
+      'mt_11_note_nested_or_bound on public.mt_11_note',
+      'mt_11_note_not_or on public.mt_11_note',
+      'mt_11_note_uid_in_correlated on public.mt_11_note',
+      'mt_11_note_in_nested on public.mt_11_note',
+      'mt_11_note_caller_roles on public.mt_11_note',
+      'mt_11_note_job_coalesce_false on public.mt_11_note'
+    )
+  $q$,
+  'MT-11: no row for a caller call bound to a column on every path through AND, OR, NOT, CASE, COALESCE (FR-1)'
 );
 rollback to savepoint mt_11_negative;
 
