@@ -10,11 +10,13 @@ import {
 } from '@trace/shared/contracts/m1';
 import { renderCandidateSummary } from '@trace/shared';
 import type { ReactNode } from 'react';
+import { OrgInfoContext } from '../api/runtime';
 import { INTEGRITY_PRESETS, fromIntegrityView } from '../settings/integrity-model';
 import { fromDraftView } from './editor-v2-model';
 import { FromTemplateView } from './FromTemplateRoute';
 import { IntegrityStepView } from './IntegrityStep';
 import { SectionsEditorView } from './SectionsEditor';
+import { NewTestRoute } from './TestEditorPage';
 
 const ID = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const AT = '2026-10-23T10:00:00.000Z';
@@ -153,10 +155,12 @@ const templateProps = {
   busy: false,
   error: null,
   created: null,
+  proposal: { kind: 'none' as const },
   onSelect: noop,
   onJobTitle: noop,
   onJdText: noop,
   onMore: noop,
+  onPropose: noop,
   onCreate: noop,
 };
 
@@ -180,6 +184,50 @@ export function m1Screens(): Record<string, ReactNode> {
     ),
     'editor-sections-read-only': (
       <SectionsEditorView form={fromDraftView(draft)} pools={pools} readOnly onChange={noop} />
+    ),
+    'editor-sections-paste-allowed': (
+      <SectionsEditorView
+        form={fromDraftView(draft, { paste_written: 'allowed_logged' })}
+        pools={pools}
+        readOnly={false}
+        onChange={noop}
+      />
+    ),
+    'new-test-step-1': (
+      <OrgInfoContext
+        value={{
+          orgId: ID(90),
+          orgName: 'Synthetic Staffing',
+          userId: ID(91),
+          roles: ['recruiter'],
+        }}
+      >
+        <NewTestRoute />
+      </OrgInfoContext>
+    ),
+    'from-template-embedded': <FromTemplateView {...templateProps} embedded />,
+    'from-template-proposed': (
+      <FromTemplateView
+        {...templateProps}
+        jdText="Synthetic job description."
+        selected="bpo_voice:1"
+        proposal={{
+          kind: 'matched',
+          name: 'BPO Voice',
+          sections: [
+            { title: 'Verbal', available: true },
+            { title: 'Spoken English', available: false },
+          ],
+        }}
+      />
+    ),
+    'from-template-no-match': (
+      <FromTemplateView
+        {...templateProps}
+        jdText="Synthetic job description."
+        selected={null}
+        proposal={{ kind: 'no_match' }}
+      />
     ),
     'integrity-step': (
       <IntegrityStepView

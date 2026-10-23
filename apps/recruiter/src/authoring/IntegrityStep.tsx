@@ -212,11 +212,13 @@ function Loaded({
   testId,
   view,
   readOnly,
+  onSaved,
 }: {
   api: ApiClient;
   testId: string;
   view: IntegritySettingsView;
   readOnly: boolean;
+  onSaved: ((saved: IntegritySettingsView) => void) | undefined;
 }) {
   const [state, setState] = useState<IntegrityState>(() => fromIntegrityView(view));
   const [busy, setBusy] = useState(false);
@@ -233,6 +235,7 @@ function Loaded({
     if (result.ok) {
       setState(fromIntegrityView(result.data));
       setMessage({ kind: 'ok', text: 'Settings saved.' });
+      onSaved?.(result.data);
     } else {
       setMessage({ kind: 'error', text: errorText(result.code) });
     }
@@ -254,15 +257,21 @@ function Loaded({
   );
 }
 
-/** Loads `GET …/tests/:testId/integrity` and saves with `PUT` (draft only; `readOnly` for a published version). */
+/**
+ * Loads `GET …/tests/:testId/integrity` and saves with `PUT` (draft only; `readOnly` for a published version).
+ * `onSaved` receives the stored settings after a save, so the editor can make every written section follow
+ * `paste_written` (`setPasteWritten`, rule 3) and save the draft again before publish.
+ */
 export function IntegrityStep({
   api,
   testId,
   readOnly = false,
+  onSaved,
 }: {
   api: ApiClient;
   testId: string;
   readOnly?: boolean;
+  onSaved?: (saved: IntegritySettingsView) => void;
 }) {
   const load = useCallback(() => getIntegritySettings(api, testId), [api, testId]);
   const [state] = useResource(load);
@@ -274,5 +283,7 @@ export function IntegrityStep({
       </p>
     );
   }
-  return <Loaded api={api} testId={testId} view={state.data} readOnly={readOnly} />;
+  return (
+    <Loaded api={api} testId={testId} view={state.data} readOnly={readOnly} onSaved={onSaved} />
+  );
 }

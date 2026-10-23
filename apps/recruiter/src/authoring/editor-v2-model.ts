@@ -1,12 +1,21 @@
 // The v2 test editor's form state and its rules (specs/m1-test-authoring.md §6.5; R5-53 b, R5-54 a). Pure functions:
 // the screens only call them. `fromDraftView` reads the M1 draft read-model (TestDraftView) and `toSaveTestDraftRequest`
 // builds the `PUT …/tests/:testId/draft` body (SaveTestDraftRequest); the two round-trip, including a D1 section whose
-// navigation is null (package v1: inline, unshuffled, no paste rule), which is saved back exactly as it was until the
-// recruiter uses an M1 feature on it. Inline items are carried as they are (their editor is D1's); this model owns the
-// section rules: pool or inline, the draw count and strata quotas (which add up to it), navigation (a written section is
-// forward-only), a per-section timer, shuffle flags and the paste rule. D1's own editor model (editor-model.ts) is not
-// touched: the live editor keeps D1's load and save until A2 switches the api and the editor together.
-import { SaveTestDraftRequest, type TestDraftView } from '@trace/shared/contracts/m1';
+// navigation is null (package v1: inline, unshuffled, no paste rule), which is saved back exactly as it was while the
+// whole draft is package v1. Once the draft is package v2 (integrity settings saved, or any section uses an M1 feature:
+// the publish guard's own test, `20261023020000_m1_tests.sql`), every section is saved with a navigation (its format's
+// default if it had none) and every written section with the test's `paste_written` as its paste rule: the guard
+// refuses a v2 version otherwise, and the candidate's paste rules text and the band input come from that one setting
+// (rule 3, DB-M1-1). Inline items are carried as they are (their editor is D1's); this model owns the section rules:
+// pool or inline, the draw count and strata quotas (which add up to it), navigation (a written section is forward-only),
+// a per-section timer and shuffle flags, plus the v2 publish rules it can show early (weights add up to 100, timers on
+// every section or none). D1's own editor model (editor-model.ts) is not touched: the live editor keeps D1's load and
+// save until A2 switches the api and the editor together.
+import {
+  SaveTestDraftRequest,
+  type IntegritySettingsView,
+  type TestDraftView,
+} from '@trace/shared/contracts/m1';
 
 export const MAX_SECTIONS = 10;
 const MAX_STRATA = 20;
@@ -39,10 +48,9 @@ export interface SectionForm {
   strata: StratumForm[];
   shuffleItems: boolean;
   shuffleOptions: boolean;
-  /** null is a D1 section (package v1). */
+  /** null is a D1 section; it stays null on save only while the whole draft is package v1. */
   navigation: Navigation | null;
-  /** null follows the test's paste setting. */
-  pasteRule: PasteRule | null;
+  // No paste rule here: a written section always takes the test's paste_written (pasteRuleOf).
   timeLimitSeconds: number | null;
 }
 
@@ -55,8 +63,20 @@ export interface EditorV2Form {
   name: string;
   durationMinutes: string;
   qualityCutoff: string;
+  /**
+   * The test's `paste_written` integrity setting, which every written section of a v2 draft takes as its paste rule;
+   * null while the draft has no integrity settings stored (a D1 draft).
+   */
+  pasteWritten: PasteRule | null;
   sections: SectionForm[];
 }
+
+/** The stored integrity values the editor needs (from `GET …/tests/:testId/integrity` or a saved `PUT`). */
+export type StoredIntegrity = Pick<IntegritySettingsView['values'], 'paste_written'>;
+
+/** A section's navigation when it has none of its own (M1-11): written is one-way, multiple choice allows going back. */
+const defaultNavigation = (format: SectionFormat): Navigation =>
+  format === 'written' ? 'forward_only' : 'free';
 
 // ---- reading a stored draft -------------------------------------------------------------------------------------
 
@@ -74,29 +94,36 @@ function draftItem(item: ViewItem): DraftItem {
     : { format: 'written', prompt: item.prompt, rubric: structuredClone(item.rubric) };
 }
 
-export function fromDraftView(view: TestDraftView): EditorV2Form {
-  const sections = [...view.version.sections]
-    .sort((a, b) => a.position - b.position)
-    .map((s): SectionForm => ({
-      key: s.id,
-      mode: s.mode,
-      format: s.format,
-      name: s.name,
-      weight: String(s.weight),
-      items: s.items.map(draftItem),
-      poolId: s.poolId ?? '',
-      drawCount: s.drawCount === undefined ? '' : String(s.drawCount),
-      strata: (s.blueprint?.strata ?? []).map((t) => ({
-        skillKey: t.skillKey,
-        level: t.difficultyBand,
-        count: String(t.count),
-      })),
-      shuffleItems: s.shuffleItems,
-      shuffleOptions: s.shuffleOptions,
-      navigation: s.navigation,
-      pasteRule: s.pasteRule ?? null,
-      timeLimitSeconds: s.timeLimitSeconds ?? null,
-    }));
+/**
+ * The form of a stored draft. `integrity` is the test's stored integrity settings, or null while its ruleset has none
+ * (a D1 draft: then a D1 draft stays D1). Without it, the paste rule a v2 draft's written sections already carry is
+ * kept (the guard made them equal to the settings at the last save).
+ */
+export function fromDraftView(
+  view: TestDraftView,
+  integrity: StoredIntegrity | null = null,
+): EditorV2Form {
+  const ordered = [...view.version.sections].sort((a, b) => a.position - b.position);
+  const storedRule = ordered.find((s) => s.format === 'written' && s.pasteRule !== undefined);
+  const sections = ordered.map((s): SectionForm => ({
+    key: s.id,
+    mode: s.mode,
+    format: s.format,
+    name: s.name,
+    weight: String(s.weight),
+    items: s.items.map(draftItem),
+    poolId: s.poolId ?? '',
+    drawCount: s.drawCount === undefined ? '' : String(s.drawCount),
+    strata: (s.blueprint?.strata ?? []).map((t) => ({
+      skillKey: t.skillKey,
+      level: t.difficultyBand,
+      count: String(t.count),
+    })),
+    shuffleItems: s.shuffleItems,
+    shuffleOptions: s.shuffleOptions,
+    navigation: s.navigation,
+    timeLimitSeconds: s.timeLimitSeconds ?? null,
+  }));
   return {
     testId: view.test.id,
     workspaceId: view.test.workspaceId,
@@ -106,8 +133,39 @@ export function fromDraftView(view: TestDraftView): EditorV2Form {
     name: view.test.name,
     durationMinutes: String(view.version.durationMinutes),
     qualityCutoff: String(view.version.qualityCutoff),
+    pasteWritten: integrity?.paste_written ?? storedRule?.pasteRule ?? null,
     sections,
   };
+}
+
+// ---- package v1 or v2 (the publish guard's test, mirrored) ------------------------------------------------------
+
+/** A section that uses an M1 feature: the guard's list (pool, navigation, shuffle, paste rule, blueprint). */
+const usesM1Feature = (s: SectionForm): boolean =>
+  s.mode === 'pool' ||
+  s.navigation !== null ||
+  s.shuffleItems ||
+  s.shuffleOptions ||
+  s.strata.length > 0;
+
+/**
+ * True once the draft is package v2: integrity settings are stored, or any section uses an M1 feature. Then the guard
+ * wants every section's navigation and every written section's paste rule equal to `paste_written`. False only for a
+ * D1 draft, which is saved exactly as D1 saved it.
+ */
+export const isPackageV2 = (form: EditorV2Form): boolean =>
+  form.pasteWritten !== null || form.sections.some(usesM1Feature);
+
+/**
+ * The paste rule every written section of a v2 draft takes: the test's `paste_written`. Before any integrity settings
+ * are saved it is `blocked`, D1's behaviour, so the candidate is never told paste is allowed while paste could still be
+ * a band input (rule 3); the guard refuses publish until the settings are saved and the sections follow them.
+ */
+export const pasteRuleOf = (form: EditorV2Form): PasteRule => form.pasteWritten ?? 'blocked';
+
+/** The test's paste setting changed (the integrity step saved it): every written section follows it. */
+export function setPasteWritten(form: EditorV2Form, rule: PasteRule): EditorV2Form {
+  return form.pasteWritten === rule ? form : { ...form, pasteWritten: rule };
 }
 
 // ---- building the save request ------------------------------------------------------------------------------------
@@ -117,7 +175,8 @@ const toInt = (text: string): number =>
 const CUTOFF_TEXT = /^(?:0|[1-9][0-9]?|100)$/;
 export const isCutoffValid = (text: string): boolean => CUTOFF_TEXT.test(text);
 
-function sectionRequest(s: SectionForm): Record<string, unknown> {
+/** `v2Paste` is the paste rule of a v2 draft's written sections, or null for a D1 (package v1) draft. */
+function sectionRequest(s: SectionForm, v2Paste: PasteRule | null): Record<string, unknown> {
   const out: Record<string, unknown> = {
     mode: s.mode,
     format: s.format,
@@ -126,7 +185,8 @@ function sectionRequest(s: SectionForm): Record<string, unknown> {
     items: s.items,
     shuffleItems: s.shuffleItems,
     shuffleOptions: s.shuffleOptions,
-    navigation: s.navigation,
+    // A v2 version needs every section's navigation (publish guard v2): a D1 section takes its format's default.
+    navigation: v2Paste === null ? s.navigation : (s.navigation ?? defaultNavigation(s.format)),
   };
   if (s.mode === 'pool') {
     out.poolId = s.poolId;
@@ -141,7 +201,8 @@ function sectionRequest(s: SectionForm): Record<string, unknown> {
       };
     }
   }
-  if (s.pasteRule !== null) out.pasteRule = s.pasteRule;
+  // Rule 3 (DB-M1-1): a written v2 section's paste rule is the test's paste_written, never a value of its own.
+  if (s.format === 'written' && v2Paste !== null) out.pasteRule = v2Paste;
   if (s.timeLimitSeconds !== null) out.timeLimitSeconds = s.timeLimitSeconds;
   return out;
 }
@@ -152,11 +213,12 @@ export type BuiltV2 =
 /** The `PUT …/draft` body, parsed with the shared contract; never built without a valid cutoff. */
 export function toSaveTestDraftRequest(form: EditorV2Form): BuiltV2 {
   if (!isCutoffValid(form.qualityCutoff)) return { ok: false, reason: 'cutoff' };
+  const v2Paste = isPackageV2(form) ? pasteRuleOf(form) : null;
   const parsed = SaveTestDraftRequest.safeParse({
     name: form.name.trim(),
     durationMinutes: toInt(form.durationMinutes),
     qualityCutoff: Number(form.qualityCutoff),
-    sections: form.sections.map(sectionRequest),
+    sections: form.sections.map((s) => sectionRequest(s, v2Paste)),
   });
   return parsed.success ? { ok: true, request: parsed.data } : { ok: false, reason: 'invalid' };
 }
@@ -172,7 +234,10 @@ export type SectionIssueCode =
   | 'strata_count'
   | 'strata_sum'
   | 'strata_duplicate'
-  | 'time_limit';
+  | 'time_limit'
+  // Test-wide publish rules of a v2 draft (section null): R2-13 and M1-11.
+  | 'weights_sum'
+  | 'timers_mixed';
 
 const SKILL = /^[a-z][a-z0-9_]{1,40}$/;
 const inRange = (n: number, min: number, max: number): boolean =>
@@ -184,9 +249,26 @@ export const strataSum = (section: SectionForm): number =>
     return sum + (Number.isNaN(n) ? 0 : n);
   }, 0);
 
-/** Why a section cannot be saved yet, in screen order. A half-written section (no items yet) is not an issue. */
-export function sectionIssues(form: EditorV2Form): { section: number; code: SectionIssueCode }[] {
-  const out: { section: number; code: SectionIssueCode }[] = [];
+/** The sum of the section weights (a weight that is not a whole number counts 0). */
+export const weightSum = (form: EditorV2Form): number =>
+  form.sections.reduce((sum, s) => {
+    const n = toInt(s.weight);
+    return sum + (Number.isNaN(n) ? 0 : n);
+  }, 0);
+
+/** An issue of one section (its index), or of the whole test (`section` null). */
+export interface SectionIssue {
+  section: number | null;
+  code: SectionIssueCode;
+}
+
+/**
+ * Why the draft cannot be saved or published yet, in screen order: each section's own issues, then the publish rules
+ * of a v2 draft that the guard enforces (section weights add up to 100, R2-13; a time limit on every section or on
+ * none, M1-11). A D1 (package v1) draft keeps D1's rules. A half-written section (no items yet) is not an issue.
+ */
+export function sectionIssues(form: EditorV2Form): SectionIssue[] {
+  const out: SectionIssue[] = [];
   form.sections.forEach((s, section) => {
     const add = (code: SectionIssueCode) => out.push({ section, code });
     if (s.name.trim() === '') add('name');
@@ -204,6 +286,13 @@ export function sectionIssues(form: EditorV2Form): { section: number; code: Sect
     if (new Set(pairs).size !== pairs.length) add('strata_duplicate');
     if (drawOk && strataSum(s) !== draw) add('strata_sum');
   });
+  if (isPackageV2(form) && form.sections.length > 0) {
+    if (weightSum(form) !== 100) out.push({ section: null, code: 'weights_sum' });
+    const timed = form.sections.filter((s) => s.timeLimitSeconds !== null).length;
+    if (timed !== 0 && timed !== form.sections.length) {
+      out.push({ section: null, code: 'timers_mixed' });
+    }
+  }
   return out;
 }
 
@@ -221,8 +310,6 @@ export function poolGap(
 // ---- editing sections ------------------------------------------------------------------------------------------
 
 let made = 0;
-const defaultNavigation = (format: SectionFormat): Navigation =>
-  format === 'written' ? 'forward_only' : 'free';
 
 export function newSection(mode: SectionMode, format: SectionFormat): SectionForm {
   made += 1;
@@ -239,7 +326,6 @@ export function newSection(mode: SectionMode, format: SectionFormat): SectionFor
     shuffleItems: false,
     shuffleOptions: false,
     navigation: defaultNavigation(format),
-    pasteRule: null,
     timeLimitSeconds: null,
   };
 }
@@ -296,7 +382,6 @@ export function setFormat(section: SectionForm, format: SectionFormat): SectionF
           ? 'forward_only'
           : section.navigation,
     shuffleOptions: format === 'written' ? false : section.shuffleOptions,
-    pasteRule: format === 'mcq' ? null : section.pasteRule,
   };
 }
 
@@ -317,13 +402,6 @@ export function setShuffle(
   const next =
     which === 'items' ? { ...section, shuffleItems: on } : { ...section, shuffleOptions: on };
   return on ? upgraded(next) : next;
-}
-
-/** Only a written section has a paste rule; null follows the test's paste setting. */
-export function setPasteRule(section: SectionForm, rule: PasteRule | null): SectionForm {
-  if (section.format !== 'written' || section.pasteRule === rule) return section;
-  const next = { ...section, pasteRule: rule };
-  return rule === null ? next : upgraded(next);
 }
 
 const MINUTES = /^[1-9][0-9]{0,2}$/;

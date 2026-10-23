@@ -315,10 +315,11 @@ describe('navigation (§6.5)', () => {
       ]),
     );
     expect(isPackageV2(mixed)).toBe(true);
-    expect(built(mixed).sections.map((s) => s.navigation)).toEqual([
-      'free',
-      'forward_only',
-      'free',
+    // In position order: the D1 mcq section (1), the pool (2), the D1 written section (3).
+    expect(built(mixed).sections.map((s) => `${s.format}:${s.navigation}`)).toEqual([
+      'mcq:free',
+      'mcq:free',
+      'written:forward_only',
     ]);
     // Integrity settings saved for the test make it a v2 draft too.
     const withSettings = fromDraftView(view([d1Section]), { paste_written: 'allowed_logged' });

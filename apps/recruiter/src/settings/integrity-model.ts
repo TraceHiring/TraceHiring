@@ -80,7 +80,8 @@ export const PRESET_INFO: Readonly<Record<PresetKey, { label: string; descriptio
   },
   open_book: {
     label: 'Open-book',
-    description: 'Notes and search allowed. Focus signals off; typing provenance only.',
+    description:
+      'Notes and search allowed. Focus, screen, camera and microphone checks off. Paste allowed and recorded; typing provenance and the calibration warm-up stay on.',
   },
 };
 

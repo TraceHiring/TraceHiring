@@ -1,16 +1,21 @@
 // The v2 sections editor (specs/m1-test-authoring.md §6.5, §6.1): per section the question source (written here, or a
-// draw from a pool with strata quotas), navigation, a timer, shuffle flags and, for written sections, the paste rule.
-// Controls are text fields, selects and buttons only (no checkbox: the recruiter guards ban row selection). Every value
-// is React text. The component works on the pure model in editor-v2-model.ts; the A2+A5 switch mounts it in the live
-// editor later (R5-53 b), so it is not wired into the D1 route yet. Inline items are edited by D1's item editor.
+// draw from a pool with strata quotas), navigation, a timer and shuffle flags. A written section's paste rule is shown
+// read-only: it is always the test's paste_written integrity setting (rule 3; the publish guard refuses any other), so
+// there is no per-section choice. The test-wide publish rules of a v2 draft (weights add up to 100, timers on every
+// section or none) are shown under the sections. Controls are text fields, selects and buttons only (no checkbox: the
+// recruiter guards ban row selection). Every value is React text. The component works on the pure model in
+// editor-v2-model.ts; the A2+A5 switch mounts it in the live editor later (R5-53 b), so it is not wired into the D1
+// route yet. Inline items are edited by D1's item editor.
 import type { PoolDetail } from '@trace/shared/contracts/m1';
 import type { ReactNode } from 'react';
 import ui from '../common/Ui.module.css';
+import { valueLabel } from '../settings/integrity-model';
 import {
   MAX_SECTIONS,
   addSection,
   addStratum,
   moveSection,
+  pasteRuleOf,
   poolGap,
   removeSection,
   removeStratum,
@@ -19,18 +24,18 @@ import {
   setFormat,
   setMode,
   setNavigation,
-  setPasteRule,
   setPool,
   setShuffle,
   setTimeLimitMinutes,
   strataSum,
   updateStratum,
+  weightSum,
   type EditorV2Form,
   type SectionForm,
   type SectionIssueCode,
 } from './editor-v2-model';
 
-const ISSUE_TEXT: Readonly<Record<SectionIssueCode, string>> = {
+const ISSUE_TEXT: Readonly<Record<Exclude<SectionIssueCode, 'weights_sum'>, string>> = {
   name: 'Give the section a name.',
   weight: 'The weight is a whole number from 1 to 100.',
   pool_missing: 'Choose a pool to draw from.',
@@ -40,7 +45,13 @@ const ISSUE_TEXT: Readonly<Record<SectionIssueCode, string>> = {
   strata_sum: 'The strata must add up to the number of questions to draw.',
   strata_duplicate: 'Use each skill and level once.',
   time_limit: 'The time limit is from 1 to 120 minutes.',
+  timers_mixed: 'Give every section a time limit, or none, to publish.',
 };
+
+const issueText = (code: SectionIssueCode, form: EditorV2Form): string =>
+  code === 'weights_sum'
+    ? `Section weights add up to ${weightSum(form)}. They must add up to 100 to publish.`
+    : ISSUE_TEXT[code];
 
 function TextField({
   label,
@@ -352,31 +363,16 @@ function SectionPanel({
               }}
             />
           )}
-          {written && (
-            <SelectField
-              label="Paste rule"
-              value={section.pasteRule ?? ''}
-              disabled={disabled}
-              options={[
-                { value: '', text: 'Follow the test setting' },
-                { value: 'blocked', text: 'Blocked, attempts logged' },
-                { value: 'allowed_logged', text: 'Allowed, logged' },
-              ]}
-              onChange={(v) => {
-                onSection(
-                  setPasteRule(
-                    section,
-                    v === '' ? null : v === 'blocked' ? 'blocked' : 'allowed_logged',
-                  ),
-                );
-              }}
-            />
-          )}
         </div>
         {written && <p className={ui.note}>A written section is always forward only.</p>}
+        {written && (
+          <p className={ui.note}>
+            {`Paste on written answers: ${valueLabel('paste_written', pasteRuleOf(form))}. Set in the integrity settings.`}
+          </p>
+        )}
         {issues.map((code) => (
           <p key={code} role="alert" className={ui.alert}>
-            {ISSUE_TEXT[code]}
+            {issueText(code, form)}
           </p>
         ))}
         {!disabled && (
@@ -451,6 +447,13 @@ export function SectionsEditorView({
           />
         ))}
       </ol>
+      {issues
+        .filter((x) => x.section === null)
+        .map((x) => (
+          <p key={x.code} role="alert" className={ui.alert}>
+            {issueText(x.code, form)}
+          </p>
+        ))}
       {!readOnly && (
         <div className={ui.row}>
           <button
