@@ -542,7 +542,7 @@ select pg_temp.preset('tl', 'standard');
 select pg_temp.u('owner');
 select is(pg_temp.try($$update public.test_versions set snapshot_digest = repeat('2', 64) where id = pg_temp.id('tl')$$), 'OK 1', 'digest: a draft update may name the column (the owner holds its update grant)');
 select is((select snapshot_digest is null from public.test_versions where id = pg_temp.id('tl')), true, 'digest: a draft keeps none (only the publish update carries it)');
-select is(pg_temp.try($$select pg_temp.publish('tl')$$), 'OK 1', 'digest: the owner publishes a v2 version with its digest');
+select is(pg_temp.try($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64), snapshot_digest = pg_temp.live_digest('tl') where id = pg_temp.id('tl')$$), 'OK 1', 'digest: the owner publishes a v2 version with its digest');
 select pg_temp.op();
 select * from finish();
 rollback;
