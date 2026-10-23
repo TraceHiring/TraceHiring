@@ -269,6 +269,8 @@ update public.memberships set roles = '{admin}' where org_id = pg_temp.id('A') a
 select pg_temp.as_sub(pg_temp.id('invitee4'), false);
 select is(pg_temp.try($$update public.memberships set status = 'active' where user_id = '00000000-0000-4000-8000-000000000034' and org_id = 'a1000000-0000-4000-8000-000000000001'$$), '42501 TRACE_GUARD: the inviter is no longer an active admin or owner', 'R2-14 (confirming re-review): an owner invitation cannot be accepted after its inviter lost the owner role, though still an active admin');
 select pg_temp.op();
+-- The inviter is an owner again before the removal, so only the status check can refuse (database review L1).
+update public.memberships set roles = '{org_owner,admin}' where org_id = pg_temp.id('A') and user_id = pg_temp.id('owner');
 update public.memberships set status = 'removed' where org_id = pg_temp.id('A') and user_id = pg_temp.id('owner');
 select pg_temp.as_sub(pg_temp.id('invitee4'), false);
 select is(pg_temp.try($$update public.memberships set status = 'active' where user_id = '00000000-0000-4000-8000-000000000034' and org_id = 'a1000000-0000-4000-8000-000000000001'$$), '42501 TRACE_GUARD: the inviter is no longer an active admin or owner', 'R2-14 (confirming re-review): nor after its owner inviter was removed');

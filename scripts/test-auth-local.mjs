@@ -333,6 +333,7 @@ async function run(deps) {
   );
   const problem = invokerVerdict({
     low: low.status,
+    lowData: low.data,
     high: high.status,
     highData: high.data,
     after: after.ok ? after.out.trim() : null,
@@ -352,9 +353,9 @@ export const INVOKER_ROWS = Object.freeze([
 /**
  * DC-M1-1 verdict, or null. aal2 must be accepted with exactly the error row back; aal1 must be refused with 409
  * (23503 'import job not found': RLS hid the job inside the INVOKER function); the job must be validating with one
- * stored error row. Never echoes a body.
+ * stored error row. Never echoes a body (the refusal body is compared, not printed).
  */
-export function invokerVerdict({ low, high, highData, after }) {
+export function invokerVerdict({ low, lowData, high, highData, after }) {
   if (high !== 200) return `the aal2 call returned HTTP ${high ?? 'network error'}`;
   const e = Array.isArray(highData?.errors) ? highData.errors : [];
   if (
@@ -367,6 +368,9 @@ export function invokerVerdict({ low, high, highData, after }) {
     return 'the aal2 call returned an unexpected result';
   if (low !== 409)
     return `the aal1 call returned HTTP ${low ?? 'network error'}, expected 409 (RLS hides the job)`;
+  // PostgREST answers 409 for 23505 too: the code and the guard's message must both be the hidden job's.
+  if (lowData?.code !== '23503' || lowData?.message !== 'TRACE_GUARD: import job not found')
+    return 'the aal1 call was refused for another reason (expected 23503, job not found)';
   if (after !== 'validating 1') return 'the job is not validating with one stored error row';
   return null;
 }

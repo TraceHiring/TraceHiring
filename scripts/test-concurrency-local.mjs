@@ -10,6 +10,10 @@
 // inside the local stack's Postgres container. Each scenario creates its own org with two fixed-shape
 // synthetic users (random ids), so a re-run never collides. Output: one line per scenario, OK or the
 // failed step; never SQL text, server output, a URL or an id.
+// Rows are committed and left behind until the next db reset: per run a running count-1 drafting job with
+// one in_review AI draft, and a cancelled import job, each in its own org-conc-* org. Nothing later in
+// scripts/test-rls.mjs reads them; a future sweep over running drafting jobs across orgs must skip
+// org-conc-* orgs (database review Info 5).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isEntryPoint } from './lib/cli.mjs';
@@ -116,6 +120,7 @@ const asAuthoringWorkerSql = (orgSql) =>
 
 /** Shared setup: one synthetic owner and an org (operator path); sets psql variables org_id and ws_id. */
 function orgSetupSql({ owner, suffix, kind }) {
+  if (!/^[a-z]+$/.test(kind)) throw new Error('bad kind');
   return [
     'insert into auth.users (id, aud, role, email) values',
     `  (${uuid(owner)}, 'authenticated', 'authenticated', 'p-conc-${kind}-${suffixOf(suffix)}@example.test');`,
@@ -226,15 +231,25 @@ export function draftInsertSql({ orgId, jobId, itemId, shaChar, marker: m }) {
   ].join('\n');
 }
 
+/** status|stored drafts of the job, read as the operator. */
 export const draftsSql = (jobId) =>
-  `select count(*) from public.item_versions where ai_draft_job_id = ${uuid(jobId)};`;
+  [
+    "select j.status || '|' || (select count(*) from public.item_versions as v where v.ai_draft_job_id = j.id)",
+    `from public.ai_draft_jobs as j where j.id = ${uuid(jobId)};`,
+  ].join('\n');
 
-/** M1 verdict: the second delivery waited, was refused after the first committed, and one draft is stored. */
-export function draftVerdict({ waited, firstErrored, secondErrored, drafts }) {
+/**
+ * M1 verdict: the second delivery waited, was refused after the first committed, one draft is stored, and the job
+ * is still running (the refusal message is shared with "job not running", so a job that ended early would hide a
+ * missing cap; database review L3).
+ */
+export function draftVerdict({ waited, firstErrored, secondErrored, state }) {
   if (firstErrored) return 'the first delivery failed';
   if (!waited) return 'the second delivery did not wait for the first';
   if (!secondErrored) return 'the second delivery was not refused';
-  if (drafts !== 1) return `the job has ${drafts} drafts, not 1`;
+  const [status, drafts] = String(state).split('|');
+  if (status !== 'running') return `the job is ${status}, not running`;
+  if (drafts !== '1') return `the job has ${drafts} drafts, not 1`;
   return null;
 }
 
@@ -281,8 +296,10 @@ function openSession(user = 'postgres') {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A wall-clock deadline: each check may itself take a docker exec (database review Info 4).
 async function until(check) {
-  for (let t = 0; t < WAIT_MS; t += POLL_MS) {
+  const deadline = Date.now() + WAIT_MS;
+  while (Date.now() < deadline) {
     if (check()) return true;
     await sleep(POLL_MS);
   }
@@ -397,7 +414,7 @@ async function draftCapScenario() {
     waited: r.waited,
     firstErrored: /ERROR/.test(r.aErr),
     secondErrored: /an AI draft needs its running drafting job/.test(r.bErr),
-    drafts: Number(runOnce(draftsSql(jobId)).out),
+    state: runOnce(draftsSql(jobId)).out,
   });
 }
 

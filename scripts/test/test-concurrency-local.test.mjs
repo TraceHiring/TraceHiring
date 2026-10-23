@@ -133,12 +133,17 @@ describe('test-concurrency-local: two deliveries of a count-1 drafting job (M1 D
     expect(() => draftsSql("'; drop table x; --")).toThrow();
   });
 
-  it('passes only when the second delivery waited, was refused and one draft is stored', () => {
-    const ok = { waited: true, firstErrored: false, secondErrored: true, drafts: 1 };
+  it('passes only when the second delivery waited, was refused, one draft is stored and the job still runs', () => {
+    const ok = { waited: true, firstErrored: false, secondErrored: true, state: 'running|1' };
     expect(draftVerdict(ok)).toBeNull();
     expect(draftVerdict({ ...ok, waited: false })).toMatch(/did not wait/);
     expect(draftVerdict({ ...ok, firstErrored: true })).toMatch(/first delivery failed/);
-    expect(draftVerdict({ ...ok, secondErrored: false, drafts: 2 })).toMatch(/was not refused/);
-    expect(draftVerdict({ ...ok, drafts: 2 })).toMatch(/2 drafts, not 1/);
+    expect(draftVerdict({ ...ok, secondErrored: false, state: 'running|2' })).toMatch(
+      /was not refused/,
+    );
+    expect(draftVerdict({ ...ok, state: 'running|2' })).toMatch(/2 drafts, not 1/);
+    // Database review L3: the refusal text is shared with "job not running"; a job that ended is a failure.
+    expect(draftVerdict({ ...ok, state: 'completed|1' })).toBe('the job is completed, not running');
+    expect(draftsSql(randomUUID())).toContain('from public.ai_draft_jobs as j');
   });
 });

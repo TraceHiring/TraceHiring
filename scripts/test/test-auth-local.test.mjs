@@ -49,7 +49,23 @@ describe('codeIn', () => {
 
 describe('invokerVerdict (DC-M1-1, specs/m1-test-authoring.md §8)', () => {
   const highData = { accepted: 0, errors: [{ rowNo: 2, field: 'stem', code: 'missing_field' }] };
-  const ok = { low: 409, high: 200, highData, after: 'validating 1' };
+  const lowData = { code: '23503', message: 'TRACE_GUARD: import job not found' };
+  const ok = { low: 409, lowData, high: 200, highData, after: 'validating 1' };
+
+  it('requires the 409 to be the hidden-job refusal, not another 409 (23505 or another guard)', () => {
+    expect(invokerVerdict({ ...ok, lowData: { code: '23505', message: 'duplicate' } })).toBe(
+      'the aal1 call was refused for another reason (expected 23503, job not found)',
+    );
+    expect(
+      invokerVerdict({
+        ...ok,
+        lowData: { code: '23503', message: 'TRACE_GUARD: skill not found' },
+      }),
+    ).toBe('the aal1 call was refused for another reason (expected 23503, job not found)');
+    expect(invokerVerdict({ ...ok, lowData: null })).toBe(
+      'the aal1 call was refused for another reason (expected 23503, job not found)',
+    );
+  });
 
   it('sends one error-only row, so the call needs no content', () => {
     expect(INVOKER_ROWS).toEqual([
