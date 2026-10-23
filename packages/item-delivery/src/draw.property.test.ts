@@ -53,9 +53,10 @@ const arbCase: fc.Arbitrary<Case> = arbItems.chain((items) => {
   const groups = new Map<string, { skillKey: string; difficultyBand: number; size: number }>();
   for (const i of items) {
     const key = `${i.skillKey}:${i.difficultyBand}`;
+    // The arbitrary always names both (R5-58 makes them optional in the package).
     const g = groups.get(key) ?? {
-      skillKey: i.skillKey,
-      difficultyBand: i.difficultyBand,
+      skillKey: i.skillKey!,
+      difficultyBand: i.difficultyBand!,
       size: 0,
     };
     g.size += 1;
