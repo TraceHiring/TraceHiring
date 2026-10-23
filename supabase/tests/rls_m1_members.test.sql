@@ -244,20 +244,18 @@ end
 $f$;
 -- publish(version key): operator-path publish with a content hash (the publish guard runs in full).
 -- live_digest(version key): what the api sends as snapshotDigest (R5-56 d): the rows a package built now would use
--- (approved pool items of pool sections, inline items of inline sections) with their exposure, as @trace/shared
--- snapshotDigest computes it. publish() sends it, so a v2 publish passes the M1-e digest check.
+-- (approved pool items of pool sections, inline items of inline sections) as @trace/shared snapshotDigest computes
+-- it: section:item lines, no exposure (R5-60 a). publish() sends it, so a v2 publish passes the digest check.
 create function pg_temp.live_digest(p_tv text) returns text language sql stable as $f$
   select encode(sha256(convert_to(coalesce(string_agg(x.l, E'\n' order by x.l collate "C"), ''), 'UTF8')), 'hex')
   from (
-    select s.id::text || ':' || i.id::text || ':' ||
-      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text as l
+    select s.id::text || ':' || i.id::text as l
     from public.sections as s
     join public.pool_items as pi on pi.org_id = s.org_id and pi.pool_id = s.pool_id
     join public.item_versions as i on i.org_id = pi.org_id and i.id = pi.item_version_id and i.status = 'approved'
     where s.test_version_id = pg_temp.id(p_tv)
     union all
-    select s.id::text || ':' || i.id::text || ':' ||
-      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text
+    select s.id::text || ':' || i.id::text
     from public.sections as s
     join public.item_versions as i on i.org_id = s.org_id and i.section_id = s.id
     where s.test_version_id = pg_temp.id(p_tv) and s.pool_id is null
@@ -357,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(129);
+select plan(136);
 -- Extra personas: pure_owner (…030, org A owner only), invitee (…031), invitee two (…032) and three (…033).
 insert into auth.users (id, aud, role, email) values
   ('00000000-0000-4000-8000-000000000030', 'authenticated', 'authenticated', 'p-pure-owner@example.test'),
@@ -494,6 +492,19 @@ select pg_temp.w('trace_admin_worker', null);
 select matches(pg_temp.try(format($$select private.provision_invited_member(%L, %L, 'Persona Invitee')$$, pg_temp.id('i1'), pg_temp.id('invitee'))), '^42501 TRACE_GUARD: member invite not found in the job org', 'R5-35: an unbound admin worker provisions nothing');
 select pg_temp.op();
 select is((select string_agg(r, ',' order by r) from unnest(array['anon', 'authenticated', 'service_role', 'trace_api', 'trace_worker', 'trace_quality_worker', 'trace_integrity_worker', 'trace_authoring_worker', 'trace_admin_worker', 'trace_candidate']) as r where has_function_privilege(r, 'private.provision_invited_member(uuid, uuid, text)', 'EXECUTE')), 'trace_admin_worker', 'provision: EXECUTE is granted to trace_admin_worker only');
+
+-- ===== Migration M1-g (R5-61 a, E26): the Auth user id for a pending invite in the job org =====
+select pg_temp.w('trace_admin_worker', pg_temp.id('A'));
+select is(private.auth_user_id_for_invite(pg_temp.id('i1'), '  P-Invitee@Example.TEST '), pg_temp.id('invitee'), 'E26: the admin worker finds the existing Auth user of a pending invite (trimmed, any case)');
+select is(private.auth_user_id_for_invite(pg_temp.id('i1'), 'p-nobody@example.test'), null, 'E26: no Auth user for the address gives null (the job creates one)');
+select matches(pg_temp.try(format($$select private.auth_user_id_for_invite(%L, 'p-invitee@example.test')$$, pg_temp.id('i4'))), '^42501 TRACE_GUARD: the invite is not pending in the job org', 'E26: a cancelled invite looks up nothing');
+select pg_temp.w('trace_admin_worker', pg_temp.id('B'));
+select matches(pg_temp.try(format($$select private.auth_user_id_for_invite(%L, 'p-invitee@example.test')$$, pg_temp.id('i1'))), '^42501 TRACE_GUARD: the invite is not pending in the job org', 'E26: an admin worker bound to org B looks up nothing for an org A invite');
+select pg_temp.w('trace_admin_worker', null);
+select matches(pg_temp.try(format($$select private.auth_user_id_for_invite(%L, 'p-invitee@example.test')$$, pg_temp.id('i1'))), '^42501 TRACE_GUARD: the invite is not pending in the job org', 'E26: an unbound admin worker looks up nothing');
+select pg_temp.op();
+select is((select string_agg(r, ',' order by r) from unnest(array['anon', 'authenticated', 'service_role', 'trace_api', 'trace_worker', 'trace_quality_worker', 'trace_integrity_worker', 'trace_authoring_worker', 'trace_admin_worker', 'trace_candidate']) as r where has_function_privilege(r, 'private.auth_user_id_for_invite(uuid, text)', 'EXECUTE')), 'trace_admin_worker', 'E26: EXECUTE on the lookup is granted to trace_admin_worker only');
+select is((select prosecdef::text || '|' || provolatile::text || '|' || array_to_string(proconfig, ',') from pg_proc where oid = 'private.auth_user_id_for_invite(uuid, text)'::regprocedure), 'true|s|search_path=""', 'E26: the lookup is SECURITY DEFINER, stable, with an empty search_path');
 
 -- ===== provision_invited_member: the invited membership (roles only from the invite, R2-14) =====
 select pg_temp.w('trace_admin_worker', pg_temp.id('A'));

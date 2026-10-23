@@ -54,6 +54,8 @@ describe('SessionDO (real class, SQLite-backed storage, local R2 and queue)', ()
     if (!started.ok || started.kind !== 'live') throw new Error('start refused');
     const first = started.view.streamId;
     const alarmAt = Date.parse(started.startedAt) + DURATION_SECONDS * 1000 + GRACE_MS;
+    // The DO accepts answers only at a position it has served (R5-59 b).
+    expect((await stub.item(AUTH, WRITTEN)).ok).toBe(true);
 
     // One batch, then a resend of it with one new event: acked to the high-water mark, stored once each.
     const batch = [text(1, WRITTEN, 0, 0, 'hello'), heartbeat(2)];

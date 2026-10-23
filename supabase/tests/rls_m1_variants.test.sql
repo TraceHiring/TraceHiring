@@ -244,20 +244,18 @@ end
 $f$;
 -- publish(version key): operator-path publish with a content hash (the publish guard runs in full).
 -- live_digest(version key): what the api sends as snapshotDigest (R5-56 d): the rows a package built now would use
--- (approved pool items of pool sections, inline items of inline sections) with their exposure, as @trace/shared
--- snapshotDigest computes it. publish() sends it, so a v2 publish passes the M1-e digest check.
+-- (approved pool items of pool sections, inline items of inline sections) as @trace/shared snapshotDigest computes
+-- it: section:item lines, no exposure (R5-60 a). publish() sends it, so a v2 publish passes the digest check.
 create function pg_temp.live_digest(p_tv text) returns text language sql stable as $f$
   select encode(sha256(convert_to(coalesce(string_agg(x.l, E'\n' order by x.l collate "C"), ''), 'UTF8')), 'hex')
   from (
-    select s.id::text || ':' || i.id::text || ':' ||
-      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text as l
+    select s.id::text || ':' || i.id::text as l
     from public.sections as s
     join public.pool_items as pi on pi.org_id = s.org_id and pi.pool_id = s.pool_id
     join public.item_versions as i on i.org_id = pi.org_id and i.id = pi.item_version_id and i.status = 'approved'
     where s.test_version_id = pg_temp.id(p_tv)
     union all
-    select s.id::text || ':' || i.id::text || ':' ||
-      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text
+    select s.id::text || ':' || i.id::text
     from public.sections as s
     join public.item_versions as i on i.org_id = s.org_id and i.section_id = s.id
     where s.test_version_id = pg_temp.id(p_tv) and s.pool_id is null
@@ -357,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(48);
+select plan(49);
 -- Fixtures: a parameterised MCQ draft P (difficulty 0.50) in workspace A1, one in A2, and a plain approved MCQ item.
 select pg_temp.bank('qa1', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'quant', 0.50, 'approved');
 insert into public.items (id, org_id, workspace_id, format, skill_key) values
@@ -471,6 +469,17 @@ select is(pg_temp.try($$insert into public.item_variant_keys (org_id, item_varia
 select matches(pg_temp.try($$update public.item_versions set status = 'in_review' where id = 'c2100000-0000-4000-8000-000000000003'$$), '^42501 TRACE_GUARD: variants are numbered 1 to n', 'M1-e: variants 1 and 3 without 2 cannot be submitted');
 select is(pg_temp.try($$insert into public.item_variants (org_id, item_version_id, variant_no, params, stem, options, difficulty, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c2100000-0000-4000-8000-000000000003', 2, '{"a": 4}', '[synthetic] What is 4 + 1?', '[{"id": "o1", "text": "5"}, {"id": "o2", "text": "4"}]', 0.50, repeat('c', 64))$$), 'OK 1', 'M1-e: variant 2 fills the gap');
 select is(pg_temp.try($$insert into public.item_variant_keys (org_id, item_variant_id, key) select org_id, id, '{"option_id": "o1"}' from public.item_variants where item_version_id = 'c2100000-0000-4000-8000-000000000003' and variant_no = 2$$), 'OK 1', 'M1-e: variant 2 is keyed');
+select pg_temp.op();
+create temp table v2_keep as select * from public.item_variants where item_version_id = 'c2100000-0000-4000-8000-000000000003' and variant_no = 2;
+create temp table v2_key_keep as select k.* from public.item_variant_keys as k join v2_keep as v on v.id = k.item_variant_id;
+delete from public.item_variant_keys where item_variant_id in (select id from v2_keep);
+delete from public.item_variants where id in (select id from v2_keep);
+select pg_temp.u('owner');
+select matches(pg_temp.try($$update public.item_versions set status = 'in_review' where id = 'c2100000-0000-4000-8000-000000000003'$$), '^42501 TRACE_GUARD: variants are numbered 1 to n', 'M1-f (R5-60 d): variant 2 of 1..3 deleted, the item cannot be submitted');
+select pg_temp.op();
+insert into public.item_variants select * from v2_keep;
+insert into public.item_variant_keys select * from v2_key_keep;
+select pg_temp.u('owner');
 select is(pg_temp.try($$update public.item_versions set status = 'in_review' where id = 'c2100000-0000-4000-8000-000000000003'$$), 'OK 1', 'M1-e: variants 1 to 3 are submitted');
 select pg_temp.op();
 select * from finish();

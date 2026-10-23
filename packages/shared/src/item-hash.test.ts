@@ -136,45 +136,42 @@ describe('scrubDraftTopic (§6.4)', () => {
   });
 });
 
-describe('snapshotDigest (publish race, Wave 2 lead decision)', () => {
+describe('snapshotDigest (publish race, R5-56 d; exposure left out, R5-60 a)', () => {
   const rows = [
-    { sectionId: ORG_LIB, itemVersionId: ORG_A, exposureAtPublish: 3 },
-    { sectionId: ORG_A, itemVersionId: ORG_LIB, exposureAtPublish: 0 },
+    { sectionId: ORG_LIB, itemVersionId: ORG_A },
+    { sectionId: ORG_A, itemVersionId: ORG_LIB },
   ];
-  it('is the SHA-256 of the sorted lines, independent of row order', async () => {
-    const lines = [`${ORG_A}:${ORG_LIB}:0`, `${ORG_LIB}:${ORG_A}:3`].join('\n');
+  it('is the SHA-256 of the sorted section:item lines, independent of row order', async () => {
+    const lines = [`${ORG_A}:${ORG_LIB}`, `${ORG_LIB}:${ORG_A}`].join('\n');
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(lines));
     const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
     expect(await snapshotDigest(rows)).toBe(hex);
     expect(await snapshotDigest([...rows].reverse())).toBe(hex);
   });
-  it('changes with an exposure count or a missing row; refuses a negative count', async () => {
+  it('changes with a missing row; an exposure count on a row does not change it (R5-60 a)', async () => {
     const base = await snapshotDigest(rows);
-    expect(await snapshotDigest([{ ...rows[0]!, exposureAtPublish: 4 }, rows[1]!])).not.toBe(base);
     expect(await snapshotDigest([rows[0]!])).not.toBe(base);
-    await expect(snapshotDigest([{ ...rows[0]!, exposureAtPublish: -1 }])).rejects.toThrow();
+    const withExposure = rows.map((r, k) => ({ ...r, exposureAtPublish: 5 + k }));
+    expect(await snapshotDigest(withExposure)).toBe(base);
   });
-  it('matches the vector the publish guard is pinned to (rls_m1_snapshot, migration M1-e)', async () => {
+  it('matches the vector the publish guard is pinned to (rls_m1_snapshot, migration M1-f)', async () => {
     // Same three rows as private.snapshot_digest_of in rls_m1_snapshot; upper-case ids are lowered first.
     const vector = [
       {
         sectionId: 'D2000000-0000-4000-8000-00000000000B',
         itemVersionId: 'd3000000-0000-4000-8000-000000000002',
-        exposureAtPublish: 7,
       },
       {
         sectionId: 'd2000000-0000-4000-8000-00000000000a',
         itemVersionId: 'd3000000-0000-4000-8000-000000000001',
-        exposureAtPublish: 0,
       },
       {
         sectionId: 'd2000000-0000-4000-8000-00000000000a',
         itemVersionId: 'd3000000-0000-4000-8000-000000000003',
-        exposureAtPublish: 12,
       },
     ];
     expect(await snapshotDigest(vector)).toBe(
-      'e905567988cc26439a5c547f68097ce1e4917bf36d1355d7ab70f46f4abed28b',
+      '82eef2b94352364281abc6e08e377aa99232a34f8c82f19ed16efe139c35e475',
     );
   });
 });

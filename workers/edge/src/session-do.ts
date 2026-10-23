@@ -11,6 +11,7 @@ import {
   type AttachResult,
   type EventsResult,
   type ItemResult,
+  type MediaResult,
   type SessionApi,
   type SessionAuth,
   type StartInput,
@@ -80,8 +81,12 @@ export class SessionDO extends DurableObject<Env> implements SessionApi {
     return this.#core.attach(auth);
   }
 
-  item(auth: SessionAuth, position: number): Promise<ItemResult> {
-    return this.#core.item(auth, position);
+  item(auth: SessionAuth, position: number, afterSeq?: number): Promise<ItemResult> {
+    return this.#core.item(auth, position, afterSeq);
+  }
+
+  media(auth: SessionAuth, hash: string): Promise<MediaResult> {
+    return this.#core.media(auth, hash);
   }
 
   events(

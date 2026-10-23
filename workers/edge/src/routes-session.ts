@@ -14,11 +14,15 @@
 import {
   EventBatchAck,
   EventBatchReq,
+  ItemGetQuery,
   Receipt,
   ServedItem,
+  ServedItemV2,
   SessionAttachRes,
+  SessionAttachResV2,
   SessionStartReq,
   SessionStartRes,
+  SessionStartResV2,
   SubmitReq,
   type CandidateTokenClaims,
 } from '@trace/shared/contracts/candidate';
@@ -48,7 +52,8 @@ import {
   sessionFor,
   type RouteDeps,
 } from './route-support.js';
-import type { PhotoRef, Refusal, SessionApi, SessionAuth } from './session-core.js';
+import { mountItemMediaRoute } from './item-media.js';
+import type { PhotoRef, Refusal, SessionApi, SessionAuth, View, ViewV2 } from './session-core.js';
 import { verifyCandidateToken } from './token.js';
 
 /** Answers a refusal of the SessionDO with its constant code (409 with `ackSeq`, 429 with `Retry-After`). */
@@ -56,6 +61,8 @@ const refuseSession = (result: Refusal): never => {
   if (result.error === 'out_of_order') return failOutOfOrder(result.ackSeq ?? 0);
   return fail(result.error, result.retryAfterSeconds);
 };
+
+const isV2 = (view: View | ViewV2): view is ViewV2 => 'v' in view && view.v === 2;
 
 interface SessionRequest {
   claims: CandidateTokenClaims;
@@ -244,11 +251,16 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
       if (started.kind === 'submitted') {
         return sendJson(c, SessionStartRes, { state: 'submitted', receipt: started.receipt });
       }
-      return sendJson(c, SessionStartRes, {
-        sessionToken: grant.sessionToken,
-        expiresAt: new Date(granted.exp * 1000).toISOString(),
-        view: started.view,
-      });
+      const expiresAt = new Date(granted.exp * 1000).toISOString();
+      const view = started.view;
+      if (isV2(view)) {
+        return sendJson(c, SessionStartResV2, {
+          sessionToken: grant.sessionToken,
+          expiresAt,
+          view,
+        });
+      }
+      return sendJson(c, SessionStartRes, { sessionToken: grant.sessionToken, expiresAt, view });
     }),
   );
 
@@ -259,7 +271,9 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
       const { session, auth } = await sessionAuth(c, deps);
       const out = await otpCall(() => session.attach(auth));
       if (!out.ok) return refuseSession(out);
-      return sendJson(c, SessionAttachRes, { view: out.view });
+      const view = out.view;
+      if (isV2(view)) return sendJson(c, SessionAttachResV2, { view });
+      return sendJson(c, SessionAttachRes, { view });
     }),
   );
 
@@ -269,8 +283,14 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
       const { session, auth } = await sessionAuth(c, deps);
       const raw = c.req.param('pos') ?? '';
       if (!POSITION.test(raw)) return fail('bad_request');
-      const out = await otpCall(() => session.item(auth, Number(raw)));
+      // R5-45: `afterSeq` (digits only) is the only query key read; v1 sessions never need it.
+      const afterRaw = c.req.query('afterSeq');
+      const query = ItemGetQuery.safeParse(afterRaw === undefined ? {} : { afterSeq: afterRaw });
+      if (!query.success) return fail('bad_request');
+      const afterSeq = query.data.afterSeq;
+      const out = await otpCall(() => session.item(auth, Number(raw), afterSeq));
       if (!out.ok) return refuseSession(out);
+      if ('v2' in out) return sendJson(c, ServedItemV2, out.v2);
       return sendJson(c, ServedItem, out.item);
     }),
   );
@@ -288,6 +308,7 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
         serverNow: out.serverNow,
         deadlineAt: out.deadlineAt,
         state: out.state,
+        ...(out.refusedSeqs === undefined ? {} : { refusedSeqs: out.refusedSeqs }),
       });
     }),
   );
@@ -303,4 +324,7 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
       return sendJson(c, Receipt, out.receipt);
     }),
   );
+
+  // M1 R5-10, R5-56 f: item images, mounted with the session routes (the factory lives in item-media.ts).
+  mountItemMediaRoute(app, (c) => sessionAuth(c, deps));
 };

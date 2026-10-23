@@ -32,6 +32,11 @@ export interface StoredEvent {
   t: number;
   tServer: number;
   body: EventBody;
+  /**
+   * An answer acknowledged but refused for navigation (package v2: a closed section, or below the highest served
+   * position of a forward-only section; R5-20). Kept as a record, never applied: the replay skips it.
+   */
+  refused?: true;
 }
 
 /** The answer state of one item. `gseq` is the session-global number of the last edit. */
@@ -40,6 +45,8 @@ export type AnswerState =
   | { kind: 'choice'; choice: string | null; gseq: number };
 
 export type PackageItem = TestPackage['items'][number];
+/** What an answer edit is checked against: a v1 package item, or a v2 slot (the served variant's options). */
+export type AnswerItem = Pick<PackageItem, 'kind' | 'options' | 'maxChars'>;
 
 export const isAnswer = (body: EventBody): body is AnswerBody =>
   body.kind === 'answer.text' || body.kind === 'answer.choice';
@@ -60,7 +67,7 @@ export const applySplice = (text: string, p: number, d: number, i: string): stri
 export const applyAnswer = (
   prev: AnswerState | undefined,
   body: AnswerBody,
-  item: PackageItem,
+  item: AnswerItem,
   gseq: number,
 ): AnswerState | null => {
   if (body.kind === 'answer.choice') {
@@ -79,17 +86,17 @@ export const applyAnswer = (
   return { kind: 'text', text, gseq };
 };
 
-/** Replays every accepted answer edit from empty, in `gseq` order. Null if a stored edit no longer applies. */
+/** Replays every accepted answer edit from empty, in `gseq` order (refused ones skipped). Null if one no longer applies. */
 export const replayAnswers = (
   events: Iterable<StoredEvent>,
-  items: ReadonlyMap<number, PackageItem>,
+  items: ReadonlyMap<number, AnswerItem>,
 ): Map<number, AnswerState> | null => {
   const out = new Map<number, AnswerState>();
   let last = 0;
   for (const event of events) {
     if (event.gseq <= last) return null;
     last = event.gseq;
-    if (!isAnswer(event.body)) continue;
+    if (!isAnswer(event.body) || event.refused === true) continue;
     const item = items.get(event.body.item);
     if (item === undefined) return null;
     const next = applyAnswer(out.get(event.body.item), event.body, item, event.gseq);

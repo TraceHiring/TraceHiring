@@ -112,5 +112,16 @@ select is(pg_temp.try($$insert into public.item_variant_keys (org_id, item_varia
 select matches(pg_temp.try($$update public.item_versions set status = 'in_review' where id = 'c2100000-0000-4000-8000-000000000003'$$), '^42501 TRACE_GUARD: variants are numbered 1 to n', 'M1-e: variants 1 and 3 without 2 cannot be submitted');
 select is(pg_temp.try($$insert into public.item_variants (org_id, item_version_id, variant_no, params, stem, options, difficulty, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c2100000-0000-4000-8000-000000000003', 2, '{"a": 4}', '[synthetic] What is 4 + 1?', '[{"id": "o1", "text": "5"}, {"id": "o2", "text": "4"}]', 0.50, repeat('c', 64))$$), 'OK 1', 'M1-e: variant 2 fills the gap');
 select is(pg_temp.try($$insert into public.item_variant_keys (org_id, item_variant_id, key) select org_id, id, '{"option_id": "o1"}' from public.item_variants where item_version_id = 'c2100000-0000-4000-8000-000000000003' and variant_no = 2$$), 'OK 1', 'M1-e: variant 2 is keyed');
+select pg_temp.op();
+create temp table v2_keep as select * from public.item_variants where item_version_id = 'c2100000-0000-4000-8000-000000000003' and variant_no = 2;
+create temp table v2_key_keep as select k.* from public.item_variant_keys as k join v2_keep as v on v.id = k.item_variant_id;
+delete from public.item_variant_keys where item_variant_id in (select id from v2_keep);
+delete from public.item_variants where id in (select id from v2_keep);
+select pg_temp.u('owner');
+select matches(pg_temp.try($$update public.item_versions set status = 'in_review' where id = 'c2100000-0000-4000-8000-000000000003'$$), '^42501 TRACE_GUARD: variants are numbered 1 to n', 'M1-f (R5-60 d): variant 2 of 1..3 deleted, the item cannot be submitted');
+select pg_temp.op();
+insert into public.item_variants select * from v2_keep;
+insert into public.item_variant_keys select * from v2_key_keep;
+select pg_temp.u('owner');
 select is(pg_temp.try($$update public.item_versions set status = 'in_review' where id = 'c2100000-0000-4000-8000-000000000003'$$), 'OK 1', 'M1-e: variants 1 to 3 are submitted');
 select pg_temp.op();

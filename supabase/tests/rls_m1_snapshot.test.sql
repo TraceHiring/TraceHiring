@@ -244,20 +244,18 @@ end
 $f$;
 -- publish(version key): operator-path publish with a content hash (the publish guard runs in full).
 -- live_digest(version key): what the api sends as snapshotDigest (R5-56 d): the rows a package built now would use
--- (approved pool items of pool sections, inline items of inline sections) with their exposure, as @trace/shared
--- snapshotDigest computes it. publish() sends it, so a v2 publish passes the M1-e digest check.
+-- (approved pool items of pool sections, inline items of inline sections) as @trace/shared snapshotDigest computes
+-- it: section:item lines, no exposure (R5-60 a). publish() sends it, so a v2 publish passes the digest check.
 create function pg_temp.live_digest(p_tv text) returns text language sql stable as $f$
   select encode(sha256(convert_to(coalesce(string_agg(x.l, E'\n' order by x.l collate "C"), ''), 'UTF8')), 'hex')
   from (
-    select s.id::text || ':' || i.id::text || ':' ||
-      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text as l
+    select s.id::text || ':' || i.id::text as l
     from public.sections as s
     join public.pool_items as pi on pi.org_id = s.org_id and pi.pool_id = s.pool_id
     join public.item_versions as i on i.org_id = pi.org_id and i.id = pi.item_version_id and i.status = 'approved'
     where s.test_version_id = pg_temp.id(p_tv)
     union all
-    select s.id::text || ':' || i.id::text || ':' ||
-      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text
+    select s.id::text || ':' || i.id::text
     from public.sections as s
     join public.item_versions as i on i.org_id = s.org_id and i.section_id = s.id
     where s.test_version_id = pg_temp.id(p_tv) and s.pool_id is null
@@ -357,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(68);
+select plan(79);
 -- Fixtures (operator path): approved MCQ bank items v1..v10 and w1..w100 in workspace A1; pools PA = v1..v10,
 -- PB = w1..w99, PC = w1..w100, PD = {v1, w1} (overlaps PA); org B pool PBB = 10 items.
 select pg_temp.bank('v' || n, pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'approved') from generate_series(1, 10) as n;
@@ -521,8 +519,8 @@ select is((select min_pool_ratio::text from public.test_versions where id = pg_t
 
 -- ===== Publish race (R5-56 d, migration M1-e): the guard recomputes the digest of the snapshot it writes =====
 select pg_temp.op();
-select is(private.snapshot_digest_of(array['d2000000-0000-4000-8000-00000000000b:d3000000-0000-4000-8000-000000000002:7', 'd2000000-0000-4000-8000-00000000000a:d3000000-0000-4000-8000-000000000001:0', 'd2000000-0000-4000-8000-00000000000a:d3000000-0000-4000-8000-000000000003:12']), 'e905567988cc26439a5c547f68097ce1e4917bf36d1355d7ab70f46f4abed28b', 'digest: the SQL digest equals @trace/shared snapshotDigest on the pinned vector (item-hash.test.ts)');
-select is((select snapshot_digest from public.test_versions where id = pg_temp.id('ta')), (select private.snapshot_digest_of(array_agg(sp.section_id::text || ':' || sp.item_version_id::text || ':' || sp.exposure_at_publish::text)) from public.section_pool_snapshot as sp where sp.test_version_id = pg_temp.id('ta')), 'digest: a published v2 version stores the digest of its snapshot');
+select is(private.snapshot_digest_of(array['d2000000-0000-4000-8000-00000000000b:d3000000-0000-4000-8000-000000000002', 'd2000000-0000-4000-8000-00000000000a:d3000000-0000-4000-8000-000000000001', 'd2000000-0000-4000-8000-00000000000a:d3000000-0000-4000-8000-000000000003']), '82eef2b94352364281abc6e08e377aa99232a34f8c82f19ed16efe139c35e475', 'digest (M1-f): the SQL digest equals @trace/shared snapshotDigest on the pinned vector (item-hash.test.ts)');
+select is((select snapshot_digest from public.test_versions where id = pg_temp.id('ta')), (select private.snapshot_digest_of(array_agg(sp.section_id::text || ':' || sp.item_version_id::text)) from public.section_pool_snapshot as sp where sp.test_version_id = pg_temp.id('ta')), 'digest (M1-f): a published v2 version stores the digest of its snapshot''s section:item lines');
 select is((select snapshot_digest is null from public.test_versions where id = pg_temp.id('tg')), true, 'digest: a v1 version stores none (it has no snapshot), even when one is sent');
 select pg_temp.tv('tk', pg_temp.id('A'), pg_temp.id('A1'));
 select pg_temp.sec('sk', 'tk', 1, 'mcq', 'd1000000-0000-4000-8000-00000000000a', 1, 100);
@@ -544,5 +542,31 @@ select is(pg_temp.try($$update public.test_versions set snapshot_digest = repeat
 select is((select snapshot_digest is null from public.test_versions where id = pg_temp.id('tl')), true, 'digest: a draft keeps none (only the publish update carries it)');
 select is(pg_temp.try($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64), snapshot_digest = pg_temp.live_digest('tl') where id = pg_temp.id('tl')$$), 'OK 1', 'digest: the owner publishes a v2 version with its digest');
 select pg_temp.op();
+
+-- ===== Migration M1-f (R5-60): exposure is not in the digest; trigger states; the column grant's denied cases =====
+select is((select string_agg(tgname || '=' || tgenabled::text, ',' order by tgname) from pg_trigger where tgname in ('test_versions_snapshot_digest', 'item_versions_variants_numbered')), 'item_versions_variants_numbered=A,test_versions_snapshot_digest=A', 'R5-60 d: both M1-e triggers are ENABLE ALWAYS');
+select is((select string_agg(tgname, ',' order by tgname collate "C") from pg_trigger where tgrelid = 'public.test_versions'::regclass and tgname in ('test_versions_guard', 'test_versions_snapshot_digest')), 'test_versions_guard,test_versions_snapshot_digest', 'R5-60 d: the digest trigger sorts after the publish guard on test_versions');
+select is((select string_agg(tgname, ',' order by tgname collate "C") from pg_trigger where tgrelid = 'public.item_versions'::regclass and tgname in ('item_versions_guard', 'item_versions_variants_numbered')), 'item_versions_guard,item_versions_variants_numbered', 'R5-60 d: the numbering trigger sorts after the item guard on item_versions');
+select is((select string_agg(r, ',' order by r) from unnest(array['anon', 'trace_api', 'trace_worker', 'trace_quality_worker', 'trace_integrity_worker', 'trace_authoring_worker', 'trace_admin_worker', 'trace_candidate']) as r where has_column_privilege(r, 'public.test_versions', 'snapshot_digest', 'UPDATE')), null, 'R5-60 d: no role but authenticated may update snapshot_digest');
+select pg_temp.tv('tm', pg_temp.id('A'), pg_temp.id('A1'));
+select pg_temp.sec('sm', 'tm', 1, 'mcq', 'd1000000-0000-4000-8000-00000000000c', 1, 100);
+select pg_temp.preset('tm', 'standard');
+select pg_temp.u('reviewer');
+select is(pg_temp.try($$update public.test_versions set snapshot_digest = repeat('3', 64) where id = pg_temp.id('tm')$$), 'OK 0', 'R5-60 d: a reviewer updates no test version (RLS)');
+select pg_temp.u('hm');
+select is(pg_temp.try($$update public.test_versions set snapshot_digest = repeat('3', 64) where id = pg_temp.id('tm')$$), 'OK 0', 'R5-60 d: a hiring manager updates no test version (RLS)');
+select pg_temp.u('b_admin');
+select is(pg_temp.try($$update public.test_versions set snapshot_digest = repeat('3', 64) where id = pg_temp.id('tm')$$), 'OK 0', 'R5-60 d: another org''s admin updates no test version (RLS)');
+select pg_temp.op();
+create temp table exposure_digest as select pg_temp.live_digest('tm') as d;
+select pg_temp.session('sx', 'tl', 91);
+create temp table served_pick as select sp.item_version_id from public.section_pool_snapshot as sp where sp.section_id = pg_temp.id('sl') and exists (select 1 from public.pool_items as pi where pi.pool_id = 'd1000000-0000-4000-8000-00000000000c' and pi.item_version_id = sp.item_version_id) order by sp.item_version_id limit 1;
+grant select on served_pick to public;
+select pg_temp.w('trace_worker', pg_temp.id('A'));
+select is(pg_temp.try(format($$insert into public.session_items (org_id, session_id, section_id, item_version_id, position, served_at) values (%L, %L, %L, %L, 1, now())$$, pg_temp.id('A'), pg_temp.id('sx'), pg_temp.id('sl'), (select item_version_id from served_pick))), 'OK 1', 'R5-60 a: an item of pool C is served in a live session of the published version');
+select pg_temp.op();
+select is((select count(*)::int from public.item_exposure_events where session_item_id in (select id from public.session_items where session_id = pg_temp.id('sx'))), 1, 'R5-60 a: the serve counted one exposure');
+select is(pg_temp.try(format($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64), snapshot_digest = %L where id = %L$$, (select d from exposure_digest), pg_temp.id('tm'))), 'OK 1', 'R5-60 a (DB review Medium): a package built before an item was served still publishes (exposure is not in the digest)');
+select is((select max(exposure_at_publish) from public.section_pool_snapshot where test_version_id = pg_temp.id('tm')), 1, 'R5-60 a: the snapshot still freezes the exposure count at publish');
 select * from finish();
 rollback;

@@ -13,6 +13,7 @@ import {
   coreHarness,
   heartbeat,
   paste,
+  serveCore,
   sessionHarness,
   startCore,
   tabHidden,
@@ -31,6 +32,7 @@ const KEYS = evidenceKeys(ORG, '44444444-4444-4444-8444-444444444444');
 const runSchedule = async (shift: (arrivalMs: number) => number) => {
   const h = await coreHarness();
   const { view } = await startCore(h);
+  await serveCore(h, [WRITTEN]);
   const t0 = h.clock.ms;
   // Heartbeats for the first minute, a 70 s silence, a paste, a tab_hidden of 40 s, then heartbeats again.
   const schedule: { at: number; make: (seq: number, t: number) => ClientEvent }[] = [];
@@ -52,6 +54,7 @@ const runSchedule = async (shift: (arrivalMs: number) => number) => {
       events: [make(seq, Math.max(0, shift(at)))],
     });
     if (!out.ok) throw new Error(`refused at ${at}: ${out.error}`);
+    expect(out).not.toHaveProperty('refusedSeqs');
     expect(out.serverNow).toBe(new Date(h.clock.ms).toISOString());
     expect(out.deadlineAt).toBe(view.deadlineAt);
   }
