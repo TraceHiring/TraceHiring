@@ -142,7 +142,10 @@ describe('scrubDraftTopic (§6.4)', () => {
     const topic = `a${at}b x` + '\u{1F600}'.repeat(247);
     const out = scrubDraftTopic(topic);
     expect(out.length).toBeLessThanOrEqual(500);
-    expect(out.isWellFormed()).toBe(true);
+    // No lone surrogate (a high one not followed by a low one, or a low one not preceded by a high one).
+    expect(out).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
     expect(
       AuthoringQueueMessage.safeParse({
         v: 1,
