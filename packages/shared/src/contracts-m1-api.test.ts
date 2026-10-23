@@ -11,11 +11,18 @@ import {
   INTEGRITY_SETTING_VALUES,
   SaveTestDraftRequest,
 } from './contracts-m1.js';
+import { canonicalJson } from './canonical-json.js';
 import { allObjectsStrict, keysMatching, schemaKeys } from './contracts-schema-walk.js';
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const T0 = '2026-10-23T10:00:00.000Z';
 const T1 = '2026-10-23T11:00:00.000Z';
+/** A page cursor built independently of the code under test: base64url of the canonical JSON keyset. */
+const b64url = (text: string) => Buffer.from(text, 'utf8').toString('base64url');
+const cursorOf = (createdAt: string, rowId: string) =>
+  b64url(canonicalJson({ createdAt, id: rowId }));
+const C1 = cursorOf(T0, id(1));
+const C2 = cursorOf(T1, id(2));
 const ok = (schema: z.ZodType, value: unknown) => schema.safeParse(value).success;
 /** Looks an export up by name, so a missing schema fails its test instead of the whole file's typecheck. */
 const schema = (name: string): z.ZodType => {
@@ -25,6 +32,9 @@ const schema = (name: string): z.ZodType => {
 };
 
 const NEW_SCHEMAS = [
+  'PageCursor',
+  'PoolListQuery',
+  'RoleTemplateListQuery',
   'TestDraftView',
   'CreateTestFromTemplateResponse',
   'RoleTemplateListResponse',
@@ -339,6 +349,14 @@ describe('CreateTestFromTemplateResponse (POST …/tests/from-template)', () => 
       },
     ],
     ['an unknown format', { ...created, skippedSections: [{ title: 'Code', format: 'code' }] }],
+    [
+      'a servable mcq section (M1-16)',
+      { ...created, skippedSections: [{ title: 'V', format: 'mcq' }] },
+    ],
+    [
+      'a servable written section (M1-16)',
+      { ...created, skippedSections: [{ title: 'W', format: 'written' }] },
+    ],
     ['an empty title', { ...created, skippedSections: [{ title: '', format: 'typing' }] }],
     [
       'more than 10 skipped sections',
@@ -362,16 +380,27 @@ describe('RoleTemplateListResponse (GET …/templates)', () => {
     name: '[synthetic] Customer Support',
     presetKey: 'standard',
   };
-  it('accepts templates, at most 100, one per key and version', () => {
-    expect(ok(R(), { templates: [t, { ...t, templateKey: 'bpo_voice' }] })).toBe(true);
-    expect(ok(R(), { templates: [] })).toBe(true);
-    expect(ok(R(), { templates: [t, t] })).toBe(false);
+  it('a cursor page of at most 50 templates, one per key and version', () => {
+    expect(ok(R(), { templates: [t, { ...t, templateKey: 'bpo_voice' }], nextCursor: null })).toBe(
+      true,
+    );
+    expect(ok(R(), { templates: [], nextCursor: C1 })).toBe(true);
+    expect(ok(R(), { templates: [t, t], nextCursor: null })).toBe(false);
     expect(
       ok(R(), {
-        templates: Array.from({ length: 101 }, (_, i) => ({ ...t, version: i + 1 })),
+        templates: Array.from({ length: 51 }, (_, i) => ({ ...t, version: i + 1 })),
+        nextCursor: null,
       }),
     ).toBe(false);
-    expect(ok(R(), { templates: [{ ...t, presetKey: 'lenient' }] })).toBe(false);
+    expect(ok(R(), { templates: [t] })).toBe(false);
+    expect(ok(R(), { templates: [{ ...t, presetKey: 'lenient' }], nextCursor: null })).toBe(false);
+  });
+  it('RoleTemplateListQuery takes a page cursor only', () => {
+    const Q = schema('RoleTemplateListQuery');
+    expect(ok(Q, {})).toBe(true);
+    expect(ok(Q, { cursor: C1 })).toBe(true);
+    expect(ok(Q, { cursor: 'abc_DEF-1' })).toBe(false);
+    expect(ok(Q, { presetKey: 'standard' })).toBe(false);
   });
 });
 
@@ -405,7 +434,7 @@ describe('BankItemListQuery (§6.2 filters: format, skill, difficulty range, sta
         status: 'in_review',
         origin: 'ai_draft',
         poolId: id(30),
-        cursor: 'abc_DEF-1',
+        cursor: C1,
       }),
     ).toEqual({
       format: 'mcq',
@@ -415,7 +444,7 @@ describe('BankItemListQuery (§6.2 filters: format, skill, difficulty range, sta
       status: 'in_review',
       origin: 'ai_draft',
       poolId: id(30),
-      cursor: 'abc_DEF-1',
+      cursor: C1,
     });
     expect(ok(Q(), {})).toBe(true);
   });
@@ -423,6 +452,13 @@ describe('BankItemListQuery (§6.2 filters: format, skill, difficulty range, sta
     ['min above max', { difficultyMin: '0.8', difficultyMax: '0.2' }],
     ['a difficulty over 1', { difficultyMax: '1.5' }],
     ['a non-number difficulty', { difficultyMin: 'x' }],
+    ['an empty difficulty (coerce would read 0)', { difficultyMin: '' }],
+    ['a blank difficulty (coerce would read 0)', { difficultyMax: ' ' }],
+    ['a padded difficulty', { difficultyMin: ' 0.5' }],
+    ['a hex difficulty', { difficultyMin: '0x1' }],
+    ['an exponent difficulty', { difficultyMin: '1e-1' }],
+    ['a number, not query text', { difficultyMin: 0.5 }],
+    ['a hand-made cursor', { cursor: 'abc_DEF-1' }],
     ['the old rejected status (R5-22)', { status: 'rejected' }],
     ['an unknown origin', { origin: 'ai' }],
     ['an unknown format', { format: 'voice' }],
@@ -438,7 +474,7 @@ describe('BankItemListQuery (§6.2 filters: format, skill, difficulty range, sta
 describe('BankItemListResponse (cursor page of BankItemSummary)', () => {
   const R = () => schema('BankItemListResponse');
   it('accepts a page and the last page', () => {
-    expect(ok(R(), { items: [summary], nextCursor: 'next_1' })).toBe(true);
+    expect(ok(R(), { items: [summary], nextCursor: C2 })).toBe(true);
     expect(ok(R(), { items: [], nextCursor: null })).toBe(true);
   });
   it.each([
@@ -559,18 +595,45 @@ const pool = {
   itemCount: 12,
   approvedCount: 10,
   usedByDraws: [{ testId: id(31), drawCount: 5 }],
+  usedByDrawsTotal: 1,
 };
 
 describe('PoolListResponse and PoolItemsRequest', () => {
-  it('PoolListResponse: at most 500 pools, distinct ids', () => {
+  it('PoolListResponse: a cursor page of at most 50 pools, distinct ids', () => {
     const R = schema('PoolListResponse');
-    expect(ok(R, { pools: [pool, { ...pool, id: id(32) }] })).toBe(true);
-    expect(ok(R, { pools: [] })).toBe(true);
-    expect(ok(R, { pools: [pool, pool] })).toBe(false);
+    expect(ok(R, { pools: [pool, { ...pool, id: id(32) }], nextCursor: C1 })).toBe(true);
+    expect(ok(R, { pools: [], nextCursor: null })).toBe(true);
+    expect(ok(R, { pools: [pool, pool], nextCursor: null })).toBe(false);
     expect(
-      ok(R, { pools: Array.from({ length: 501 }, (_, i) => ({ ...pool, id: id(5000 + i) })) }),
+      ok(R, {
+        pools: Array.from({ length: 51 }, (_, i) => ({ ...pool, id: id(5000 + i) })),
+        nextCursor: null,
+      }),
     ).toBe(false);
-    expect(ok(R, { pools: [{ ...pool, approvedCount: 13 }] })).toBe(false);
+    expect(ok(R, { pools: [pool] })).toBe(false);
+    expect(ok(R, { pools: [{ ...pool, approvedCount: 13 }], nextCursor: null })).toBe(false);
+  });
+  it('PoolListQuery takes a page cursor only', () => {
+    const Q = schema('PoolListQuery');
+    expect(ok(Q, {})).toBe(true);
+    expect(ok(Q, { cursor: C2 })).toBe(true);
+    expect(ok(Q, { cursor: 'a b' })).toBe(false);
+    expect(ok(Q, { status: 'active' })).toBe(false);
+  });
+  it('PoolDetail.usedByDraws: at most 50 listed, with the full count beside them', () => {
+    const P = M1.PoolDetail;
+    const draws = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ testId: id(9000 + i), drawCount: 1 }));
+    expect(ok(P, { ...pool, usedByDraws: draws(50), usedByDrawsTotal: 120 })).toBe(true);
+    expect(ok(P, { ...pool, usedByDraws: [], usedByDrawsTotal: 0 })).toBe(true);
+    expect(ok(P, { ...pool, usedByDraws: draws(51), usedByDrawsTotal: 51 })).toBe(false);
+    expect(ok(P, { ...pool, usedByDraws: draws(3), usedByDrawsTotal: 2 })).toBe(false);
+    expect(ok(P, { ...pool, usedByDrawsTotal: -1 })).toBe(false);
+    expect(ok(P, { ...pool, usedByDrawsTotal: 1.5 })).toBe(false);
+    const withoutTotal = Object.fromEntries(
+      Object.entries(pool).filter(([key]) => key !== 'usedByDrawsTotal'),
+    );
+    expect(ok(P, withoutTotal)).toBe(false);
   });
   it('PoolItemsRequest: 1-500 distinct item version ids', () => {
     const R = schema('PoolItemsRequest');
@@ -603,7 +666,7 @@ const card = {
 describe('LibraryBrowseResponse (cursor page of LibraryItemCard)', () => {
   const R = () => schema('LibraryBrowseResponse');
   it('accepts a page and the last page', () => {
-    expect(ok(R(), { items: [card], nextCursor: 'c_2' })).toBe(true);
+    expect(ok(R(), { items: [card], nextCursor: C2 })).toBe(true);
     expect(ok(R(), { items: [], nextCursor: null })).toBe(true);
   });
   it.each([
@@ -839,14 +902,14 @@ describe('MemberInviteCreateResponse, MemberInviteListQuery and MemberInviteList
   it('list query takes a cursor only', () => {
     const Q = schema('MemberInviteListQuery');
     expect(ok(Q, {})).toBe(true);
-    expect(ok(Q, { cursor: 'c_1' })).toBe(true);
+    expect(ok(Q, { cursor: C1 })).toBe(true);
     expect(ok(Q, { cursor: 'a b' })).toBe(false);
     expect(ok(Q, { email: 'person@example.test' })).toBe(false);
   });
   it('list: a cursor page of at most 50 invites', () => {
     const L = schema('MemberInviteListResponse');
     expect(ok(L, { invites: [invite], nextCursor: null })).toBe(true);
-    expect(ok(L, { invites: [], nextCursor: 'c_2' })).toBe(true);
+    expect(ok(L, { invites: [], nextCursor: C2 })).toBe(true);
     expect(ok(L, { invites: Array.from({ length: 51 }, () => invite), nextCursor: null })).toBe(
       false,
     );
@@ -921,5 +984,394 @@ describe('api contracts equal the M1 tables', () => {
       'lockedValue',
       'settingKey',
     ]);
+  });
+});
+
+// ---- First-review fixes (spec and security reviews of m1/w1-contracts) -------------------------------------------
+
+/** A D1 section as the editor sends it back: inline, no M1 feature, navigation null (R2-1). */
+const d1Request = {
+  mode: 'inline',
+  format: 'mcq',
+  name: 'Reasoning',
+  weight: 50,
+  items: [],
+  shuffleItems: false,
+  shuffleOptions: false,
+  navigation: null,
+};
+const poolDraft = {
+  mode: 'pool',
+  format: 'mcq',
+  name: 'Quant',
+  weight: 50,
+  items: [],
+  poolId: id(30),
+  drawCount: 3,
+  shuffleItems: false,
+  shuffleOptions: false,
+  navigation: 'free',
+};
+
+describe('PageCursor: a keyset only, base64url of canonical JSON', () => {
+  type Codec = {
+    encodePageCursor: (c: { createdAt: string; id: string }) => string;
+    decodePageCursor: (s: string) => { createdAt: string; id: string } | null;
+  };
+  const codec = (): Codec => {
+    const m = M1 as Record<string, unknown>;
+    if (typeof m.encodePageCursor !== 'function' || typeof m.decodePageCursor !== 'function') {
+      throw new Error('contracts-m1 does not export the page cursor codec');
+    }
+    return m as unknown as Codec;
+  };
+  it('encodes to the canonical form and decodes it back', () => {
+    const { encodePageCursor, decodePageCursor } = codec();
+    expect(encodePageCursor({ id: id(1), createdAt: T0 })).toBe(C1);
+    expect(decodePageCursor(C1)).toEqual({ createdAt: T0, id: id(1) });
+    expect(decodePageCursor(C2)).toEqual({ createdAt: T1, id: id(2) });
+    expect(encodePageCursor({ createdAt: '2026-10-23T15:30:00+05:30', id: id(3) })).toMatch(
+      /^[A-Za-z0-9_-]+$/,
+    );
+  });
+  it('PageCursor is the strict keyset {createdAt, id}', () => {
+    const P = schema('PageCursor');
+    expect(schemaKeys(P)).toEqual(['createdAt', 'id']);
+    expect(ok(P, { createdAt: T0, id: id(1) })).toBe(true);
+    expect(ok(P, { createdAt: T0, id: id(1), orgId: id(2) })).toBe(false);
+  });
+  it('encode refuses a value that is not a keyset', () => {
+    const { encodePageCursor } = codec();
+    expect(() => encodePageCursor({ createdAt: 'yesterday', id: id(1) })).toThrow();
+    expect(() =>
+      encodePageCursor({ createdAt: T0, id: id(1), workspaceId: id(2) } as never),
+    ).toThrow();
+  });
+  it.each([
+    ['empty', ''],
+    ['not base64url (space)', 'a b'],
+    ['the standard base64 alphabet', `${C1.slice(0, -2)}+/`],
+    ['padded', `${C1}=`],
+    ['base64url of non-JSON', b64url('not json')],
+    ['base64url of a JSON array', b64url(canonicalJson([T0, id(1)]))],
+    ['base64url of JSON null', b64url('null')],
+    [
+      'an extra key (scope smuggled in)',
+      b64url(canonicalJson({ createdAt: T0, id: id(1), orgId: id(2) })),
+    ],
+    [
+      'a filter smuggled in',
+      b64url(canonicalJson({ createdAt: T0, id: id(1), status: 'approved' })),
+    ],
+    ['a missing key', b64url(canonicalJson({ id: id(1) }))],
+    ['an id that is not a uuid', b64url(canonicalJson({ createdAt: T0, id: 'row-1' }))],
+    ['a numeric createdAt', b64url(canonicalJson({ createdAt: 1761213600000, id: id(1) }))],
+    ['a createdAt that is not ISO', b64url(canonicalJson({ createdAt: '23/10/2026', id: id(1) }))],
+    ['keys out of canonical order', b64url(`{"id":"${id(1)}","createdAt":"${T0}"}`)],
+    ['whitespace in the JSON', b64url(`{"createdAt": "${T0}","id": "${id(1)}"}`)],
+    ['invalid UTF-8', Buffer.from([0x7b, 0xff, 0xfe, 0x7d]).toString('base64url')],
+    ['over 200 characters', 'A'.repeat(201)],
+    ['a hand-made cursor', 'abc_DEF-123'],
+  ])('decode refuses %s', (_label, text) => {
+    const { decodePageCursor } = codec();
+    expect(decodePageCursor(text)).toBeNull();
+  });
+  it.each([
+    'BankItemListQuery',
+    'MemberInviteListQuery',
+    'PoolListQuery',
+    'RoleTemplateListQuery',
+    'LibraryBrowseQuery',
+  ])('%s.cursor accepts only a decodable cursor', (name) => {
+    expect(ok(schema(name), { cursor: C1 })).toBe(true);
+    expect(ok(schema(name), { cursor: 'abc_DEF-123' })).toBe(false);
+    expect(
+      ok(schema(name), { cursor: b64url(canonicalJson({ createdAt: T0, id: id(1), x: 1 })) }),
+    ).toBe(false);
+  });
+  it.each([
+    ['BankItemListResponse', { items: [] }],
+    ['LibraryBrowseResponse', { items: [] }],
+    ['MemberInviteListResponse', { invites: [] }],
+    ['PoolListResponse', { pools: [] }],
+    ['RoleTemplateListResponse', { templates: [] }],
+  ])('%s.nextCursor accepts only a decodable cursor', (name, rows) => {
+    expect(ok(schema(name), { ...rows, nextCursor: C2 })).toBe(true);
+    expect(ok(schema(name), { ...rows, nextCursor: 'next_1' })).toBe(false);
+  });
+});
+
+describe('query difficulties are decimal text before conversion', () => {
+  it.each(['BankItemListQuery', 'LibraryBrowseQuery'])('%s', (name) => {
+    const Q = schema(name);
+    expect(Q.parse({ difficultyMin: '0', difficultyMax: '1' })).toMatchObject({
+      difficultyMin: 0,
+      difficultyMax: 1,
+    });
+    expect(Q.parse({ difficultyMin: '0.25' })).toMatchObject({ difficultyMin: 0.25 });
+    for (const bad of [
+      '',
+      ' ',
+      '\t',
+      ' 0.5',
+      '0.5 ',
+      '0x1',
+      '1e-1',
+      '.5',
+      '-0',
+      '+1',
+      'NaN',
+      '2',
+    ]) {
+      expect(ok(Q, { difficultyMin: bad }), JSON.stringify(bad)).toBe(false);
+      expect(ok(Q, { difficultyMax: bad }), JSON.stringify(bad)).toBe(false);
+    }
+  });
+});
+
+describe('SectionDraft round-trips a D1 section (navigation null where the DB allows it)', () => {
+  const d1Written = {
+    id: id(104),
+    position: 1,
+    mode: 'inline',
+    format: 'written',
+    name: 'Written',
+    weight: 50,
+    items: [
+      {
+        id: id(112),
+        position: 1,
+        format: 'written',
+        prompt: '[synthetic] Describe a process',
+        rubric: {
+          criteria: [{ id: 'c1', label: 'Clear', maxPoints: 5, anchors: ['first'], minHits: 1 }],
+        },
+      },
+    ],
+    shuffleItems: false,
+    shuffleOptions: false,
+    navigation: null,
+  };
+  const d1Mcq = {
+    id: id(105),
+    position: 2,
+    mode: 'inline',
+    format: 'mcq',
+    name: 'Reasoning',
+    weight: 50,
+    items: viewInline.items,
+    shuffleItems: false,
+    shuffleOptions: false,
+    navigation: null,
+  };
+  it('a D1 draft read and sent back keeps navigation null (no silent change to D1 behaviour)', () => {
+    const view = { ...draftView, version: { ...draftView.version, sections: [d1Written, d1Mcq] } };
+    const parsed = schema('TestDraftView').parse(view) as {
+      version: { sections: (typeof d1Written | typeof d1Mcq)[] };
+    };
+    const request = {
+      name: draftView.test.name,
+      durationMinutes: draftView.version.durationMinutes,
+      qualityCutoff: draftView.version.qualityCutoff,
+      sections: parsed.version.sections.map((section) => ({
+        ...withoutIds(section),
+        items: section.items.map((item) => withoutIds(item)),
+      })),
+    };
+    const saved = SaveTestDraftRequest.parse(request);
+    expect(saved.sections.map((s) => s.navigation)).toEqual([null, null]);
+    expect(saved).toEqual(request);
+  });
+  it('navigation null is accepted for a plain inline section of either format', () => {
+    expect(ok(M1.SectionDraft, d1Request)).toBe(true);
+    expect(ok(M1.SectionDraft, { ...d1Request, format: 'written' })).toBe(true);
+    expect(ok(M1.SectionDraft, { ...d1Request, format: 'written', navigation: 'free' })).toBe(
+      false,
+    );
+  });
+  it.each([
+    ['a pool section', { ...poolDraft, navigation: null }],
+    ['shuffled items', { ...d1Request, shuffleItems: true }],
+    ['shuffled options', { ...d1Request, shuffleOptions: true }],
+    ['a paste rule', { ...d1Request, format: 'written', pasteRule: 'blocked' }],
+  ])('navigation null is a D1 section only: refuses %s', (_label, section) => {
+    expect(ok(M1.SectionDraft, section)).toBe(false);
+  });
+});
+
+describe('BankItemDetail: a library copy is library-sourced', () => {
+  const libraryDetail = {
+    itemId: id(40),
+    itemVersionId: id(41),
+    versionNo: 1,
+    workspaceId: id(9),
+    status: 'approved',
+    origin: 'library',
+    isParameterised: false,
+    librarySourced: true,
+    createdBy: id(7),
+    approvedBy: id(7),
+    approvedAt: T0,
+    exposureCount: 0,
+    content: {
+      format: 'mcq',
+      stem: '[synthetic] Library copy',
+      options: [
+        { id: 'a', text: 'One' },
+        { id: 'b', text: 'Two' },
+      ],
+      skillKey: 'quant',
+      difficulty: 0.4,
+    },
+  };
+  it('accepts a library copy without its key', () => {
+    expect(ok(M1.BankItemDetail, libraryDetail)).toBe(true);
+  });
+  it('refuses origin library marked not library-sourced, with or without a key', () => {
+    expect(
+      ok(M1.BankItemDetail, {
+        ...libraryDetail,
+        librarySourced: false,
+        content: { ...libraryDetail.content, key: { optionId: 'a' } },
+      }),
+    ).toBe(false);
+    expect(ok(M1.BankItemDetail, { ...libraryDetail, librarySourced: false })).toBe(false);
+  });
+});
+
+describe('ParamName reserves prototype-chain names', () => {
+  const spec = {
+    params: { a: { kind: 'int', min: 2, max: 9, step: 1 } },
+    derived: { total: 'a * 2' },
+    constraints: [],
+    stem: '[synthetic] {{a}}',
+    options: [
+      { id: 'a', text: '{{total}}' },
+      { id: 'b', text: '{{a}}' },
+    ],
+    correctOptionId: 'a',
+    count: 5,
+  };
+  it('accepts ordinary names', () => {
+    expect(ok(M1.ParamSpec, spec)).toBe(true);
+  });
+  it.each(['constructor', 'prototype', '__proto__'])(
+    'refuses %s as a param or derived name',
+    (name) => {
+      // JSON.parse makes an own property even for __proto__, as a request body would.
+      const text = JSON.stringify(spec);
+      const asParam = JSON.parse(
+        text.replace('"params":{', `"params":{"${name}":{"kind":"int","min":0,"max":1,"step":1},`),
+      ) as { params: object };
+      const asDerived = JSON.parse(text.replace('"derived":{', `"derived":{"${name}":"a",`)) as {
+        derived: object;
+      };
+      expect(Object.keys(asParam.params)).toContain(name);
+      expect(Object.keys(asDerived.derived)).toContain(name);
+      expect(ok(M1.ParamSpec, asParam)).toBe(false);
+      expect(ok(M1.ParamSpec, asDerived)).toBe(false);
+    },
+  );
+});
+
+describe('free text must be storable (no U+0000, no lone surrogate)', () => {
+  const mcq = {
+    format: 'mcq',
+    stem: '[synthetic] Pick one',
+    options: [
+      { id: 'a', text: 'One' },
+      { id: 'b', text: 'Two' },
+    ],
+    key: { optionId: 'a' },
+    skillKey: 'quant',
+    difficulty: 0.4,
+  };
+  const row = {
+    rowNo: 2,
+    format: 'mcq',
+    skillKey: 'quant',
+    difficulty: 0.4,
+    stem: '[synthetic] Row stem',
+    options: ['One', 'Two'],
+    correct: 'a',
+  };
+  const inlineItem = {
+    format: 'mcq',
+    prompt: '[synthetic] Pick one',
+    options: [
+      { id: 'a', text: 'One' },
+      { id: 'b', text: 'Two' },
+    ],
+    correctOptionId: 'a',
+  };
+  const section = { ...d1Request, items: [inlineItem] };
+  const spec = (stemText: string) => ({
+    params: { a: { kind: 'int', min: 2, max: 9, step: 1 } },
+    derived: {},
+    constraints: [],
+    stem: stemText,
+    options: [
+      { id: 'a', text: '1' },
+      { id: 'b', text: '2' },
+    ],
+    correctOptionId: 'a',
+    count: 5,
+  });
+  const two = { id: 'b', text: 'Two' };
+  const cases: [string, z.ZodType, (text: string) => unknown][] = [
+    ['a bank stem', M1.BankItemDraft, (t) => ({ ...mcq, stem: t })],
+    ['a bank option', M1.BankItemDraft, (t) => ({ ...mcq, options: [{ id: 'a', text: t }, two] })],
+    [
+      'an image alt',
+      M1.BankItemDraft,
+      (t) => ({ ...mcq, media: [{ key: `item-media/${id(1)}/${'c'.repeat(64)}.png`, alt: t }] }),
+    ],
+    ['an import row stem', M1.ImportRow, (t) => ({ ...row, stem: t })],
+    ['an import row option', M1.ImportRow, (t) => ({ ...row, options: [t, 'Two'] })],
+    ['an import row in a batch', M1.ImportRowsRequest, (t) => ({ rows: [{ ...row, stem: t }] })],
+    ['a section name', M1.SectionDraft, (t) => ({ ...section, name: t })],
+    [
+      'an inline item prompt (D1 item shape)',
+      M1.SectionDraft,
+      (t) => ({ ...section, items: [{ ...inlineItem, prompt: t }] }),
+    ],
+    [
+      'an inline item option',
+      M1.SectionDraft,
+      (t) => ({ ...section, items: [{ ...inlineItem, options: [{ id: 'a', text: t }, two] }] }),
+    ],
+    [
+      'a draft name',
+      M1.SaveTestDraftRequest,
+      (t) => ({ name: t, durationMinutes: 30, qualityCutoff: 40, sections: [] }),
+    ],
+    ['a pool name', M1.PoolRequest, (t) => ({ name: t, format: 'mcq' })],
+    [
+      'a job title',
+      M1.CreateTestFromTemplateRequest,
+      (t) => ({ jobTitle: t, templateKey: 'customer_support', templateVersion: 1 }),
+    ],
+    ['a JD text', M1.BlueprintProposeRequest, (t) => ({ jdText: t })],
+    ['a param spec stem', M1.ParamSpec, (t) => spec(`{{a}} ${t}`)],
+    [
+      'an invite display name',
+      M1.MemberInviteRequest,
+      (t) => ({ email: 'member@example.test', roles: ['recruiter'], displayName: t }),
+    ],
+  ];
+  it.each(cases)('%s: text accepted, U+0000 and a lone surrogate refused', (_l, s, make) => {
+    expect(ok(s, make('[synthetic] ok'))).toBe(true);
+    expect(ok(s, make('[synthetic] ok \u{1F600}'))).toBe(true);
+    expect(ok(s, make('a\u0000b'))).toBe(false);
+    expect(ok(s, make('a\uD800b'))).toBe(false);
+    expect(ok(s, make('a\uDC00'))).toBe(false);
+  });
+});
+
+describe('the DELETE …/members/invites/:inviteId answer (MemberInviteView, cancelled)', () => {
+  it('a cancelled invite has no membership', () => {
+    const V = schema('MemberInviteView');
+    expect(ok(V, { ...invite, status: 'cancelled' })).toBe(true);
+    expect(ok(V, { ...invite, status: 'cancelled', membershipId: id(91) })).toBe(false);
   });
 });

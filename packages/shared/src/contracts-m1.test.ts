@@ -411,6 +411,7 @@ describe('PoolRequest and PoolDetail', () => {
       itemCount: 12,
       approvedCount: 10,
       usedByDraws: [{ testId: id(31), drawCount: 5 }],
+      usedByDrawsTotal: 1,
     };
     expect(PoolDetail.parse(pool)).toEqual(pool);
     expect(ok(PoolDetail, { ...pool, status: 'deleted' })).toBe(false);
@@ -892,7 +893,10 @@ describe('LibraryBrowseQuery and LibraryItemCard', () => {
       difficultyMax: 0.6,
     });
     expect(ok(LibraryBrowseQuery, {})).toBe(true);
-    expect(ok(LibraryBrowseQuery, { cursor: 'abc_DEF-123' })).toBe(true);
+    // A page cursor is base64url of the canonical keyset {createdAt, id} (review fix 6); a hand-made string is not.
+    const cursor = Buffer.from(`{"createdAt":"${T0}","id":"${id(1)}"}`).toString('base64url');
+    expect(ok(LibraryBrowseQuery, { cursor })).toBe(true);
+    expect(ok(LibraryBrowseQuery, { cursor: 'abc_DEF-123' })).toBe(false);
     expect(ok(LibraryBrowseQuery, { difficultyMin: '0.7', difficultyMax: '0.2' })).toBe(false);
     expect(ok(LibraryBrowseQuery, { difficultyMin: 'x' })).toBe(false);
     expect(ok(LibraryBrowseQuery, { cursor: 'a b' })).toBe(false);
