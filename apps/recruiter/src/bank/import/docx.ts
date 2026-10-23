@@ -13,7 +13,7 @@ import {
   type ItemHeader,
   type RawRow,
 } from './template';
-import { attr, descendants, kids, nameOf, parseXml } from './xml';
+import { attr, descendants, kid, kids, nameOf, parseXml } from './xml';
 
 export type DocxOutcome = { ok: true; rows: RawRow[] } | { ok: false; code: SheetFailure };
 
@@ -33,18 +33,64 @@ const SKIPPED_IN_TEXT = new Set([
 /** A style name without case or spaces: "Heading 2" and "heading 2" are both "heading2". */
 const styleKey = (name: string): string => name.toLowerCase().replace(/\s+/g, '');
 
-function paragraphText(p: Element): string {
-  let out = '';
-  const walk = (el: Element): void => {
-    for (const child of Array.from(el.children)) {
-      const name = nameOf(child);
-      if (name === 't') out += child.textContent ?? '';
-      else if (name === 'tab') out += '\t';
-      else if (name === 'br' || name === 'cr') out += '\n';
-      else if (!SKIPPED_IN_TEXT.has(name)) walk(child);
+/** One paragraph as the body walk found it: its own style, text and pictures (not those of a paragraph inside it). */
+interface Paragraph {
+  key: string;
+  text: string;
+  blips: { embed: string | null; link: string | null }[];
+  /** The `descr` of the first picture description in the paragraph, or null when it has none. */
+  docPrAlt: string | null;
+}
+
+/**
+ * Every paragraph under `body`, in document order, from ONE pre-order walk: each element is visited once and handled
+ * for the innermost paragraph around it, so paragraphs nested to any depth cost the number of nodes, not depth times
+ * nodes (X3). Text is the paragraph's own runs: it does not enter a drawing, a picture, a field code or a paragraph
+ * inside it (that one is a paragraph of its own). Pictures belong to the paragraph they sit in.
+ */
+function readParagraphs(body: Element, styleNames: ReadonlyMap<string, string>): Paragraph[] {
+  const out: Paragraph[] = [];
+  interface Frame {
+    el: Element;
+    para: Paragraph | null;
+    inText: boolean;
+  }
+  const stack: Frame[] = [{ el: body, para: null, inText: false }];
+  for (let frame = stack.pop(); frame !== undefined; frame = stack.pop()) {
+    const { el } = frame;
+    let para = frame.para;
+    let inText = frame.inText;
+    const name = nameOf(el);
+    if (name === 'p') {
+      const styleEl = kid(el, 'pPr');
+      const pStyle = styleEl === null ? null : kid(styleEl, 'pStyle');
+      const styleId = pStyle === null ? null : attr(pStyle, 'val');
+      para = {
+        key: styleId === null ? '' : (styleNames.get(styleId) ?? styleKey(styleId)),
+        text: '',
+        blips: [],
+        docPrAlt: null,
+      };
+      out.push(para);
+      inText = true;
+    } else if (para !== null) {
+      if (inText && name === 't') {
+        para.text += el.textContent ?? '';
+        continue;
+      }
+      if (inText && name === 'tab') para.text += '\t';
+      else if (inText && (name === 'br' || name === 'cr')) para.text += '\n';
+      else if (name === 'blip')
+        para.blips.push({ embed: attr(el, 'embed'), link: attr(el, 'link') });
+      else if (name === 'docPr' && para.docPrAlt === null) para.docPrAlt = attr(el, 'descr') ?? '';
+      if (SKIPPED_IN_TEXT.has(name)) inText = false;
     }
-  };
-  walk(p);
+    const children = Array.from(el.children);
+    for (let i = children.length - 1; i >= 0; i--) {
+      const child = children[i];
+      if (child !== undefined) stack.push({ el: child, para, inText });
+    }
+  }
   return out;
 }
 
@@ -104,10 +150,8 @@ export function readDocxRows(parts: readonly XmlPart[], maxRows: number): DocxOu
   let current: Block | null = null;
   const body = descendants(document, 'body')[0];
   if (body === undefined) return fail('bad_template');
-  for (const p of descendants(body, 'p')) {
-    const pStyle = descendants(p, 'pStyle')[0];
-    const styleId = pStyle === undefined ? null : attr(pStyle, 'val');
-    const key = styleId === null ? '' : (styleNames.get(styleId) ?? styleKey(styleId));
+  for (const p of readParagraphs(body, styleNames)) {
+    const { key } = p;
     if (key === 'heading2') {
       if (blocks.length >= maxRows || blocks.length + 2 > LAST_ROW_NO) return fail('row_limit');
       current = newBlock();
@@ -115,14 +159,9 @@ export function readDocxRows(parts: readonly XmlPart[], maxRows: number): DocxOu
       continue;
     }
     if (current === null) continue;
-    for (const blip of descendants(p, 'blip')) {
-      current.blips.push({ embed: attr(blip, 'embed'), link: attr(blip, 'link') });
-    }
-    const docPr = descendants(p, 'docPr')[0];
-    if (docPr !== undefined && current.docPrAlt === '') {
-      current.docPrAlt = (attr(docPr, 'descr') ?? '').trim();
-    }
-    const text = paragraphText(p).trim();
+    current.blips.push(...p.blips);
+    if (p.docPrAlt !== null && current.docPrAlt === '') current.docPrAlt = p.docPrAlt.trim();
+    const text = p.text.trim();
     if (key === 'tracemeta') {
       for (const line of text.split('\n')) {
         const colon = line.indexOf(':');

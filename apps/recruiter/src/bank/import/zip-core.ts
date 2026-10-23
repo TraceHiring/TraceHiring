@@ -184,6 +184,8 @@ export async function extractArchive(
   let declaredXml = 0;
   let imageCount = 0;
   const skipped: SkippedImage[] = [];
+  /** The entries the streaming pass must inflate, each exactly once (see the end of the pass). */
+  const expected: string[] = [];
   for (const entry of directory) {
     if (/(?:^|\/)vbaProject\.bin$/i.test(entry.name)) return fail('macro_file');
     declared.set(entry.name, entry);
@@ -195,10 +197,12 @@ export async function extractArchive(
       if (entry.size > limits.xmlPartBytes || declaredXml > limits.xmlTotalBytes) {
         return fail('archive_too_large');
       }
+      expected.push(entry.name);
     } else if (role === 'image') {
       imageCount += 1;
       if (imageCount > limits.images) return fail('too_many_images');
       if (entry.size > limits.imageBytes) skipped.push({ name: entry.name, reason: 'too_large' });
+      else expected.push(entry.name);
     }
   }
 
@@ -208,18 +212,28 @@ export async function extractArchive(
   let total = 0;
   let xmlTotal = 0;
   let open = 0;
+  // Office reads the central directory; this pass reads the local records. They must be one list: a name streamed twice
+  // (another record could replace the part the directory names, or slip past the image count above) is refused (X1).
+  const seenLocal = new Set<string>();
+  let startedImages = 0;
   const stop = (code: ExtractErrorCode): void => {
     state.failure ??= code;
   };
 
   const unzip = new Unzip((file) => {
     if (state.failure !== null) return;
+    if (seenLocal.has(file.name)) return stop('bad_archive');
+    seenLocal.add(file.name);
     const entry = declared.get(file.name);
     if (entry === undefined) return stop('bad_archive');
     const role = classifyEntry(kind, file.name);
     if (role === 'skip') return;
     if (role === 'image' && entry.size > limits.imageBytes) return;
     if (file.compression !== 0 && file.compression !== 8) return stop('bad_archive');
+    if (role === 'image') {
+      startedImages += 1;
+      if (startedImages > limits.images) return stop('too_many_images');
+    }
     const chunks: Uint8Array[] = [];
     let entryBytes = 0;
     const entryCap = role === 'xml' ? limits.xmlPartBytes : limits.imageBytes;
@@ -271,6 +285,7 @@ export async function extractArchive(
     stop('bad_archive');
   }
   if (state.failure === null && open !== 0) stop('bad_archive');
+  if (state.failure === null && expected.some((name) => !seenLocal.has(name))) stop('bad_archive');
   if (state.failure !== null) return fail(state.failure);
 
   const contentTypes = xml.find((part) => part.name === '[Content_Types].xml');
