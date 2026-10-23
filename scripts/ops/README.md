@@ -232,9 +232,16 @@ checks that CA (ADR-031 amendment 1). One config per login, one binding per conf
 | `jobs_authoring_login` (M1) | `trace_authoring_worker` | `trace-staging-jobs-authoring-login` | `JOBS_AUTHORING_DB` | `trace-jobs-staging` (`workers/jobs`) |
 | `jobs_admin_login` (M1) | `trace_admin_worker` | `trace-staging-jobs-admin-login` | `JOBS_ADMIN_DB` | `trace-jobs-staging` (`workers/jobs`) |
 
-The two M1 rows (specs/m1-test-authoring.md R5-11) are new: the first run after M1 creates their configs and
-rotates the other four. Send the two printed ids to the lead; until they are committed, `check-deploy-vars`
-refuses every staging deploy.
+The two M1 rows (specs/m1-test-authoring.md R5-11) are new. Their configs need the roles migration M1-a creates,
+so the order after M1 is (security review INF-1):
+
+1. A staging deploy applies the migrations (M1-a included) and runs the catalog checks.
+2. It then stops at "Check the Hyperdrive bindings" (`node scripts/check-deploy-vars.mjs --hyperdrive`),
+   because the two M1 ids are not committed yet; no Worker has been deployed.
+3. You run this script with `--yes`: it creates the two M1 configs and rotates the other four.
+4. You send the printed ids to the lead, who commits them (and empties `PENDING_BINDINGS` in
+   `scripts/lib/hyperdrive.mjs`).
+5. The next staging deploy passes the check and deploys the Workers.
 
 It also sets `MEDIA_LINK_HMAC_KEY` (64 random hex characters) on the api Worker, and deletes the old database
 URL secrets (`API_DB_URL` on api; `JOBS_MIRROR_DB_URL`, `JOBS_QUALITY_DB_URL`, `JOBS_INTEGRITY_DB_URL`,

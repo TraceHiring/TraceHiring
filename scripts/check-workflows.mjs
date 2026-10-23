@@ -29,7 +29,8 @@
 //   - deploy-staging (when present) has the exact needs / if / environment / concurrency of §7.2
 //     (the if: admits a push on main, or a workflow_dispatch on d1/** or milestone/**, never a PR)
 //   - deploy-staging's D1 chain (specs/d1-demo-slice.md §7.1, docs/reviews/D1-security-review-bindings.md
-//     F4/F5): check-deploy-vars, then migrations, then ensure-staging-resources, then exactly three
+//     F4/F5): check-deploy-vars --vars, then migrations, then (after the catalog checks)
+//     check-deploy-vars --hyperdrive (INF-1), then ensure-staging-resources, then exactly three
 //     `wrangler deploy --env staging` steps in the order services/api, workers/jobs, workers/edge
 //     with the exact `--var NAME:$SOURCE` set per Worker, public values only from `vars.*`, then
 //     check-staging-secrets; no wrangler delete anywhere in the job
@@ -657,7 +658,10 @@ const SMOKE_AUTH_RUN = /^\s*node scripts\/smoke-staging-auth\.mjs\s*$/;
 
 // d1 §7.1: the two scripts of the deploy chain. Each step's whole run text is that one command, so
 // no extra line, flag or comment can reach the Cloudflare token or skip the guard.
-const GUARD_RUN = /^\s*node scripts\/check-deploy-vars\.mjs\s*$/;
+const GUARD_RUN = /^\s*node scripts\/check-deploy-vars\.mjs --vars\s*$/;
+// Security review INF-1 (M1 Wave 0): the Hyperdrive half of the guard runs after the migrations and catalog checks
+// (the M1 configs need the roles migration M1-a creates) and before any Worker deploy.
+const HYPERDRIVE_RUN = /^\s*node scripts\/check-deploy-vars\.mjs --hyperdrive\s*$/;
 const RESOURCES_RUN = /^\s*node scripts\/ensure-staging-resources\.mjs\s*$/;
 
 /** §7.3 staging secrets and the commands a step must run to be allowed to hold each one (§7.2). */
@@ -1684,7 +1688,7 @@ function checkDeployChain(d, where, file, out) {
       v(
         file,
         where,
-        'a step must run exactly node scripts/check-deploy-vars.mjs (it fails the deploy on an empty public variable or a private JWK member, F4)',
+        'a step must run exactly node scripts/check-deploy-vars.mjs --vars (it fails the deploy on an empty public variable or a private JWK member, F4)',
       ),
     );
   } else {
@@ -1693,7 +1697,7 @@ function checkDeployChain(d, where, file, out) {
         v(
           file,
           sw(guard),
-          'node scripts/check-deploy-vars.mjs must run before the migrations and before the Worker deploys',
+          'node scripts/check-deploy-vars.mjs --vars must run before the migrations and before the Worker deploys',
         ),
       );
     }
@@ -1708,6 +1712,47 @@ function checkDeployChain(d, where, file, out) {
           ),
         );
       }
+    }
+  }
+
+  // The Hyperdrive half (INF-1): after the migrations and every step that reads the staging database (the catalog
+  // checks), before the first Worker deploy; it reads only the committed wrangler files, so it sets no env at all.
+  const hyperdrive = indexOf((s) => HYPERDRIVE_RUN.test(runOf(s)));
+  const lastDbStep = steps.reduce(
+    (last, s, i) =>
+      isObj(s) && isObj(s.env) && Object.hasOwn(s.env, 'SUPABASE_STAGING_DB_URL') ? i : last,
+    -1,
+  );
+  if (hyperdrive < 0) {
+    out.push(
+      v(
+        file,
+        where,
+        'a step must run exactly node scripts/check-deploy-vars.mjs --hyperdrive (the committed Hyperdrive ids, ADR-031 amendment 1)',
+      ),
+    );
+  } else {
+    if (
+      (migrate >= 0 && hyperdrive < migrate) ||
+      hyperdrive < lastDbStep ||
+      (firstDeploy >= 0 && hyperdrive > firstDeploy)
+    ) {
+      out.push(
+        v(
+          file,
+          sw(hyperdrive),
+          'node scripts/check-deploy-vars.mjs --hyperdrive must run after the migrations and catalog checks and before the Worker deploys (INF-1)',
+        ),
+      );
+    }
+    if (steps[hyperdrive].env !== undefined) {
+      out.push(
+        v(
+          file,
+          sw(hyperdrive),
+          'the check-deploy-vars --hyperdrive step reads only the wrangler files: it sets no env',
+        ),
+      );
     }
   }
 

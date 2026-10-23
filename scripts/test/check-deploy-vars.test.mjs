@@ -321,6 +321,62 @@ describe('checkDeployVars', () => {
   });
 });
 
+// Security review INF-1 (M1 Wave 0): the deploy checks the public variables before the migrations (--vars) and
+// the Hyperdrive bindings only after them (--hyperdrive), so migration M1-a's roles exist on staging before the
+// deploy stops for the missing M1 config ids, and the founder can then create them.
+describe('main: the two deploy steps (--vars, --hyperdrive)', () => {
+  const d1Only = () => {
+    const configs = GOOD_CONFIGS();
+    configs.jobs.env.staging.hyperdrive = configs.jobs.env.staging.hyperdrive.slice(0, 3);
+    return configs;
+  };
+  const runMain = (argv, env, configs) => {
+    const errs = [];
+    const outs = [];
+    const code = main({
+      argv,
+      env,
+      configs,
+      out: (l) => outs.push(l),
+      err: (l) => errs.push(l),
+    });
+    return { code, errs: errs.join('\n'), outs: outs.join('\n') };
+  };
+
+  it('--vars checks the public variables only: missing Hyperdrive ids do not fail it', () => {
+    expect(runMain(['--vars'], GOOD(), d1Only()).code).toBe(0);
+    const bad = runMain(['--vars'], { ...GOOD(), CANDIDATE_TOKEN_KID: '' }, GOOD_CONFIGS());
+    expect(bad.code).toBe(1);
+    expect(bad.errs).toMatch(/CANDIDATE_TOKEN_KID/);
+    expect(bad.errs).not.toMatch(/hyperdrive/);
+  });
+
+  it('--hyperdrive checks the Hyperdrive bindings only: it needs no variable', () => {
+    expect(runMain(['--hyperdrive'], {}, GOOD_CONFIGS()).code).toBe(0);
+    const pending = runMain(['--hyperdrive'], {}, d1Only());
+    expect(pending.code).toBe(1);
+    expect(pending.errs).toMatch(/jobs: env.staging.hyperdrive must be exactly \[/);
+    expect(pending.errs).not.toMatch(/CANDIDATE_TOKEN_KID/);
+  });
+
+  it('with no flag runs both checks (a local run)', () => {
+    const r = runMain([], { ...GOOD(), CANDIDATE_TOKEN_KID: '' }, d1Only());
+    expect(r.code).toBe(1);
+    expect(r.errs).toMatch(/CANDIDATE_TOKEN_KID/);
+    expect(r.errs).toMatch(/hyperdrive/);
+  });
+
+  it.each([[['--vars', '--hyperdrive']], [['--skip']], [['--vars', 'x']], [['vars']]])(
+    'refuses the arguments %j with exit 2 and checks nothing',
+    (argv) => {
+      const r = runMain(argv, GOOD(), GOOD_CONFIGS());
+      expect(r.code).toBe(2);
+      expect(r.errs).toMatch(/use --vars or --hyperdrive/);
+      expect(r.outs).not.toMatch(/OK/);
+    },
+  );
+});
+
 describe('main', () => {
   it('exits 0 and says OK for good values', () => {
     const lines = [];

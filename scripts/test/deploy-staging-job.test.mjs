@@ -57,7 +57,9 @@ function stateOf(step) {
   if (step.uses === './.github/actions/setup') return 'setup';
   if (/\bpnpm build\b/.test(r)) return 'built';
   if (/\bnode scripts\/scan-dist\.mjs\b/.test(r)) return 'output_scanned';
-  if (/^node scripts\/check-deploy-vars\.mjs$/.test(r.trim())) return 'vars_checked';
+  if (/^node scripts\/check-deploy-vars\.mjs --vars$/.test(r.trim())) return 'vars_checked';
+  if (/^node scripts\/check-deploy-vars\.mjs --hyperdrive$/.test(r.trim()))
+    return 'hyperdrive_checked';
   if (/\bsupabase db push\b/.test(r)) return 'migrated';
   if (/\bnode scripts\/staging-catalog-checks\.mjs\b/.test(r)) return 'catalog_checked';
   if (/^node scripts\/ensure-staging-resources\.mjs$/.test(r.trim())) return 'resources_ready';
@@ -96,6 +98,8 @@ const EXPECTED_ENV = {
   },
   migrated: { SUPABASE_STAGING_DB_URL: S('SUPABASE_STAGING_DB_URL') },
   catalog_checked: { SUPABASE_STAGING_DB_URL: S('SUPABASE_STAGING_DB_URL') },
+  // INF-1: reads only the committed wrangler files.
+  hyperdrive_checked: {},
   resources_ready: { ...CLOUDFLARE },
   'workers_deployed (api)': {
     ...CLOUDFLARE,
@@ -239,7 +243,7 @@ describe('deploy-staging: gate (§7.2; d1 §7.1, D1-16)', () => {
 });
 
 describe('deploy-staging: steps in §15.1 order (with the d1 §7.1 states)', () => {
-  it('checkout → setup → built → output_scanned → vars_checked → migrated → catalog_checked → resources_ready → workers_deployed (api, jobs, edge) → secrets_checked → pages_deployed → smoke_passed → org_signin_smoked', () => {
+  it('checkout → setup → built → output_scanned → vars_checked → migrated → catalog_checked → hyperdrive_checked → resources_ready → workers_deployed (api, jobs, edge) → secrets_checked → pages_deployed → smoke_passed → org_signin_smoked', () => {
     expect(STEPS.map(stateOf)).toEqual([
       'checkout',
       'setup',
@@ -248,6 +252,8 @@ describe('deploy-staging: steps in §15.1 order (with the d1 §7.1 states)', () 
       'vars_checked',
       'migrated',
       'catalog_checked',
+      // INF-1: after the migrations (M1-a's roles exist) and before any Worker deploy.
+      'hyperdrive_checked',
       'resources_ready',
       'workers_deployed (api)',
       'workers_deployed (jobs)',
@@ -401,8 +407,14 @@ describe('deploy-staging: commands', () => {
     expect(run(stepIn('output_scanned')).trim()).toBe('node scripts/scan-dist.mjs');
   });
 
-  it('checks the public deploy variables with exactly node scripts/check-deploy-vars.mjs (F4)', () => {
-    expect(run(stepIn('vars_checked')).trim()).toBe('node scripts/check-deploy-vars.mjs');
+  it('checks the public deploy variables with exactly node scripts/check-deploy-vars.mjs --vars (F4)', () => {
+    expect(run(stepIn('vars_checked')).trim()).toBe('node scripts/check-deploy-vars.mjs --vars');
+  });
+
+  it('checks the Hyperdrive ids with exactly node scripts/check-deploy-vars.mjs --hyperdrive (INF-1)', () => {
+    expect(run(stepIn('hyperdrive_checked')).trim()).toBe(
+      'node scripts/check-deploy-vars.mjs --hyperdrive',
+    );
   });
 
   it('applies migrations with the §7.2 command, non-interactively', () => {

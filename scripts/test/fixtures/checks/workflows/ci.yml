@@ -129,7 +129,7 @@ jobs:
           SUPABASE_STAGING_URL: ${{ vars.SUPABASE_STAGING_URL }}
           SUPABASE_STAGING_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
           API_STAGING_ORIGIN: ${{ vars.API_STAGING_ORIGIN }}
-        run: node scripts/check-deploy-vars.mjs
+        run: node scripts/check-deploy-vars.mjs --vars
       - name: Apply migrations
         env:
           SUPABASE_STAGING_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
@@ -141,6 +141,8 @@ jobs:
           for f in supabase/catalog-checks/MT-*.sql; do
             psql -X -v ON_ERROR_STOP=1 -At "$SUPABASE_STAGING_DB_URL" -f "$f"
           done
+      - name: Check the Hyperdrive bindings
+        run: node scripts/check-deploy-vars.mjs --hyperdrive
       - name: Create the staging buckets and queues
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

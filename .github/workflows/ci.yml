@@ -224,7 +224,7 @@ jobs:
           SUPABASE_STAGING_URL: ${{ vars.SUPABASE_STAGING_URL }}
           SUPABASE_STAGING_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
           API_STAGING_ORIGIN: ${{ vars.API_STAGING_ORIGIN }}
-        run: node scripts/check-deploy-vars.mjs
+        run: node scripts/check-deploy-vars.mjs --vars
       # §7.2 step 3. --yes answers the CLI's "push these migrations?" prompt.
       - name: Apply migrations to staging
         env:
@@ -239,6 +239,12 @@ jobs:
           set -euo pipefail
           psql --version
           node scripts/staging-catalog-checks.mjs
+      # ADR-031 amendment 1, M1 security review INF-1: every Hyperdrive config id is committed. Runs after
+      # the migrations, because the M1 configs need the roles migration M1-a creates: the founder runs
+      # scripts/ops/staging-worker-secrets.mjs after a deploy stops here, then the ids are committed.
+      # Reads only the wrangler files; no env.
+      - name: Check the Hyperdrive bindings
+        run: node scripts/check-deploy-vars.mjs --hyperdrive
       # d1 §7.1 (security review F5): the R2 buckets and Queues the Workers bind to, created only if
       # missing ("already exists" is success; nothing is ever deleted). Before the first deploy, so
       # the bindings and the jobs queue consumer have their targets.
