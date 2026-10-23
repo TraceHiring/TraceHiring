@@ -12,6 +12,14 @@ import {
   type ScoreSection,
 } from './score.js';
 import { scoreMcq } from './mcq.js';
+import {
+  mcqKeyOf,
+  planScoredItems,
+  type DrawnItem,
+  type PlanEntry,
+  type PlanItem,
+  type PlanSection,
+} from './v2.js';
 
 const S1 = '6c1f0e2a-4b7d-4c3e-9a51-2f8d7b6e1a01';
 const S2 = '6c1f0e2a-4b7d-4c3e-9a51-2f8d7b6e1a02';
@@ -255,5 +263,117 @@ describe('quality score properties (AT-D15, seeded)', () => {
       const input = generate(rand);
       expect(computeAnswerQuality(structuredClone(input))).toEqual(computeAnswerQuality(input));
     }
+  });
+});
+
+// ---- Package v2 (spec m1 R5-19, R5-47; AT-M1-21): the scored item set is the candidate's own set ---------------
+describe('package v2 scored item set (AT-M1-21)', () => {
+  const INLINE = S1;
+  const POOL = S2;
+  const NEVER = S3;
+  const iv = (n: number) => `4e7a1c9d-2b5f-4d8e-a3c6-${n.toString(16).padStart(12, '0')}`;
+  const VARIANT = '4e7a1c9d-2b5f-4d8e-a3c6-0000000000f1';
+  const mcq = (n: number, sectionId: string, variantId: string | null = null): PlanItem => ({
+    itemVersionId: iv(n),
+    sectionId,
+    format: 'mcq',
+    stem: '[synthetic] stem',
+    rubricVersionId: null,
+    variantId,
+  });
+  const drawn = (n: number, position: number, variantId: string | null = null): DrawnItem => ({
+    ...mcq(n, POOL, variantId),
+    position,
+  });
+  const sections: PlanSection[] = [
+    { id: INLINE, drawCount: null },
+    { id: POOL, drawCount: 3 },
+    { id: NEVER, drawCount: 2 },
+  ];
+
+  it('inline items as D1, then the drawn items in draw order, then empty slots up to draw_count', () => {
+    const plan = planScoredItems(
+      sections,
+      [mcq(1, INLINE), mcq(2, INLINE)],
+      [drawn(12, 2), drawn(11, 1)],
+    );
+    expect(plan.map((e) => [e.sectionId, e.item?.itemVersionId ?? null])).toEqual([
+      [INLINE, iv(1)],
+      [INLINE, iv(2)],
+      [POOL, iv(11)],
+      [POOL, iv(12)],
+      [POOL, null],
+      [NEVER, null],
+      [NEVER, null],
+    ]);
+    expect(new Set(plan.map((e) => e.id)).size).toBe(plan.length);
+  });
+
+  const scoreOf = (plan: PlanEntry[], scores: Record<string, number>) =>
+    computeAnswerQuality({
+      sections: sections.map((s) => ({ id: s.id, weight: 1 })),
+      items: plan.map((e) => ({
+        id: e.id,
+        sectionId: e.sectionId,
+        score: e.item === null ? 0 : (scores[e.item.itemVersionId] ?? 0),
+      })),
+    }).sections.map((s) => s.scoreHundredths);
+
+  it('pool section fully answered, partly answered, never entered', () => {
+    const plan = planScoredItems(
+      sections,
+      [mcq(1, INLINE)],
+      [drawn(11, 1), drawn(12, 2), drawn(13, 3)],
+    );
+    expect(scoreOf(plan, { [iv(1)]: 100, [iv(11)]: 100, [iv(12)]: 100, [iv(13)]: 100 })).toEqual([
+      10000, 10000, 0,
+    ]);
+    expect(scoreOf(plan, { [iv(1)]: 100, [iv(11)]: 100 })).toEqual([10000, 3333, 0]);
+  });
+
+  it('a section entered but drawn short still counts draw_count slots (the denominator never shrinks)', () => {
+    const plan = planScoredItems(sections, [mcq(1, INLINE)], [drawn(11, 1)]);
+    expect(scoreOf(plan, { [iv(1)]: 100, [iv(11)]: 100 })).toEqual([10000, 3333, 0]);
+  });
+
+  it('refuses more drawn rows than draw_count, a repeated or out-of-range position, and an unknown section', () => {
+    expect(() =>
+      planScoredItems(sections, [], [drawn(11, 1), drawn(12, 2), drawn(13, 3), drawn(14, 4)]),
+    ).toThrow(/^quality_bad_draw$/);
+    expect(() => planScoredItems(sections, [], [drawn(11, 1), drawn(12, 1)])).toThrow(
+      /^quality_bad_draw$/,
+    );
+    expect(() => planScoredItems(sections, [], [drawn(11, 0)])).toThrow(/^quality_bad_draw$/);
+    expect(() => planScoredItems(sections, [], [{ ...drawn(11, 1), sectionId: iv(99) }])).toThrow(
+      /^quality_bad_draw$/,
+    );
+    expect(() => planScoredItems(sections, [], [{ ...drawn(11, 1), sectionId: INLINE }])).toThrow(
+      /^quality_bad_draw$/,
+    );
+    expect(() => planScoredItems(sections, [mcq(1, POOL)], [])).toThrow(/^quality_bad_item$/);
+  });
+
+  it('the variant key is used for a parameterised item; the item key for the others; none is an error', () => {
+    const keys = new Map([[iv(11), 'a']]);
+    const variantKeys = new Map([[VARIANT, 'c']]);
+    expect(mcqKeyOf(mcq(11, POOL, VARIANT), keys, variantKeys)).toBe('c');
+    expect(mcqKeyOf(mcq(11, POOL), keys, variantKeys)).toBe('a');
+    expect(() => mcqKeyOf(mcq(12, POOL), keys, variantKeys)).toThrow(/^quality_bad_key$/);
+    expect(() => mcqKeyOf(mcq(11, POOL, iv(77)), keys, variantKeys)).toThrow(/^quality_bad_key$/);
+  });
+
+  it('options are scored by id: the served order never changes the score', () => {
+    const key = mcqKeyOf(mcq(11, POOL, VARIANT), new Map(), new Map([[VARIANT, 'c']]));
+    expect(scoreMcq('c', key)).toBe(100);
+    expect(scoreMcq('a', key)).toBe(0);
+  });
+
+  it('a v1 version (no pool section) gives the D1 item list unchanged', () => {
+    const v1Sections: PlanSection[] = [{ id: INLINE, drawCount: null }];
+    const plan = planScoredItems(v1Sections, [mcq(1, INLINE), mcq(2, INLINE)], []);
+    expect(plan.map((e) => [e.id, e.item?.itemVersionId])).toEqual([
+      [iv(1), iv(1)],
+      [iv(2), iv(2)],
+    ]);
   });
 });

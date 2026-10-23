@@ -2,6 +2,7 @@
 // The ack/retry matrix, the invalid-message path and the log hygiene are pinned here. The stages
 // themselves (stream R2) are tested in their own folders.
 import { LogLine } from '@trace/shared/contracts';
+import type { SessionMirrorMessageV2 } from '@trace/shared/contracts/candidate';
 import { createLogger, type ErrorReporter, type SerializedError } from '@trace/shared/log';
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,6 +14,26 @@ import {
   type StageName,
 } from './consumer.js';
 import { fakeBatch, fakeMessage, validMessage } from './test-fixtures.js';
+
+// A valid v2 message (spec m1 R5-19): the v1 fixture's one served item, now in a pool section that drew it.
+const POOL_SECTION = '3f2b8c1e-9a47-4d6b-8e15-7c0a2d94b0f0';
+const OTHER_ITEM = '3f2b8c1e-9a47-4d6b-8e15-7c0a2d94b0f1';
+const validMessageV2 = (): SessionMirrorMessageV2 => {
+  const v1 = validMessage();
+  return {
+    ...v1,
+    v: 2,
+    served: v1.served.map((s) => ({ ...s, sectionId: POOL_SECTION })),
+    poolSectionIds: [POOL_SECTION],
+    draws: [
+      {
+        sectionId: POOL_SECTION,
+        itemVersionIds: v1.served.map((s) => s.itemVersionId),
+        itemVariantIds: v1.served.map(() => null),
+      },
+    ],
+  };
+};
 
 const setup = (overrides: Partial<Record<StageName, () => Promise<void>>> = {}) => {
   const calls: string[] = [];
@@ -439,30 +460,14 @@ describe('processBatch: invalid messages', () => {
     });
   });
 
-  // M1 Wave 0: the union parses v2 (R5-8), but the v1 stages would ignore its draws; until stream A3 stores them a
-  // v2 message is retried (then the DLQ), never acked and never run.
-  it('retries a v2 message without running a stage until v2 is implemented', async () => {
-    const { calls, lines, deps } = setup();
-    const v1 = validMessage();
-    const sectionId = '3f2b8c1e-9a47-4d6b-8e15-7c0a2d94b0f0';
-    const message = fakeMessage({
-      ...v1,
-      v: 2,
-      served: v1.served.map((s) => ({ ...s, sectionId })),
-      draws: [],
-      poolSectionIds: [],
-    });
+  it('acks a v2 message whose shape is wrong without running a stage (as D1: it can never become valid)', async () => {
+    const { calls, deps } = setup();
+    const message = fakeMessage({ ...validMessageV2(), draws: 'none' });
 
     await processBatch(fakeBatch([message]), deps);
 
     expect(calls).toEqual([]);
-    expect(message.acked()).toBe(0);
-    expect(message.retried()).toBe(1);
-    expect(LogLine.parse(JSON.parse(lines[0] ?? ''))).toMatchObject({
-      level: 'error',
-      service: 'jobs',
-      event: 'queue.message_v2_unsupported',
-    });
+    expect(message.acked()).toBe(1);
   });
 
   it('logs no payload field, value or id for an invalid message', async () => {
@@ -494,6 +499,91 @@ describe('processBatch: invalid messages', () => {
     expect(bad.acked()).toBe(1);
     expect(good.acked()).toBe(1);
     expect(calls).toEqual(['mirror', 'quality', 'integrity']);
+  });
+});
+
+describe('processBatch: v1 and v2 (spec m1 R5-8)', () => {
+  it('runs the three stages for a valid v2 message and acks it', async () => {
+    const { calls, lines, deps } = setup();
+    const seen: unknown[] = [];
+    deps.stages.mirror = (m) => {
+      seen.push(m);
+      calls.push('mirror');
+      return Promise.resolve();
+    };
+    const message = fakeMessage(validMessageV2());
+
+    await processBatch(fakeBatch([message]), deps);
+
+    expect(calls).toEqual(['mirror', 'quality', 'integrity']);
+    expect(message.acked()).toBe(1);
+    expect(seen[0]).toMatchObject({ v: 2, draws: validMessageV2().draws });
+    expect(lines).toEqual([]);
+  });
+
+  it('a sweep-re-enqueued v1 mirror.json (JSON text read back from R2) still parses and runs', async () => {
+    const { calls, deps } = setup();
+    const message = fakeMessage(JSON.parse(JSON.stringify(validMessage())) as unknown);
+
+    await processBatch(fakeBatch([message]), deps);
+
+    expect(calls).toEqual(['mirror', 'quality', 'integrity']);
+    expect(message.acked()).toBe(1);
+  });
+
+  it('a v2 message that breaks a cross-field invariant is retried (then the DLQ), runs no stage, and is reported by its code only', async () => {
+    const { calls, lines, reports, deps } = setup();
+    const v2 = validMessageV2();
+    // The served pool item is not in its section's draw (R5-42).
+    const body = { ...v2, draws: v2.draws.map((d) => ({ ...d, itemVersionIds: [OTHER_ITEM] })) };
+    const message = fakeMessage(body);
+
+    await processBatch(fakeBatch([message]), deps);
+
+    expect(calls).toEqual([]);
+    expect(message.retried()).toBe(1);
+    expect(message.acked()).toBe(0);
+    expect(lines).toHaveLength(1);
+    expect(LogLine.parse(JSON.parse(lines[0] ?? ''))).toMatchObject({
+      level: 'error',
+      service: 'jobs',
+      event: 'queue.mirror_invariant',
+      data: { code: 'served_missing_from_draw' },
+    });
+    expect(reports).toHaveLength(1);
+    expect(JSON.stringify(reports)).toContain('served_missing_from_draw');
+    const everything = [...lines, JSON.stringify(reports)].join(' | ');
+    for (const id of [v2.sessionId, v2.orgId, v2.invitationId, OTHER_ITEM, POOL_SECTION]) {
+      expect(everything).not.toContain(id);
+    }
+  });
+
+  it('a broken v2 message never holds back another message of the batch', async () => {
+    const { calls, deps } = setup();
+    const v2 = validMessageV2();
+    const bad = fakeMessage({ ...v2, poolSectionIds: [POOL_SECTION, POOL_SECTION] }, 'a');
+    const good = fakeMessage(validMessage(), 'b');
+
+    await processBatch(fakeBatch([bad, good]), deps);
+
+    expect(bad.retried()).toBe(1);
+    expect(good.acked()).toBe(1);
+    expect(calls).toEqual(['mirror', 'quality', 'integrity']);
+  });
+
+  it('still retries a broken v2 message when the reporter throws', async () => {
+    const { deps } = setup();
+    const reporter: ErrorReporter = {
+      capture() {
+        throw new Error('reporter down');
+      },
+    };
+    const v2 = validMessageV2();
+    const message = fakeMessage({ ...v2, poolSectionIds: [POOL_SECTION, POOL_SECTION] });
+
+    await processBatch(fakeBatch([message]), { ...deps, reporter });
+
+    expect(message.retried()).toBe(1);
   });
 });
 
