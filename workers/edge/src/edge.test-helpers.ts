@@ -43,13 +43,27 @@ export const testJpeg = (width: number, height: number, pad = 64, sof = 0xc0): U
   return new Uint8Array([0xff, 0xd8, ...app0, ...frame, ...sos, ...body, 0xff, 0xd9]);
 };
 
+/**
+ * The SQLite-backed object's per-entry limit: key and value combined at most 2 MB (Cloudflare Durable Objects limits,
+ * "SQLite-backed Durable Objects general limits"). The fake counts the worst case, two bytes per UTF-16 unit of the
+ * key and of the value's JSON, so a value that fits here fits the real storage.
+ */
+export const KV_ENTRY_MAX_BYTES = 2 * 1000 * 1000;
+export const kvEntryBytes = (key: string, value: unknown): number =>
+  2 * (key.length + (JSON.stringify(value)?.length ?? 0));
+
 export class MapKv implements SessionKv {
   readonly map = new Map<string, unknown>();
+  /** The largest entry written so far (bytes as kvEntryBytes counts them). */
+  largestEntry = 0;
   get<T = unknown>(key: string): T | undefined {
     const value = this.map.get(key);
     return value === undefined ? undefined : (structuredClone(value) as T);
   }
   put<T>(key: string, value: T): void {
+    const bytes = kvEntryBytes(key, value);
+    if (bytes > KV_ENTRY_MAX_BYTES) throw new RangeError('kv entry over 2 MB');
+    this.largestEntry = Math.max(this.largestEntry, bytes);
     this.map.set(key, structuredClone(value));
   }
   delete(key: string): boolean {
@@ -339,6 +353,8 @@ export interface Harness {
   otp: ReturnType<typeof fakeOtpNamespace>;
   evidence: ReturnType<typeof fakeBucket>;
   packages: ReturnType<typeof fakeBucket>;
+  /** The item image bucket (M1 R5-10); the edge only reads it. */
+  itemMedia: ReturnType<typeof fakeBucket>;
   queue: ReturnType<typeof fakeQueue>;
   session: ReturnType<typeof fakeSessionNamespace>;
   limiter: ReturnType<typeof fakeLimiter>;
@@ -366,6 +382,7 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
   const ops: string[] = [];
   const evidence = fakeBucket(ops);
   const packages = fakeBucket();
+  const itemMedia = fakeBucket();
   const queue = fakeQueue(ops);
   const session = fakeSessionNamespace({
     clock,
@@ -437,6 +454,7 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
     EVIDENCE: evidence.bucket,
     SESSION: session.ns,
     PACKAGES: packages.bucket,
+    ITEM_MEDIA: itemMedia.bucket,
     MIRROR_QUEUE: queue.queue,
     LINK_LIMITER: limiter.limiter,
   } as unknown as Env;
@@ -481,6 +499,7 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
     otp,
     evidence,
     packages,
+    itemMedia,
     queue,
     session,
     limiter,
