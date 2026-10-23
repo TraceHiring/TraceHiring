@@ -248,3 +248,29 @@ select pg_temp.op();
 -- ===== AT-M1-25: invite audit details are ids and role enums only =====
 select is((select count(*)::int from public.audit_log where action like 'member_invite.%' and not (pg_temp.keys(details) in ('member_invite_id', 'member_invite_id,roles') and (details ->> 'member_invite_id') ~ '^[0-9a-f-]{36}$' and (not (details ? 'roles') or (jsonb_typeof(details -> 'roles') = 'array' and not exists (select 1 from jsonb_array_elements(details -> 'roles') as r where jsonb_typeof(r) <> 'string' or (r #>> '{}') not in ('org_owner', 'admin', 'recruiter', 'reviewer', 'hiring_manager')))))), 0, 'AT-M1-25: every member_invite.* row carries the invite id and, on create, role enums only');
 select is((select count(*)::int from public.audit_log where action like 'member_invite.%'), 14, 'AT-M1-25: eight creates (one on the operator path), one cancel, one failure and four provisionings; the re-delivered job writes no second row');
+
+-- ===== R2-14 for an owner invitation (R5-51 a; Wave 0c confirming re-review Low): its inviter must still be an active owner at acceptance =====
+-- Last in the file, so the audit count above is unchanged. Invites on the operator path, from the owner persona.
+select pg_temp.op();
+insert into auth.users (id, aud, role, email) values
+  ('00000000-0000-4000-8000-000000000034', 'authenticated', 'authenticated', 'p-invitee-four@example.test'),
+  ('00000000-0000-4000-8000-000000000035', 'authenticated', 'authenticated', 'p-invitee-five@example.test');
+insert into pg_temp.ids values ('invitee4', '00000000-0000-4000-8000-000000000034'), ('invitee5', '00000000-0000-4000-8000-000000000035');
+insert into public.member_invites (id, org_id, email_hmac, roles, invited_by) values
+  ('a9000000-0000-4000-8000-00000000000a', pg_temp.id('A'), repeat('c', 64), '{org_owner}', pg_temp.id('owner')),
+  ('a9000000-0000-4000-8000-00000000000b', pg_temp.id('A'), repeat('d', 64), '{org_owner}', pg_temp.id('owner'));
+select pg_temp.w('trace_admin_worker', pg_temp.id('A'));
+select is(pg_temp.try(format($$insert into pg_temp.res select 'm10', private.provision_invited_member('a9000000-0000-4000-8000-00000000000a', %L, 'Persona Invitee Four')$$, pg_temp.id('invitee4'))), 'OK 1', 'R2-14: an owner invite from an active owner is provisioned');
+select is(pg_temp.try(format($$insert into pg_temp.res select 'm11', private.provision_invited_member('a9000000-0000-4000-8000-00000000000b', %L, 'Persona Invitee Five')$$, pg_temp.id('invitee5'))), 'OK 1', 'R2-14: a second owner invite from the same owner is provisioned');
+select pg_temp.as_sub(pg_temp.id('invitee5'), false);
+select is(pg_temp.try($$update public.memberships set status = 'active' where user_id = '00000000-0000-4000-8000-000000000035' and org_id = 'a1000000-0000-4000-8000-000000000001'$$), 'OK 1', 'R2-14: an owner invitation is accepted while its inviter is an active owner');
+select pg_temp.op();
+update public.memberships set roles = '{admin}' where org_id = pg_temp.id('A') and user_id = pg_temp.id('owner');
+select pg_temp.as_sub(pg_temp.id('invitee4'), false);
+select is(pg_temp.try($$update public.memberships set status = 'active' where user_id = '00000000-0000-4000-8000-000000000034' and org_id = 'a1000000-0000-4000-8000-000000000001'$$), '42501 TRACE_GUARD: the inviter is no longer an active admin or owner', 'R2-14 (confirming re-review): an owner invitation cannot be accepted after its inviter lost the owner role, though still an active admin');
+select pg_temp.op();
+update public.memberships set status = 'removed' where org_id = pg_temp.id('A') and user_id = pg_temp.id('owner');
+select pg_temp.as_sub(pg_temp.id('invitee4'), false);
+select is(pg_temp.try($$update public.memberships set status = 'active' where user_id = '00000000-0000-4000-8000-000000000034' and org_id = 'a1000000-0000-4000-8000-000000000001'$$), '42501 TRACE_GUARD: the inviter is no longer an active admin or owner', 'R2-14 (confirming re-review): nor after its owner inviter was removed');
+select pg_temp.op();
+select is((select status::text from public.memberships where org_id = pg_temp.id('A') and user_id = pg_temp.id('invitee4')), 'invited', 'R2-14: the owner invitation stays unaccepted');

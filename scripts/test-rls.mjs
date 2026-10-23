@@ -25,6 +25,8 @@
 //      stdout lines are printed on failure; its stderr never is.
 //   5c. `node scripts/test-concurrency-local.mjs` (M0b review M0B-DB-5): two connections demote the two
 //      owners of one org at once, under READ COMMITTED and REPEATABLE READ; the second must be refused.
+//      M1 (R5-51 b): a cancel waits for a running import batch and counts it (DB H1); two deliveries of a
+//      count-1 drafting job take turns and the second is refused (DB M1).
 //      Only its `test-concurrency-local: ` stdout lines are printed on failure; its stderr never is.
 //   5d. `node scripts/test-staging-roles-local.mjs` (d1 Chat E spec review SR-E-5): the real staging
 //      login-role SQL of scripts/ops/staging-worker-secrets.mjs, run in one rolled-back transaction.
@@ -753,7 +755,9 @@ export async function main(options) {
       );
     }
     // M0B-DB-5: its stdout holds only fixed messages; stderr is never printed.
-    log('test-rls: running the two-connection owner-demotion test (M0B-DB-5)');
+    log(
+      'test-rls: running the two-connection tests (M0B-DB-5 owner demotion; M1 import cancel, draft cap)',
+    );
     const conc = await run('node', CONCURRENCY_TEST_ARGS, { cwd: root });
     if (conc.status !== 0) {
       const lines = toText(conc.stdout)
