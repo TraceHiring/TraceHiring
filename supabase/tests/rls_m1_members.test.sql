@@ -334,7 +334,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(118);
+select plan(122);
 -- Extra personas: pure_owner (…030, org A owner only), invitee (…031), invitee two (…032) and three (…033).
 insert into auth.users (id, aud, role, email) values
   ('00000000-0000-4000-8000-000000000030', 'authenticated', 'authenticated', 'p-pure-owner@example.test'),
@@ -481,7 +481,7 @@ select matches(pg_temp.try(format($$select private.provision_invited_member(%L, 
 select matches(pg_temp.try(format($$select private.provision_invited_member(%L, %L, 'Persona Outsider')$$, pg_temp.id('i5'), pg_temp.id('outsider'))), '^42501 TRACE_GUARD: the invite is not pending', 'provision: a failed invite is not provisioned');
 select matches(pg_temp.try(format($$select private.provision_invited_member(%L, %L, 'Persona Recruiter Again')$$, pg_temp.id('i6'), pg_temp.id('recruiter'))), '^23505 TRACE_GUARD: the user already has a membership in this org', 'E26: an existing Auth user who is already a member gets no second membership');
 select matches(pg_temp.try(format($$select private.provision_invited_member(%L, gen_random_uuid(), 'Persona Nobody')$$, pg_temp.id('i6'))), '^23503', 'provision: the user must exist in Auth');
-select matches(pg_temp.try(format($$select private.provision_invited_member(%L, %L, repeat('n', 121))$$, pg_temp.id('i6'), pg_temp.id('outsider'))), '^23514', 'provision: the display name follows the memberships CHECK');
+select matches(pg_temp.try(format($$select private.provision_invited_member(%L, %L, repeat('n', 121))$$, pg_temp.id('i6'), pg_temp.id('outsider'))), '^22023 TRACE_BAD_INPUT: display name', 'provision (security review L-1): a display name outside 1-120 characters is refused before the insert, so the name never reaches an error detail');
 select matches(pg_temp.try(format($$insert into public.memberships (org_id, user_id, roles, display_name, status) values (%L, %L, '{recruiter}', 'Direct', 'invited')$$, pg_temp.id('A'), pg_temp.id('outsider'))), '^42501 permission denied', 'provision: the admin worker cannot insert a membership directly');
 select set_config('trace.provision_invite', pg_temp.id('i6')::text, true);
 select matches(pg_temp.try(format($$insert into public.memberships (org_id, user_id, roles, display_name, status) values (%L, %L, '{recruiter}', 'Direct', 'invited')$$, pg_temp.id('A'), pg_temp.id('outsider'))), '^42501 permission denied', 'provision: setting the marker by hand does not open a direct insert');
@@ -551,12 +551,22 @@ select pg_temp.u('recruiter');
 select is(pg_temp.try($$update public.memberships set display_name = 'Recruiter Renamed' where user_id = '00000000-0000-4000-8000-000000000005'$$), 'OK 1', 'M0b: an active member still renames themselves');
 select matches(pg_temp.try($$update public.memberships set status = 'suspended' where user_id = '00000000-0000-4000-8000-000000000005'$$), '^42501 TRACE_GUARD: nobody changes their own roles, status or scope', 'M0b: nobody changes their own status');
 
--- ===== R2-14: the inviter is re-checked at provisioning =====
+-- ===== R2-14: the inviter is re-checked at provisioning and again at acceptance (security review M-1) =====
+select pg_temp.w('trace_admin_worker', pg_temp.id('A'));
+select is(pg_temp.try(format($$insert into pg_temp.res select 'm7', private.provision_invited_member(%L, %L, 'Persona Invitee Three')$$, pg_temp.id('i7'), pg_temp.id('invitee3'))), 'OK 1', 'R2-14: an invite of an active admin is provisioned');
 select pg_temp.op();
+insert into public.member_invites (id, org_id, email_hmac, roles, invited_by) values ('a9000000-0000-4000-8000-000000000008', pg_temp.id('A'), repeat('b', 64), '{recruiter}', pg_temp.id('admin'));
 update public.memberships set status = 'suspended' where org_id = pg_temp.id('A') and user_id = pg_temp.id('admin');
 select pg_temp.w('trace_admin_worker', pg_temp.id('A'));
-select matches(pg_temp.try(format($$select private.provision_invited_member(%L, %L, 'Persona Invitee Three')$$, pg_temp.id('i7'), pg_temp.id('invitee3'))), '^42501 TRACE_GUARD: the inviter is no longer an active admin or owner', 'R2-14: an invite from an admin who was suspended is not provisioned');
+select matches(pg_temp.try(format($$select private.provision_invited_member('a9000000-0000-4000-8000-000000000008', %L, 'Persona Invitee Three')$$, pg_temp.id('invitee3'))), '^42501 TRACE_GUARD: the inviter is no longer an active admin or owner', 'R2-14: an invite from an admin who was suspended is not provisioned');
+select pg_temp.as_sub(pg_temp.id('invitee3'), false);
+select is(pg_temp.try($$update public.memberships set status = 'active' where user_id = '00000000-0000-4000-8000-000000000033' and org_id = 'a1000000-0000-4000-8000-000000000001'$$), '42501 TRACE_GUARD: the inviter is no longer an active admin or owner', 'R2-14 (security review M-1): an invitation cannot be accepted after its inviter was suspended');
 select pg_temp.op();
+update public.memberships set status = 'removed' where org_id = pg_temp.id('A') and user_id = pg_temp.id('admin');
+select pg_temp.as_sub(pg_temp.id('invitee3'), false);
+select is(pg_temp.try($$update public.memberships set status = 'active' where user_id = '00000000-0000-4000-8000-000000000033' and org_id = 'a1000000-0000-4000-8000-000000000001'$$), '42501 TRACE_GUARD: the inviter is no longer an active admin or owner', 'R2-14 (security review M-1): nor after the inviter was removed');
+select pg_temp.op();
+select is((select status::text from public.memberships where org_id = pg_temp.id('A') and user_id = pg_temp.id('invitee3') and status <> 'removed'), 'invited', 'R2-14: the invitation stays unaccepted (an admin may remove it, E27)');
 
 -- ===== R2-6, R2-23: the admin worker holds nothing else =====
 select is((select array_agg(c.relname::text || case when has_any_column_privilege('trace_admin_worker', c.oid, 'INSERT, UPDATE') then ':write' else '' end order by c.relname) from pg_catalog.pg_class as c where c.relnamespace in ('public'::regnamespace, 'quality'::regnamespace, 'integrity'::regnamespace, 'private'::regnamespace) and c.relkind in ('r', 'p', 'v', 'm') and (has_table_privilege('trace_admin_worker', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') or has_any_column_privilege('trace_admin_worker', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))), array['member_invites:write'], 'R2-23: the admin worker holds exactly member_invites (select, update status)');
@@ -571,6 +581,6 @@ select pg_temp.op();
 
 -- ===== AT-M1-25: invite audit details are ids and role enums only =====
 select is((select count(*)::int from public.audit_log where action like 'member_invite.%' and not (pg_temp.keys(details) in ('member_invite_id', 'member_invite_id,roles') and (details ->> 'member_invite_id') ~ '^[0-9a-f-]{36}$' and (not (details ? 'roles') or (jsonb_typeof(details -> 'roles') = 'array' and not exists (select 1 from jsonb_array_elements(details -> 'roles') as r where jsonb_typeof(r) <> 'string' or (r #>> '{}') not in ('org_owner', 'admin', 'recruiter', 'reviewer', 'hiring_manager')))))), 0, 'AT-M1-25: every member_invite.* row carries the invite id and, on create, role enums only');
-select is((select count(*)::int from public.audit_log where action like 'member_invite.%'), 12, 'AT-M1-25: seven creates, one cancel, one failure and three provisionings; the re-delivered job writes no second row');
+select is((select count(*)::int from public.audit_log where action like 'member_invite.%'), 14, 'AT-M1-25: eight creates (one on the operator path), one cancel, one failure and four provisionings; the re-delivered job writes no second row');
 select * from finish();
 rollback;

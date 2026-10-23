@@ -334,7 +334,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(122);
+select plan(126);
 -- Fixtures (operator path): an approved bank item in workspace A1 (content hash c…c, for duplicate_in_bank); batches as
 -- jsonb (pg_temp.batch) and function results (pg_temp.res), readable by every persona.
 select pg_temp.bank('dup', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'approved');
@@ -528,6 +528,7 @@ select matches(pg_temp.try($$update public.import_jobs set images_ok = 2 where i
 select pg_temp.u('recruiter');
 select is(pg_temp.try($$update public.import_jobs set images_ok = 2 where id = 'a7000000-0000-4000-8000-000000000001'$$), 'OK 0', 'import_jobs U: staff cannot reach a finished job');
 select matches(pg_temp.try($$select public.import_item_batch('a7000000-0000-4000-8000-000000000001', (select j from pg_temp.batch where k = 'b1'))$$), '^42501 TRACE_GUARD: the import job is not open', 'batch: a completed job takes no more rows');
+select matches(pg_temp.try($$update public.import_jobs set status = 'completed' where id = 'a7000000-0000-4000-8000-000000000002'$$), '^42501 TRACE_GUARD: import job status change not allowed', 'import_jobs U (DB review L1, §4.3): an open job never completes before a batch has validated it');
 select is(pg_temp.try($$update public.import_jobs set status = 'cancelled' where id = 'a7000000-0000-4000-8000-000000000002'$$), 'OK 1', 'import_jobs U: recruiter cancels an open import');
 select pg_temp.u('ws_recruiter');
 select is(pg_temp.try($$update public.import_jobs set status = 'cancelled' where id = 'a7000000-0000-4000-8000-000000000004'$$), 'OK 0', 'import_jobs U: workspace recruiter cannot end a workspace A1 import');
@@ -613,5 +614,9 @@ select is(pg_temp.try($$update public.item_versions set status = 'in_review' whe
 select is(pg_temp.try($$select public.save_item_variants(pg_temp.id('pv'), (select j from pg_temp.batch where k = 'vars2'))$$), '42501 TRACE_GUARD: the item version is frozen', 'R2-22: variants and their keys are frozen once the item leaves draft');
 select is((select count(*)::int from public.item_variants where item_version_id = pg_temp.id('pv')), 1, 'R2-22: the submitted item keeps its variant');
 select pg_temp.op();
+-- ===== DB review H1, M3: a batch and the end of its job are serialised; duplicate_in_bank has its index =====
+select is((select provolatile::text from pg_proc where oid = 'private.import_job_open(uuid,uuid,uuid)'::regprocedure), 'v', 'H1: import_job_open is volatile (it takes a row lock)');
+select matches(pg_get_functiondef('private.import_job_open(uuid,uuid,uuid)'::regprocedure), 'from public\.import_jobs as j\s+where j\.org_id = p_org and j\.id = p_job and j\.workspace_id = p_workspace and j\.status in \(''open'', ''validating''\)\s+for share', 'H1: a batch holds the job row FOR SHARE, so a cancel or completion waits for it (and the batch waits for an ending job, then sees it ended)');
+select is((select count(*)::int from pg_indexes where schemaname = 'public' and tablename = 'item_versions' and indexdef like '%(org_id, workspace_id, content_sha256)%' and indexdef like '%section_id IS NULL%'), 1, 'M3: duplicate_in_bank reads a partial index on bank rows (org, workspace, content hash)');
 select * from finish();
 rollback;
