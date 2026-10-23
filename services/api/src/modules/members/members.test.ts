@@ -10,7 +10,6 @@ import {
   MemberInviteView,
 } from '@trace/shared/contracts/m1';
 import { Hono } from 'hono';
-import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { RestError } from '../tests/org-context.js';
 import { fakeDb, idMaker, type Row } from '../tests/rest.test-helpers.js';
@@ -18,6 +17,10 @@ import { callerOf, MEMBERSHIP, ORG, USER, WS } from '../tests/tests.test-helpers
 import { inviteEmailHmac } from './email-hmac.js';
 import { createMembersRoutes, type InviteQueue } from './routes.js';
 
+// node:crypto (nodejs_compat in the test runtime) is the independent reference; the Worker source has no node types.
+interface NodeCrypto {
+  createHmac(alg: 'sha256', key: string): { update(data: string): { digest(enc: 'hex'): string } };
+}
 const PEPPER = ['synthetic', 'pepper', 'for', 'tests', 'only'].join('-');
 const ADDRESS = ['p-invitee', 'example.test'].join('@');
 
@@ -110,9 +113,9 @@ const codeOf = async (res: Response) =>
 
 describe('inviteEmailHmac (shared with workers/jobs: trim, lower-case, HMAC-SHA-256 hex)', () => {
   it('matches node:crypto on the normalised address, keyed by the pepper', async () => {
-    const expected = createHmac('sha256', Buffer.from(PEPPER, 'utf8'))
-      .update(Buffer.from(ADDRESS, 'utf8'))
-      .digest('hex');
+    // @ts-expect-error -- the Worker tsconfig has no node types; nodejs_compat provides the module at test time
+    const { createHmac } = (await import('node:crypto')) as NodeCrypto;
+    const expected = createHmac('sha256', PEPPER).update(ADDRESS).digest('hex');
     expect(await inviteEmailHmac(PEPPER, `  ${ADDRESS.toUpperCase()}\n`)).toBe(expected);
     expect(await inviteEmailHmac(PEPPER, ADDRESS)).toMatch(/^[0-9a-f]{64}$/);
     expect(await inviteEmailHmac(`${PEPPER}x`, ADDRESS)).not.toBe(expected);
