@@ -10,7 +10,7 @@ select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'astrology', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^23503 TRACE_GUARD: skill not found', 'ai_draft_jobs I: the skill comes from the taxonomy');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 11, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^23514', 'ai_draft_jobs I: at most 10 drafts per job');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'voice', 'spoken_english', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^(22P02|23514)', 'ai_draft_jobs I: drafts are MCQ or written only (enum today, CHECK once voice joins section_format)');
-select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, 'Write about the customer Priya', 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^23514', 'ai_draft_jobs I: the topic is stored only as its SHA-256 (text never fits)');
+select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, '[synthetic] Write about a named customer', 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^23514', 'ai_draft_jobs I: the topic is stored only as its SHA-256 (text never fits)');
 select pg_temp.u('owner');
 select is(pg_temp.try($$insert into public.ai_draft_jobs (id, org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a8000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'written', 'written_communication', 0.40, 3, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'ai_draft_jobs I: owner requests written drafts');
 select pg_temp.u('admin');
@@ -34,6 +34,10 @@ select is((select string_agg(column_name::text, ',' order by column_name) from i
 -- ===== ai_draft_jobs: S =====
 select pg_temp.u('owner');
 select is((select count(*)::int from public.ai_draft_jobs), 5, 'ai_draft_jobs S: owner sees the five org A jobs');
+select pg_temp.u('admin');
+select is((select count(*)::int from public.ai_draft_jobs), 5, 'ai_draft_jobs S (DB review M2): admin sees the five org A jobs');
+select pg_temp.u('recruiter');
+select is((select count(*)::int from public.ai_draft_jobs), 5, 'ai_draft_jobs S (DB review M2): an org-wide recruiter sees the five org A jobs');
 select pg_temp.u('ws_recruiter');
 select is((select count(*)::int from public.ai_draft_jobs), 1, 'ai_draft_jobs S: workspace recruiter sees only the A2 job');
 select pg_temp.u('reviewer');

@@ -334,7 +334,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(126);
+select plan(134);
 -- Fixtures (operator path): an approved bank item in workspace A1 (content hash c…c, for duplicate_in_bank); batches as
 -- jsonb (pg_temp.batch) and function results (pg_temp.res), readable by every persona.
 select pg_temp.bank('dup', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'approved');
@@ -369,7 +369,7 @@ insert into pg_temp.batch values
   ('big', (select jsonb_agg(jsonb_build_object('rowNo', n, 'contentSha256', repeat('0', 64), 'errors', jsonb_build_array(jsonb_build_object('field', 'row', 'code', 'row_limit')))) from generate_series(2, 102) as n)),
   ('twice', jsonb_build_array(jsonb_build_object('rowNo', 30, 'contentSha256', repeat('0', 64), 'errors', '[{"field": "row", "code": "row_limit"}]'::jsonb), jsonb_build_object('rowNo', 30, 'contentSha256', repeat('0', 64), 'errors', '[{"field": "row", "code": "row_limit"}]'::jsonb))),
   ('header', jsonb_build_array(jsonb_build_object('rowNo', 1, 'contentSha256', repeat('0', 64), 'errors', '[{"field": "row", "code": "row_limit"}]'::jsonb))),
-  ('cell', jsonb_build_array(jsonb_build_object('rowNo', 40, 'contentSha256', repeat('0', 64), 'errors', '[{"field": "Priya Sharma", "code": "missing_field"}]'::jsonb)));
+  ('cell', jsonb_build_array(jsonb_build_object('rowNo', 40, 'contentSha256', repeat('0', 64), 'errors', '[{"field": "[synthetic] Cell Value", "code": "missing_field"}]'::jsonb)));
 
 -- ===== import_jobs: I (OW AD RC in their workspaces) =====
 select pg_temp.u('owner');
@@ -402,6 +402,10 @@ select is((select status || '|' || rows_total || '|' || rows_ok || '|' || rows_e
 -- ===== import_jobs: S =====
 select pg_temp.u('owner');
 select is((select count(*)::int from public.import_jobs), 5, 'import_jobs S: owner sees the five org A imports');
+select pg_temp.u('admin');
+select is((select count(*)::int from public.import_jobs), 5, 'import_jobs S (DB review M2): admin sees the five org A imports');
+select pg_temp.u('recruiter');
+select is((select count(*)::int from public.import_jobs), 5, 'import_jobs S (DB review M2): an org-wide recruiter sees the five org A imports');
 select pg_temp.u('ws_recruiter');
 select is((select count(*)::int from public.import_jobs), 2, 'import_jobs S: workspace recruiter sees only the workspace A2 imports');
 select pg_temp.u('reviewer');
@@ -499,6 +503,12 @@ select pg_temp.u('recruiter');
 select is(pg_temp.try($$insert into public.import_row_errors (org_id, import_job_id, row_no, field, error_code) values ('a1000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000004', 20, 'stem', 'too_long')$$), 'OK 1', 'import_row_errors I: staff record an error code for an open job of their workspace');
 select matches(pg_temp.try($$insert into public.import_row_errors (org_id, import_job_id, row_no, field, error_code) values ('a1000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000004', 21, 'stem', 'the stem said hello')$$), '^23514', 'import_row_errors I: the code is an enum, never text from the file');
 select matches(pg_temp.try($$insert into public.import_row_errors (org_id, import_job_id, row_no, field, error_code) values ('a1000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000004', 2002, 'stem', 'row_limit')$$), '^23514', 'import_row_errors I: at most 2,000 data rows (rows 2..2001)');
+select pg_temp.u('owner');
+select is(pg_temp.try($$insert into public.import_row_errors (org_id, import_job_id, row_no, field, error_code) values ('a1000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000004', 23, 'stem', 'too_long')$$), 'OK 1', 'import_row_errors I (DB review M2): the owner records a row error');
+select pg_temp.u('admin');
+select is(pg_temp.try($$insert into public.import_row_errors (org_id, import_job_id, row_no, field, error_code) values ('a1000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000004', 24, 'stem', 'too_long')$$), 'OK 1', 'import_row_errors I (DB review M2): an admin records a row error');
+select pg_temp.u('hm');
+select matches(pg_temp.try($$insert into public.import_row_errors (org_id, import_job_id, row_no, field, error_code) values ('a1000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000004', 25, 'stem', 'too_long')$$), '^42501', 'import_row_errors I (DB review M2): a hiring manager records no row error');
 select pg_temp.u('ws_recruiter');
 select matches(pg_temp.try($$insert into public.import_row_errors (org_id, import_job_id, row_no, field, error_code) values ('a1000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000004', 22, 'stem', 'too_long')$$), '^42501', 'import_row_errors I: workspace recruiter cannot write errors of a workspace A1 job');
 select is((select count(*)::int from public.import_row_errors), 0, 'import_row_errors S: workspace recruiter sees no workspace A1 error');
@@ -514,6 +524,13 @@ select pg_temp.op();
 select matches(pg_temp.try($$update public.import_row_errors set error_code = 'bad_key'$$), '^42501 TRACE_GUARD: import row errors are never changed', 'import_row_errors U: never changed, even on the operator path');
 
 -- ===== import_jobs: U (state machine §4.3; counts by the guard) =====
+select pg_temp.u('recruiter');
+select pg_temp.u('owner');
+select is(pg_temp.try($$update public.import_jobs set images_ok = 1 where id = 'a7000000-0000-4000-8000-000000000001'$$), 'OK 1', 'import_jobs U (DB review M2): the owner records the images accepted');
+select pg_temp.u('admin');
+select is(pg_temp.try($$update public.import_jobs set images_ok = 1 where id = 'a7000000-0000-4000-8000-000000000001'$$), 'OK 1', 'import_jobs U (DB review M2): an admin records the images accepted');
+select pg_temp.u('hm');
+select is(pg_temp.try($$update public.import_jobs set images_ok = 1 where id = 'a7000000-0000-4000-8000-000000000001'$$), 'OK 0', 'import_jobs U (DB review M2): a hiring manager reaches no import job');
 select pg_temp.u('recruiter');
 select is(pg_temp.try($$update public.import_jobs set images_ok = 1 where id = 'a7000000-0000-4000-8000-000000000001'$$), 'OK 1', 'import_jobs U: staff record the images accepted while validating');
 select matches(pg_temp.try($$update public.import_jobs set rows_ok = 999 where id = 'a7000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'import_jobs U: counts are outside the update grant');

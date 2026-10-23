@@ -9,7 +9,7 @@ describe('@trace/db-types', () => {
     expectTypeOf<keyof Database>().toEqualTypeOf<'public'>();
   });
 
-  it('has the eight M0b tables and the nineteen D1 migration-1 to migration-3 tables (specs/d1-demo-slice.md §3.1), no views and no public functions', () => {
+  it('has the eight M0b tables and the nineteen D1 migration-1 to migration-3 tables (specs/d1-demo-slice.md §3.1), the M1 tables, views and M1-c functions', () => {
     expectTypeOf<
       | 'orgs'
       | 'workspaces'
@@ -84,11 +84,19 @@ describe('@trace/db-types', () => {
       | 'integrity_setting_defs'
       | 'integrity_presets'
       | 'org_integrity_locks'
+      // M1 migrations M1-c and M1-d (specs/m1-test-authoring.md §3.2)
+      | 'import_jobs'
+      | 'import_row_errors'
+      | 'ai_draft_jobs'
+      | 'member_invites'
     >();
     expectTypeOf<keyof Database['public']['Views']>().toEqualTypeOf<
       'v_item_exposure' | 'v_item_bank_quant_share'
     >();
-    expectTypeOf<keyof Database['public']['Functions']>().toEqualTypeOf<never>();
+    // M1-c: three INVOKER functions the api calls with the caller's JWT (§3.4, DC-M1-1).
+    expectTypeOf<keyof Database['public']['Functions']>().toEqualTypeOf<
+      'import_item_batch' | 'save_test_draft' | 'save_item_variants'
+    >();
   });
 
   it('carries the M0b enums and the three D1 enums (migrations 1 and 2)', () => {

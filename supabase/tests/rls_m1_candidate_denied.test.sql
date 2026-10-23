@@ -406,6 +406,15 @@ insert into public.role_templates (org_id, template_key, version, name, keywords
   (pg_temp.id('A'), 'denied_tpl', 1, 'Denied template', '{night}',
    '{"sections": [{"title": "Verbal", "format": "mcq", "skillKey": "verbal", "drawCount": 1, "available": true}], "totalTimeSeconds": 600}', 'standard');
 insert into public.org_integrity_locks (org_id, setting_key, locked_value) values (pg_temp.id('A'), 'question_copy', 'on');
+-- One row in each M1-c/M1-d table (operator path), so the owner control proves the zeros below are denials.
+insert into public.import_jobs (id, org_id, workspace_id, source_kind, template_version, created_by) values
+  ('a7000000-0000-4000-8000-0000000000c1', pg_temp.id('A'), pg_temp.id('A1'), 'xlsx', 'trace-items-v1', pg_temp.id('owner'));
+insert into public.import_row_errors (org_id, import_job_id, row_no, field, error_code) values
+  (pg_temp.id('A'), 'a7000000-0000-4000-8000-0000000000c1', 2, 'stem', 'missing_field');
+insert into public.ai_draft_jobs (org_id, workspace_id, requested_by, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values
+  (pg_temp.id('A'), pg_temp.id('A1'), pg_temp.id('owner'), 'mcq', 'verbal', 0.50, 1, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1');
+insert into public.member_invites (org_id, email_hmac, roles, invited_by) values
+  (pg_temp.id('A'), repeat('c', 64), '{recruiter}', pg_temp.id('admin'));
 select pg_temp.tv('v2', pg_temp.id('A'), pg_temp.id('A1'));
 select pg_temp.sec('sp', 'v2', 1, 'mcq', 'd1000000-0000-4000-8000-0000000000c1', 1, 100);
 select pg_temp.preset('v2', 'standard');
@@ -439,7 +448,7 @@ select is(pg_temp.visible(), 'skill_taxonomy=- items=0 item_variants=0 item_vari
 select pg_temp.u('outsider');
 select is(pg_temp.visible(), 'skill_taxonomy=- items=0 item_variants=0 item_variant_keys=0 item_exposure_events=0 pools=0 pool_items=0 library_copy_requests=0 role_templates=0 jobs=0 section_pool_snapshot=0 integrity_setting_defs=- integrity_presets=- org_integrity_locks=0 v_item_exposure=0 v_item_bank_quant_share=0 import_jobs=0 import_row_errors=0 ai_draft_jobs=0 member_invites=0', 'a user with no membership reads no M1 row');
 select pg_temp.u('owner');
-select is(pg_temp.visible(), 'skill_taxonomy=- items=4 item_variants=1 item_variant_keys=1 item_exposure_events=1 pools=1 pool_items=2 library_copy_requests=1 role_templates=1 jobs=1 section_pool_snapshot=2 integrity_setting_defs=- integrity_presets=- org_integrity_locks=1 v_item_exposure=1 v_item_bank_quant_share=1 import_jobs=0 import_row_errors=0 ai_draft_jobs=0 member_invites=0', 'control: the owner reads the fixtures (so the zeros above are denials)');
+select is(pg_temp.visible(), 'skill_taxonomy=- items=4 item_variants=1 item_variant_keys=1 item_exposure_events=1 pools=1 pool_items=2 library_copy_requests=1 role_templates=1 jobs=1 section_pool_snapshot=2 integrity_setting_defs=- integrity_presets=- org_integrity_locks=1 v_item_exposure=1 v_item_bank_quant_share=1 import_jobs=1 import_row_errors=1 ai_draft_jobs=1 member_invites=1', 'control: the owner reads the fixtures (so the zeros above are denials)');
 select pg_temp.op();
 
 -- ===== Direct calls by the candidate roles =====

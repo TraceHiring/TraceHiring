@@ -70,7 +70,8 @@ key" (the placed M1-a still grants that SELECT).
    list `drafter_error, bad_output, no_draft_passed, timeout, internal` (contracts `AiDraftJobView.errorCode` must
    match). `provider, model_id, prompt_version` are written by the api at request time (versioning rule); the worker
    updates only `status, drafts_discarded, error_code`. queued → failed is allowed (e.g. a poison message).
-9. `private.ai_draft_job_running` also caps drafts at the job's `count`. The draft's format/skill are not checked
+9. (Superseded at placement, spec R5-50/R5-51: the cap is `private.ai_draft_job_has_room`, checked on draft insert
+   only, and both hooks lock the job row.) `private.ai_draft_job_running` also caps drafts at the job's `count`. The draft's format/skill are not checked
    against the job's (the hook signature has no format); a follow-up guard could add it.
 10. `save_test_draft` DB payload documented in the function header; `settings` optional (absent keeps the ruleset's
     settings; present resets `preset_version` so the guard picks the latest); a pool section with inline items is

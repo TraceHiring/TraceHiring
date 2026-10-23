@@ -95,6 +95,8 @@ select matches(pg_temp.try('select * from public.member_invites'), '^42501 permi
 select pg_temp.op();
 
 -- ===== member_invites: U (admin cancels; the admin worker marks failed) =====
+select pg_temp.u('admin_aal1');
+select is(pg_temp.try(format($$update public.member_invites set status = 'cancelled' where id = %L$$, pg_temp.id('i4'))), 'OK 0', 'member_invites U (DB review M2): an admin at aal1 cannot cancel (aal2 role)');
 select pg_temp.u('recruiter');
 select is(pg_temp.try(format($$update public.member_invites set status = 'cancelled' where id = %L$$, pg_temp.id('i4'))), 'OK 0', 'member_invites U: recruiter cannot cancel');
 select pg_temp.u('pure_owner');
