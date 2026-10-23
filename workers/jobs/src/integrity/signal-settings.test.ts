@@ -9,6 +9,7 @@ import { SQL } from './store.js';
 import {
   ALL_SIGNALS_ENABLED,
   D1_RULES,
+  addQualityCard,
   heartbeat,
   integrityWorld,
   paste,
@@ -73,6 +74,15 @@ describe('callBand passes the pinned signal settings (R5-52 f)', () => {
     const off = await callBand(table1, [], FULL, 'd1-signals-v1', false, settings(['paste']));
     expect(off.inputHash).not.toBe(on.inputHash);
   });
+
+  it('the input hash does not depend on the key order of the stored map (jsonb prints keys by length)', async () => {
+    const off = settings(['paste']);
+    const reversed = Object.fromEntries(Object.entries(off).reverse());
+    expect(Object.keys(reversed)).not.toEqual(Object.keys(off));
+    const a = await callBand(table1, [], FULL, 'd1-signals-v1', false, off);
+    const b = await callBand(table1, [], FULL, 'd1-signals-v1', false, reversed);
+    expect(b.inputHash).toBe(a.inputHash);
+  });
 });
 
 describe('the integrity stage reads signal_settings from the pinned ruleset', () => {
@@ -88,6 +98,7 @@ describe('the integrity stage reads signal_settings from the pinned ruleset', ()
       review_state: 'reviewed',
     });
     expect(table(w.db, 'flags')).toHaveLength(0);
+    expect(table(w.db, 'signals').map((r) => r['kind'])).toContain('paste');
     const timeline = table(w.db, 'timeline');
     expect(timeline).toHaveLength(1);
     expect(timeline[0]).toMatchObject({
@@ -95,6 +106,27 @@ describe('the integrity stage reads signal_settings from the pinned ruleset', ()
       signal_kind: 'paste',
       rule_id: null,
     });
+  });
+
+  it('awaiting quality, then the flip with a kind switched off: one result, still Clear, no input change', async () => {
+    const w = await integrityWorld({
+      meetsCutoff: null,
+      signalSettings: settings(['paste', 'drop']),
+    });
+    await run(w);
+    expect(table(w.db, 'integrity_cards')[0]).toMatchObject({
+      band: 'clear',
+      review_state: 'awaiting_quality',
+    });
+    addQualityCard(w.db, true);
+    await run(w);
+    expect(table(w.db, 'results')).toHaveLength(1);
+    expect(table(w.db, 'integrity_cards')).toHaveLength(1);
+    expect(table(w.db, 'integrity_cards')[0]).toMatchObject({
+      band: 'clear',
+      review_state: 'reviewed',
+    });
+    expect(table(w.db, 'flags')).toHaveLength(0);
   });
 
   it('switched-off untrusted input never gives Strong concern', async () => {

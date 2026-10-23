@@ -114,7 +114,8 @@ beforeAll(async () => {
   // orgs a crashed earlier run left behind (older than 30 minutes, never a concurrent run's)
   await cleanupStaleOrgs(h.admin);
   schemaBefore = String((await q(SCHEMA_STATE_SQL, []))[0]?.['fp']);
-  f = await seedOrg(h, ORG, [40, 60]);
+  // cutoff 45: a version whose pinned ruleset switches paste and drop off (M1 R5-52 f, R5-23)
+  f = await seedOrg(h, ORG, [40, 45, 60], { 45: ['paste', 'drop'] });
   console.info(`db-test setup ${Date.now() - started} ms`);
 }, 60_000);
 
@@ -199,6 +200,27 @@ describe('full chain against the real schema', () => {
     ]);
     expect(snap.timeline).toHaveLength(51);
     expect(snap.signals).toHaveLength(51);
+  });
+
+  it('a paste whose kinds the pinned ruleset switches off: Clear, signal stored, context only (R5-52 f)', async () => {
+    const s = await seedSession(h, f, {
+      cutoff: 45,
+      lines: [heartbeat(1, 10_000), paste(4, 20_000), heartbeat(5, 30_000)],
+    });
+    await all(s);
+    const snap = await snapshot(s.session);
+    expect(snap.signals).toEqual([expect.objectContaining({ seq: 4, kind: 'paste' })]);
+    expect(snap.flags).toEqual([]);
+    expect(snap.icards).toEqual([
+      expect.objectContaining({ band: 'clear', review_state: 'reviewed' }),
+    ]);
+    expect(snap.timeline).toEqual([
+      expect.objectContaining({ position: 1, entry_kind: 'context', signal_kind: 'paste' }),
+    ]);
+    const engine = await q('select engine_version from integrity.results where session_id = $1', [
+      s.session,
+    ]);
+    expect(engine).toEqual([{ engine_version: 'band-engine-2' }]);
   });
 
   it('below the cutoff: flags not_used, no timeline, integrity pointer null (rule 6)', async () => {

@@ -39,6 +39,8 @@ export const seedOrg = async (
   h: Harness,
   org: string,
   cutoffs: readonly number[],
+  /** Kinds switched off in a version's pinned ruleset (by cutoff), written before publish as an unpublished D1 row. */
+  disabledKinds: Readonly<Record<number, readonly string[]>> = {},
 ): Promise<OrgFixture> => {
   const a = h.admin;
   const workspace = newId();
@@ -145,6 +147,13 @@ export const seedOrg = async (
       "insert into public.item_answer_keys (org_id, item_version_id, format, key) values ($1, $2, 'mcq', $3::text::jsonb)";
     await a.unsafe(insertKey, [org, items.mcq1, '{"option_id":"b"}']);
     await a.unsafe(insertKey, [org, items.mcq2, '{"option_id":"c"}']);
+    for (const kind of disabledKinds[cutoff] ?? []) {
+      await a.unsafe(
+        'update public.ruleset_versions set signal_settings = jsonb_set(signal_settings, array[$2], ' +
+          '\'{"enabled":false}\'::jsonb) where id = (select ruleset_version_id from public.test_versions where id = $1)',
+        [id, kind],
+      );
+    }
     await a.unsafe(
       "update public.test_versions set status = 'published', content_sha256 = $2 where id = $1",
       [id, hex(32)],
