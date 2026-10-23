@@ -37,3 +37,28 @@ Media route auth, leakage, package storage, refused events and logging checked c
 6. Info — unconstrained `numeric` keeps the written scale (`0.500`). 7. Info — 40001 is generic: the api matches the
    `TRACE_GUARD` message, not the SQLSTATE alone (A2b brief).
 Trigger order, no TOCTOU, digest lifecycle, column grant, SQL = JS digest, keyset ties, variant race: clean.
+
+## A3a jobs v2 (`893657a..74d9891`, branch `m1/a3a-jobs-v2`)
+**Spec: PASS WITH FIXES. Security: APPROVE WITH FIXES. Database: APPROVE WITH FIXES.** Rule 1 and rule 3 clean; R5-59 a met.
+- Security Medium — `served[].position` is never checked against the layout: a DO bug or crafted message that swaps two
+  pool positions scores an answer with another item's key. → fix round 1 (slot check, `*_bad_served_position`).
+- Spec/security Low — `poolSectionIds` taken from the message. → fix round 1 (set equality with the version).
+- Spec Medium — band-engine-1 re-delivery (R5-52 f): the reviewer reads "A3 owns" as requiring an ack of a provably
+  identical stored result; rule 3 → FOUNDER-QUEUE 2026-10-23 (default: DLQ, never overwrite). Not changed.
+- Spec Medium — new SQL tested only against fakes. → fix round 1 adds `db-test/stages-v2.db.test.ts` (database
+  reviewer's 12 cases).
+- Spec Low — v2 keeps `d1-scoring-v1`. → lead decision: v2 records `m1-scoring-v1`.
+- Database Low — replayed pool rows hit the guard (42501) before ON CONFLICT; comments wrong (exactly-once holds via the
+  key under the invitation lock). Database Low — message `v` vs `package_version` unchecked on the v1 quality path.
+  Info — fakes weaker than Postgres; dead `signal_settings` null branch.
+
+## A3b jobs drafting and members (`893657a..2b706d0`, branch `m1/a3b-jobs-authoring`)
+**Security: APPROVE WITH FIXES** (spec and database pending at the time of writing).
+- High — E26 not built: after the Auth user is created, any failure makes every retry hit 422 `email_exists` → invite
+  failed for good, orphaned `auth.users` row (DPDP), cross-tenant enumeration of existing accounts; the fake reuses the
+  user, so tests pass. Fix: look up the existing user's id (lead migration, definer for `trace_admin_worker`), re-check
+  inviter admin + invite pending before Auth, make the fake behave like the real adapter.
+- Low — Auth fetch follows redirects (custom `apikey` header survives cross-origin) and has no timeout; pepper only
+  non-empty (require ≥ 32 bytes); topic not tied to `topic_sha256`; drafter output size uncapped; `on conflict do
+  nothing` with no target treats an id clash as a re-delivery. Note — DLQ retention of admin messages carrying the
+  plaintext address belongs in retention/deletion.
