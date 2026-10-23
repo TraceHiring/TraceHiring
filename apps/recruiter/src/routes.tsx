@@ -8,7 +8,6 @@ import { BankRoute } from './bank/BankRoute';
 import { ImportRoute } from './bank/import/ImportRoute';
 import { ItemRoute } from './bank/ItemRoute';
 import { PoolsRoute } from './bank/PoolsRoute';
-import { FromTemplateRoute } from './authoring/FromTemplateRoute';
 import { InviteRoute } from './authoring/InvitePage';
 import { ReviewersRoute } from './authoring/ReviewersPanel';
 import { NewTestRoute, TestEditorRoute } from './authoring/TestEditorPage';
@@ -67,8 +66,7 @@ export function buildRoutes(demo: DemoExtras | null): RouteObject[] {
             { path: 'reports/:reportId', element: <ReportRoute /> },
             { path: 'review', element: <ReviewQueueRoute /> },
             // M1 (specs/m1-test-authoring.md §6.10, §6.11; R5-54). Staff: owner, admin, recruiter. Reviewers read
-            // the bank to approve items. Integrity locks and member invitations are admin only.
-            { path: 'tests/new/template', element: gated(isStaff, <FromTemplateRoute />) },
+            // the bank to approve items (the template choice is step 1 of tests/new, R5-15). Integrity locks and member invitations are admin only.
             { path: 'bank', element: gated(canReadBank, <BankRoute />) },
             { path: 'bank/items/new', element: gated(isStaff, <ItemRoute />) },
             { path: 'bank/items/:itemId', element: gated(canReadBank, <ItemRoute />) },

@@ -1,5 +1,5 @@
-// Placeholder from A5-0 (R5-54): the route, its role gate and its nav entry are wired in routes.tsx and shell/nav.ts.
-// Stream A5c replaces this file's contents and keeps the export names.
+// Placeholder from A5-0 (R5-54). It has no route of its own (R5-15, spec 6.1): stream A5c turns it into the
+// component for template choice inside step 1 of tests/new and keeps the export names.
 import ui from '../common/Ui.module.css';
 
 export function FromTemplateRoute() {
