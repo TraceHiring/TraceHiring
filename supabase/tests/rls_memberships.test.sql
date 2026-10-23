@@ -401,7 +401,7 @@ select is(pg_temp.try($$update public.memberships set display_name = 'Pw Self' w
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000c", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000001}], "role": "authenticated"}';
 select is(pg_temp.try($$update public.memberships set display_name = 'Suspended Self' where user_id = '00000000-0000-4000-8000-00000000000c'$$), 'OK 0', 'U: a suspended member cannot change their own display_name [B0-DB1]');
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000a", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
-select is(pg_temp.try($$update public.memberships set display_name = 'Invited Self' where user_id = '00000000-0000-4000-8000-00000000000a'$$), 'OK 0', 'U: an invited member cannot change their own display_name before accepting [B0-SP7]');
+select matches(pg_temp.try($$update public.memberships set display_name = 'Invited Self' where user_id = '00000000-0000-4000-8000-00000000000a'$$), '^42501 TRACE_GUARD: an invited member can only accept', 'U: an invited member cannot change their own display_name before accepting [B0-SP7; M1 R5-50: now an explicit denial]');
 set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000d", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000001}], "role": "authenticated"}';
 select is(pg_temp.try($$update public.memberships set display_name = 'S Self' where user_id = '00000000-0000-4000-8000-00000000000d'$$), 'OK 0', 'U: a member of a suspended org cannot change their own display_name [B0-DB1, N6]');
 reset role;

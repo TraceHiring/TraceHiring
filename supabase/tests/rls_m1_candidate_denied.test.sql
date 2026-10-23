@@ -282,21 +282,30 @@ begin
   return v_sid;
 end
 $f$;
--- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review (the operator path names origin, as the
--- authoring worker's write path would; its answer key is added on the operator path too, since the worker writes only
--- for a running drafting job, which M1-c brings, SEC-M1-3). Records <key>, <key>_item.
+-- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review, written the way the drafting job writes
+-- it (R5-35): the operator requests a drafting job, the authoring worker (bound to the org) moves it to running and
+-- inserts the item, the version naming the job and its answer key. Records <key>, <key>_item and <key>_job.
 create function pg_temp.ai_draft(p_key text, p_org uuid, p_ws uuid) returns uuid language plpgsql as $f$
-declare v_item uuid; v_ver uuid;
+declare v_job uuid; v_item uuid; v_ver uuid;
 begin
   perform pg_temp.op();
+  insert into public.ai_draft_jobs (org_id, workspace_id, requested_by, format, skill_key, difficulty, count, topic_sha256,
+      provider, model_id, prompt_version)
+    values (p_org, p_ws, case when p_org = pg_temp.id('B') then pg_temp.id('b_admin') else pg_temp.id('owner') end, 'mcq',
+      'verbal', 0.50, 10, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')
+    returning id into v_job;
+  perform pg_temp.w('trace_authoring_worker', p_org);
+  update public.ai_draft_jobs set status = 'running' where id = v_job;
   insert into public.items (org_id, workspace_id, format, skill_key) values (p_org, p_ws, 'mcq', 'verbal')
     returning id into v_item;
-  insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, origin, content_sha256)
+  insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, ai_draft_job_id,
+      content_sha256)
     values (p_org, v_item, 'mcq', '[synthetic] AI draft ' || p_key,
-      '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', repeat('c', 64))
+      '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, v_job, repeat('c', 64))
     returning id into v_ver;
   insert into public.item_answer_keys (org_id, item_version_id, format, key) values (p_org, v_ver, 'mcq', '{"option_id": "o1"}');
-  insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
+  perform pg_temp.op();
+  insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item), (p_key || '_job', v_job);
   return v_ver;
 end
 $f$;
@@ -326,20 +335,24 @@ begin
 end
 $f$;
 select plan(14);
--- m1_tables(): every M1 table and view (M1-a, M1-b; M1-c and M1-d add theirs).
+-- m1_tables(): every M1 table and view (M1-a, M1-b, M1-c, M1-d).
 create function pg_temp.m1_tables() returns text[] language sql as $f$
   select array['skill_taxonomy', 'items', 'item_variants', 'item_variant_keys', 'item_exposure_events', 'pools', 'pool_items',
     'library_copy_requests', 'role_templates', 'jobs', 'section_pool_snapshot', 'integrity_setting_defs', 'integrity_presets',
-    'org_integrity_locks', 'v_item_exposure', 'v_item_bank_quant_share']
+    'org_integrity_locks', 'v_item_exposure', 'v_item_bank_quant_share', 'import_jobs', 'import_row_errors', 'ai_draft_jobs',
+    'member_invites']
 $f$;
 grant execute on function pg_temp.m1_tables() to public;
--- m1_functions(): every function M1 adds in private or public (M1-a, M1-b).
+-- m1_functions(): every function M1 adds in private or public (M1-a, M1-b, M1-c, M1-d).
 create function pg_temp.m1_functions() returns text[] language sql as $f$
   select array['library_org_id', 'param_spec_valid', 'media_refs_valid', 'skill_key_exists', 'ai_draft_job_running',
     'import_job_open', 'item_version_ready', 'library_copy', 'library_viewer_ok', 'library_browse', 'library_exposure',
     'blueprint_valid', 'current_settings_catalog', 'integrity_settings_check', 'derive_signal_settings',
     'assert_drive_pool_ratio', 'library_reference', 'session_items_a_ai_gate', 'session_items_exposure',
-    'ai_draft_job_running_in', 'item_media_in_org', 'bank_no_truncate', 'sealed_settings_catalogs', 'settings_catalog_sealed']
+    'ai_draft_job_running_in', 'item_media_in_org', 'bank_no_truncate', 'sealed_settings_catalogs', 'settings_catalog_sealed',
+    'import_jobs_guard', 'import_jobs_audit', 'import_row_errors_guard', 'ai_draft_jobs_guard', 'ai_draft_jobs_audit',
+    'save_item_variants', 'import_item_batch', 'save_test_draft', 'member_invites_guard', 'member_invites_audit',
+    'provision_invited_member']
 $f$;
 grant execute on function pg_temp.m1_functions() to public;
 -- held(role): the M1 tables and functions the role holds any privilege on (table, any column, EXECUTE), sorted.

@@ -281,21 +281,30 @@ begin
   return v_sid;
 end
 $f$;
--- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review (the operator path names origin, as the
--- authoring worker's write path would; its answer key is added on the operator path too, since the worker writes only
--- for a running drafting job, which M1-c brings, SEC-M1-3). Records <key>, <key>_item.
+-- ai_draft(key, org, workspace): an AI-drafted MCQ bank version left in_review, written the way the drafting job writes
+-- it (R5-35): the operator requests a drafting job, the authoring worker (bound to the org) moves it to running and
+-- inserts the item, the version naming the job and its answer key. Records <key>, <key>_item and <key>_job.
 create function pg_temp.ai_draft(p_key text, p_org uuid, p_ws uuid) returns uuid language plpgsql as $f$
-declare v_item uuid; v_ver uuid;
+declare v_job uuid; v_item uuid; v_ver uuid;
 begin
   perform pg_temp.op();
+  insert into public.ai_draft_jobs (org_id, workspace_id, requested_by, format, skill_key, difficulty, count, topic_sha256,
+      provider, model_id, prompt_version)
+    values (p_org, p_ws, case when p_org = pg_temp.id('B') then pg_temp.id('b_admin') else pg_temp.id('owner') end, 'mcq',
+      'verbal', 0.50, 10, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')
+    returning id into v_job;
+  perform pg_temp.w('trace_authoring_worker', p_org);
+  update public.ai_draft_jobs set status = 'running' where id = v_job;
   insert into public.items (org_id, workspace_id, format, skill_key) values (p_org, p_ws, 'mcq', 'verbal')
     returning id into v_item;
-  insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, origin, content_sha256)
+  insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, ai_draft_job_id,
+      content_sha256)
     values (p_org, v_item, 'mcq', '[synthetic] AI draft ' || p_key,
-      '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, 'ai_draft', repeat('c', 64))
+      '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', 'verbal', 0.50, v_job, repeat('c', 64))
     returning id into v_ver;
   insert into public.item_answer_keys (org_id, item_version_id, format, key) values (p_org, v_ver, 'mcq', '{"option_id": "o1"}');
-  insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item);
+  perform pg_temp.op();
+  insert into pg_temp.ids values (p_key, v_ver), (p_key || '_item', v_item), (p_key || '_job', v_job);
   return v_ver;
 end
 $f$;

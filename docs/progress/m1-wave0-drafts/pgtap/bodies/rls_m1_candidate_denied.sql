@@ -1,18 +1,22 @@
 -- rls_m1_candidate_denied (spec specs/m1-test-authoring.md revision 5 §10 row rls_m1_candidate_denied; §3.5 last line: trace_candidate, anon, service_role, hiring_manager and client viewer hold nothing on any M1 table; rule 5). rls_d1_candidate_denied already scans the whole catalogue for trace_candidate, trace_candidate_gateway and anon; this file adds service_role, the M1 functions, the RLS personas and direct calls. RED first: written from the spec before migration M1-b. Personas and content are synthetic.
--- m1_tables(): every M1 table and view (M1-a, M1-b; M1-c and M1-d add theirs).
+-- m1_tables(): every M1 table and view (M1-a, M1-b, M1-c, M1-d).
 create function pg_temp.m1_tables() returns text[] language sql as $f$
   select array['skill_taxonomy', 'items', 'item_variants', 'item_variant_keys', 'item_exposure_events', 'pools', 'pool_items',
     'library_copy_requests', 'role_templates', 'jobs', 'section_pool_snapshot', 'integrity_setting_defs', 'integrity_presets',
-    'org_integrity_locks', 'v_item_exposure', 'v_item_bank_quant_share']
+    'org_integrity_locks', 'v_item_exposure', 'v_item_bank_quant_share', 'import_jobs', 'import_row_errors', 'ai_draft_jobs',
+    'member_invites']
 $f$;
 grant execute on function pg_temp.m1_tables() to public;
--- m1_functions(): every function M1 adds in private or public (M1-a, M1-b).
+-- m1_functions(): every function M1 adds in private or public (M1-a, M1-b, M1-c, M1-d).
 create function pg_temp.m1_functions() returns text[] language sql as $f$
   select array['library_org_id', 'param_spec_valid', 'media_refs_valid', 'skill_key_exists', 'ai_draft_job_running',
     'import_job_open', 'item_version_ready', 'library_copy', 'library_viewer_ok', 'library_browse', 'library_exposure',
     'blueprint_valid', 'current_settings_catalog', 'integrity_settings_check', 'derive_signal_settings',
     'assert_drive_pool_ratio', 'library_reference', 'session_items_a_ai_gate', 'session_items_exposure',
-    'ai_draft_job_running_in', 'item_media_in_org', 'bank_no_truncate', 'sealed_settings_catalogs', 'settings_catalog_sealed']
+    'ai_draft_job_running_in', 'item_media_in_org', 'bank_no_truncate', 'sealed_settings_catalogs', 'settings_catalog_sealed',
+    'import_jobs_guard', 'import_jobs_audit', 'import_row_errors_guard', 'ai_draft_jobs_guard', 'ai_draft_jobs_audit',
+    'save_item_variants', 'import_item_batch', 'save_test_draft', 'member_invites_guard', 'member_invites_audit',
+    'provision_invited_member']
 $f$;
 grant execute on function pg_temp.m1_functions() to public;
 -- held(role): the M1 tables and functions the role holds any privilege on (table, any column, EXECUTE), sorted.
