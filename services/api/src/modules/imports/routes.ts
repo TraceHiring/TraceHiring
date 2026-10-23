@@ -13,8 +13,9 @@
 //   stores, marks a repeat of an earlier row of the batch `duplicate_in_file`, and sends the batch to
 //   `public.import_item_batch` (idempotent on the row number, E13; `duplicate_in_bank` and the approval by the
 //   importer, Q23, happen there). The answer lists every bad row by row, column and code; never a cell value.
-// - `…/complete` (validating only) records the number of distinct images the job's items use; `…/cancel` ends an open
-//   or validating job and keeps the rows already imported (R5-51 g, founder default a).
+// - `…/complete` (validating only) ends the job; the guard counts its rows and distinct images (R5-64 c, the api
+//   never sends `images_ok`); `…/cancel` ends an open or validating job and keeps the rows already imported (R5-51 g,
+//   founder default a).
 import {
   IMPORT_IMAGE_MAX_BYTES,
   ImportJobCreateRequest,
@@ -41,7 +42,6 @@ import {
   eq,
   handleOrg,
   orgFail,
-  PGRST_MAX_ROWS,
   pathId,
   rpcOf,
   type OrgContext,
@@ -271,36 +271,6 @@ const batchRowOf = async (
   };
 };
 
-const MediaRow = z.object({
-  id: z.string(),
-  media: z.array(z.object({ key: z.string() })).nullable(),
-});
-type MediaRow = z.infer<typeof MediaRow>;
-
-/** Distinct image keys used by the job's stored items (`images_ok` at completion), read in id-keyset pages. */
-const imagesOf = async (ctx: OrgContext, orgId: string, jobId: string): Promise<number> => {
-  const keys = new Set<string>();
-  let after: string | null = null;
-  for (;;) {
-    const rows: MediaRow[] = parseRows(
-      MediaRow,
-      await ctx.rest.select('item_versions', {
-        select: 'id,media',
-        org_id: eq(orgId),
-        import_job_id: eq(jobId),
-        order: 'id.asc',
-        limit: String(PGRST_MAX_ROWS),
-        ...(after === null ? {} : { id: `gt.${after}` }),
-      }),
-    );
-    for (const r of rows) for (const m of r.media ?? []) keys.add(m.key);
-    const last: MediaRow | undefined = rows[rows.length - 1];
-    if (rows.length < PGRST_MAX_ROWS || last === undefined) break;
-    after = last.id;
-  }
-  return Math.min(keys.size, 2000);
-};
-
 /** Ends a job with a guarded status update; 0 rows is 404 (unseen) or 409 (not in a state that may end so). */
 const endJob = async (
   ctx: OrgContext,
@@ -472,11 +442,8 @@ export const createImportsRoutes = (deps: ImportsDeps): Hono<{ Bindings: Env }> 
       const job = await findJob(ctx, orgId, jobId);
       // §4.3 (R5-51 c): only a validating job completes (an open job has had no batch).
       if (job.status !== 'validating') return orgFail('conflict');
-      const imagesOk = await imagesOf(ctx, orgId, jobId);
-      const row = await endJob(ctx, orgId, jobId, 'eq.validating', {
-        status: 'completed',
-        images_ok: imagesOk,
-      });
+      // M1-m (R5-64 c): the guard counts rows and images when the job ends; the stored counts are read back.
+      const row = await endJob(ctx, orgId, jobId, 'eq.validating', { status: 'completed' });
       return answer(ImportJobView, viewOf(row));
     }),
   );
