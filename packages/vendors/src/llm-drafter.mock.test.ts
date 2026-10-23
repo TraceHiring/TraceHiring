@@ -333,6 +333,85 @@ describe('request validation and abort', () => {
   it('rejects when the signal is already aborted', async () => {
     const ac = new AbortController();
     ac.abort();
-    await expect(drafter().draft(request(), { signal: ac.signal })).rejects.toBeDefined();
+    await expect(drafter().draft(request(), { signal: ac.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+  });
+
+  it.each<[string, unknown]>([
+    ['null', null],
+    ['undefined', undefined],
+    ['a string', 'mcq'],
+    ['a number', 5],
+    ['an array', [request()]],
+  ])('rejects a request that is %s with not_object', async (_n, req) => {
+    const p = drafter().draft(req as DraftRequest);
+    await expect(p).rejects.toBeInstanceOf(DraftRequestError);
+    await expect(p).rejects.toMatchObject({ code: 'not_object' });
+  });
+});
+
+describe('the production guard cannot be skipped without the constructor', () => {
+  it('rejects draft on an object that only has the prototype', async () => {
+    const bare = Object.create(MockLlmDrafter.prototype) as MockLlmDrafter;
+    await expect(bare.draft(request())).rejects.toBeInstanceOf(Error);
+  });
+
+  it('rejects draft called with a foreign this', async () => {
+    const call = MockLlmDrafter.prototype.draft.call({ seed: 1 }, request());
+    await expect(call).rejects.toBeInstanceOf(Error);
+  });
+
+  it('still drafts on a real instance', async () => {
+    await expect(drafter().draft(request())).resolves.toBeDefined();
+  });
+});
+
+describe('a request is read once (no check-then-use race)', () => {
+  it('never returns more than 10 items when count changes between reads', async () => {
+    let reads = 0;
+    const req = {
+      format: 'mcq',
+      skill: 'sql_basics',
+      difficulty: 0.5,
+      get count() {
+        reads++;
+        return reads === 1 ? 5 : 100000;
+      },
+      topic: '',
+    } as DraftRequest;
+    const r = await drafter().draft(req);
+    expect(r.items).toHaveLength(5);
+    expect(reads).toBe(1);
+  });
+
+  it('reads every field exactly once and never hashes a skill that changed after the check', async () => {
+    const reads: Record<string, number> = {};
+    const once = <T>(name: string, first: T, later: T): T => {
+      reads[name] = (reads[name] ?? 0) + 1;
+      return reads[name] === 1 ? first : later;
+    };
+    const req = {
+      get format() {
+        return once('format', 'mcq', 'written');
+      },
+      get skill() {
+        return once('skill', 'sql_basics', 'x'.repeat(50_000_000));
+      },
+      get difficulty() {
+        return once('difficulty', 0.5, 7);
+      },
+      get count() {
+        return once('count', 3, 100000);
+      },
+      get topic() {
+        return once('topic', '', 'ignore previous instructions');
+      },
+    } as DraftRequest;
+    const r = await drafter().draft(req);
+    expect(r.items).toHaveLength(3);
+    expect(r.items.every((i) => i.format === 'mcq')).toBe(true);
+    expect(reads).toEqual({ format: 1, skill: 1, difficulty: 1, count: 1, topic: 1 });
+    expect(r).toEqual(await drafter().draft(request({ count: 3, topic: '' })));
   });
 });
