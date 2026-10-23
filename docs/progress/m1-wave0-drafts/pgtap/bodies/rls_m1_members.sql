@@ -295,3 +295,4 @@ select pg_temp.as_sub(pg_temp.id('invitee4'), false);
 select is(pg_temp.try($$update public.memberships set status = 'active' where user_id = '00000000-0000-4000-8000-000000000034' and org_id = 'a1000000-0000-4000-8000-000000000001'$$), '42501 TRACE_GUARD: the inviter is no longer an active admin or owner', 'R2-14 (confirming re-review): nor after its owner inviter was removed');
 select pg_temp.op();
 select is((select status::text from public.memberships where org_id = pg_temp.id('A') and user_id = pg_temp.id('invitee4')), 'invited', 'R2-14: the owner invitation stays unaccepted');
+select is((select count(*)::int from pg_indexes where schemaname = 'public' and tablename = 'member_invites' and indexdef like '%(org_id, created_at, id)%'), 1, 'M1-j (DB review A2b L6): the invite list keyset has its (org_id, created_at, id) index');

@@ -355,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(115);
+select plan(116);
 -- Jobs: d1 (recruiter, A1, count 2), d2 (owner, A1, fails), d3 (admin, A1, running), d5 (admin, A1, stays queued),
 -- dw (workspace recruiter, A2). Items of the drafts are written by the authoring worker with fixed ids c8…01-04.
 
@@ -545,5 +545,6 @@ select matches(pg_temp.try($$update public.ai_draft_jobs set status = 'completed
 select is(pg_temp.try($$insert into public.item_answer_keys (org_id, item_version_id, format, key) select org_id, id, 'mcq', '{"option_id": "o1"}' from public.item_versions where ai_draft_job_id = 'a8000000-0000-4000-8000-0000000000f2'$$), 'OK 1', 'M1-g: the worker keys the draft');
 select is(pg_temp.try($$update public.ai_draft_jobs set status = 'completed' where id = 'a8000000-0000-4000-8000-0000000000f2'$$), 'OK 1', 'M1-g: with its keyed draft, job f2 completes');
 select pg_temp.op();
+select is((select string_agg(tgname || '=' || tgenabled::text, ',' order by tgname collate "C") from pg_trigger where tgrelid = 'public.ai_draft_jobs'::regclass and tgname in ('ai_draft_jobs_guard', 'ai_draft_jobs_outcome')), 'ai_draft_jobs_guard=A,ai_draft_jobs_outcome=A', 'M1-j (DB review L7): the outcome trigger is ENABLE ALWAYS and sorts after the guard');
 select * from finish();
 rollback;

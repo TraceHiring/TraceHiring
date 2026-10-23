@@ -62,3 +62,24 @@ Trigger order, no TOCTOU, digest lifecycle, column grant, SQL = JS digest, keyse
   non-empty (require ≥ 32 bytes); topic not tied to `topic_sha256`; drafter output size uncapped; `on conflict do
   nothing` with no target treats an id clash as a re-delivery. Note — DLQ retention of admin messages carrying the
   plaintext address belongs in retention/deletion.
+
+## Fix-round confirmations (A3a, A3b) and later reviews
+- A3a fix 1 (`402a3ac`): CONFIRMED WITH NOTES (new Low: quality checks the message but scores stored rows → R5-62 b, M1-i
+  grant; the mirror-side check is owed). A3b fix 1 (`1866c92`): CONFIRMED WITH NOTES (inviter re-check → M1-h; two-accounts
+  branch untested).
+
+## A2b api (`09e4ed8..8f7b52c`, branch `m1/a2b-api-tests`)
+**Spec: PASS WITH FIXES. Security: APPROVE WITH FIXES. Database: APPROVE WITH FIXES.** No rule 1-9 issue; decisions R5-63.
+- Spec Medium — a losing publisher's R2 put can land over the winner's package (SessionDO then refuses every session).
+- Spec/security/database — pepper 16 chars (api) vs 32 bytes (jobs); the local HMAC helper takes `(pepper, email)`, the
+  shared one `(email, pepper)` (a swap would type-check and break every invite).
+- Spec Medium (merge blocker) — the recruiter app still parses `TestDetailResponse` from GET/POST/PUT (R5-53 a).
+- Database Medium — from-template not atomic (leftover job/test/pools/copies; copy cap); publish reads N+1 (~300-500
+  sequential subrequests per attempt at 5,000 items).
+- Lows — R5-34 not applied on clone; settings + null navigation never publishable; AT-M1-29 v2 retire/loser untested;
+  unmapped guard keys answer 404; invite resolve parses the whole package for its title; preset_version dropped;
+  from-template bypasses the LibraryLimiter; settings + paste rule in two writes; no invite keyset index; template list
+  not paged; owner-without-admin cannot manage invites (spec AD).
+- Database review of lead migrations M1-f…M1-i: **APPROVE** (Lows: pin `ai_draft_jobs_outcome`; the M1-g comment
+  overstates the lookup's binding; the M1-i grant is not used yet).
+
