@@ -355,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(136);
+select plan(137);
 -- Extra personas: pure_owner (…030, org A owner only), invitee (…031), invitee two (…032) and three (…033).
 insert into auth.users (id, aud, role, email) values
   ('00000000-0000-4000-8000-000000000030', 'authenticated', 'authenticated', 'p-pure-owner@example.test'),
@@ -502,6 +502,12 @@ select pg_temp.w('trace_admin_worker', pg_temp.id('B'));
 select matches(pg_temp.try(format($$select private.auth_user_id_for_invite(%L, 'p-invitee@example.test')$$, pg_temp.id('i1'))), '^42501 TRACE_GUARD: the invite is not pending in the job org', 'E26: an admin worker bound to org B looks up nothing for an org A invite');
 select pg_temp.w('trace_admin_worker', null);
 select matches(pg_temp.try(format($$select private.auth_user_id_for_invite(%L, 'p-invitee@example.test')$$, pg_temp.id('i1'))), '^42501 TRACE_GUARD: the invite is not pending in the job org', 'E26: an unbound admin worker looks up nothing');
+select pg_temp.op();
+update public.memberships set roles = '{recruiter}' where org_id = pg_temp.id('A') and user_id = (select invited_by from public.member_invites where id = pg_temp.id('i1'));
+select pg_temp.w('trace_admin_worker', pg_temp.id('A'));
+select matches(pg_temp.try(format($$select private.auth_user_id_for_invite(%L, 'p-invitee@example.test')$$, pg_temp.id('i1'))), '^42501 TRACE_GUARD: the inviter is no longer an active admin or owner', 'M1-h (A3b re-review L1): no Auth lookup, so no Auth user, once the inviter is no longer an admin');
+select pg_temp.op();
+update public.memberships set roles = '{admin}' where org_id = pg_temp.id('A') and user_id = (select invited_by from public.member_invites where id = pg_temp.id('i1'));
 select pg_temp.op();
 select is((select string_agg(r, ',' order by r) from unnest(array['anon', 'authenticated', 'service_role', 'trace_api', 'trace_worker', 'trace_quality_worker', 'trace_integrity_worker', 'trace_authoring_worker', 'trace_admin_worker', 'trace_candidate']) as r where has_function_privilege(r, 'private.auth_user_id_for_invite(uuid, text)', 'EXECUTE')), 'trace_admin_worker', 'E26: EXECUTE on the lookup is granted to trace_admin_worker only');
 select is((select prosecdef::text || '|' || provolatile::text || '|' || array_to_string(proconfig, ',') from pg_proc where oid = 'private.auth_user_id_for_invite(uuid, text)'::regprocedure), 'true|s|search_path=""', 'E26: the lookup is SECURITY DEFINER, stable, with an empty search_path');
