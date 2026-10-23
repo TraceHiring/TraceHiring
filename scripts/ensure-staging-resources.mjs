@@ -14,12 +14,27 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntryPoint } from './lib/cli.mjs';
 
-/** R2 buckets (api writes PACKAGES, edge writes EVIDENCE; spec §7.1). */
-export const BUCKETS = Object.freeze(['trace-packages-staging', 'trace-evidence-staging']);
-/** The DLQ first: the main queue's consumer config names it. There is no quality or integrity queue. */
+/**
+ * R2 buckets (api writes PACKAGES, edge writes EVIDENCE; spec §7.1). M1 R5-13: item images (edge ITEM_MEDIA,
+ * get/head only).
+ */
+export const BUCKETS = Object.freeze([
+  'trace-packages-staging',
+  'trace-evidence-staging',
+  'trace-item-media-staging',
+]);
+/**
+ * Each DLQ before its queue: the queue's consumer config names it. There is no quality or integrity queue. M1 R5-13
+ * adds the AI drafting and member provisioning queues, named as the mirror queue (`<name>-<env>`, DLQ
+ * `<name>-dlq-<env>`); the api produces to them and workers/jobs consumes them.
+ */
 export const QUEUES = Object.freeze([
   'trace-session-mirror-dlq-staging',
   'trace-session-mirror-staging',
+  'trace-authoring-dlq-staging',
+  'trace-authoring-staging',
+  'trace-admin-dlq-staging',
+  'trace-admin-staging',
 ]);
 
 const BUCKET_LOCATION = 'apac';

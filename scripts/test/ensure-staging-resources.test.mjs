@@ -15,6 +15,8 @@ import {
 } from '../ensure-staging-resources.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+/** Every resource, buckets then queues (counts below are derived, so the lists above stay the one pin). */
+const N_ALL = BUCKETS.length + QUEUES.length;
 
 const ok = { status: 0, stdout: '', stderr: '' };
 const exists = (what) => ({
@@ -66,12 +68,22 @@ const recorder = (answer = () => ok) => {
 };
 
 describe('the resource names', () => {
-  it('are exactly the staging buckets and queues of spec §7.1', () => {
-    expect([...BUCKETS]).toEqual(['trace-packages-staging', 'trace-evidence-staging']);
-    // The DLQ first: the main queue's consumer config names it.
+  it('are exactly the staging buckets and queues of spec §7.1 and M1 R5-13', () => {
+    expect([...BUCKETS]).toEqual([
+      'trace-packages-staging',
+      'trace-evidence-staging',
+      // M1 R5-13: item images (api writes, edge reads with get/head only).
+      'trace-item-media-staging',
+    ]);
+    // Each DLQ before its queue: the queue's consumer config names it. M1 R5-13 adds the drafting and member
+    // provisioning queues, named as D1's mirror queue: <name>-<env> with the DLQ <name>-dlq-<env>.
     expect([...QUEUES]).toEqual([
       'trace-session-mirror-dlq-staging',
       'trace-session-mirror-staging',
+      'trace-authoring-dlq-staging',
+      'trace-authoring-staging',
+      'trace-admin-dlq-staging',
+      'trace-admin-staging',
     ]);
   });
 
@@ -118,10 +130,24 @@ describe('ensureResources', () => {
         '--location',
         'apac',
       ],
+      [
+        'exec',
+        'wrangler',
+        'r2',
+        'bucket',
+        'create',
+        'trace-item-media-staging',
+        '--location',
+        'apac',
+      ],
       ['exec', 'wrangler', 'queues', 'create', 'trace-session-mirror-dlq-staging'],
       ['exec', 'wrangler', 'queues', 'create', 'trace-session-mirror-staging'],
+      ['exec', 'wrangler', 'queues', 'create', 'trace-authoring-dlq-staging'],
+      ['exec', 'wrangler', 'queues', 'create', 'trace-authoring-staging'],
+      ['exec', 'wrangler', 'queues', 'create', 'trace-admin-dlq-staging'],
+      ['exec', 'wrangler', 'queues', 'create', 'trace-admin-staging'],
     ]);
-    expect(report).toHaveLength(4);
+    expect(report).toHaveLength(N_ALL);
     expect(report.join('\n')).toMatch(/created/);
   });
 
@@ -129,7 +155,7 @@ describe('ensureResources', () => {
     const w = recorder(existing());
     const { violations, report } = ensureResources({ run: w.run });
     expect(violations).toEqual([]);
-    expect(report).toHaveLength(4);
+    expect(report).toHaveLength(N_ALL);
     expect(report.join('\n')).toMatch(/already exists \(confirmed\)/);
     expect(report.join('\n')).not.toMatch(/created/);
   });
@@ -143,8 +169,13 @@ describe('ensureResources', () => {
     expect(w.calls.filter((a) => verbOf(a) === 'info')).toEqual([
       ['exec', 'wrangler', 'r2', 'bucket', 'info', 'trace-packages-staging', '--json'],
       ['exec', 'wrangler', 'r2', 'bucket', 'info', 'trace-evidence-staging', '--json'],
+      ['exec', 'wrangler', 'r2', 'bucket', 'info', 'trace-item-media-staging', '--json'],
       ['exec', 'wrangler', 'queues', 'info', 'trace-session-mirror-dlq-staging'],
       ['exec', 'wrangler', 'queues', 'info', 'trace-session-mirror-staging'],
+      ['exec', 'wrangler', 'queues', 'info', 'trace-authoring-dlq-staging'],
+      ['exec', 'wrangler', 'queues', 'info', 'trace-authoring-staging'],
+      ['exec', 'wrangler', 'queues', 'info', 'trace-admin-dlq-staging'],
+      ['exec', 'wrangler', 'queues', 'info', 'trace-admin-staging'],
     ]);
   });
 
@@ -162,7 +193,7 @@ describe('ensureResources', () => {
 
   it('fails an existing bucket in another location (a location cannot change later)', () => {
     const { violations } = ensureResources({ run: recorder(existing({ location: 'ENAM' })).run });
-    expect(violations).toHaveLength(2);
+    expect(violations).toHaveLength(BUCKETS.length);
     expect(violations[0]).toMatch(/trace-packages-staging.*location ENAM.*apac/);
   });
 
@@ -180,7 +211,7 @@ describe('ensureResources', () => {
             }
           : existing()(args),
       ).run;
-      expect(ensureResources({ run }).violations, String(location)).toHaveLength(2);
+      expect(ensureResources({ run }).violations, String(location)).toHaveLength(BUCKETS.length);
     }
   });
 
@@ -199,31 +230,31 @@ describe('ensureResources', () => {
     for (const answer of answers) {
       const run = recorder((args) => (verbOf(args) === 'info' ? answer : existing()(args))).run;
       const { violations } = ensureResources({ run });
-      expect(violations, JSON.stringify(answer)).toHaveLength(4);
+      expect(violations, JSON.stringify(answer)).toHaveLength(N_ALL);
       expect(violations[0]).toMatch(/already exists.*could not be confirmed/);
     }
     const throws = recorder((args) => {
       if (verbOf(args) === 'info') throw new Error('boom');
       return existing()(args);
     });
-    expect(ensureResources({ run: throws.run }).violations).toHaveLength(4);
+    expect(ensureResources({ run: throws.run }).violations).toHaveLength(N_ALL);
   });
 
   it('fails when the info answer names another bucket or queue', () => {
     expect(
       ensureResources({ run: recorder(existing({ bucketAs: 'someone-else' })).run }).violations,
-    ).toHaveLength(2);
+    ).toHaveLength(BUCKETS.length);
     expect(
       ensureResources({ run: recorder(existing({ queueAs: 'trace-session-mirror' })).run })
         .violations,
-    ).toHaveLength(2);
+    ).toHaveLength(QUEUES.length);
     // The name line must be exactly the queue's, not a longer name that starts with it.
     const longer = recorder((args) =>
       verbOf(args) === 'info' && args[2] === 'queues'
         ? queueInfo(`${args[4]}-old`)
         : existing()(args),
     );
-    expect(ensureResources({ run: longer.run }).violations).toHaveLength(2);
+    expect(ensureResources({ run: longer.run }).violations).toHaveLength(QUEUES.length);
   });
 
   it('matches "exists" only in wrangler\'s error block on stderr, with the code of its kind', () => {
@@ -247,7 +278,7 @@ describe('ensureResources', () => {
         args[2] === 'r2' && verbOf(args) === 'create' ? answer : existing()(args),
       );
       const { violations } = ensureResources({ run: w.run });
-      expect(violations, JSON.stringify(answer)).toHaveLength(2);
+      expect(violations, JSON.stringify(answer)).toHaveLength(BUCKETS.length);
       expect(violations[0]).toMatch(/create failed/);
       // No confirmation is attempted for an answer that is not an "exists" answer.
       expect(w.calls.filter((a) => a[2] === 'r2' && verbOf(a) === 'info')).toEqual([]);
@@ -258,7 +289,7 @@ describe('ensureResources', () => {
         ? { status: 1, stdout: '', stderr: '✘ [ERROR] Request failed.\n  [code: 10004]\n' }
         : existing()(args),
     );
-    expect(ensureResources({ run: w.run }).violations).toHaveLength(2);
+    expect(ensureResources({ run: w.run }).violations).toHaveLength(QUEUES.length);
   });
 
   // Staging dispatch 5 (run 39486961836): the first line ("A request to the Cloudflare API (…) failed.") hid the
@@ -276,7 +307,7 @@ describe('ensureResources', () => {
         : existing()(args),
     );
     const { violations } = ensureResources({ run: w.run });
-    expect(violations).toHaveLength(2);
+    expect(violations).toHaveLength(BUCKETS.length);
     expect(violations[0]).toMatch(/create failed \(exit 1\): .*; Cloudflare codes 10000, 10042$/);
     expect(violations.join('\n')).not.toMatch(/99999|Authentication error|token=abc/);
   });
@@ -306,7 +337,7 @@ describe('ensureResources', () => {
         : existing()(args),
     );
     const { violations } = ensureResources({ run: denied.run });
-    expect(violations).toHaveLength(2);
+    expect(violations).toHaveLength(BUCKETS.length);
     expect(violations[0]).toMatch(/; Cloudflare codes 10000$/);
     expect(violations.join('\n')).not.toContain('\x1b');
   });
@@ -350,7 +381,7 @@ describe('ensureResources', () => {
     expect(violations).toHaveLength(1);
     expect(violations[0]).toMatch(/trace-evidence-staging/);
     expect(violations[0]).toMatch(/Authentication error/);
-    expect(w.calls).toHaveLength(4);
+    expect(w.calls).toHaveLength(N_ALL);
   });
 
   it('fails when wrangler cannot be started or is killed, and when run throws', () => {
@@ -360,15 +391,15 @@ describe('ensureResources', () => {
       stderr: '',
       error: new Error('ENOENT'),
     }));
-    expect(ensureResources({ run: spawnError.run }).violations).toHaveLength(4);
+    expect(ensureResources({ run: spawnError.run }).violations).toHaveLength(N_ALL);
     const killed = recorder(() => ({ status: null, signal: 'SIGKILL', stdout: '', stderr: '' }));
-    expect(ensureResources({ run: killed.run }).violations).toHaveLength(4);
+    expect(ensureResources({ run: killed.run }).violations).toHaveLength(N_ALL);
     const throws = ensureResources({
       run: () => {
         throw new Error('boom');
       },
     });
-    expect(throws.violations).toHaveLength(4);
+    expect(throws.violations).toHaveLength(N_ALL);
   });
 
   it('never deletes, whatever wrangler answers', () => {

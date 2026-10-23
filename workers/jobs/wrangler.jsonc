@@ -5,6 +5,8 @@
 // JOBS_INTEGRITY_DB Hyperdrive bindings in env.staging (ADR-031 amendment 1; their config ids are public, created
 // by the founder on 2026-10-22); the local stack instead gets the three loopback URL secrets
 // (scripts/e2e-local.mjs). Deploy order: services/api, then workers/jobs, then workers/edge.
+// M1 R5-13: consumer of trace-authoring-<env> and trace-admin-<env> too (5 tries, then their DLQs); src/index.ts
+// dispatches each batch on its queue name.
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "trace-jobs",
@@ -54,6 +56,19 @@
             "max_retries": 5,
             "dead_letter_queue": "trace-session-mirror-dlq-dev",
           },
+          // M1 R5-13: AI drafting and member provisioning, one job per message; queue() dispatches on the queue.
+          {
+            "queue": "trace-authoring-dev",
+            "max_batch_size": 1,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-authoring-dlq-dev",
+          },
+          {
+            "queue": "trace-admin-dev",
+            "max_batch_size": 1,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-admin-dlq-dev",
+          },
         ],
       },
       "triggers": { "crons": ["* * * * *"] },
@@ -71,6 +86,18 @@
             "max_batch_size": 10,
             "max_retries": 5,
             "dead_letter_queue": "trace-session-mirror-dlq-staging",
+          },
+          {
+            "queue": "trace-authoring-staging",
+            "max_batch_size": 1,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-authoring-dlq-staging",
+          },
+          {
+            "queue": "trace-admin-staging",
+            "max_batch_size": 1,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-admin-dlq-staging",
           },
         ],
       },
