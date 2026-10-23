@@ -179,15 +179,17 @@ select pg_temp.w('trace_worker', null);
 select is((select count(*)::int from public.sections), 0, 'M1-i: an unbound trace_worker sees no section');
 select pg_temp.op();
 
--- ===== Migration M1-k (R5-63, A2b lead ask 1): trace_api reads a test's title for the invite resolve, org-bound =====
+-- ===== Migration M1-l (R5-63 i; supersedes M1-k): trace_api reads a test's title only through a definer function,
+-- bound to its api org; it still holds no SELECT on public.tests (rls_d1_api pin unchanged, R5-28) =====
 select pg_temp.api(pg_temp.id('A'));
-select ok((select count(*) from (select id, org_id, name from public.tests where org_id = pg_temp.id('A')) as t) > 0, 'M1-k: trace_api bound to org A reads id, org_id and name of its tests');
-select matches(pg_temp.try('select workspace_id from public.tests'), '^42501 permission denied', 'M1-k: trace_api cannot read a test''s workspace');
-select matches(pg_temp.try('select created_by from public.tests'), '^42501 permission denied', 'M1-k: trace_api cannot read who created a test');
-select matches(pg_temp.try($$update public.tests set name = name$$), '^42501 permission denied', 'M1-k: trace_api cannot update tests');
-select matches(pg_temp.try($$delete from public.tests$$), '^42501 permission denied', 'M1-k: trace_api cannot delete tests');
+select matches(pg_temp.try('select name from public.tests'), '^42501 permission denied', 'M1-l: trace_api holds no SELECT on tests (the D1 pin stays)');
+select ok(private.api_test_title(pg_temp.id('v3')) like 'Test %', 'M1-l: trace_api bound to org A reads the title of its test version');
+select is(private.api_test_title('d1000000-0000-4000-8000-0000000000ff'), null, 'M1-l: an unknown test version has no title');
 select pg_temp.api(pg_temp.id('B'));
-select is((select count(*)::int from public.tests where org_id = pg_temp.id('A')), 0, 'M1-k: trace_api bound to org B sees no org A test');
+select is(private.api_test_title(pg_temp.id('v3')), null, 'M1-l: trace_api bound to org B reads no org A title');
 select pg_temp.api(null);
-select is((select count(*)::int from public.tests), 0, 'M1-k: an unbound trace_api sees no test');
+select is(private.api_test_title(pg_temp.id('v3')), null, 'M1-l: an unbound trace_api reads no title');
 select pg_temp.op();
+select is((select string_agg(r, ',' order by r) from unnest(array['anon', 'authenticated', 'service_role', 'trace_worker', 'trace_quality_worker', 'trace_integrity_worker', 'trace_candidate', 'trace_authoring_worker', 'trace_admin_worker', 'trace_api']) as r where has_function_privilege(r, 'private.api_test_title(uuid)', 'EXECUTE')), 'trace_api', 'M1-l: only trace_api may execute private.api_test_title');
+select is((select prosecdef from pg_catalog.pg_proc where oid = 'private.api_test_title(uuid)'::regprocedure), true, 'M1-l: api_test_title is SECURITY DEFINER');
+select is((select proconfig from pg_catalog.pg_proc where oid = 'private.api_test_title(uuid)'::regprocedure), array['search_path=""'], 'M1-l: api_test_title pins an empty search_path');
