@@ -34,11 +34,17 @@ describe('the pool list', () => {
     usedByDrawsTotal: 1,
   });
   const UNUSED = pool(3, { format: 'written', skillKey: null });
+  const LOW = pool(4, {
+    approvedCount: 8,
+    itemCount: 8,
+    usedByDraws: [{ testId: uid(74), drawCount: 2 }],
+    usedByDrawsTotal: 1,
+  });
 
   function listApi() {
     return fakeApi((call) =>
       call.path === '/pools'
-        ? { body: { pools: [USED, BIG, UNUSED], nextCursor: cursorFor(3) } }
+        ? { body: { pools: [USED, BIG, UNUSED, LOW], nextCursor: cursorFor(3) } }
         : undefined,
     );
   }
@@ -72,8 +78,12 @@ describe('the pool list', () => {
     const { api } = listApi();
     mounted = await mountPools(api);
     const rows = [...mounted.container.querySelectorAll('tbody tr')];
+    // The first pool's list of tests is cut off (2 of 7), so the gap is a lower bound.
     expect(rows[0]?.textContent).toContain(
-      'Needs 25 more approved items for drives (10 times the largest draw, 3)',
+      'Needs at least 25 more approved items for drives (10 times the largest draw, 3)',
+    );
+    expect(rows[3]?.textContent).toContain(
+      'Needs 12 more approved items for drives (10 times the largest draw, 2)',
     );
     expect(rows[1]?.textContent).toContain(
       'Large enough for drives (10 times the largest draw, 4)',
@@ -237,7 +247,11 @@ describe('managing the items of a pool', () => {
       if (call.method === 'POST') return failure(400, 'bad_request');
       if (call.path === '/pools') return { body: { pools: [P], nextCursor: null } };
       if (call.path === `/pools/${P.id}`) return { body: P };
-      if (call.path === '/bank/items') return { body: { items: [CANDIDATE], nextCursor: null } };
+      if (call.path === '/bank/items') {
+        return call.query['poolId'] === undefined
+          ? { body: { items: [CANDIDATE], nextCursor: null } }
+          : { body: { items: [], nextCursor: null } };
+      }
       return undefined;
     });
     mounted = await mountPools(api);

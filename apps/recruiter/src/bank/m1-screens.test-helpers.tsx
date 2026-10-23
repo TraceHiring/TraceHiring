@@ -7,6 +7,7 @@ import { BankTable, StatsPanel } from './BankRoute';
 import { FilterForm } from './FilterForm';
 import { ItemContentView } from './ItemContentView';
 import { ItemFormView } from './ItemFormView';
+import { NewPoolForm, PoolTable } from './PoolsRoute';
 import { ReviewPanel } from './ReviewPanel';
 import { EMPTY_FILTERS } from './filters';
 import { formFromDetail, toDraft } from './item-form';
@@ -16,6 +17,7 @@ import {
   STATS,
   aiJob,
   mcqDetail,
+  pool,
   summary,
   writtenDetail,
 } from './testing/fixtures.test-helpers';
@@ -104,6 +106,17 @@ export function m1Screens(): Record<string, ReactNode> {
     'ai draft job queued': <AiJobView job={aiJob()} />,
     'ai draft job completed': <AiJobView job={aiJob({ status: 'completed', draftsCreated: 2 })} />,
     'ai draft job failed': <AiJobView job={aiJob({ status: 'failed', errorCode: 'bad_output' })} />,
+    'pool table': (
+      <PoolTable
+        pools={[
+          pool(1, { usedByDraws: [{ testId: pool(9).id, drawCount: 3 }], usedByDrawsTotal: 8 }),
+          pool(2, { format: 'written', skillKey: null, status: 'archived' }),
+        ]}
+        openId={null}
+        onManage={noop}
+      />
+    ),
+    'pool new': <NewPoolForm busy={false} failure="bad_request" onCreate={noop} />,
     'bank share': <StatsPanel stats={STATS} />,
     'bank filters': (
       <FilterForm
