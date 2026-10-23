@@ -353,7 +353,12 @@ describe('M1 audit details carry ids, enums, counts and booleans only (AT-M1-25,
       AuditDetails['integrity_lock.create'].safeParse({ setting_key: 'id_verification' }).success,
     ).toBe(false);
     const settings = AuditDetails['test.integrity_settings'].shape;
-    expect([...settings.preset_key.options]).toEqual([...PresetKey.options]);
+    expect([...settings.preset_key.unwrap().options]).toEqual([...PresetKey.options]);
+    // Custom settings have no preset: the database audits preset_key null (review fix 4).
+    const custom = { preset_key: null, catalog_version: INTEGRITY_CATALOG_VERSION };
+    expect(AuditDetails['test.integrity_settings'].safeParse(custom).success).toBe(true);
+    const absent = { catalog_version: INTEGRITY_CATALOG_VERSION };
+    expect(AuditDetails['test.integrity_settings'].safeParse(absent).success).toBe(false);
     expect([...settings.catalog_version.options]).toEqual([INTEGRITY_CATALOG_VERSION]);
     expect([...AuditDetails['item.submit'].shape.from.options]).toEqual([...ItemStatus.options]);
     expect([...AuditDetails['item.create'].shape.format.options]).toEqual([...ItemFormat.options]);

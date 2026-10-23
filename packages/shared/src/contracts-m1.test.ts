@@ -532,6 +532,19 @@ describe('SectionDraft', () => {
     ],
     ['a weight of 0', { ...inlineSection, weight: 0 }],
     ['an extra key', { ...inlineSection, seed: 1 }],
+    [
+      'a repeated (skillKey, difficultyBand) stratum',
+      {
+        ...poolSection,
+        drawCount: 2,
+        blueprint: {
+          strata: [
+            { skillKey: 'written_communication', difficultyBand: 2, count: 1 },
+            { skillKey: 'written_communication', difficultyBand: 2, count: 1 },
+          ],
+        },
+      },
+    ],
   ])('rejects %s', (_label, value) => {
     expect(ok(SectionDraft, value)).toBe(false);
   });
@@ -596,6 +609,11 @@ describe('IntegritySettingsRequest and IntegritySettingsView', () => {
       IntegritySettingsRequest.parse({ presetKey: 'standard', values: standard }),
     ).toBeTruthy();
   });
+  it('custom settings have no preset (ruleset_versions.preset_key null)', () => {
+    const custom = { presetKey: null, values: { ...standard, single_screen: 'on' } };
+    expect(IntegritySettingsRequest.parse(custom)).toEqual(custom);
+    expect(ok(IntegritySettingsRequest, { values: standard })).toBe(false); // null, never absent
+  });
   it.each([
     ['an unknown preset', { presetKey: 'lenient', values: standard }],
     [
@@ -635,6 +653,7 @@ describe('IntegritySettingsRequest and IntegritySettingsView', () => {
   };
   it('the view marks every always-locked setting as always and the rest as admin at most', () => {
     expect(IntegritySettingsView.parse(view)).toEqual(view);
+    expect(ok(IntegritySettingsView, { ...view, presetKey: null })).toBe(true);
     const missingAlways = { ...view.locked, id_verification: undefined };
     expect(ok(IntegritySettingsView, { ...view, locked: missingAlways })).toBe(false);
     expect(

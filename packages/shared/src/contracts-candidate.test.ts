@@ -61,6 +61,9 @@ import {
   TestPackage,
   TestPackageV2,
   discardIdentityKeys,
+  checkMirrorV2,
+  ItemGetQuery,
+  MirrorInvariantError,
 } from './contracts-candidate.js';
 import {
   allObjectsStrict,
@@ -1180,6 +1183,7 @@ const pkgItem = (n: number, sectionId: string, extra: Record<string, unknown> = 
   options: twoOptions,
   skillKey: 'quant',
   difficultyBand: n % 5,
+  exposureAtPublish: n % 3,
   ...extra,
 });
 const writtenPkgItem = {
@@ -1191,11 +1195,13 @@ const writtenPkgItem = {
   maxChars: 2000,
   skillKey: 'written_communication',
   difficultyBand: 2,
+  exposureAtPublish: 0,
 };
 const secA = {
   id: sectionA,
   title: 'Quant',
   position: 1,
+  format: 'mcq',
   navigation: 'free',
   shuffleItems: true,
   shuffleOptions: true,
@@ -1205,6 +1211,7 @@ const secB = {
   id: sectionB,
   title: 'Writing',
   position: 2,
+  format: 'written',
   navigation: 'forward_only',
   shuffleItems: false,
   shuffleOptions: false,
@@ -1314,8 +1321,57 @@ describe('TestPackageV2 (§5; AT-M1-20)', () => {
       () => replaceFirst({ ...pkgItem(1, sectionA), media: [{ hash: HEX, ext: 'png', alt: '' }] }),
     ],
     ['a heartbeat other than 10', () => ({ ...pkgV2, heartbeatSeconds: 5 })],
+    // Review fixes (R3-2, R5-24, strata): exposure frozen at publish; section format drives the paste rule.
+    [
+      'an item without exposureAtPublish',
+      () => replaceFirst({ ...pkgItem(1, sectionA), exposureAtPublish: undefined }),
+    ],
+    [
+      'a negative exposureAtPublish',
+      () => replaceFirst({ ...pkgItem(1, sectionA), exposureAtPublish: -1 }),
+    ],
+    [
+      'a fractional exposureAtPublish',
+      () => replaceFirst({ ...pkgItem(1, sectionA), exposureAtPublish: 1.5 }),
+    ],
+    ['a section without a format', () => withSections([{ ...secA, format: undefined }, secB])],
+    ['a section of format voice', () => withSections([{ ...secA, format: 'voice' }, secB])],
+    [
+      'a paste rule on an mcq section',
+      () => withSections([{ ...secA, pasteRule: 'blocked' }, secB]),
+    ],
+    [
+      'a written section without a paste rule',
+      () => withSections([secA, { ...secB, pasteRule: undefined }]),
+    ],
+    [
+      'a written section free to navigate',
+      () => withSections([secA, { ...secB, navigation: 'free' }]),
+    ],
+    [
+      'an item whose kind differs from its section format',
+      () =>
+        withItems([
+          ...pkgV2.items,
+          { ...writtenPkgItem, itemVersionId: id(1005), sectionId: sectionA },
+        ]),
+    ],
+    [
+      'a repeated (skillKey, difficultyBand) stratum',
+      () =>
+        strata([
+          { skillKey: 'quant', difficultyBand: 1, count: 1 },
+          { skillKey: 'quant', difficultyBand: 1, count: 1 },
+        ]),
+    ],
   ])('refuses %s', (_label, make) => {
     expect(ok(TestPackageV2, make())).toBe(false);
+  });
+  it('R3-2: exposureAtPublish is in the package and never reaches the candidate', () => {
+    expect(keysMatching(TestPackageV2, /exposure/i)).toEqual(['exposureAtPublish']);
+    expect(keysMatching(ServedItemV2, /exposure/i)).toEqual([]);
+    expect(keysMatching(SessionViewV2, /exposure/i)).toEqual([]);
+    expect(ok(ServedItemV2, { ...servedV2, exposureAtPublish: 0 })).toBe(false);
   });
   it('accepts timers on every section and strata that fit', () => {
     const timed = withSections([
@@ -1359,8 +1415,8 @@ const sectionViewA = {
   id: sectionA,
   title: 'Quant',
   position: 1,
+  format: 'mcq',
   navigation: 'free',
-  pasteRule: 'blocked',
   state: 'open',
   deadlineAt: T1,
 };
@@ -1368,6 +1424,7 @@ const sectionViewB = {
   id: sectionB,
   title: 'Writing',
   position: 2,
+  format: 'written',
   navigation: 'forward_only',
   pasteRule: 'allowed_logged',
   state: 'not_entered',
@@ -1416,7 +1473,24 @@ describe('ServedItemV2 and SessionViewV2 (R5-9, §4.6)', () => {
     ],
     [
       'an unknown paste rule',
-      { sections: [{ ...sectionViewA, pasteRule: 'allowed' }, sectionViewB] },
+      { sections: [sectionViewA, { ...sectionViewB, pasteRule: 'allowed' }] },
+    ],
+    // R5-24: the paste rule belongs to written sections only, and every written section has one.
+    [
+      'a paste rule on an mcq section',
+      { sections: [{ ...sectionViewA, pasteRule: 'blocked' }, sectionViewB] },
+    ],
+    [
+      'a written section without a paste rule',
+      { sections: [sectionViewA, { ...sectionViewB, pasteRule: undefined }] },
+    ],
+    [
+      'a written section free to navigate',
+      { sections: [sectionViewA, { ...sectionViewB, navigation: 'free' }] },
+    ],
+    [
+      'a section without a format',
+      { sections: [{ ...sectionViewA, format: undefined }, sectionViewB] },
     ],
     [
       '11 sections',
@@ -1539,29 +1613,12 @@ describe('SessionMirrorMessage v1 | v2 (R5-8, R5-19, R5-42; AT-M1-21)', () => {
     }
     expect(ok(SessionMirrorMessage, { ...mirrorV2, served: [], draws: [] })).toBe(true);
   });
-  it('R5-42: a served item of a pool section missing from its draw is refused as malformed', () => {
-    const missing = { ...mirrorV2, served: [{ ...servedPool, itemVersionId: id(1003) }] };
-    expect(ok(SessionMirrorMessage, missing)).toBe(false);
-    expect(ok(SessionMirrorMessage, { ...mirrorV2, draws: [] })).toBe(false);
-  });
   it.each([
     ['a v1 served row (no sectionId) in a v2 message', { served: mirrorV1.served }],
     ['no draws', { draws: undefined }],
     ['no pool section list', { poolSectionIds: undefined }],
-    ['a draw of a section that is not a pool section', { poolSectionIds: [] }],
-    ['two draws for one section', { draws: [drawA, drawA] }],
-    ['variant ids not parallel to the draw', { draws: [{ ...drawA, itemVariantIds: [id(3001)] }] }],
-    ['an item drawn twice', { draws: [{ ...drawA, itemVersionIds: [id(1002), id(1002)] }] }],
-    [
-      'a served variant other than the drawn one',
-      { served: [{ ...servedPool, itemVariantId: id(3002) }] },
-    ],
-    [
-      'a served item without its drawn variant',
-      { served: [{ ...servedPool, itemVariantId: undefined }] },
-    ],
-    ['an option order with a repeat', { served: [{ ...servedPool, optionOrder: ['a', 'a'] }] }],
     ['a bad draw seed hash', { served: [{ ...servedPool, drawSeedSha256: 'x' }] }],
+    ['an option order of one', { served: [{ ...servedPool, optionOrder: ['a'] }] }],
     [
       '101 served rows',
       {
@@ -1572,8 +1629,20 @@ describe('SessionMirrorMessage v1 | v2 (R5-8, R5-19, R5-42; AT-M1-21)', () => {
         })),
       },
     ],
+    [
+      'a draw of 101 items',
+      {
+        draws: [
+          {
+            sectionId: sectionA,
+            itemVersionIds: Array.from({ length: 101 }, (_v, i) => id(6000 + i)),
+            itemVariantIds: Array.from({ length: 101 }, () => null),
+          },
+        ],
+      },
+    ],
     ['an extra key', { score: 1 }],
-  ])('refuses %s', (_label, patch) => {
+  ])('refuses the structural fault %s at parse', (_label, patch) => {
     expect(ok(SessionMirrorMessage, { ...mirrorV2, ...patch })).toBe(false);
   });
   it('v2 carries no signal list, answer text, answer key or identity beyond ids', () => {
@@ -1588,5 +1657,108 @@ describe('SessionMirrorMessage v1 | v2 (R5-8, R5-19, R5-42; AT-M1-21)', () => {
       keysMatching(SessionMirrorMessageV1, /key/i),
     );
     expect(allObjectsStrict(SessionMirrorMessageV2)).toBe(true);
+  });
+});
+
+// Cross-field invariants are not schema refusals: D1's consumer acks a schema failure with no retry, which would drop
+// a session silently. The mirror stage calls checkMirrorV2, so a violation retries and reaches the DLQ (R5-8, R5-42).
+describe('checkMirrorV2 (R5-42, R5-9; review fix 2)', () => {
+  const parse = (patch: Record<string, unknown>) =>
+    SessionMirrorMessageV2.parse({ ...mirrorV2, ...patch });
+  const codeOf = (patch: Record<string, unknown>): string | null => {
+    try {
+      checkMirrorV2(parse(patch));
+      return null;
+    } catch (error) {
+      expect(error).toBeInstanceOf(MirrorInvariantError);
+      return (error as MirrorInvariantError).code;
+    }
+  };
+  it('a valid v2 message passes, with or without served items', () => {
+    expect(codeOf({})).toBeNull();
+    expect(codeOf({ served: [], draws: [] })).toBeNull();
+    expect(codeOf({ served: [servedInline], draws: [] })).toBeNull(); // pool section never entered
+  });
+  it.each([
+    [
+      'a served pool item missing from its draw',
+      { served: [{ ...servedPool, itemVersionId: id(1003) }] },
+      'served_missing_from_draw',
+    ],
+    ['a served pool item whose section has no draw', { draws: [] }, 'served_missing_from_draw'],
+    [
+      'a draw of a section that is not a pool section',
+      { poolSectionIds: [] },
+      'draw_not_pool_section',
+    ],
+    [
+      'a pool section listed twice',
+      { poolSectionIds: [sectionA, sectionA] },
+      'duplicate_pool_section',
+    ],
+    ['two draws for one section', { draws: [drawA, drawA] }, 'duplicate_draw'],
+    [
+      'variant ids not parallel to the draw',
+      { draws: [{ ...drawA, itemVariantIds: [id(3001)] }] },
+      'variant_ids_not_parallel',
+    ],
+    [
+      'an item drawn twice',
+      { draws: [{ ...drawA, itemVersionIds: [id(1002), id(1002)] }] },
+      'item_drawn_twice',
+    ],
+    [
+      'a served variant other than the drawn one',
+      { served: [{ ...servedPool, itemVariantId: id(3002) }] },
+      'served_variant_mismatch',
+    ],
+    [
+      'a served item without its drawn variant',
+      { served: [{ ...servedPool, itemVariantId: undefined }] },
+      'served_variant_mismatch',
+    ],
+    [
+      'an option order with a repeat',
+      { served: [{ ...servedPool, optionOrder: ['a', 'a'] }] },
+      'option_order_not_permutation',
+    ],
+  ])('throws on %s', (_label, patch, code) => {
+    expect(ok(SessionMirrorMessage, { ...mirrorV2, ...patch })).toBe(true); // structurally fine
+    expect(codeOf(patch)).toBe(code);
+  });
+  it('caps the drawn items across all draws at 100 (R5-9)', () => {
+    const sections = Array.from({ length: 3 }, (_v, i) => id(7000 + i));
+    const drawOf = (sectionId: string, n: number, base: number) => ({
+      sectionId,
+      itemVersionIds: Array.from({ length: n }, (_v, i) => id(base + i)),
+      itemVariantIds: Array.from({ length: n }, () => null),
+    });
+    const at = (sizes: number[]) => ({
+      served: [],
+      poolSectionIds: sections,
+      draws: sizes.map((n, k) => drawOf(sections[k] ?? sectionA, n, 8000 + 200 * k)),
+    });
+    expect(codeOf(at([40, 40, 20]))).toBeNull();
+    expect(codeOf(at([40, 40, 21]))).toBe('too_many_drawn');
+  });
+  it('the error names a constant code and carries no message data', () => {
+    const error = new MirrorInvariantError('item_drawn_twice');
+    expect(error.message).toBe('mirror v2 invariant: item_drawn_twice');
+    expect(error.name).toBe('MirrorInvariantError');
+    expect(error).toBeInstanceOf(Error);
+  });
+});
+
+describe('ItemGetQuery (R5-45)', () => {
+  it('coerces afterSeq from the query string', () => {
+    expect(ItemGetQuery.parse({ afterSeq: '5' })).toEqual({ afterSeq: 5 });
+    expect(ItemGetQuery.parse({ afterSeq: '0' })).toEqual({ afterSeq: 0 });
+    expect(ItemGetQuery.parse({})).toEqual({});
+  });
+  it.each([['-1'], ['1.5'], ['x'], ['']])('refuses afterSeq %j', (afterSeq) => {
+    expect(ok(ItemGetQuery, { afterSeq })).toBe(false);
+  });
+  it('refuses any other query key', () => {
+    expect(ok(ItemGetQuery, { afterSeq: '1', position: '2' })).toBe(false);
   });
 });
