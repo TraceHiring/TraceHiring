@@ -104,6 +104,7 @@ describe('generateVariants', () => {
     expect(result).toEqual({
       ok: false,
       code: 'variant_generation_failed',
+      reason: 'attempts',
       accepted: 1,
       attempts: 250,
     });

@@ -91,7 +91,7 @@ describe('rational', () => {
 
   it('refuses values beyond the size bound (so nested powers cannot exhaust memory)', () => {
     let x = r(2);
-    expect(MAX_BITS).toBe(1024);
+    expect(MAX_BITS).toBe(256);
     expect(
       codeOf(() => {
         for (let i = 0; i < 10; i += 1) x = pow(x, 6);

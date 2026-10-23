@@ -59,6 +59,13 @@ describe('templates', () => {
     expect(renderCode('{{x:2}}', { x: 'red' })).toBe('format_on_text');
   });
 
+  it('a value near the size bound that cannot be scaled is a rejection, never a throw (review round 1)', () => {
+    const huge = rational(2n ** 250n + 1n);
+    expect(renderCode('{{x:4}}', { x: huge })).toBe('too_large');
+    expect(renderCode('{{x:%}}', { x: rational(2n ** 250n + 1n, 2n ** 5n) })).toBe('too_large');
+    expect(renderCode('{{x}}', { x: rational(2n ** 250n + 1n, 2n ** 5n) })).toBe('too_large');
+  });
+
   it('treats names found on Object.prototype as ordinary names (lead note, contracts security review)', () => {
     for (const name of ['constructor', 'prototype', 'hasownproperty', 'valueof', 'tostring']) {
       expect(renderCode(`{{${name}}}`, {})).toBe('unknown_name');
