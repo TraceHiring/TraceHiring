@@ -143,7 +143,7 @@ describe('text normalisation is charged by whitespace runs (A1 re-review round 2
   it('stops on the work budget within 1,000 attempts at count 200', () => {
     const result = generateVariants(spec, seedsFor(200));
     expect(result).toMatchObject({ ok: false, reason: 'work_budget' });
-    if (result.ok) return;
+    if (result.ok || result.code !== 'variant_generation_failed') return;
     expect(result.attempts).toBeLessThanOrEqual(1000);
   });
 });

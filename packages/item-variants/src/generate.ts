@@ -54,7 +54,8 @@ export const TUPLE_WORK_BUDGET = 20_000;
 /**
  * Work units a whole generation may spend, the bound on the CPU any accepted spec can cost: well above what the
  * realistic maximal spec needs at count 200 (about 835,000), while every adversarial spec of the A1 reviews
- * (bigint-heavy, Fibonacci gcd, 8-argument min/max, text-heavy) stops within about 0.25 s of Node CPU.
+ * (bigint-heavy, Fibonacci gcd, 8-argument min/max, non-terminating decimals, text with many whitespace runs) stops
+ * within about 0.3 s of Node CPU as measured by the reviews.
  */
 export const GENERATION_WORK_BUDGET = 2_000_000;
 
@@ -244,6 +245,19 @@ export function validateParamSpec(spec: unknown): SpecCheck {
 const normalise = (text: string) => text.trim().replace(/\s+/g, ' ');
 
 /**
+ * normalise() for generated text, once per text, also charging one unit per two whitespace runs: the replace costs
+ * more per run than per character, so a length charge alone let word-space-word text run about 1.1 s at count 200
+ * (A1 re-review round 2). Each run is one space in the result, so the result's spaces count the runs.
+ */
+function normaliseMetered(text: string): string {
+  const out = normalise(text);
+  let runs = 0;
+  for (let i = 0; i < out.length; i += 1) if (out.charCodeAt(i) === 32) runs += 1;
+  charge(Math.ceil(runs / 2));
+  return out;
+}
+
+/**
  * The jsonb text Postgres prints for a JSON value (`x::text`): ", " and ": " separators and JSON string escapes
  * (the same escapes as JSON.stringify). Key order differs from jsonb's, which does not change the length.
  */
@@ -320,9 +334,11 @@ function tryTuple(
     throw error;
   }
   charge(textUnits(stem.length + options.reduce((n, o) => n + o.text.length, 0)) * 2);
-  if (normalise(stem) === '' || stem.length > MAX_STEM) return undefined;
-  const texts = options.map((o) => normalise(o.text));
-  if (texts.some((t, i) => t === '' || options[i]!.text.length > MAX_OPTION)) return undefined;
+  if (stem.length > MAX_STEM || options.some((o) => o.text.length > MAX_OPTION)) return undefined;
+  const normalStem = normaliseMetered(stem);
+  if (normalStem === '') return undefined;
+  const texts = options.map((o) => normaliseMetered(o.text));
+  if (texts.some((t) => t === '')) return undefined;
   if (new Set(texts).size !== texts.length) return undefined;
   const params: Record<string, number | string> = {};
   for (const [name, v] of drawn)
@@ -331,7 +347,7 @@ function tryTuple(
   if (jsonbTextBytes(params) > MAX_PARAMS_BYTES) return undefined;
   return {
     variant: { variantNo, params, stem, options, correctOptionId: c.spec.correctOptionId },
-    key: JSON.stringify([normalise(stem), texts]),
+    key: JSON.stringify([normalStem, texts]),
   };
 }
 
