@@ -1,17 +1,22 @@
-// Test fakes for member provisioning (M1-20): an in-memory InviteStore that behaves like private.provision_invited_member
-// and the member_invites guard for the paths the job takes (a transaction rolls back on throw), a fake Auth admin API
-// (E26: an existing user is reused) and a capturing logger. Synthetic data only: `@example.test` addresses, made-up ids.
+// Test fakes for member provisioning (M1-20, E26, R5-61 a): an in-memory InviteStore that behaves like
+// private.provision_invited_member, private.auth_user_id_for_invite and the member_invites guard for the paths the job
+// takes (a transaction rolls back on throw), a fake Auth admin API that is the real adapter over a fake HTTP endpoint
+// (a second create of the same address answers 422 email_exists; it never silently reuses a user) and a capturing
+// logger. Synthetic data only: `@example.test` addresses, made-up ids.
 import type { AdminQueueMessage } from '@trace/shared/contracts/m1';
 import { createLogger, type Logger } from '@trace/shared/log';
-import type { AuthAdmin } from './auth-admin.js';
+import { createSupabaseAuthAdmin, type AuthAdmin } from './auth-admin.js';
+import { normaliseInviteEmail } from './email-hmac.js';
 import type { MembersDb } from './provision.js';
 import type { InviteRow, InviteStore } from './store.js';
 
 export const ORG = '4a1c7e2d-8b36-4f5a-9d04-6b1f3c85a201';
+export const OTHER_ORG = '4a1c7e2d-8b36-4f5a-9d04-6b1f3c85a2ff';
 export const INVITE = '4a1c7e2d-8b36-4f5a-9d04-6b1f3c85a202';
 export const INVITER = '4a1c7e2d-8b36-4f5a-9d04-6b1f3c85a203';
 export const EMAIL = 'p-invitee@example.test';
-export const PEPPER = ['synthetic', 'pepper', 'for', 'tests'].join('-');
+/** 40 bytes: the job requires at least 32. */
+export const PEPPER = ['synthetic', 'pepper', 'for', 'member', 'invite', 'tests'].join('-');
 
 export interface FakeInvite extends InviteRow {
   org_id: string;
@@ -35,6 +40,8 @@ export interface FakeWorld {
   memberships: FakeMembership[];
   /** Users whose membership counts as an active admin/owner of ORG (the R2-14 re-check). */
   activeAdmins: Set<string>;
+  /** auth.users by normalised address (never rolled back: the Auth API is outside any transaction). */
+  authUsers: Map<string, string>;
 }
 
 export const invite = (patch: Partial<FakeInvite> = {}): FakeInvite => ({
@@ -53,6 +60,7 @@ export const world = (invites: readonly FakeInvite[] = [invite()]): FakeWorld =>
   invites: new Map(invites.map((i) => [i.id, i])),
   memberships: [],
   activeAdmins: new Set([INVITER]),
+  authUsers: new Map(),
 });
 
 export const message = (patch: Partial<AdminQueueMessage> = {}): AdminQueueMessage => ({
@@ -71,6 +79,19 @@ const guardError = (code: string, reason: string): Error =>
   });
 
 let membershipSeq = 0;
+let userSeq = 0;
+
+const newUserId = (): string => {
+  userSeq += 1;
+  return `4a1c7e2d-8b36-4f5a-9d04-${(0xb00 + userSeq).toString(16).padStart(12, '0')}`;
+};
+
+/** An Auth user that exists before the job runs (another org's member, or an earlier try's user). */
+export const seedAuthUser = (w: FakeWorld, email: string): string => {
+  const id = newUserId();
+  w.authUsers.set(normaliseInviteEmail(email), id);
+  return id;
+};
 
 const storeOf = (w: FakeWorld, org: string, fail: (m: keyof InviteStore) => void): InviteStore => {
   const visible = (id: string): FakeInvite | null => {
@@ -91,6 +112,13 @@ const storeOf = (w: FakeWorld, org: string, fail: (m: keyof InviteStore) => void
       if (i?.status !== 'pending') return false;
       i.status = 'failed';
       return true;
+    },
+    async authUserIdForInvite(id, email) {
+      fail('authUserIdForInvite');
+      if (visible(id)?.status !== 'pending') {
+        throw guardError('42501', 'the invite is not pending in the job org');
+      }
+      return w.authUsers.get(normaliseInviteEmail(email)) ?? null;
     },
     async provision(id, userId, displayName) {
       fail('provision');
@@ -166,38 +194,50 @@ export const fakeDb = (w: FakeWorld): FakeDb => {
 };
 
 export interface FakeAuth extends AuthAdmin {
-  /** Users by normalised address (the Auth side; never asserted on as text in logs). */
+  /** auth.users by normalised address (the world's; never asserted on as text in logs). */
   readonly users: Map<string, string>;
+  /** POSTs to the Auth admin API (creates and 422s). */
   readonly calls: () => number;
+  /** The next POST answers 500. */
   failNext(): void;
 }
 
-let userSeq = 0;
-
-export const fakeAuth = (): FakeAuth => {
-  const users = new Map<string, string>();
+/** The real adapter over a fake /auth/v1/admin/users: creates a user, or 422 email_exists for a known address. */
+export const fakeAuth = (w: FakeWorld): FakeAuth => {
   let calls = 0;
   let failing = false;
+  const json = (status: number, body: unknown): Response =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+  const endpoint = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    calls += 1;
+    if (failing) {
+      failing = false;
+      return json(500, { msg: 'synthetic failure' });
+    }
+    const { email } = JSON.parse(String(init?.body)) as { email: string };
+    const key = normaliseInviteEmail(email);
+    if (w.authUsers.has(key)) {
+      return json(422, { code: 422, error_code: 'email_exists', msg: 'exists' });
+    }
+    const id = newUserId();
+    w.authUsers.set(key, id);
+    return json(200, { id });
+  }) as typeof fetch;
+  const adapter = createSupabaseAuthAdmin({
+    url: 'https://project.example.test',
+    secretKey: ['sb', 'secret', 'synthetic'].join('_'),
+    fetch: endpoint,
+  });
   return {
-    users,
+    users: w.authUsers,
     calls: () => calls,
     failNext: () => {
       failing = true;
     },
-    ensureUser: async (email) => {
-      calls += 1;
-      if (failing) {
-        failing = false;
-        throw new Error('auth_admin_failed');
-      }
-      const key = email.trim().toLowerCase();
-      const existing = users.get(key);
-      if (existing !== undefined) return existing;
-      userSeq += 1;
-      const id = `4a1c7e2d-8b36-4f5a-9d04-${(0xb00 + userSeq).toString(16).padStart(12, '0')}`;
-      users.set(key, id);
-      return id;
-    },
+    ensureUser: (email, lookup) => adapter.ensureUser(email, lookup),
   };
 };
 

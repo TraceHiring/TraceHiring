@@ -1,15 +1,19 @@
 // Test fakes for the AI drafting job: an in-memory DraftStore that behaves like the M1 schema for the paths the job
 // takes (a transaction rolls back on throw; the item_versions guard stores an AI draft as in_review only while its job is
-// running and has room; a finished job is frozen), a scripted LlmDrafter and a capturing logger. Synthetic data only.
+// running and has room; a finished job is frozen; an item id is unique across orgs), a scripted LlmDrafter and a
+// capturing logger. Synthetic data only.
 import type { AuthoringQueueMessage } from '@trace/shared/contracts/m1';
 import { createLogger, type Logger } from '@trace/shared/log';
 import type { DraftRequest, DraftResult, DraftedItem, LlmDrafter } from '@trace/vendors';
-import type { DraftingDb } from './handler.js';
+import { draftTopicSha256, type DraftingDb } from './handler.js';
 import type { DraftJobRow, DraftOutcomeWrite, DraftStore, StoredDraft } from './store.js';
 
 export const ORG = '3f2b8c1e-9a47-4d6b-8e15-7c0a2d94b101';
 export const WORKSPACE = '3f2b8c1e-9a47-4d6b-8e15-7c0a2d94b102';
 export const JOB = '3f2b8c1e-9a47-4d6b-8e15-7c0a2d94b103';
+export const TOPIC = '[synthetic] planning a small team week';
+/** ai_draft_jobs.topic_sha256 of TOPIC, as the api writes it (R5-61 d). */
+export const TOPIC_SHA256 = await draftTopicSha256(TOPIC);
 
 export interface FakeJob extends DraftJobRow {
   org_id: string;
@@ -54,6 +58,7 @@ export const job = (patch: Partial<FakeJob> = {}): FakeJob => ({
   provider: 'mock',
   model_id: 'mock-drafter-v1',
   prompt_version: 'draft-v1',
+  topic_sha256: TOPIC_SHA256,
   drafts_discarded: 0,
   error_code: null,
   ...patch,
@@ -78,7 +83,7 @@ export const message = (patch: Partial<AuthoringQueueMessage> = {}): AuthoringQu
   skillKey: 'logical',
   difficulty: 0.5,
   count: 3,
-  topic: '[synthetic] planning a small team week',
+  topic: TOPIC,
   ...patch,
 });
 
@@ -126,6 +131,7 @@ const storeOf = (w: FakeWorld, org: string, fail: (m: StoreMethod) => void): Dra
         provider: j.provider,
         model_id: j.model_id,
         prompt_version: j.prompt_version,
+        topic_sha256: j.topic_sha256,
       };
     },
     async claim(jobId) {
@@ -157,7 +163,11 @@ const storeOf = (w: FakeWorld, org: string, fail: (m: StoreMethod) => void): Dra
       if (live?.status !== 'running' || stored >= live.count) {
         throw guard('an AI draft needs its running drafting job');
       }
-      if (w.items.has(draft.itemId)) return null;
+      if (w.items.has(draft.itemId)) {
+        throw Object.assign(new Error('duplicate key value violates unique constraint'), {
+          code: '23505',
+        });
+      }
       w.items.add(draft.itemId);
       versionSeq += 1;
       const id = `3f2b8c1e-9a47-4d6b-8e15-${versionSeq.toString(16).padStart(12, '0')}`;
@@ -186,7 +196,7 @@ const storeOf = (w: FakeWorld, org: string, fail: (m: StoreMethod) => void): Dra
       if (outcome.status === 'completed' && j.status !== 'running') {
         throw guard('drafting job status change not allowed');
       }
-      if (outcome.discarded < 0 || outcome.discarded > j.count) {
+      if (outcome.discarded < 0) {
         throw Object.assign(new Error('check violation'), { code: '23514' });
       }
       j.status = outcome.status;

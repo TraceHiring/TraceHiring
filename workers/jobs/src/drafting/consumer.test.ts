@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 import { createDraftingConsumer, FINAL_ATTEMPT } from './consumer.js';
 import { JOB, capturedLog, fakeDb, message, world } from './fakes.test-helpers.js';
 import type { DraftingDeps } from './handler.js';
+import { draftItemId } from './seed.js';
+import { wranglerConsumers } from './wrangler-queues.test-helpers.js';
 
 interface Settled {
   acks: number;
@@ -132,5 +134,32 @@ describe('createDraftingConsumer', () => {
     });
     await consumer(batchOf([fakeMessage(message())]), ENV, CTX);
     expect(seen).toEqual([ENV]);
+  });
+
+  it('an item id clash rolls the drafts back and retries; the last try ends the job internal', async () => {
+    const { w, consumer } = setup();
+    // Another org already holds the item id the job derives for its first draft.
+    w.items.add(await draftItemId(JOB, 0));
+    const first = fakeMessage(message());
+    await consumer(batchOf([first]), ENV, CTX);
+    expect(first.retries).toBe(1);
+    expect(w.versions).toHaveLength(0);
+    expect(w.jobs.get(JOB)!.status).toBe('running');
+    const last = fakeMessage(message(), FINAL_ATTEMPT);
+    await consumer(batchOf([last]), ENV, CTX);
+    expect(last.acks).toBe(1);
+    expect(w.versions).toHaveLength(0);
+    expect(w.jobs.get(JOB)!).toMatchObject({ status: 'failed', error_code: 'internal' });
+  });
+});
+
+describe('FINAL_ATTEMPT (Cloudflare Queues: attempts starts at 1, then max_retries retries)', () => {
+  it('is 1 + max_retries of every trace-authoring consumer in wrangler.jsonc', () => {
+    const consumers = wranglerConsumers().filter((c) => /^trace-authoring-[a-z]+$/.test(c.queue));
+    expect(consumers.map((c) => c.queue).sort()).toEqual([
+      'trace-authoring-dev',
+      'trace-authoring-staging',
+    ]);
+    for (const c of consumers) expect(FINAL_ATTEMPT).toBe((c.max_retries ?? 3) + 1);
   });
 });

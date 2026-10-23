@@ -1,4 +1,5 @@
-// The AI drafting job (specs/m1-test-authoring.md §4.4, §6.4, R5-50 draft cap, R5-51 d, R5-56 c/e; AT-M1-09): drafts land
+// The AI drafting job (specs/m1-test-authoring.md §4.4, §6.4, R5-50 draft cap, R5-51 d, R5-56 c/e, R5-61 c/d; AT-M1-09):
+// drafts land
 // in_review only and never approved, written drafts are discarded, the cap holds, a re-delivery reproduces the same drafts
 // and never duplicates them, and no topic or draft text reaches a log. In-memory store; the real schema is
 // db-test/drafting.db.test.ts.
@@ -16,7 +17,7 @@ import {
   synthMcq,
   world,
 } from './fakes.test-helpers.js';
-import { handleDraftMessage, type DraftingDeps } from './handler.js';
+import { draftTopicSha256, handleDraftMessage, type DraftingDeps } from './handler.js';
 import { draftItemId, jobSeed } from './seed.js';
 
 const mockDrafterFor: DraftingDeps['drafterFor'] = (spec) =>
@@ -57,13 +58,11 @@ describe('handleDraftMessage: the happy path (AT-M1-09)', () => {
   });
 
   it('passes the job row values and the re-scrubbed topic, and no identity field, to the drafter', async () => {
-    const w = world();
+    const topic = '[synthetic] ask p-someone@example.test or see https://example.test/x';
+    const w = world([job({ topic_sha256: await draftTopicSha256(topic) })]);
     const drafter = scriptedDrafter(async () => result([synthMcq(1), synthMcq(2), synthMcq(3)]));
     const { deps } = depsFor(w, { drafterFor: () => drafter });
-    await handleDraftMessage(
-      message({ topic: '[synthetic] ask p-someone@example.test or see https://example.test/x' }),
-      deps,
-    );
+    await handleDraftMessage(message({ topic }), deps);
     expect(drafter.requests).toHaveLength(1);
     const req = drafter.requests[0]!;
     expect(Object.keys(req).sort()).toEqual(['count', 'difficulty', 'format', 'skill', 'topic']);
@@ -122,6 +121,16 @@ describe('handleDraftMessage: exactly once', () => {
     );
   });
 
+  it('an item id that already exists (another org) raises and rolls back: never completed with fewer drafts', async () => {
+    const w = world();
+    w.items.add(await draftItemId(JOB, 1));
+    const err = await handleDraftMessage(message(), depsFor(w).deps).catch((e: unknown) => e);
+    expect((err as { code?: unknown }).code).toBe('23505');
+    expect(w.versions).toHaveLength(0);
+    expect(w.jobs.get(JOB)!.status).toBe('running');
+    expect(w.idempotency.size).toBe(0);
+  });
+
   it('a failure while finishing rolls the drafts back, so nothing is half stored', async () => {
     const w = world();
     const { deps, db } = depsFor(w);
@@ -141,7 +150,7 @@ describe('handleDraftMessage: exactly once', () => {
 });
 
 describe('handleDraftMessage: the draft cap (R5-50, R5-51 d)', () => {
-  it('stores at most count drafts when the drafter over-generates; discarded stays within count', async () => {
+  it('stores at most count drafts when the drafter over-generates (up to 3 x count items)', async () => {
     const w = world([job({ count: 2 })]);
     const drafter = scriptedDrafter(async () =>
       result([{ junk: 1 }, synthMcq(1), { junk: 2 }, synthMcq(2), synthMcq(3), synthMcq(4)]),
@@ -173,13 +182,23 @@ describe('handleDraftMessage: the draft cap (R5-50, R5-51 d)', () => {
     expect(w.versions).toHaveLength(3);
   });
 
-  it('counts at most count discarded drafts (the ai_draft_jobs CHECK)', async () => {
-    const w = world([job({ count: 1 })]);
-    const junk = Array.from({ length: 5 }, (_, i) => ({ junk: i }));
+  it('R5-61 c: counts every failed attempt, beyond count', async () => {
+    const w = world([job({ count: 2 })]);
+    const junk = Array.from({ length: 6 }, (_, i) => ({ junk: i }));
     const drafter = scriptedDrafter(async () => result(junk));
     const { deps } = depsFor(w, { drafterFor: () => drafter });
-    expect(await handleDraftMessage(message({ count: 1 }), deps)).toBe('failed');
-    expect(w.jobs.get(JOB)!).toMatchObject({ error_code: 'no_draft_passed', drafts_discarded: 1 });
+    expect(await handleDraftMessage(message({ count: 2 }), deps)).toBe('failed');
+    expect(w.jobs.get(JOB)!).toMatchObject({ error_code: 'no_draft_passed', drafts_discarded: 6 });
+  });
+
+  it('an answer of more than 3 x count items is bad_output, and nothing is stored', async () => {
+    const w = world([job({ count: 2 })]);
+    const many = Array.from({ length: 7 }, (_, i) => synthMcq(i));
+    const drafter = scriptedDrafter(async () => result(many));
+    const { deps } = depsFor(w, { drafterFor: () => drafter });
+    expect(await handleDraftMessage(message({ count: 2 }), deps)).toBe('failed');
+    expect(w.jobs.get(JOB)!).toMatchObject({ status: 'failed', error_code: 'bad_output' });
+    expect(w.versions).toHaveLength(0);
   });
 });
 
@@ -270,6 +289,7 @@ describe('handleDraftMessage: failures end the job with a code', () => {
     ['skill', { skillKey: 'verbal' }],
     ['difficulty', { difficulty: 0.9 }],
     ['count', { count: 4 }],
+    ['topic (R5-61 d: its scrubbed SHA-256)', { topic: '[synthetic] another topic' }],
   ])('fails internal when the message %s differs from the job row', async (_label, patch) => {
     const w = world();
     const drafter = scriptedDrafter(async () => result([synthMcq(1)]));
@@ -283,13 +303,15 @@ describe('handleDraftMessage: failures end the job with a code', () => {
 describe('handleDraftMessage: nothing of the topic or the drafts in logs', () => {
   it('logs ids and codes only', async () => {
     const topic = '[synthetic] zebra-topic-marker';
+    const sha = await draftTopicSha256(topic);
     for (const setup of [
-      () => depsFor(world()),
-      () => depsFor(world([job({ format: 'written' })])),
+      () => depsFor(world([job({ topic_sha256: sha })])),
+      () => depsFor(world([job({ format: 'written', topic_sha256: sha })])),
       () =>
-        depsFor(world(), {
+        depsFor(world([job({ topic_sha256: sha })]), {
           drafterFor: () => scriptedDrafter(() => Promise.reject(new Error(topic))),
         }),
+      () => depsFor(world()),
     ]) {
       const { deps, lines } = setup();
       const w = await handleDraftMessage(message({ topic }), deps).catch(() => 'threw');

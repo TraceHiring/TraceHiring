@@ -16,6 +16,7 @@ import {
   message,
   world,
 } from './fakes.test-helpers.js';
+import { wranglerConsumers } from '../drafting/wrangler-queues.test-helpers.js';
 
 interface Settled {
   acks: number;
@@ -58,7 +59,7 @@ beforeEach(async () => {
 
 const setup = (w = world([invite({ email_hmac: HMAC })])) => {
   const db = fakeDb(w);
-  const auth = fakeAuth();
+  const auth = fakeAuth(w);
   const { log, lines } = capturedLog();
   const reports: SerializedError[] = [];
   const consumer = createMembersConsumer(() => ({
@@ -131,10 +132,21 @@ describe('createMembersConsumer', () => {
     const { log } = capturedLog();
     const consumer = createMembersConsumer((env) => {
       seen.push(env);
-      return { db: fakeDb(w), authAdmin: fakeAuth(), pepper: PEPPER, log };
+      return { db: fakeDb(w), authAdmin: fakeAuth(w), pepper: PEPPER, log };
     });
     await consumer(batchOf([fakeMessage(message())]), ENV, CTX);
     expect(seen).toEqual([ENV]);
     expect(w.invites.get(INVITE)!.status).toBe('provisioned');
+  });
+});
+
+describe('FINAL_ATTEMPT (Cloudflare Queues: attempts starts at 1, then max_retries retries)', () => {
+  it('is 1 + max_retries of every trace-admin consumer in wrangler.jsonc', () => {
+    const consumers = wranglerConsumers().filter((c) => /^trace-admin-[a-z]+$/.test(c.queue));
+    expect(consumers.map((c) => c.queue).sort()).toEqual([
+      'trace-admin-dev',
+      'trace-admin-staging',
+    ]);
+    for (const c of consumers) expect(FINAL_ATTEMPT).toBe((c.max_retries ?? 3) + 1);
   });
 });

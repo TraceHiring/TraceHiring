@@ -25,8 +25,8 @@ describe('membersDepsFor', () => {
   it('without the Auth secrets the Auth admin API fails closed', async () => {
     const deps = membersDepsFor({ VERSION: 'dev' } as unknown as Env);
     expect(deps.pepper).toBeUndefined();
-    await expect(deps.authAdmin.ensureUser('p-someone@example.test')).rejects.toThrow(
-      AUTH_ADMIN_UNAVAILABLE,
-    );
+    await expect(
+      deps.authAdmin.ensureUser('p-someone@example.test', async () => null),
+    ).rejects.toThrow(AUTH_ADMIN_UNAVAILABLE);
   });
 });

@@ -1,11 +1,17 @@
-// The AI drafting job against the real schema (specs/m1-test-authoring.md §6.4, M1-19, R5-35, R5-50 draft cap, R5-56 e;
-// AT-M1-09): the job runs as trace_authoring_worker bound to its job org, its drafts land in_review with their keys and
-// audit rows and never approved, a re-delivery adds nothing, the item_versions guard enforces the cap, and the worker's
-// grants refuse everything else. Synthetic org per file, cleaned up afterwards.
+// The AI drafting job against the real schema (specs/m1-test-authoring.md §6.4, M1-19, R5-35, R5-50 draft cap, R5-56 e,
+// R5-61 b/c/d; AT-M1-09): the job runs as trace_authoring_worker bound to its job org, its drafts land in_review with
+// their keys and audit rows and never approved, a re-delivery adds nothing, the item_versions guard enforces the cap, a
+// topic that is not the row's or an item id clash never completes the job, and the worker's grants refuse everything
+// else. Synthetic org per file, cleaned up afterwards.
 import { randomBytes } from 'node:crypto';
 import { MockLlmDrafter } from '@trace/vendors';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { handleDraftMessage, type DraftingDeps } from '../src/drafting/handler.js';
+import {
+  draftTopicSha256,
+  failDraftJob,
+  handleDraftMessage,
+  type DraftingDeps,
+} from '../src/drafting/handler.js';
 import { draftItemId } from '../src/drafting/seed.js';
 import { normaliseText } from '../src/drafting/checks.js';
 import { sqlDraftStore, type DraftStore } from '../src/drafting/store.js';
@@ -18,18 +24,26 @@ const otherOrg = newId();
 const workspace = newId();
 const otherWorkspace = newId();
 const hex = (n: number): string => randomBytes(n).toString('hex');
+const TOPIC = '[synthetic] a small team week';
 
 const insertJob = async (
   o: string,
   ws: string,
-  patch: { format?: string; count?: number; status?: string } = {},
+  patch: { format?: string; count?: number; status?: string; topicSha256?: string } = {},
 ): Promise<string> => {
   const id = newId();
   await h.admin.unsafe(
     'insert into public.ai_draft_jobs (id, org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, ' +
       "provider, model_id, prompt_version) values ($1, $2, $3, $4::public.section_format, 'logical', 0.5, $5, $6, " +
       "'mock', 'mock-drafter-v1', 'draft-v1')",
-    [id, o, ws, patch.format ?? 'mcq', patch.count ?? 3, hex(32)],
+    [
+      id,
+      o,
+      ws,
+      patch.format ?? 'mcq',
+      patch.count ?? 3,
+      patch.topicSha256 ?? (await draftTopicSha256(TOPIC)),
+    ],
   );
   if (patch.status !== undefined) {
     await h.admin.unsafe('update public.ai_draft_jobs set status = $2 where id = $1', [
@@ -59,7 +73,7 @@ const msg = (jobId: string, patch: Record<string, unknown> = {}) => ({
   skillKey: 'logical',
   difficulty: 0.5,
   count: 3,
-  topic: '[synthetic] a small team week',
+  topic: TOPIC,
   ...patch,
 });
 
@@ -212,6 +226,69 @@ describe('drafting job on the real schema', () => {
       drafts_discarded: 2,
       error_code: 'no_draft_passed',
     });
+  });
+});
+
+describe('R5-61: the topic check and item id clashes', () => {
+  const jobRow = async (id: string) => {
+    const [j] = await h.admin.unsafe<
+      { status: string; drafts_created: number; error_code: string | null }[]
+    >('select status, drafts_created, error_code from public.ai_draft_jobs where id = $1', [id]);
+    return j;
+  };
+
+  it('d: a topic whose scrubbed SHA-256 is not the row topic_sha256 ends the job internal, no drafter call', async () => {
+    const id = await insertJob(org, workspace, { topicSha256: hex(32) });
+    let drafted = 0;
+    const d: DraftingDeps = {
+      ...deps(),
+      drafterFor: (spec) => {
+        drafted += 1;
+        return new MockLlmDrafter('dev', { seed: spec.seed });
+      },
+    };
+    expect(await handleDraftMessage(msg(id), d)).toBe('failed');
+    expect(drafted).toBe(0);
+    expect(await jobRow(id)).toEqual({
+      status: 'failed',
+      drafts_created: 0,
+      error_code: 'internal',
+    });
+  });
+
+  it('an item at a derived id in another org raises and rolls back; the job never completes with fewer drafts', async () => {
+    const id = await insertJob(org, workspace);
+    await h.admin.unsafe(
+      "insert into public.items (id, org_id, workspace_id, format, skill_key) values ($1, $2, $3, 'mcq', 'logical')",
+      [await draftItemId(id, 1), otherOrg, otherWorkspace],
+    );
+    const err = await handleDraftMessage(msg(id), deps()).catch((e: unknown) => e);
+    expect((err as { code?: unknown }).code).toBe('23505');
+    expect(await jobRow(id)).toEqual({ status: 'running', drafts_created: 0, error_code: null });
+    const [count] = await h.admin.unsafe<{ n: number }[]>(
+      'select count(*)::int as n from public.item_versions where ai_draft_job_id = $1',
+      [id],
+    );
+    expect(count?.n).toBe(0);
+    // The last try (the consumer) ends it internal.
+    expect(await failDraftJob(msg(id), deps(), 'internal')).toBe(true);
+    expect(await jobRow(id)).toEqual({
+      status: 'failed',
+      drafts_created: 0,
+      error_code: 'internal',
+    });
+  });
+
+  it('c: drafts_discarded may exceed count (the CHECK is only >= 0)', async () => {
+    const id = await insertJob(org, workspace, { count: 1, status: 'running' });
+    await asWorker(org, (s) =>
+      s.finish(id, { status: 'failed', errorCode: 'no_draft_passed', discarded: 3 }),
+    );
+    const [j] = await h.admin.unsafe<{ drafts_discarded: number }[]>(
+      'select drafts_discarded from public.ai_draft_jobs where id = $1',
+      [id],
+    );
+    expect(j?.drafts_discarded).toBe(3);
   });
 });
 

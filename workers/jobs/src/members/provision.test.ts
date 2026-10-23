@@ -1,19 +1,21 @@
-// Member provisioning (specs/m1-test-authoring.md M1-20, R2-14, R5-56 c, §4.5, §7 E26; AT-M1-26 with a fake admin API):
-// the job checks HMAC(email, pepper) against the invite row before anything else, takes roles only from the row, reuses
-// an existing Auth user, is idempotent on re-delivery, and never logs or reports the address. The real schema is
-// db-test/members.db.test.ts.
+// Member provisioning (specs/m1-test-authoring.md M1-20, R2-14, R5-56 c, R5-61 a, §4.5, §7 E26; AT-M1-26 with a fake
+// admin API): the job checks HMAC(email, pepper) against the invite row before anything else, takes roles only from the
+// row, finds an existing Auth user through the invite-bound lookup before creating one, is idempotent on re-delivery,
+// and never logs or reports the address. The real schema is db-test/members.db.test.ts.
 import { beforeEach, describe, expect, it } from 'vitest';
 import { inviteEmailHmac } from './email-hmac.js';
 import {
   EMAIL,
   INVITE,
   ORG,
+  OTHER_ORG,
   PEPPER,
   capturedLog,
   fakeAuth,
   fakeDb,
   invite,
   message,
+  seedAuthUser,
   world,
   type FakeWorld,
 } from './fakes.test-helpers.js';
@@ -26,7 +28,7 @@ beforeEach(async () => {
 
 const setup = (w: FakeWorld, patch: Partial<MembersDeps> = {}) => {
   const db = fakeDb(w);
-  const auth = fakeAuth();
+  const auth = fakeAuth(w);
   const { log, lines } = capturedLog();
   const deps: MembersDeps = { db, authAdmin: auth, pepper: PEPPER, log, ...patch };
   return { deps, db, auth, lines };
@@ -59,13 +61,34 @@ describe('handleInviteMessage: provisioning (AT-M1-26)', () => {
     ).toBe('provisioned');
   });
 
-  it('E26: reuses an Auth user that already exists', async () => {
+  it('E26: finds an Auth user that already exists through the lookup and never creates one', async () => {
     const w = world([invite({ email_hmac: HMAC })]);
     const { deps, auth } = setup(w);
-    const existing = await auth.ensureUser(EMAIL);
+    const existing = seedAuthUser(w, ' P-Invitee@Example.TEST');
     expect(await handleInviteMessage(message(), deps)).toBe('provisioned');
     expect(w.memberships[0]!.user_id).toBe(existing);
     expect(auth.users.size).toBe(1);
+    expect(auth.calls()).toBe(0);
+  });
+
+  it('E26: a user who already belongs to another org is provisioned into this one', async () => {
+    const w = world([invite({ email_hmac: HMAC })]);
+    const { deps, auth } = setup(w);
+    const existing = seedAuthUser(w, EMAIL);
+    w.memberships.push({
+      id: '4a1c7e2d-8b36-4f5a-9d04-6b1f3c85a2ab',
+      org_id: OTHER_ORG,
+      user_id: existing,
+      roles: ['admin'],
+      workspace_id: null,
+      display_name: '[synthetic] Elsewhere',
+      status: 'active',
+    });
+    expect(await handleInviteMessage(message(), deps)).toBe('provisioned');
+    expect(w.memberships.filter((m) => m.org_id === ORG)).toMatchObject([
+      { user_id: existing, status: 'invited' },
+    ]);
+    expect(auth.calls()).toBe(0);
   });
 });
 
@@ -88,9 +111,9 @@ describe('handleInviteMessage: the HMAC check comes first', () => {
     expect(auth.calls()).toBe(0);
   });
 
-  it('without the pepper it fails closed: a constant error, nothing changed, no Auth call', async () => {
+  it('without a pepper of at least 32 bytes it fails closed: a constant error, nothing changed, no Auth call', async () => {
     const w = world([invite({ email_hmac: HMAC })]);
-    for (const pepper of [undefined, '']) {
+    for (const pepper of [undefined, '', 'x'.repeat(31), 'é'.repeat(15)]) {
       const { deps, auth } = setup(w, { pepper });
       await expect(handleInviteMessage(message(), deps)).rejects.toThrow(PEPPER_UNAVAILABLE);
       expect(auth.calls()).toBe(0);
@@ -115,9 +138,33 @@ describe('handleInviteMessage: exactly once', () => {
     db.failOn('provision');
     await expect(handleInviteMessage(message(), deps)).rejects.toThrow();
     expect(w.invites.get(INVITE)!.status).toBe('pending');
+    expect(auth.calls()).toBe(1);
+    const created = auth.users.get(EMAIL);
     expect(await handleInviteMessage(message(), deps)).toBe('provisioned');
+    expect(auth.calls()).toBe(1);
     expect(auth.users.size).toBe(1);
     expect(w.memberships).toHaveLength(1);
+    expect(w.memberships[0]!.user_id).toBe(created);
+  });
+
+  it('an invite cancelled after the HMAC check is refused by the lookup before any Auth call', async () => {
+    const w = world([invite({ email_hmac: HMAC })]);
+    const { deps, db, auth } = setup(w);
+    let runs = 0;
+    const cancelling = {
+      ...deps,
+      db: {
+        run: async <T>(o: string, fn: Parameters<typeof db.run<T>>[1]): Promise<T> => {
+          runs += 1;
+          if (runs === 2) w.invites.get(INVITE)!.status = 'cancelled';
+          return db.run(o, fn);
+        },
+      },
+    };
+    expect(await handleInviteMessage(message(), cancelling)).not.toBe('provisioned');
+    expect(auth.calls()).toBe(0);
+    expect(w.invites.get(INVITE)!.status).toBe('cancelled');
+    expect(w.memberships).toHaveLength(0);
   });
 
   it.each(['cancelled', 'failed'] as const)(
@@ -149,8 +196,8 @@ describe('handleInviteMessage: refusals settle the invite as failed', () => {
 
   it('E26: a user who already holds a live membership of the org fails the invite', async () => {
     const w = world([invite({ email_hmac: HMAC })]);
-    const { deps, auth } = setup(w);
-    const user = await auth.ensureUser(EMAIL);
+    const { deps } = setup(w);
+    const user = seedAuthUser(w, EMAIL);
     w.memberships.push({
       id: '4a1c7e2d-8b36-4f5a-9d04-6b1f3c85a2aa',
       org_id: ORG,
