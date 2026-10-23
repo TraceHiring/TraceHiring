@@ -2,6 +2,7 @@
 // and the jobs worker write the same item_versions.content_sha256), and the AI draft topic scrubber (§6.4).
 // Synthetic content only.
 import { describe, expect, it } from 'vitest';
+import { AuthoringQueueMessage } from './contracts-m1.js';
 import {
   itemContentSha256,
   scrubDraftTopic,
@@ -133,6 +134,29 @@ describe('scrubDraftTopic (§6.4)', () => {
 
   it('never returns an empty topic', () => {
     expect(scrubDraftTopic('   ')).toBe('[removed]');
+  });
+
+  it('never cuts a surrogate pair, so a lengthened topic still fits the queue message (A2a security S2)', () => {
+    const at = String.fromCharCode(64);
+    // 499 UTF-16 units; the short email grows to [removed], pushing the cut into the middle of an emoji.
+    const topic = `a${at}b x` + '\u{1F600}'.repeat(247);
+    const out = scrubDraftTopic(topic);
+    expect(out.length).toBeLessThanOrEqual(500);
+    expect(out.isWellFormed()).toBe(true);
+    expect(
+      AuthoringQueueMessage.safeParse({
+        v: 1,
+        kind: 'ai_draft',
+        jobId: 'a1000000-0000-4000-8000-000000000001',
+        orgId: 'a1000000-0000-4000-8000-000000000002',
+        workspaceId: 'a1000000-0000-4000-8000-000000000003',
+        format: 'mcq',
+        skillKey: 'quant',
+        difficulty: 0.5,
+        count: 1,
+        topic: out,
+      }).success,
+    ).toBe(true);
   });
 });
 
