@@ -1,5 +1,5 @@
-# HANDOFF — 2026-10-23 01:45 IST (M1 BUILD 1 = Wave 0, part 1 done on `m1/integration`; next: Wave 0 part 2)
-Reason for stopping: context near 60% (chat rule). Wave 0 split at the migration boundary (spec §11.4). Usage at stop: see LOG row. Start from `docs/progress/RESUME-PROMPT.md` on **`m1/integration`** (worktree `.claude/worktrees/m1-integration`). The repo wins over this file and over any memory.
+# HANDOFF — 2026-10-23 07:45 IST (M1 BUILD 1 = Wave 0 part 2 done on `m1/integration`; next: Wave 0 part 3)
+Reason for stopping: context at 60% (chat rule). Wave 0 split again at the migration boundary (spec §11.4): M1-c and M1-d move to part 3. Start from `docs/progress/RESUME-PROMPT.md` on **`m1/integration`** (worktree `.claude/worktrees/m1-integration`). The repo wins over this file.
 
 ## Paused: D1 (founder, 2026-10-22 night: paused, not closed)
 D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/worktrees/d1-integration`). Nothing is committed to `d1/integration` or `main` from M1. Copied from the `d1/integration` HANDOFF (`3c2e42a`, tip `1547fd0`):
@@ -9,39 +9,42 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
 - **D1 founder items:** AT-D2 screen capture (`pnpm e2e:record`); Workers Paid (OPEN-8a) "not yet", decide before any load test (M3a); Dependabot PRs #7-#12 not merged blind; after D1 merges, `e2e-local` back on the required checks.
 
 ## Where we are (verified this chat)
-- Milestone **M1 · Test authoring**, phase **BUILD 1 = Wave 0, part 1 of 2 done** (lead only, no writers). Branch `m1/integration`. HEAD = this handoff commit; parents `3db2585` (db-types type test) → `486f41d` (M1-a migration) → `a7a3d94` (pgTAP red first) → `a6ae915` (M1 SPEC handoff).
-- `d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged.
-- `pnpm test:rls` green on `486f41d`'s tree (all files, catalog checks, db-types; `rls_*` 2870 passed = new floor; `catalog_*` floor 144 unchanged). Full `pnpm verify` (`--workspace-concurrency=1`) on `3db2585`: typecheck + lint green; `workers/edge` test hit a V8 heap OOM once (RAM, D1-LEAD-1 class), passed alone (24 files, 417 tests); then `pnpm test`, `pnpm test:rls`, `pnpm build` re-run in sequence: exit 0.
-- No staging dispatch. No reviews run yet on M1-a (see Next step 3).
+- Milestone **M1 · Test authoring**, phase **BUILD 1 = Wave 0, part 2 of 3 done**. Founder (chat, 2026-10-23): "work in multi agent … time and quality … production ready … if it won't break anything": writers ran in parallel on disjoint files; the lead kept every migration, `supabase test db`, db reset and verify (build-notes "Autopilot changes", second 2026-10-23 row).
+- `m1/integration` HEAD = this handoff commit; code tip `018d856`. `d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged.
+- `pnpm test:rls` green on `36d7375`'s tree from a fresh reset: rls_* **3262** (floor 2870 → 3262), catalog_* **150** (floor 144 → 150), db-types current. Full `pnpm verify` on `018d856`: typecheck + lint green; `pnpm test` OOM'd in parallel (memory allocation failed), re-run serially `pnpm -r --workspace-concurrency=1 test` exit 0 plus `vitest run --root scripts` 2819 passed / 2 skipped; `pnpm build` exit 0 (check-headers, scan-dist OK); test:rls as above.
+- Pushed `76ba806` mid-chat (draft PR TraceHiring/TraceHiring#14 CI); the wrap-up push sends the rest. No staging dispatch.
 
-## Done this chat (verified)
-- `a7a3d94` pgTAP written red first: `supabase/tests/rls_m1_bank` (110), `rls_m1_keys` (47), `rls_m1_variants` (34), `rls_m1_pools` (44); sources + drafts in `docs/progress/m1-wave0-drafts/` (README there).
-- `486f41d` migration **M1-a** `supabase/migrations/20261023010000_m1_bank.sql` (provisional timestamp, R5-30): roles `trace_authoring_worker`, `trace_admin_worker`; library org + default workspace; `private.library_org_id()`; `item_status` enum; `skill_taxonomy` (+ seed, moved here from M1-b); `items`; `item_versions` widened + guard v2 (inline rows keep D1's path; bank §4.1 state machine, origin from the write path, approver roles R5-38/R5-40, library expert review); `item_answer_keys` widened + guard v2 (R5-44) + policies recreated with `not library_sourced`; `item_variants`/`item_variant_keys` (±0.10); `item_exposure_events` (append-only) + `v_item_exposure`; `v_item_bank_quant_share` (AT-M1-06 counting view, new); `pools`/`pool_items`; `library_copy_requests` + copy trigger (reuse, rubric copy, 2,000/day cap); `private.library_browse`, `library_exposure` (trace_api); hooks `private.ai_draft_job_running` / `import_job_open` return false until M1-c replaces them.
-- R5-28 edits (add-only): `rls_d1_invariants` role list, login lists, I-12 NOT NULL list minus item_versions/item_answer_keys (inline proof in rls_m1_bank/keys). `rls_roles` R5-32 lists extended + 2 rows for the new roles (plan 67). `packages/db-types` regenerated. build-notes "Autopilot changes" row (R5-1, R3-10, split, seed move).
-- One D1 test caught a regression and it was fixed in the migration (`rls_d1_consents` TRUNCATE CASCADE): `item_exposure_events` keeps its owner TRUNCATE grant (the ALWAYS trigger refuses it).
+## Done this chat (each branch: Opus first reviews, fixes test first, a confirming re-review, then `--no-ff`)
+- `9cb9ca5` pgTAP red first for M1-b (`rls_m1_snapshot/publish_v2/serving/settings/templates_jobs/carried/candidate_denied`); `76ba806` **migration M1-b** `supabase/migrations/20261023020000_m1_tests.sql` (provisional ts) + rls_roles R5-32 adds + db-types.
+- `36d7375` merge `m1/w0-dbfix`: Opus security **BLOCK** (SEC-M1-1 library `param_spec.correctOptionId` key leak; SEC-M1-2..5) and Opus database **APPROVE WITH FIXES** (DB-M1-1 a written section's `paste_rule` must equal settings `paste_written`; snapshot insert while draft; draw cap; truncate; catalog seal; indexes; strata) all fixed in place in M1-a/M1-b; Opus re-review CONFIRMED WITH NOTES.
+- `cae300c` merge `m1/w0-contracts`: `contracts-m1.ts`, candidate v2 (TestPackageV2 with `exposureAtPublish` and section `format`, SessionViewV2, ServedItemV2, `section.finish`, `refusedSeqs`, `section_closed` 410, `ItemGetQuery`), mirror v1|v2 union + `checkMirrorV2()`, AUDIT_ACTIONS R5-14/R5-26 (Opus spec PASS WITH FIXES, Sonnet CONFIRMED). `0ab7df3` jobs retry v2 mirror messages until A3; candidate ERROR_STATUS.
+- `8362f3a` merge `m1/w0-adr-vendors-carried`: ADR-033 (worker unzips with streaming `Unzip`, page parses with `DOMParser`; spec **R5-48**), VENDOR_INTERFACES + `llm-drafter.ts` types, D1-LEAD-1 perf split, recruiter B2-SEC-1/B2-SEC-4/account copy + `main.tsx` wiring.
+- `b811408` merge `m1/w0-mt11-fr1`: M0b FR-1 closed in MT-11 (four new branches).
+- `018d856` merge `m1/w0-infra`: R5-11 logins (Hyperdrive ids PENDING), R5-12 secrets list + D1 spec **4q**, R5-13 queues/DLQs/bucket + jobs `queue()` dispatch with throwing stubs, boundary rules 11–15, post-migration "Check the Hyperdrive bindings" CI step (INF-1).
+- `4ba07c9` M1-c/M1-d drafts in `docs/progress/m1-wave0-drafts/m1cd/` (helper-written, checked only rolled back; NOT placed, NOT reviewed).
 
 ## Next step (one precise action)
-**M1 BUILD 1 part 2 (Wave 0b), lead only:**
-1. pgTAP red first for M1-b from `docs/progress/m1-wave0-drafts/m1b_tests.sql.draft` (applied cleanly locally on top of M1-a, untested): `rls_m1_snapshot`, `rls_m1_publish_v2`, `rls_m1_serving`, `rls_m1_settings` (incl. R5-5/R5-31 flags guard, R5-34), `rls_m1_templates_jobs`, `rls_m1_carried` (each replaced function: one D1 case + one M1 case; B0-SP7 rest), `rls_m1_candidate_denied`; then place M1-b, then M1-c (imports, ai drafts; replace the two hooks; ai_draft⇔job CHECK; AT-M1-07/08 ai cases), M1-d (members, R5-35 fences) with `rls_m1_imports`, `rls_m1_ai_drafts`, `rls_m1_members`. Use the generator (`gen.mjs`/`run.mjs`, preamble) in the drafts folder.
-2. Then the rest of §11.2: contracts (`contracts-m1.ts`, candidate v2, mirror v1|v2 union, `refusedSeqs`/`section_closed`, audit actions R5-14/R5-26 — the DB already writes `item.create`, `item.submit`, `item.approve`, `item.not_approved`, `item.retire`, `item.ai_drafted`, `library.copy`, `pool.archive`), ADR-033, logins R5-11, secrets allow-list R5-12 (+ D1 spec 4q row), queues R5-13, boundaries R5-10, `VENDOR_INTERFACES`, carried items (MT-11 FR-1, D1-LEAD-1), floors.
-3. Opus database-reviewer + security-reviewer on M1-a…d, spec-reviewer on contracts; fixes test first; confirming re-review; full `pnpm verify`; draft PR `m1/integration → main` (CI only, never merged); fix Linux CI. If one chat cannot hold it, split again at a migration boundary.
-Then BUILD 2 = Wave 1 (A1, A6, A5).
+**M1 BUILD 1 part 3 (Wave 0c), lead + parallel writers as in part 2:**
+1. Carried review notes first, test first, in M1-a/M1-b (in place, R5-30): **Medium** a written bank item can be approved without a rubric and drawn from a pool (`private.item_version_ready` must refuse; publish rubric check over the snapshot rows). Lows: `for share` on the ruleset read in publish; strata counts integers ≥ 1; audit the key review (`item.key_review` + AUDIT_ACTIONS); a spec sentence that item/variant `content_sha256` excludes keys and `correctOptionId` (or recompute the copy hash); a pgTAP assert that the current catalog is sealed.
+2. Place M1-c then M1-d from `m1cd/` (read its `notes.md`: the `pg_temp.ai_draft` preamble change; the D1/M0b assertions it changes — `rls_memberships:404`, `rls_d1_idempotency` L-20 policy count — need an R5-28-style supersession row, recorded; `rls_roles` and candidate_denied lists; floors; db-types). Opus database + security first reviews, fixes test first, re-review.
+3. Then `renderCandidateSummary` (AT-M1-31) unless a stream owns it; full `pnpm verify`; CI on PR #14; Wave 0 done → BUILD 2 = Wave 1 (A1, A6, A5) after a pre-flight agent.
 
-## Decisions made this chat (all HOW-level, build-notes row 2026-10-23)
-- Wave 0 split (§11.4). Skill taxonomy seed in M1-a. `items.id` and pool/library/copy ids are client-suppliable (uuid, like consents); `item_versions.id` is not (D1 grant kept).
-- Operator path (postgres, no JWT) may name `origin` and the approval columns, as it names `created_by` in D1 (fixtures; AT-M1-08's ai_draft fixture).
-- An `origin` value outside the CHECK is left for the CHECK (23514, rls_d1_tests:487 unchanged); any value inside it is overwritten from the write path (carried n-3).
-- Library copies of written items copy the library rubric into the customer org as `library-<key>` (FK needs a same-org rubric). Library media keys are kept as is (shared library prefix).
-- `v_item_bank_quant_share` view added for AT-M1-06's db-backed case.
+## Notes for later streams (from reviews; not defects now)
+- A3: call `checkMirrorV2()` in the mirror stage (retry → DLQ); check `poolSectionIds` against `sections.pool_id`; remove the v2 retry guard in `workers/jobs/src/queue/consumer.ts` once v2 is stored. Admin consumer treats messages as ids only.
+- A5 import: per-XML-part cap ~10–20 MB; render rows only as React text; validate the postMessage shape.
+- A6: rule 13 needs an `assert*Env` call in `MockLlmDrafter`'s constructor.
+- Infra Lows: `if:` on deploy steps is not pinned by check-workflows; the edge no-secrets test pattern is looser than rule 11. MT-11: ≈0.5 s on 209 clauses; non-equality ties count as correlation.
+- DB-M1-11: `rls_d1_invariants.test.sql:23` (`app_roles()` add-only edit from part 1) is outside R5-28's list; record it in the next spec revision.
 
 ## Founder items
-- Unchanged: Q-M1-1…Q-M1-4 (FOUNDER-QUEUE, defaults built); staging parts of M1 wait for a staging go-ahead.
+- New FOUNDER-QUEUE row 2026-10-23: M1 staging Hyperdrive configs + `MEMBER_INVITE_PEPPER` / `SUPABASE_SECRET_KEY_JOBS` (after the D1 CLOSE and a staging go-ahead; not blocking BUILD). Unchanged: Q-M1-1…Q-M1-4.
 
 ## Gotchas
-- The worktree guard refuses `cd …&&` + git, `$(...)`, shell variables in docker/sed/git commands and chained git calls: run plain commands from the worktree; commit messages via `git commit -F <scratchpad file>`.
-- pgTAP runs as a superuser through `supabase test db`; plain `psql -U postgres` cannot `grant trace_* to postgres`. Run one file: `pnpm exec supabase test db --local supabase/tests/<file>`.
-- Never hand-edit generated `rls_m1_*.test.sql`: edit `docs/progress/m1-wave0-drafts/pgtap/bodies/<name>.sql`, regenerate.
-- `integrity_presets` column is `preset_values` (`values` is reserved).
+- The worktree guard refuses `cd …&&` + git, `$(...)`, chained git calls and heredocs that mention git words; commit messages via `git commit -F <file>`; commitlint body lines ≤ 100 chars; merge subjects `chore: merge …`.
+- Python `open(...,'w')` on Windows writes CRLF unless `newline='\n'`.
+- The local `postgres` is not a superuser: no `SET SESSION AUTHORIZATION` in pgTAP.
+- Never hand-edit generated `rls_m1_*.test.sql`: edit `docs/progress/m1-wave0-drafts/pgtap/bodies/*.sql`, then `node docs/progress/m1-wave0-drafts/pgtap/gen.mjs <repo root>`.
+- RAM: parallel writers + verify:fast OOM'd once (exit 134); run verify alone.
 
 ## Verify first
 `git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `pnpm -s verify:fast`
