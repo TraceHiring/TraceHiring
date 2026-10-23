@@ -23,7 +23,6 @@ import { BankRoute } from '../bank/BankRoute';
 import { ImportRoute } from '../bank/import/ImportRoute';
 import { ItemRoute } from '../bank/ItemRoute';
 import { PoolsRoute } from '../bank/PoolsRoute';
-import { FromTemplateRoute } from '../authoring/FromTemplateRoute';
 import { LibraryRoute } from '../library/LibraryRoute';
 import { BAND_LABEL } from '../reports/labels';
 import { routes as builtRoutes, buildRoutes } from '../routes';
@@ -113,12 +112,6 @@ const M1_ROUTES: { path: string; heading: string; allowed: string[]; element: Re
     element: <IntegrityLocksRoute />,
   },
   { path: 'settings/members', heading: 'Members', allowed: ADMIN, element: <MembersRoute /> },
-  {
-    path: 'tests/new/template',
-    heading: 'New test from a template',
-    allowed: STAFF,
-    element: <FromTemplateRoute />,
-  },
 ];
 const ALL_ROLES = [...STAFF, 'reviewer', 'hiring_manager'];
 
@@ -141,6 +134,12 @@ describe('M1 route table (AT-M1-24)', () => {
       expect(paths, d1).toContain(d1);
     }
     expect(new Set(paths).size).toBe(paths.length);
+  });
+
+  it('has no template route: the template choice is step 1 of tests/new (R5-15, §6.1)', () => {
+    const paths = gateChildren(buildRoutes(null)).map((child) => child.path ?? '');
+    expect(paths).not.toContain('tests/new/template');
+    expect(paths.filter((path) => path.startsWith('tests/new'))).toEqual(['tests/new']);
   });
 
   it('no M1 route path names a forbidden word', () => {
@@ -250,6 +249,22 @@ function screens(): Record<string, string> {
   return out;
 }
 
+/**
+ * Directories (below src/) whose stream must ship `<dir>/m1-screens.test-helpers.tsx` with at least one screen. The
+ * lead appends 'bank', 'bank/import', 'library', 'settings' and 'authoring' as each stream merges, so the registry
+ * cannot stay opt-in and leave the guards checking nothing.
+ */
+export const REQUIRED_SCREEN_REGISTRIES: readonly string[] = [];
+
+/** The required directories with no registered screen (`names` are the registry keys: `./<dir>/m1-screens... <name>`). */
+const missingRegistries = (required: readonly string[], names: readonly string[]): string[] =>
+  required.filter(
+    (dir) => !names.some((name) => name.startsWith(`./${dir}/m1-screens.test-helpers.tsx `)),
+  );
+/** The wizard's integrity step is required once the stream that builds it is. */
+const integrityStepRequired = (required: readonly string[]): boolean =>
+  required.includes('settings') || required.includes('authoring');
+
 /** Screens that legitimately say "export" or "CSV": the import errors table (§6.9: an error CSV made in the browser). */
 const EXPORT_ALLOWED = /^(?:route bank\/import|\.\/bank\/import\/)/;
 
@@ -305,8 +320,11 @@ describe('M1 screens never show what the product never builds (AT-M1-24)', () =>
 
   // R5-6: the integrity step's static "Data and review" panel follows the plan; a stream that builds the wizard
   // registers its step as `integrity-step` and this pins the copy (plan-conflicts #7, #8; wording per R5-22).
-  it('the integrity step, when registered, carries the plan wording', () => {
+  // It is required once 'settings' or 'authoring' is a required registry.
+  it('the integrity step carries the plan wording', () => {
     const step = Object.entries(all).find(([name]) => name.endsWith(' integrity-step'));
+    if (integrityStepRequired(REQUIRED_SCREEN_REGISTRIES))
+      expect(step, 'integrity-step').toBeDefined();
     if (step === undefined) return;
     const body = text(step[1]);
     for (const phrase of [
@@ -319,9 +337,32 @@ describe('M1 screens never show what the product never builds (AT-M1-24)', () =>
       expect(body).toContain(phrase);
     }
   });
+
+  it('every required directory registers at least one screen', () => {
+    expect(
+      missingRegistries(REQUIRED_SCREEN_REGISTRIES, Object.keys(registeredM1Screens())),
+    ).toEqual([]);
+  });
 });
 
 describe('the M1 guard patterns (negative controls)', () => {
+  it('an empty registry for a required directory fails', () => {
+    const names = [
+      './bank/m1-screens.test-helpers.tsx list',
+      './bank/import/m1-screens.test-helpers.tsx errors',
+    ];
+    expect(missingRegistries(['bank', 'bank/import'], names)).toEqual([]);
+    expect(missingRegistries(['library'], names)).toEqual(['library']);
+    expect(missingRegistries(['bank', 'settings'], [])).toEqual(['bank', 'settings']);
+    // A nested directory's file does not satisfy its parent.
+    expect(
+      missingRegistries(['bank'], ['./bank/import/m1-screens.test-helpers.tsx errors']),
+    ).toEqual(['bank']);
+    expect(integrityStepRequired([])).toBe(false);
+    expect(integrityStepRequired(['bank', 'authoring'])).toBe(true);
+    expect(integrityStepRequired(['settings'])).toBe(true);
+  });
+
   it('catch what they should', () => {
     for (const bad of ['Reject', 'Send notice', 'Record decision', 'Confirm', 'Appeal'])
       expect(bad).toMatch(CONTROL_WORDS);
