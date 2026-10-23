@@ -154,4 +154,27 @@ describe('snapshotDigest (publish race, Wave 2 lead decision)', () => {
     expect(await snapshotDigest([rows[0]!])).not.toBe(base);
     await expect(snapshotDigest([{ ...rows[0]!, exposureAtPublish: -1 }])).rejects.toThrow();
   });
+  it('matches the vector the publish guard is pinned to (rls_m1_snapshot, migration M1-e)', async () => {
+    // Same three rows as private.snapshot_digest_of in rls_m1_snapshot; upper-case ids are lowered first.
+    const vector = [
+      {
+        sectionId: 'D2000000-0000-4000-8000-00000000000B',
+        itemVersionId: 'd3000000-0000-4000-8000-000000000002',
+        exposureAtPublish: 7,
+      },
+      {
+        sectionId: 'd2000000-0000-4000-8000-00000000000a',
+        itemVersionId: 'd3000000-0000-4000-8000-000000000001',
+        exposureAtPublish: 0,
+      },
+      {
+        sectionId: 'd2000000-0000-4000-8000-00000000000a',
+        itemVersionId: 'd3000000-0000-4000-8000-000000000003',
+        exposureAtPublish: 12,
+      },
+    ];
+    expect(await snapshotDigest(vector)).toBe(
+      'e905567988cc26439a5c547f68097ce1e4917bf36d1355d7ab70f46f4abed28b',
+    );
+  });
 });

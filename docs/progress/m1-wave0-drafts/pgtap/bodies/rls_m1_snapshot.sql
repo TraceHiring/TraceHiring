@@ -159,3 +159,29 @@ select is((select count(*)::int from public.section_pool_snapshot where test_ver
 delete from public.pool_items where pool_id = 'd1000000-0000-4000-8000-0000000000ee' and item_version_id = (select ver from huge_src where n = 5001);
 select is(pg_temp.try($$select pg_temp.publish('th')$$), 'OK 1', 'publish (E22): exactly 5,000 items publish');
 select is((select min_pool_ratio::text from public.test_versions where id = pg_temp.id('th')), '5000.00', 'publish (E22): min_pool_ratio stays within numeric(6, 2)');
+
+-- ===== Publish race (R5-56 d, migration M1-e): the guard recomputes the digest of the snapshot it writes =====
+select pg_temp.op();
+select is(private.snapshot_digest_of(array['d2000000-0000-4000-8000-00000000000b:d3000000-0000-4000-8000-000000000002:7', 'd2000000-0000-4000-8000-00000000000a:d3000000-0000-4000-8000-000000000001:0', 'd2000000-0000-4000-8000-00000000000a:d3000000-0000-4000-8000-000000000003:12']), 'e905567988cc26439a5c547f68097ce1e4917bf36d1355d7ab70f46f4abed28b', 'digest: the SQL digest equals @trace/shared snapshotDigest on the pinned vector (item-hash.test.ts)');
+select is((select snapshot_digest from public.test_versions where id = pg_temp.id('ta')), (select private.snapshot_digest_of(array_agg(sp.section_id::text || ':' || sp.item_version_id::text || ':' || sp.exposure_at_publish::text)) from public.section_pool_snapshot as sp where sp.test_version_id = pg_temp.id('ta')), 'digest: a published v2 version stores the digest of its snapshot');
+select is((select snapshot_digest is null from public.test_versions where id = pg_temp.id('tg')), true, 'digest: a v1 version stores none (it has no snapshot), even when one is sent');
+select pg_temp.tv('tk', pg_temp.id('A'), pg_temp.id('A1'));
+select pg_temp.sec('sk', 'tk', 1, 'mcq', 'd1000000-0000-4000-8000-00000000000a', 1, 100);
+select pg_temp.preset('tk', 'standard');
+select matches(pg_temp.try($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = pg_temp.id('tk')$$), '^42501 TRACE_GUARD: publish needs the snapshot digest', 'digest: a v2 publish without a digest is refused');
+select matches(pg_temp.try($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64), snapshot_digest = repeat('0', 64) where id = pg_temp.id('tk')$$), '^40001 TRACE_GUARD: the package was built from another snapshot', 'digest: a digest of other rows is refused with 40001 (the api rebuilds and retries)');
+select is((select count(*)::int || '|' || (select status::text from public.test_versions where id = pg_temp.id('tk')) from public.section_pool_snapshot where test_version_id = pg_temp.id('tk')), '0|draft', 'digest: a refused publish writes no snapshot and leaves the draft');
+create temp table stale_digest as select pg_temp.live_digest('tk') as d;
+delete from public.pool_items where pool_id = 'd1000000-0000-4000-8000-00000000000a' and item_version_id = pg_temp.id('v4');
+select matches(pg_temp.try(format($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64), snapshot_digest = %L where id = %L$$, (select d from stale_digest), pg_temp.id('tk'))), '^40001 TRACE_GUARD: the package was built from another snapshot', 'digest: a package built before a pool change is refused (A1 DB review Medium, R3-2)');
+select is(pg_temp.try($$select pg_temp.publish('tk')$$), 'OK 1', 'digest: rebuilt from the live pool, the publish passes');
+select is((select count(*)::int from public.section_pool_snapshot where test_version_id = pg_temp.id('tk')), 7, 'digest: the snapshot holds the 7 approved items left in pool A');
+select matches(pg_temp.try($$update public.test_versions set status = 'retired', snapshot_digest = repeat('1', 64) where id = pg_temp.id('tk')$$), '^42501 TRACE_GUARD: a published test version is frozen', 'digest: the digest freezes with the version');
+select pg_temp.tv('tl', pg_temp.id('A'), pg_temp.id('A1'));
+select pg_temp.sec('sl', 'tl', 1, 'mcq', 'd1000000-0000-4000-8000-00000000000c', 1, 100);
+select pg_temp.preset('tl', 'standard');
+select pg_temp.u('owner');
+select is(pg_temp.try($$update public.test_versions set snapshot_digest = repeat('2', 64) where id = pg_temp.id('tl')$$), 'OK 1', 'digest: a draft update may name the column (the owner holds its update grant)');
+select is((select snapshot_digest is null from public.test_versions where id = pg_temp.id('tl')), true, 'digest: a draft keeps none (only the publish update carries it)');
+select is(pg_temp.try($$select pg_temp.publish('tl')$$), 'OK 1', 'digest: the owner publishes a v2 version with its digest');
+select pg_temp.op();

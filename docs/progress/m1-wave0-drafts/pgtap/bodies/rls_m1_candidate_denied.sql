@@ -118,7 +118,7 @@ select pg_temp.op();
 -- ===== Direct calls by the candidate roles =====
 set local role trace_candidate;
 select is(pg_temp.visible(), 'skill_taxonomy=- items=- item_variants=- item_variant_keys=- item_exposure_events=- pools=- pool_items=- library_copy_requests=- role_templates=- jobs=- section_pool_snapshot=- integrity_setting_defs=- integrity_presets=- org_integrity_locks=- v_item_exposure=- v_item_bank_quant_share=- import_jobs=- import_row_errors=- ai_draft_jobs=- member_invites=-', 'trace_candidate: every M1 table and view is permission denied');
-select matches(pg_temp.try($$select * from private.library_browse(null, null, null, null, null, null, null, null, 10)$$), '^42501 permission denied', 'trace_candidate: library_browse is denied');
+select matches(pg_temp.try($$select * from private.library_browse(null, null, null, null, null, null, null, null, null, 10)$$), '^42501 permission denied', 'trace_candidate: library_browse is denied');
 select matches(pg_temp.try($$select private.library_reference(null, null, null, 'templates')$$), '^42501 permission denied', 'trace_candidate: library_reference is denied');
 reset role;
 set local role anon;
