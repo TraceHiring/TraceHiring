@@ -1,5 +1,7 @@
 // The candidate path's reads and writes as trace_api (spec §3.3 trace_api column, §3.4, §4.1). Each statement is
-// constant text with bound parameters and names the org itself (`org_id = $1`) on top of RLS (`api_org_id()`).
+// constant text with bound parameters and names the org itself (`org_id = $1`) on top of RLS (`api_org_id()`),
+// except `testTitle`: `private.api_test_title` is bound only by `api_org_id()`, so it must run inside `inOrg` (an
+// unset binding returns no title; M1-l).
 // Status moves are conditional updates, so a lost race changes nothing; the invitations guard trigger is the
 // database's own check of every move (L-1, L-12, L-17, L-31, L-32).
 import type { ApiDb, SqlTx } from './api-db.js';

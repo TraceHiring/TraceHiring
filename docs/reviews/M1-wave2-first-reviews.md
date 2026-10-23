@@ -97,3 +97,10 @@ Merged `f9a6ad4`; red `ea849cd`, mounts + `LIBRARY_LIMITER` (60/60 s) `fca81ee`;
   `import_not_open`, `library_not_approved` still fall to 404 → A2a maps its own keys (in the A2a brief).
 - Note 5: settings PUT and a draft save can interleave (null navigation after defaults) → refused at publish, not
   corrupted; covered by R5-63 f (one-write derivation in the database).
+
+## Lead migrations M1-k → M1-l, A2b mounts, LIBRARY_LIMITER (`c8d3b84..4fca331`) — Opus database review: **APPROVE**
+The first full verify after the A2b merge failed `rls_d1_api` 41 (M1-k's column grant loosened the D1 pin "tests: trace_api
+has no SELECT privilege"); M1-l (`d1342de` red, `4fca331`) drops it and adds `private.api_test_title` (definer, org-bound).
+Full serial verify green on `4fca331` (rls 3716, catalog 150). Findings: Low 1 `testTitle` relies only on the
+`api_org_id()` binding → documented in the store header (must run inside `inOrg`); Info 2 the `library/items` consumer of
+`LIBRARY_LIMITER` lands with A2a; Info 3 `ratelimits` on staging is confirmed only by the next staging dispatch (ADR-032).
