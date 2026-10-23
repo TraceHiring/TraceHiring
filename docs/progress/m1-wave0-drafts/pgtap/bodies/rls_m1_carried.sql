@@ -34,21 +34,17 @@ insert into public.session_items (id, org_id, session_id, section_id, item_versi
 select pg_temp.op();
 
 -- ===== B0-SP7 (rest): the candidate gateway's SET ROLE path, executed =====
-create role m1_gateway_probe nologin noinherit;
-grant trace_candidate_gateway to m1_gateway_probe with inherit false, set true;
-grant usage on schema extensions to m1_gateway_probe;
-set local session authorization m1_gateway_probe;
-select matches(pg_temp.try('select * from public.tests'), '^42501 permission denied', 'B0-SP7: a gateway login holds no privilege of its own');
-select matches(pg_temp.try('set local role trace_api'), '^42501 permission denied to set role', 'B0-SP7: a gateway login cannot become trace_api');
-select matches(pg_temp.try('set local role trace_worker'), '^42501 permission denied to set role', 'B0-SP7: a gateway login cannot become trace_worker');
-select matches(pg_temp.try('set local role authenticated'), '^42501 permission denied to set role', 'B0-SP7: a gateway login cannot become authenticated');
+-- SET ROLE is authorised against the session user, and the local postgres is not a superuser (no SET SESSION
+-- AUTHORIZATION), so the path is executed as gateway -> trace_candidate and the refusals are read from the catalogue.
+grant trace_candidate_gateway to postgres with inherit false, set true;
+grant usage on schema extensions to trace_candidate_gateway;
 set local role trace_candidate_gateway;
+select matches(pg_temp.try('select * from public.tests'), '^42501 permission denied', 'B0-SP7: as the gateway, no privilege of its own');
 set local role trace_candidate;
-select is(current_user::text, 'trace_candidate', 'B0-SP7: through the gateway, SET ROLE trace_candidate succeeds');
-select matches(pg_temp.try('select * from public.tests'), '^42501 permission denied', 'B0-SP7: as trace_candidate, no authoring table is readable');
+select is(current_user::text, 'trace_candidate', 'B0-SP7: from the gateway, SET ROLE trace_candidate succeeds');
+select matches(pg_temp.try('select * from public.items'), '^42501 permission denied', 'B0-SP7: as trace_candidate, no M1 table is readable');
 reset role;
-reset session authorization;
-select is(session_user::text, 'postgres', 'B0-SP7: the probe ends back on the operator session');
+select is((select string_agg(r.rolname::text, ',' order by r.rolname) from pg_catalog.pg_roles as r where r.rolname <> 'trace_candidate' and r.rolname <> 'trace_candidate_gateway' and pg_has_role('trace_candidate_gateway', r.oid, 'SET')), null, 'B0-SP7: the gateway can become no role but trace_candidate (trace_api, workers, authenticated, service_role included)');
 
 -- ===== B0-SP7 (rest): a pure owner (org_owner only) =====
 insert into auth.users (id, aud, role, email) values

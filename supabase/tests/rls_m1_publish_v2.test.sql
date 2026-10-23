@@ -439,7 +439,7 @@ begin
     $$update public.item_versions set stem = 'changed' where id = pg_temp.id('pa1')$$,
     $$update public.item_versions set difficulty = 0.9 where id = pg_temp.id('pw1')$$,
     $$update public.item_versions set approved_by = null, approved_at = null where id = pg_temp.id('pa1')$$,
-    $$update public.item_versions set approved_at = now() where id = pg_temp.id('ai1')$$,
+    $$update public.item_versions set approved_at = approved_at + interval '1 second' where id = pg_temp.id('ai1')$$,
     $$update public.item_versions set reviewed_by = approved_by, key_reviewed_by = approved_by where id = pg_temp.id('pa2')$$,
     $$update public.item_versions set status = 'draft' where id = pg_temp.id('pa1')$$,
     $$delete from public.item_versions where id = pg_temp.id('pa1')$$,

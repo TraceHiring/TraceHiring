@@ -401,6 +401,46 @@ isOneToOne: false
       referencedColumns: ["org_id","id"]
     }
                   ]
+                },"integrity_presets": {
+                  Row: {
+                    "catalog_version": string,"org_id": string,"preset_key": string,"preset_values": NonNullable<Json>,"version": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "catalog_version": string,"org_id": string,"preset_key": string,"preset_values": NonNullable<Json>,"version": number
+                  }
+                  Update: {
+                    "catalog_version"?: string,"org_id"?: string,"preset_key"?: string,"preset_values"?: NonNullable<Json>,"version"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "integrity_presets_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"integrity_setting_defs": {
+                  Row: {
+                    "allowed_values": (string)[],"always_locked": boolean,"available_from": string,"catalog_version": string,"default_value": string,"maps_to_signals": (string)[],"org_id": string,"setting_key": string,"value_kind": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "allowed_values": (string)[],"always_locked": boolean,"available_from": string,"catalog_version": string,"default_value": string,"maps_to_signals"?: (string)[],"org_id": string,"setting_key": string,"value_kind": string
+                  }
+                  Update: {
+                    "allowed_values"?: (string)[],"always_locked"?: boolean,"available_from"?: string,"catalog_version"?: string,"default_value"?: string,"maps_to_signals"?: (string)[],"org_id"?: string,"setting_key"?: string,"value_kind"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "integrity_setting_defs_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"integrity_timeline_entries": {
                   Row: {
                     "count": number,"entry_kind": string,"family": string | null,"flag_state": string | null,"id": string,"integrity_card_id": string,"observed": NonNullable<Json>,"offset_ms": number,"org_id": string,"position": number,"rule_id": string | null,"session_id": string,"signal_kind": string,"signal_seqs": (number)[],"test_id": string,"tier": string | null,"workspace_id": string
@@ -687,6 +727,32 @@ isOneToOne: false
       referencedColumns: ["org_id","id"]
     }
                   ]
+                },"jobs": {
+                  Row: {
+                    "archived_at": string | null,"created_at": string,"created_by": string | null,"id": string,"jd_sha256": string | null,"org_id": string,"role_template_version_id": string | null,"template_match_permille": number | null,"title": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "archived_at"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"jd_sha256"?: string | null,"org_id": string,"role_template_version_id"?: string | null,"template_match_permille"?: number | null,"title": string,"workspace_id": string
+                  }
+                  Update: {
+                    "archived_at"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"jd_sha256"?: string | null,"org_id"?: string,"role_template_version_id"?: string | null,"template_match_permille"?: number | null,"title"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "jobs_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "jobs_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
                 },"library_copy_requests": {
                   Row: {
                     "created_at": string,"id": string,"library_item_version_ids": (string)[],"org_id": string,"requested_by": string | null,"result_item_version_ids": (string)[] | null,"workspace_id": string
@@ -797,6 +863,26 @@ isOneToOne: false
                   Relationships: [
                     {
       foreignKeyName: "notice_versions_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"org_integrity_locks": {
+                  Row: {
+                    "id": string,"locked_at": string,"locked_by": string | null,"locked_value": string,"org_id": string,"setting_key": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "id"?: string,"locked_at"?: string,"locked_by"?: string | null,"locked_value": string,"org_id": string,"setting_key": string
+                  }
+                  Update: {
+                    "id"?: string,"locked_at"?: string,"locked_by"?: string | null,"locked_value"?: string,"org_id"?: string,"setting_key"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "org_integrity_locks_org_id_fkey"
       columns: ["org_id"]
 isOneToOne: false
       referencedRelation: "orgs"
@@ -1015,6 +1101,26 @@ isOneToOne: false
       referencedColumns: ["org_id","id","session_id"]
     }
                   ]
+                },"role_templates": {
+                  Row: {
+                    "blueprint": NonNullable<Json>,"created_at": string,"created_by": string | null,"id": string,"keywords": (string)[],"name": string,"org_id": string,"preset_key": string,"published_at": string | null,"status": string,"template_key": string,"version": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "blueprint": NonNullable<Json>,"created_at"?: string,"created_by"?: string | null,"id"?: string,"keywords": (string)[],"name": string,"org_id": string,"preset_key": string,"published_at"?: string | null,"status"?: string,"template_key": string,"version": number
+                  }
+                  Update: {
+                    "blueprint"?: NonNullable<Json>,"created_at"?: string,"created_by"?: string | null,"id"?: string,"keywords"?: (string)[],"name"?: string,"org_id"?: string,"preset_key"?: string,"published_at"?: string | null,"status"?: string,"template_key"?: string,"version"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "role_templates_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"rubric_versions": {
                   Row: {
                     "content_sha256": string,"created_at": string,"created_by": string | null,"criteria": NonNullable<Json>,"id": string,"org_id": string,"rubric_key": string,"version_no": number
@@ -1037,14 +1143,14 @@ isOneToOne: false
                   ]
                 },"ruleset_versions": {
                   Row: {
-                    "band_rule_version_id": string | null,"content_sha256": string | null,"id": string,"org_id": string,"published_at": string | null,"signal_settings": NonNullable<Json>,"test_id": string,"version_no": number,"workspace_id": string
+                    "band_rule_version_id": string | null,"catalog_version": string | null,"content_sha256": string | null,"id": string,"org_id": string,"preset_key": string | null,"preset_version": number | null,"published_at": string | null,"settings": Json | null,"signal_settings": NonNullable<Json>,"test_id": string,"version_no": number,"workspace_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "band_rule_version_id"?: string | null,"content_sha256"?: string | null,"id"?: string,"org_id": string,"published_at"?: string | null,"signal_settings": NonNullable<Json>,"test_id": string,"version_no": number,"workspace_id": string
+                    "band_rule_version_id"?: string | null,"catalog_version"?: string | null,"content_sha256"?: string | null,"id"?: string,"org_id": string,"preset_key"?: string | null,"preset_version"?: number | null,"published_at"?: string | null,"settings"?: Json | null,"signal_settings": NonNullable<Json>,"test_id": string,"version_no": number,"workspace_id": string
                   }
                   Update: {
-                    "band_rule_version_id"?: string | null,"content_sha256"?: string | null,"id"?: string,"org_id"?: string,"published_at"?: string | null,"signal_settings"?: NonNullable<Json>,"test_id"?: string,"version_no"?: number,"workspace_id"?: string
+                    "band_rule_version_id"?: string | null,"catalog_version"?: string | null,"content_sha256"?: string | null,"id"?: string,"org_id"?: string,"preset_key"?: string | null,"preset_version"?: number | null,"published_at"?: string | null,"settings"?: Json | null,"signal_settings"?: NonNullable<Json>,"test_id"?: string,"version_no"?: number,"workspace_id"?: string
                   }
                   Relationships: [
                     {
@@ -1067,16 +1173,66 @@ isOneToOne: false
       referencedColumns: ["org_id","id"]
     }
                   ]
-                },"sections": {
+                },"section_pool_snapshot": {
                   Row: {
-                    "created_at": string,"format": Database["public"]['Enums']["section_format"],"id": string,"name": string,"org_id": string,"position": number,"test_id": string,"test_version_id": string,"time_limit_seconds": number | null,"weight": number,"workspace_id": string
+                    "exposure_at_publish": number,"item_version_id": string,"org_id": string,"section_id": string,"test_id": string,"test_version_id": string,"workspace_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "created_at"?: string,"format": Database["public"]['Enums']["section_format"],"id"?: string,"name": string,"org_id": string,"position": number,"test_id": string,"test_version_id": string,"time_limit_seconds"?: number | null,"weight": number,"workspace_id": string
+                    "exposure_at_publish": number,"item_version_id": string,"org_id": string,"section_id": string,"test_id": string,"test_version_id": string,"workspace_id": string
                   }
                   Update: {
-                    "created_at"?: string,"format"?: Database["public"]['Enums']["section_format"],"id"?: string,"name"?: string,"org_id"?: string,"position"?: number,"test_id"?: string,"test_version_id"?: string,"time_limit_seconds"?: number | null,"weight"?: number,"workspace_id"?: string
+                    "exposure_at_publish"?: number,"item_version_id"?: string,"org_id"?: string,"section_id"?: string,"test_id"?: string,"test_version_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "section_pool_snapshot_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "section_pool_snapshot_org_id_item_version_id_fkey"
+      columns: ["org_id","item_version_id"]
+isOneToOne: false
+      referencedRelation: "item_versions"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "section_pool_snapshot_org_id_section_id_fkey"
+      columns: ["org_id","section_id"]
+isOneToOne: false
+      referencedRelation: "sections"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "section_pool_snapshot_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "section_pool_snapshot_org_id_test_version_id_fkey"
+      columns: ["org_id","test_version_id"]
+isOneToOne: false
+      referencedRelation: "test_versions"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "section_pool_snapshot_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"sections": {
+                  Row: {
+                    "blueprint": Json | null,"created_at": string,"draw_count": number | null,"format": Database["public"]['Enums']["section_format"],"id": string,"name": string,"navigation": string | null,"org_id": string,"paste_rule": string | null,"pool_id": string | null,"position": number,"shuffle_items": boolean,"shuffle_options": boolean,"test_id": string,"test_version_id": string,"time_limit_seconds": number | null,"weight": number,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "blueprint"?: Json | null,"created_at"?: string,"draw_count"?: number | null,"format": Database["public"]['Enums']["section_format"],"id"?: string,"name": string,"navigation"?: string | null,"org_id": string,"paste_rule"?: string | null,"pool_id"?: string | null,"position": number,"shuffle_items"?: boolean,"shuffle_options"?: boolean,"test_id": string,"test_version_id": string,"time_limit_seconds"?: number | null,"weight": number,"workspace_id": string
+                  }
+                  Update: {
+                    "blueprint"?: Json | null,"created_at"?: string,"draw_count"?: number | null,"format"?: Database["public"]['Enums']["section_format"],"id"?: string,"name"?: string,"navigation"?: string | null,"org_id"?: string,"paste_rule"?: string | null,"pool_id"?: string | null,"position"?: number,"shuffle_items"?: boolean,"shuffle_options"?: boolean,"test_id"?: string,"test_version_id"?: string,"time_limit_seconds"?: number | null,"weight"?: number,"workspace_id"?: string
                   }
                   Relationships: [
                     {
@@ -1103,18 +1259,24 @@ isOneToOne: false
 isOneToOne: false
       referencedRelation: "workspaces"
       referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "sections_pool_fk"
+      columns: ["org_id","pool_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "pools"
+      referencedColumns: ["org_id","id","workspace_id"]
     }
                   ]
                 },"session_items": {
                   Row: {
-                    "id": string,"item_version_id": string,"org_id": string,"position": number,"section_id": string,"served_at": string,"session_id": string,"test_id": string,"workspace_id": string
+                    "draw_seed_sha256": string | null,"id": string,"item_variant_id": string | null,"item_version_id": string,"option_order": Json | null,"org_id": string,"position": number,"section_id": string,"served_at": string | null,"session_id": string,"test_id": string,"workspace_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "id"?: string,"item_version_id": string,"org_id": string,"position": number,"section_id": string,"served_at": string,"session_id": string,"test_id": string,"workspace_id": string
+                    "draw_seed_sha256"?: string | null,"id"?: string,"item_variant_id"?: string | null,"item_version_id": string,"option_order"?: Json | null,"org_id": string,"position": number,"section_id": string,"served_at"?: string | null,"session_id": string,"test_id": string,"workspace_id": string
                   }
                   Update: {
-                    "id"?: string,"item_version_id"?: string,"org_id"?: string,"position"?: number,"section_id"?: string,"served_at"?: string,"session_id"?: string,"test_id"?: string,"workspace_id"?: string
+                    "draw_seed_sha256"?: string | null,"id"?: string,"item_variant_id"?: string | null,"item_version_id"?: string,"option_order"?: Json | null,"org_id"?: string,"position"?: number,"section_id"?: string,"served_at"?: string | null,"session_id"?: string,"test_id"?: string,"workspace_id"?: string
                   }
                   Relationships: [
                     {
@@ -1153,6 +1315,12 @@ isOneToOne: false
 isOneToOne: false
       referencedRelation: "workspaces"
       referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "session_items_variant_fk"
+      columns: ["org_id","item_variant_id","item_version_id"]
+isOneToOne: false
+      referencedRelation: "item_variants"
+      referencedColumns: ["org_id","id","item_version_id"]
     }
                   ]
                 },"sessions": {
@@ -1285,14 +1453,14 @@ isOneToOne: false
                   ]
                 },"test_versions": {
                   Row: {
-                    "content_sha256": string | null,"created_at": string,"created_by": string | null,"id": string,"notice_version_id": string | null,"org_id": string,"published_at": string | null,"published_by": string | null,"quality_cutoff": number,"ruleset_version_id": string | null,"status": Database["public"]['Enums']["test_version_status"],"test_id": string,"total_time_seconds": number,"version_no": number,"workspace_id": string
+                    "content_sha256": string | null,"created_at": string,"created_by": string | null,"id": string,"min_pool_ratio": number | null,"notice_version_id": string | null,"org_id": string,"package_version": number,"published_at": string | null,"published_by": string | null,"quality_cutoff": number,"role_template_version_id": string | null,"ruleset_version_id": string | null,"status": Database["public"]['Enums']["test_version_status"],"test_id": string,"total_time_seconds": number,"version_no": number,"workspace_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "content_sha256"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"notice_version_id"?: string | null,"org_id": string,"published_at"?: string | null,"published_by"?: string | null,"quality_cutoff": number,"ruleset_version_id"?: string | null,"status"?: Database["public"]['Enums']["test_version_status"],"test_id": string,"total_time_seconds": number,"version_no": number,"workspace_id": string
+                    "content_sha256"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"min_pool_ratio"?: number | null,"notice_version_id"?: string | null,"org_id": string,"package_version"?: number,"published_at"?: string | null,"published_by"?: string | null,"quality_cutoff": number,"role_template_version_id"?: string | null,"ruleset_version_id"?: string | null,"status"?: Database["public"]['Enums']["test_version_status"],"test_id": string,"total_time_seconds": number,"version_no": number,"workspace_id": string
                   }
                   Update: {
-                    "content_sha256"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"notice_version_id"?: string | null,"org_id"?: string,"published_at"?: string | null,"published_by"?: string | null,"quality_cutoff"?: number,"ruleset_version_id"?: string | null,"status"?: Database["public"]['Enums']["test_version_status"],"test_id"?: string,"total_time_seconds"?: number,"version_no"?: number,"workspace_id"?: string
+                    "content_sha256"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"min_pool_ratio"?: number | null,"notice_version_id"?: string | null,"org_id"?: string,"package_version"?: number,"published_at"?: string | null,"published_by"?: string | null,"quality_cutoff"?: number,"role_template_version_id"?: string | null,"ruleset_version_id"?: string | null,"status"?: Database["public"]['Enums']["test_version_status"],"test_id"?: string,"total_time_seconds"?: number,"version_no"?: number,"workspace_id"?: string
                   }
                   Relationships: [
                     {
@@ -1329,17 +1497,23 @@ isOneToOne: false
                   ]
                 },"tests": {
                   Row: {
-                    "archived_at": string | null,"created_at": string,"created_by": string | null,"id": string,"invitation_seq": number,"name": string,"org_id": string,"workspace_id": string
+                    "archived_at": string | null,"created_at": string,"created_by": string | null,"id": string,"invitation_seq": number,"job_id": string | null,"name": string,"org_id": string,"workspace_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "archived_at"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"invitation_seq"?: number,"name": string,"org_id": string,"workspace_id": string
+                    "archived_at"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"invitation_seq"?: number,"job_id"?: string | null,"name": string,"org_id": string,"workspace_id": string
                   }
                   Update: {
-                    "archived_at"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"invitation_seq"?: number,"name"?: string,"org_id"?: string,"workspace_id"?: string
+                    "archived_at"?: string | null,"created_at"?: string,"created_by"?: string | null,"id"?: string,"invitation_seq"?: number,"job_id"?: string | null,"name"?: string,"org_id"?: string,"workspace_id"?: string
                   }
                   Relationships: [
                     {
+      foreignKeyName: "tests_job_fk"
+      columns: ["org_id","job_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "jobs"
+      referencedColumns: ["org_id","id","workspace_id"]
+    },{
       foreignKeyName: "tests_org_id_fkey"
       columns: ["org_id"]
 isOneToOne: false

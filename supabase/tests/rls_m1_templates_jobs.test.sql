@@ -323,7 +323,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(60);
+select plan(61);
 insert into pg_temp.ids select 'tpl_cs', id from public.role_templates where org_id = pg_temp.id('L') and template_key = 'customer_support' and version = 1;
 insert into pg_temp.ids select 'tpl_bpo', id from public.role_templates where org_id = pg_temp.id('L') and template_key = 'bpo_voice' and version = 1;
 -- An org B published template, for the cross-org case.
@@ -409,9 +409,12 @@ select is((select string_agg(column_name::text, ',' order by column_name) from i
 
 -- ===== jobs: S / U / D =====
 select pg_temp.u('recruiter');
-select is((select count(*)::int from public.jobs), 1, 'jobs S: an A1 recruiter reads the A1 job only');
+select is((select count(*)::int from public.jobs), 2, 'jobs S: an org-wide recruiter reads the jobs of every workspace');
 select is(pg_temp.try($$update public.jobs set title = 'Support associate (night)' where id = 'e4000000-0000-4000-8000-000000000001'$$), 'OK 1', 'jobs U: the title is editable');
-select is(pg_temp.try($$update public.jobs set archived_at = now() where id = 'e4000000-0000-4000-8000-000000000002'$$), 'OK 0', 'jobs U: an A1 recruiter cannot touch the A2 job');
+select pg_temp.u('ws_recruiter');
+select is((select array_agg(id) from public.jobs), array['e4000000-0000-4000-8000-000000000002'::uuid], 'jobs S: a workspace A2 recruiter reads the A2 job only');
+select is(pg_temp.try($$update public.jobs set archived_at = now() where id = 'e4000000-0000-4000-8000-000000000001'$$), 'OK 0', 'jobs U: a workspace A2 recruiter cannot touch the A1 job');
+select pg_temp.u('recruiter');
 select matches(pg_temp.try($$update public.jobs set jd_sha256 = null where id = 'e4000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'jobs U: the JD hash is outside the update grant');
 select matches(pg_temp.try($$delete from public.jobs$$), '^42501 permission denied', 'jobs D: no delete grant (archive instead)');
 select pg_temp.op();

@@ -77,6 +77,13 @@ describe('@trace/db-types', () => {
       | 'pools'
       | 'pool_items'
       | 'library_copy_requests'
+      // M1 migration M1-b (specs/m1-test-authoring.md §3.2)
+      | 'role_templates'
+      | 'jobs'
+      | 'section_pool_snapshot'
+      | 'integrity_setting_defs'
+      | 'integrity_presets'
+      | 'org_integrity_locks'
     >();
     expectTypeOf<keyof Database['public']['Views']>().toEqualTypeOf<
       'v_item_exposure' | 'v_item_bank_quant_share'

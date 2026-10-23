@@ -453,7 +453,7 @@ select is((select served_count from private.library_exposure(pg_temp.id('lib_aut
 select pg_temp.api(pg_temp.id('A'));
 select is((select count(*)::int from private.library_exposure(pg_temp.id('owner'), 'aal2', '{otp,totp}')), 0, 'R5-36: a customer viewer reads no library exposure');
 select pg_temp.op();
-select matches(pg_temp.try(format($$update public.item_exposure_events set served_at = now() where session_item_id = %L$$, pg_temp.id('a_s1'))), '^P0001 TRACE_APPEND_ONLY', 'exposure: append-only, even on the operator path');
+select matches(pg_temp.try(format($$update public.item_exposure_events set served_at = now() where session_item_id = %L$$, pg_temp.id('a_s1'))), '^(42501 permission denied|P0001 TRACE_APPEND_ONLY)', 'exposure: append-only, even on the operator path (UPDATE revoked from the owner, ALWAYS trigger behind it)');
 
 -- ===== The quality worker reads the whole draw (R5-19, AT-M1-21 db case) =====
 select pg_temp.w('trace_quality_worker', pg_temp.id('A'));

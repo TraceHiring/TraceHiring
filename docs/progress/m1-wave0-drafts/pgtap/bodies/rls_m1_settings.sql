@@ -35,10 +35,12 @@ create function pg_temp.ss(p jsonb) returns text language sql as $f$
   select string_agg(k || '=' || (p -> k ->> 'enabled'), ',' order by k) from jsonb_object_keys(p) as k
 $f$;
 grant execute on function pg_temp.ss(jsonb) to public;
--- with(preset, key, value): the preset's values with one setting changed.
+-- with_setting(preset, key, value): the preset's values with one setting changed (read from a copy taken on the operator
+-- path, so any persona can build a payload).
+create table pg_temp.presets as select preset_key, preset_values from public.integrity_presets where version = 1;
+grant select on pg_temp.presets to public;
 create function pg_temp.with_setting(p_preset text, p_key text, p_value text) returns jsonb language sql as $f$
-  select p.preset_values || jsonb_build_object(p_key, p_value) from public.integrity_presets as p
-  where p.preset_key = p_preset and p.version = 1
+  select p.preset_values || jsonb_build_object(p_key, p_value) from pg_temp.presets as p where p.preset_key = p_preset
 $f$;
 grant execute on function pg_temp.with_setting(text, text, text) to public;
 
@@ -124,7 +126,7 @@ select matches(pg_temp.try(format($$update public.ruleset_versions set settings 
 select matches(pg_temp.try(format($$update public.ruleset_versions set settings = %L where id = pg_temp.id('t1_rs')$$, pg_temp.with_setting('strict', 'id_verification', 'on'))), '^23514 TRACE_GUARD: setting value not allowed', 'settings U: id verification stays off (Phase 2)');
 select matches(pg_temp.try(format($$update public.ruleset_versions set settings = %L where id = pg_temp.id('t1_rs')$$, pg_temp.with_setting('strict', 'question_copy', 'on') - 'question_copy')), '^23514 TRACE_GUARD: the settings name every setting of the catalog', 'settings U: a missing setting is refused');
 select matches(pg_temp.try(format($$update public.ruleset_versions set settings = %L where id = pg_temp.id('t1_rs')$$, pg_temp.with_setting('strict', 'emotion_detection', 'on'))), '^23514 TRACE_GUARD: the settings name every setting of the catalog', 'settings U (rule 7): an unknown setting is refused');
-select matches(pg_temp.try($$update public.ruleset_versions set preset_key = 'lenient' where id = pg_temp.id('t1_rs')$$), '^23514', 'settings U: an unknown preset key is refused');
+select matches(pg_temp.try($$update public.ruleset_versions set preset_key = 'lenient' where id = pg_temp.id('t1_rs')$$), '^23503 TRACE_GUARD: preset not found', 'settings U: an unknown preset key is refused');
 select matches(pg_temp.try($$update public.ruleset_versions set settings = null where id = pg_temp.id('t1_rs')$$), '^42501 TRACE_GUARD: settings once set are not removed', 'settings U: settings once set are never removed');
 select pg_temp.u('ws_recruiter');
 select is(pg_temp.try(format($$update public.ruleset_versions set settings = %L where id = pg_temp.id('t1_rs')$$, pg_temp.with_setting('strict', 'question_copy', 'off'))), 'OK 0', 'settings U: a workspace A2 recruiter cannot write a workspace A1 ruleset');
