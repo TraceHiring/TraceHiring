@@ -4,6 +4,7 @@
 // keys, the pool and import job guards) and a harness that mounts one router as a caller. Synthetic data only; the real
 // triggers and policies are proven by supabase/tests (lead).
 import { Hono } from 'hono';
+import type { VariantEngine } from './content.js';
 import type { OrgCaller, OrgDeps, Query, Rest } from '../tests/org-context.js';
 import { RestError } from '../tests/org-context.js';
 import {
@@ -412,6 +413,56 @@ export const harness = (
       {} as Env,
     );
   return { app, call };
+};
+
+/**
+ * A stand-in for `@trace/item-variants` (the real parser and generator are AT-M1-04/05 in that package): `check` refuses
+ * the grammar's reserved names (functions and keywords, which the contract's ParamName lets through) and `generate`
+ * walks the first int param from its minimum, failing when its range holds fewer values than the spec's count.
+ */
+export const RESERVED_PARAM_NAMES = [
+  'min',
+  'max',
+  'abs',
+  'round',
+  'floor',
+  'ceil',
+  'gcd',
+  'lcm',
+  'and',
+  'or',
+  'not',
+];
+export const fakeVariants: VariantEngine = {
+  check: (spec) =>
+    typeof spec === 'object' &&
+    spec !== null &&
+    Object.keys((spec as { params?: object }).params ?? {}).every(
+      (n) => !RESERVED_PARAM_NAMES.includes(n),
+    ),
+  generate: (spec, seeds) => {
+    if (seeds.length !== spec.count) throw new RangeError('seeds');
+    const [name, def] = Object.entries(spec.params)[0] ?? [];
+    if (name === undefined || def === undefined || (def as { kind: string }).kind !== 'int') {
+      return { ok: false };
+    }
+    const { min, max, step } = def as { min: number; max: number; step: number };
+    if (Math.floor((max - min) / step) + 1 < spec.count) return { ok: false };
+    const render = (t: string, value: number) => t.split(`{{${name}}}`).join(String(value));
+    return {
+      ok: true,
+      variants: Array.from({ length: spec.count }, (_, k) => {
+        const value = min + k * step;
+        return {
+          variantNo: k + 1,
+          params: { [name]: value },
+          stem: render(spec.stem, value),
+          options: spec.options.map((o) => ({ id: o.id, text: render(o.text, value) })),
+          correctOptionId: spec.correctOptionId,
+        };
+      }),
+    };
+  },
 };
 
 export const codeOf = async (res: Response): Promise<string> =>

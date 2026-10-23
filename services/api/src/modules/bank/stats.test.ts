@@ -13,7 +13,11 @@ import { quantShareOf } from './stats.js';
 const setup = (rows: Record<string, unknown>[], roles?: string[]) => {
   const db = a2aDb(roles === undefined ? {} : { roles });
   db.tables.v_item_bank_quant_share = rows;
-  const { call } = harness((org) => createBankRoutes({ org }), db, callerOf());
+  const { call } = harness(
+    (org) => createBankRoutes({ org, variants: () => null }),
+    db,
+    callerOf(),
+  );
   return { db, call };
 };
 

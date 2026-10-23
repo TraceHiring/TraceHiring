@@ -447,6 +447,16 @@ export const restErrorCode = (err: unknown): OrgErrorCode => {
         return 'package_too_large';
       case 'library_cap':
         return 'library_cap';
+      // A2a (A2b re-review Note 4): bank, pool, import and library state refusals are 409; the approver check is a
+      // permission refusal of a request the caller may see (403).
+      case 'item_frozen':
+      case 'item_status_change':
+      case 'pool_archived':
+      case 'import_not_open':
+      case 'library_not_approved':
+        return 'conflict';
+      case 'approver_required':
+        return 'forbidden';
       default:
         break;
     }

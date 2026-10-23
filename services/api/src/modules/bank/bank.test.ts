@@ -16,6 +16,7 @@ import {
   a2aDb,
   callerOf,
   codeOf,
+  fakeVariants,
   harness,
   jsonOf,
   LIBRARY_ORG,
@@ -57,7 +58,11 @@ const paramSpec = (patch: Record<string, unknown> = {}) => ({
 const setup = (roles?: string[], aal: 'aal1' | 'aal2' = 'aal1') => {
   const db = a2aDb(roles === undefined ? {} : { roles });
   const caller = callerOf({ aal, amr: aal === 'aal2' ? ['totp'] : ['otp'] });
-  const { call } = harness((org) => createBankRoutes({ org }), db, caller);
+  const { call } = harness(
+    (org) => createBankRoutes({ org, variants: () => fakeVariants }),
+    db,
+    caller,
+  );
   return { db, call };
 };
 
@@ -156,6 +161,15 @@ describe('POST …/bank/items', () => {
     expect(body.isParameterised).toBe(true);
     expect(body.content).toMatchObject({ key: { optionId: 'a' } });
     expect(db.tables.item_answer_keys).toEqual([]);
+  });
+
+  it('answers 503 for a parameterised write when no variant engine is bound', async () => {
+    const db = a2aDb();
+    const { call } = harness((org) => createBankRoutes({ org, variants: () => null }), db);
+    const res = await call('POST', '/bank/items', mcq({ paramSpec: paramSpec() as never }));
+    expect(res.status).toBe(503);
+    expect(db.tables.items).toEqual([]);
+    expect((await call('POST', '/bank/items', mcq())).status).toBe(201);
   });
 
   it('undoes the item when its version is refused, and never echoes the stem', async () => {

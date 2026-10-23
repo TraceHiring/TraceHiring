@@ -26,7 +26,7 @@ const mount = (org: OrgDeps) => {
     touched.push(name);
     return null;
   };
-  app.route('/', createBankRoutes({ org }));
+  app.route('/', createBankRoutes({ org, variants: never('variants') }));
   app.route('/', createPoolsRoutes({ org }));
   app.route('/', createLibraryRoutes({ org, source: never('source'), limiter: never('limiter') }));
   app.route('/', createImportsRoutes({ org, media: never('media') }));
