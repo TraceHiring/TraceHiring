@@ -105,10 +105,9 @@ export const SQL = {
   invitation: `select id, org_id, status::text as status, candidate_id, session_id, ${iso('started_at')} as started_at, test_version_id, candidate_label, contact_email, adult_confirmed_by_inviter, adult_self_declared, ${iso('expires_at')} as expires_at from public.invitations where org_id = $1 and id = $2`,
   testVersion:
     'select id, status::text as status, total_time_seconds, ruleset_version_id, notice_version_id, content_sha256 from public.test_versions where org_id = $1 and id = $2',
-  // Fix round 1 #8: the invite page title is the test's name (needs SELECT (id, org_id, name) on public.tests for
-  // trace_api, org-bound; lead migration), never read from the package.
-  testTitle:
-    'select t.name from public.test_versions as v join public.tests as t on t.org_id = v.org_id and t.id = v.test_id where v.org_id = $1 and v.id = $2',
+  // Fix round 1 #8: the invite page title is the test's name, never read from the package. trace_api holds no SELECT
+  // on public.tests (D1 pin); migration M1-l's definer function returns the name, bound to private.api_org_id().
+  testTitle: 'select private.api_test_title($1::uuid) as name',
   notice: 'select id, body_template from public.notice_versions where org_id = $1 and id = $2',
   consent:
     "select id from public.consents where org_id = $1 and invitation_id = $2 and event = 'granted'",
@@ -185,8 +184,8 @@ const orgStore = (tx: SqlTx, orgId: string): OrgStore => ({
     };
   },
   async testTitle(testVersionId) {
-    const [r] = await tx.query<{ name: string }>(SQL.testTitle, [orgId, testVersionId]);
-    return r === undefined ? null : r.name;
+    const [r] = await tx.query<{ name: string | null }>(SQL.testTitle, [testVersionId]);
+    return r?.name ?? null;
   },
   async notice(id) {
     const [r] = await tx.query<{ id: string; body_template: string }>(SQL.notice, [orgId, id]);
