@@ -88,6 +88,21 @@ export const createAiDraftsRoutes = (deps: AiDraftsDeps): Hono<{ Bindings: Env }
       const queue = deps.queue(c.env) ?? orgFail('unavailable');
       const workspaceId = req.workspaceId ?? (await defaultWorkspace(ctx, orgId));
       const topic = scrubDraftTopic(req.topic);
+      // A2a security S2 (R5-64 m): the message is built and parsed before the job row exists, so a message the
+      // contract refuses answers 400 and leaves no `queued` job behind. The job id is the only field the insert adds,
+      // and the database's uuid always parses (checked again below).
+      const draft = AuthoringQueueMessage.omit({ jobId: true }).safeParse({
+        v: 1,
+        kind: 'ai_draft',
+        orgId,
+        workspaceId,
+        format: req.format,
+        skillKey: req.skillKey,
+        difficulty: req.difficulty,
+        count: req.count,
+        topic,
+      });
+      if (!draft.success) return orgFail('bad_request');
       const [row] = parseRows(
         JobRow,
         await ctx.rest.insert(
@@ -108,23 +123,12 @@ export const createAiDraftsRoutes = (deps: AiDraftsDeps): Hono<{ Bindings: Env }
         ),
       );
       if (row === undefined) return orgFail('not_found');
-      const message = AuthoringQueueMessage.safeParse({
-        v: 1,
-        kind: 'ai_draft',
-        jobId: row.id,
-        orgId,
-        workspaceId: row.workspace_id,
-        format: req.format,
-        skillKey: req.skillKey,
-        difficulty: req.difficulty,
-        count: req.count,
-        topic,
-      });
+      const message = AuthoringQueueMessage.safeParse({ ...draft.data, jobId: row.id });
       try {
         if (!message.success) throw new Error('bad_message');
         await queue.send(message.data);
       } catch {
-        // The row stays queued with no message (an org user cannot fail a job; Lead ask). Nothing keeps the topic.
+        // The row stays queued with no message; the jobs sweep fails it (R5-64 m, lead). Nothing keeps the topic.
         return orgFail('unavailable');
       }
       return answer(AiDraftJobView, viewOf(row), 201);
