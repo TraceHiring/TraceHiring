@@ -82,6 +82,7 @@ const POOL_BINDINGS: Record<'top' | 'do', string[]> = {
   top: ['VERSION'],
   do: [
     'EVIDENCE',
+    'ITEM_MEDIA',
     'LINK_LIMITER',
     'MIRROR_QUEUE',
     'MIRROR_TRANSPORT',

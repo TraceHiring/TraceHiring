@@ -29,5 +29,13 @@ declare global {
     JOBS_AUTHORING_DB_URL?: string;
     /** Login role jobs_admin_login; every use runs `SET LOCAL ROLE trace_admin_worker`. Local only. */
     JOBS_ADMIN_DB_URL?: string;
+    // M1-20, R5-12 (DC-M1-5): member provisioning (the admin job only). The pepper checks the invite's email HMAC;
+    // the secret key and URL reach the Supabase Auth admin API outside any transaction. Never logged.
+    /** HMAC pepper of member_invites.email_hmac (same value on trace-api). */
+    MEMBER_INVITE_PEPPER?: string;
+    /** The Supabase secret key of this environment, for the Auth admin API only. */
+    SUPABASE_SECRET_KEY_JOBS?: string;
+    /** The Supabase project URL of this environment (the Auth admin API base). */
+    SUPABASE_URL?: string;
   }
 }

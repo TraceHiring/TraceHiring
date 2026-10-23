@@ -664,6 +664,12 @@ importers:
       '@sentry/cloudflare':
         specifier: 'catalog:'
         version: 11.1.0(wrangler@4.149.0(@types/node@22.20.5))
+      '@trace/item-delivery':
+        specifier: workspace:*
+        version: link:../../packages/item-delivery
+      '@trace/item-variants':
+        specifier: workspace:*
+        version: link:../../packages/item-variants
       '@trace/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -707,6 +713,9 @@ importers:
 
   workers/edge:
     dependencies:
+      '@trace/item-delivery':
+        specifier: workspace:*
+        version: link:../../packages/item-delivery
       '@trace/shared':
         specifier: workspace:*
         version: link:../../packages/shared

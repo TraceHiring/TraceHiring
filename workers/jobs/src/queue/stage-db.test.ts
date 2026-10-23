@@ -55,11 +55,20 @@ describe('STAGE_DB: one login secret and one worker role per stage (MT-14, L-29)
         role: 'trace_integrity_worker',
       },
       sweep: { binding: 'JOBS_MIRROR_DB', secret: 'JOBS_MIRROR_DB_URL', role: 'trace_worker' },
+      // M1 R5-11, R5-13: the AI drafting and member provisioning jobs, each with its own login and role.
+      authoring: {
+        binding: 'JOBS_AUTHORING_DB',
+        secret: 'JOBS_AUTHORING_DB_URL',
+        role: 'trace_authoring_worker',
+      },
+      admin: { binding: 'JOBS_ADMIN_DB', secret: 'JOBS_ADMIN_DB_URL', role: 'trace_admin_worker' },
     });
     const roles = new Set(
-      (['mirror', 'quality', 'integrity'] as const).map((s) => STAGE_DB[s].role),
+      (['mirror', 'quality', 'integrity', 'authoring', 'admin'] as const).map(
+        (s) => STAGE_DB[s].role,
+      ),
     );
-    expect(roles.size).toBe(3);
+    expect(roles.size).toBe(5);
   });
 });
 

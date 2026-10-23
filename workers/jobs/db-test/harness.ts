@@ -15,7 +15,12 @@ import type { SqlParam, SqlTx } from '@trace/shared/jobs';
 import { localDbUrlAllowed } from '@trace/workers-http/pg-socket';
 
 export type WorkerRole =
-  'trace_worker' | 'trace_quality_worker' | 'trace_integrity_worker' | 'trace_api';
+  | 'trace_worker'
+  | 'trace_quality_worker'
+  | 'trace_integrity_worker'
+  | 'trace_authoring_worker'
+  | 'trace_admin_worker'
+  | 'trace_api';
 type Sql = postgres.Sql;
 
 /** The local stack's operator URL, assembled at run time (no credential literal in the repo). */
@@ -109,12 +114,16 @@ const ROLES: readonly WorkerRole[] = [
   'trace_worker',
   'trace_quality_worker',
   'trace_integrity_worker',
+  'trace_authoring_worker',
+  'trace_admin_worker',
   'trace_api',
 ];
 const SET_ROLE: Record<WorkerRole, string> = {
   trace_worker: 'set local role trace_worker',
   trace_quality_worker: 'set local role trace_quality_worker',
   trace_integrity_worker: 'set local role trace_integrity_worker',
+  trace_authoring_worker: 'set local role trace_authoring_worker',
+  trace_admin_worker: 'set local role trace_admin_worker',
   trace_api: 'set local role trace_api',
 };
 const SET_ORG = "select set_config('trace.job_org_id', $1, true)";

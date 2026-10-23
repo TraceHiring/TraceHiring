@@ -14,10 +14,25 @@ import {
 import { connect as cfConnect } from 'cloudflare:sockets';
 import postgres from 'postgres';
 
-export type StageDbName = 'mirror' | 'quality' | 'integrity' | 'sweep';
-type Secret = 'JOBS_MIRROR_DB_URL' | 'JOBS_QUALITY_DB_URL' | 'JOBS_INTEGRITY_DB_URL';
-type Binding = 'JOBS_MIRROR_DB' | 'JOBS_QUALITY_DB' | 'JOBS_INTEGRITY_DB';
-type WorkerRole = 'trace_worker' | 'trace_quality_worker' | 'trace_integrity_worker';
+export type StageDbName = 'mirror' | 'quality' | 'integrity' | 'sweep' | 'authoring' | 'admin';
+type Secret =
+  | 'JOBS_MIRROR_DB_URL'
+  | 'JOBS_QUALITY_DB_URL'
+  | 'JOBS_INTEGRITY_DB_URL'
+  | 'JOBS_AUTHORING_DB_URL'
+  | 'JOBS_ADMIN_DB_URL';
+type Binding =
+  | 'JOBS_MIRROR_DB'
+  | 'JOBS_QUALITY_DB'
+  | 'JOBS_INTEGRITY_DB'
+  | 'JOBS_AUTHORING_DB'
+  | 'JOBS_ADMIN_DB';
+type WorkerRole =
+  | 'trace_worker'
+  | 'trace_quality_worker'
+  | 'trace_integrity_worker'
+  | 'trace_authoring_worker'
+  | 'trace_admin_worker';
 
 /**
  * The login of each stage, as a Hyperdrive binding (staging) and a local-stack URL secret, and its worker role; no
@@ -39,12 +54,21 @@ export const STAGE_DB: Readonly<
   },
   // The sweep is neutral and runs as trace_worker (private.sweep_pending is EXECUTE to it only).
   sweep: { binding: 'JOBS_MIRROR_DB', secret: 'JOBS_MIRROR_DB_URL', role: 'trace_worker' },
+  // M1 R5-11, R5-13: the AI drafting job (trace-authoring queue) and member provisioning (trace-admin queue).
+  authoring: {
+    binding: 'JOBS_AUTHORING_DB',
+    secret: 'JOBS_AUTHORING_DB_URL',
+    role: 'trace_authoring_worker',
+  },
+  admin: { binding: 'JOBS_ADMIN_DB', secret: 'JOBS_ADMIN_DB_URL', role: 'trace_admin_worker' },
 });
 
 const SET_ROLE_SQL: Readonly<Record<WorkerRole, string>> = Object.freeze({
   trace_worker: 'set local role trace_worker',
   trace_quality_worker: 'set local role trace_quality_worker',
   trace_integrity_worker: 'set local role trace_integrity_worker',
+  trace_authoring_worker: 'set local role trace_authoring_worker',
+  trace_admin_worker: 'set local role trace_admin_worker',
 });
 
 export const SET_CONTEXT_SQL =

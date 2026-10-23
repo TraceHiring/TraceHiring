@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@sentry/cloudflare": "catalog:",
+    "@trace/item-delivery": "workspace:*",
+    "@trace/item-variants": "workspace:*",
     "@trace/shared": "workspace:*",
     "@trace/vendors": "workspace:*",
     "@trace/workers-http": "workspace:*",

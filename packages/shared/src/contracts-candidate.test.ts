@@ -77,6 +77,8 @@ const T0 = '2026-10-14T10:00:00.000Z';
 const T1 = '2026-10-14T10:30:00.000Z';
 const T2 = '2026-10-14T10:31:00.000Z';
 const HEX = 'a'.repeat(64);
+/** A package image's stored object path (R5-10, Wave 2 lead decision: a library copy keeps the library org's prefix). */
+const MEDIA_PATH = `item-media/${'00000000-0000-4000-8000-000000000777'}/${HEX}.png`;
 const LINK = 'L'.repeat(43);
 const FAKE_JWS = ['hdr', 'body', 'sig'].join('.'); // not a real token: three fake parts
 const NONCE = 'n'.repeat(22);
@@ -1219,7 +1221,7 @@ const secB = {
   draw: null,
 };
 const variantItem = pkgItem(2, sectionA, {
-  media: [{ hash: HEX, ext: 'png', alt: 'A chart' }],
+  media: [{ hash: HEX, ext: 'png', alt: 'A chart', objectPath: MEDIA_PATH }],
   variants: [
     {
       variantId: id(3001),
@@ -1314,11 +1316,72 @@ describe('TestPackageV2 (§5; AT-M1-20)', () => {
     ['a duplicate captured signal', () => ({ ...pkgV2, captureSignals: ['paste', 'paste'] })],
     [
       'an image with a bad extension',
-      () => replaceFirst({ ...pkgItem(1, sectionA), media: [{ hash: HEX, ext: 'gif', alt: 'x' }] }),
+      () =>
+        replaceFirst({
+          ...pkgItem(1, sectionA),
+          media: [
+            { hash: HEX, ext: 'gif', alt: 'x', objectPath: MEDIA_PATH.replace('.png', '.gif') },
+          ],
+        }),
     ],
     [
       'an image without alt text',
-      () => replaceFirst({ ...pkgItem(1, sectionA), media: [{ hash: HEX, ext: 'png', alt: '' }] }),
+      () =>
+        replaceFirst({
+          ...pkgItem(1, sectionA),
+          media: [{ hash: HEX, ext: 'png', alt: '', objectPath: MEDIA_PATH }],
+        }),
+    ],
+    // Wave 2 lead decision (R5-10): the package names each image's stored object path; the edge reads exactly that path.
+    [
+      'an image without its stored object path',
+      () => replaceFirst({ ...pkgItem(1, sectionA), media: [{ hash: HEX, ext: 'png', alt: 'x' }] }),
+    ],
+    [
+      'an image path whose hash is not the image hash',
+      () =>
+        replaceFirst({
+          ...pkgItem(1, sectionA),
+          media: [
+            {
+              hash: HEX,
+              ext: 'png',
+              alt: 'x',
+              objectPath: MEDIA_PATH.replace(HEX, 'b'.repeat(64)),
+            },
+          ],
+        }),
+    ],
+    [
+      'an image path whose extension is not the image extension',
+      () =>
+        replaceFirst({
+          ...pkgItem(1, sectionA),
+          media: [{ hash: HEX, ext: 'jpg', alt: 'x', objectPath: MEDIA_PATH }],
+        }),
+    ],
+    [
+      'an image path outside item-media/<org uuid>/',
+      () =>
+        replaceFirst({
+          ...pkgItem(1, sectionA),
+          media: [{ hash: HEX, ext: 'png', alt: 'x', objectPath: `item-media/../${HEX}.png` }],
+        }),
+    ],
+    [
+      'an image path with an upper-case org id',
+      () =>
+        replaceFirst({
+          ...pkgItem(1, sectionA),
+          media: [
+            {
+              hash: HEX,
+              ext: 'png',
+              alt: 'x',
+              objectPath: `item-media/00000000-0000-4000-8000-00000000ABCD/${HEX}.png`,
+            },
+          ],
+        }),
     ],
     ['a heartbeat other than 10', () => ({ ...pkgV2, heartbeatSeconds: 5 })],
     // Review fixes (R3-2, R5-24, strata): exposure frozen at publish; section format drives the paste rule.

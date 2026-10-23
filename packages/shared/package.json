@@ -14,6 +14,7 @@
     "./contracts/d1": "./src/contracts-d1.ts",
     "./contracts/m1": "./src/contracts-m1.ts",
     "./canonical-json": "./src/canonical-json.ts",
+    "./item-hash": "./src/item-hash.ts",
     "./signal-catalog": "./src/signal-catalog.ts",
     "./canonical-notice": "./src/canonical-notice.ts",
     "./jobs": "./src/jobs.ts"

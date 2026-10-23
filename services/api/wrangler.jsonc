@@ -69,6 +69,8 @@
         // PACKAGES is written at publish; EVIDENCE is read for media fetch (spec §4.2).
         { "binding": "PACKAGES", "bucket_name": "trace-packages-dev" },
         { "binding": "EVIDENCE", "bucket_name": "trace-evidence-dev" },
+        // M1 Wave 2 (§6.9): import images, content-addressed item-media/{org}/{sha256}.{ext}.
+        { "binding": "ITEM_MEDIA", "bucket_name": "trace-item-media-dev" },
       ],
       // M1 R5-13: the api enqueues AI drafting jobs and member invite jobs; workers/jobs consumes them.
       "queues": {
@@ -105,6 +107,8 @@
       "r2_buckets": [
         { "binding": "PACKAGES", "bucket_name": "trace-packages-staging" },
         { "binding": "EVIDENCE", "bucket_name": "trace-evidence-staging" },
+        // M1 Wave 2 (§6.9): import images, content-addressed item-media/{org}/{sha256}.{ext}.
+        { "binding": "ITEM_MEDIA", "bucket_name": "trace-item-media-staging" },
       ],
       "queues": {
         "producers": [

@@ -1151,6 +1151,40 @@ export const MemberInviteRequest = z.strictObject({
 });
 export type MemberInviteRequest = z.infer<typeof MemberInviteRequest>;
 
+/**
+ * The trace-authoring queue message (§6.4, R5-13; Wave 2 lead scaffolding): services/api enqueues it after inserting
+ * the ai_draft_jobs row, with the topic already scrubbed (`scrubDraftTopic`, `@trace/shared/item-hash`);
+ * workers/jobs (role trace_authoring_worker) consumes it. It carries no person's data.
+ */
+export const AuthoringQueueMessage = z.strictObject({
+  v: z.literal(1),
+  kind: z.literal('ai_draft'),
+  jobId: uuid(),
+  orgId: uuid(),
+  workspaceId: uuid(),
+  format: ItemFormat,
+  skillKey: SkillKey,
+  difficulty: Difficulty,
+  count: z.int().min(1).max(10),
+  topic: text(1, 500),
+});
+export type AuthoringQueueMessage = z.infer<typeof AuthoringQueueMessage>;
+
+/**
+ * The trace-admin queue message (M1-20, R5-12, R5-13; Wave 2 lead scaffolding). member_invites stores only the email's
+ * HMAC, so the message carries the address once for the Auth admin API; the job checks HMAC(email, pepper) against
+ * the invite row before it creates the user, and never logs the address. Roles and workspace live on the invite row.
+ */
+export const AdminQueueMessage = z.strictObject({
+  v: z.literal(1),
+  kind: z.literal('member_invite'),
+  inviteId: uuid(),
+  orgId: uuid(),
+  email: z.email().max(254),
+  displayName: text(1, 120),
+});
+export type AdminQueueMessage = z.infer<typeof AdminQueueMessage>;
+
 const inviteRoles = () =>
   z
     .array(OrgRole)

@@ -42,7 +42,12 @@ const EXPECTED = {
   api: {
     durableObjects: { OUTBOX: 'DemoOutboxDO', MEDIA_LINKS: 'MediaLinkDO' },
     migrations: [{ tag: 'v1', new_sqlite_classes: ['DemoOutboxDO', 'MediaLinkDO'] }],
-    r2: { PACKAGES: 'trace-packages-<env>', EVIDENCE: 'trace-evidence-<env>' },
+    // M1 Wave 2 (A2, §6.9): ITEM_MEDIA receives the import images (PUT …/imports/:id/images/:sha256).
+    r2: {
+      PACKAGES: 'trace-packages-<env>',
+      EVIDENCE: 'trace-evidence-<env>',
+      ITEM_MEDIA: 'trace-item-media-<env>',
+    },
     // M1 R5-13: the api enqueues AI drafting jobs and member invite jobs; workers/jobs consumes them.
     producers: { AUTHORING_QUEUE: 'trace-authoring-<env>', ADMIN_QUEUE: 'trace-admin-<env>' },
     consumers: [],

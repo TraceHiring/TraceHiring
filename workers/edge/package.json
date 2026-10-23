@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@trace/item-delivery": "workspace:*",
     "@trace/shared": "workspace:*",
     "@trace/vendors": "workspace:*",
     "@trace/workers-http": "workspace:*",

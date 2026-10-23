@@ -543,11 +543,23 @@ export const TestPackageV2 = z
           maxChars: z.int().min(1).max(10000).optional(),
           media: z
             .array(
-              z.strictObject({
-                hash: Sha256Hex,
-                ext: z.enum(['png', 'jpg', 'webp']),
-                alt: z.string().min(1).max(300),
-              }),
+              z
+                .strictObject({
+                  hash: Sha256Hex,
+                  ext: z.enum(['png', 'jpg', 'webp']),
+                  alt: z.string().min(1).max(300),
+                  // Wave 2 lead decision (R5-10, SEC-M1-5): the stored R2 object path, item-media/<org uuid>/<hash>.<ext>. A
+                  // library copy keeps the library org's prefix, so the edge reads exactly this path (never rebuilds it
+                  // from the session's org). Never passed to the candidate.
+                  objectPath: z
+                    .string()
+                    .regex(
+                      /^item-media\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{64}\.(png|jpg|webp)$/,
+                    ),
+                })
+                .refine((m) => m.objectPath.endsWith(`/${m.hash}.${m.ext}`), {
+                  message: 'the object path names this image',
+                }),
             )
             .min(1)
             .max(4)

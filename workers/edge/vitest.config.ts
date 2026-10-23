@@ -39,7 +39,11 @@ export default defineConfig({
                 SESSION: { className: 'SessionDO', useSQLite: true },
                 OTP: { className: 'InviteOtpDO', useSQLite: true },
               },
-              r2Buckets: { PACKAGES: 'test-packages', EVIDENCE: 'test-evidence' },
+              r2Buckets: {
+                PACKAGES: 'test-packages',
+                EVIDENCE: 'test-evidence',
+                ITEM_MEDIA: 'test-item-media',
+              },
               queueProducers: { MIRROR_QUEUE: { queueName: 'test-session-mirror' } },
               ratelimits: {
                 LINK_LIMITER: { namespace_id: '9101', simple: { limit: 3, period: 10 } },
