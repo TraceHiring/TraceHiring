@@ -29,7 +29,7 @@
 //    app (5173) and the recruiter app (5174), the ports the Workers' dev origins name.
 // 4. Waits for each /health or /version.json, checks that each session started its Workers, and
 //    runs Playwright (`e2e/`, E2E_LOCAL=1) against the stack.
-// 5. Always stops every process it started, drops the four login roles and removes the state
+// 5. Always stops every process it started, drops the six login roles and removes the state
 //    folder (with the generated files); writes the per-phase
 //    timings to e2e/test-results/dc-d9.json and the redacted process logs next to it. Fails when a
 //    step fails or the whole run takes longer than the 25-minute CI job limit.

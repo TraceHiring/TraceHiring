@@ -38,7 +38,29 @@ export const HYPERDRIVE_PLAN = Object.freeze([
     login: 'jobs_integrity_login',
     config: 'trace-staging-jobs-integrity-login',
   }),
+  // M1 R5-11 (specs/m1-test-authoring.md DC-M1-6): the AI drafting job and the member provisioning job.
+  Object.freeze({
+    worker: 'jobs',
+    binding: 'JOBS_AUTHORING_DB',
+    login: 'jobs_authoring_login',
+    config: 'trace-staging-jobs-authoring-login',
+  }),
+  Object.freeze({
+    worker: 'jobs',
+    binding: 'JOBS_ADMIN_DB',
+    login: 'jobs_admin_login',
+    config: 'trace-staging-jobs-admin-login',
+  }),
 ]);
+
+/**
+ * Planned bindings whose configs the founder has not created yet (M1 R5-11: scripts/ops/staging-worker-secrets.mjs
+ * creates them at the next staging go-ahead and prints their ids). The committed wrangler.jsonc may leave out all of
+ * them (never a D1 binding, never only some), which the repository's bindings test accepts with `allowPending`; the
+ * deploy (check-deploy-vars) never sets it, so a staging deploy stays refused until every id is committed. When the
+ * ids land, empty this list (scripts/test/wrangler-bindings.test.mjs refuses a committed binding still listed here).
+ */
+export const PENDING_BINDINGS = Object.freeze(['JOBS_AUTHORING_DB', 'JOBS_ADMIN_DB']);
 
 /** A Hyperdrive config id as Cloudflare issues it. */
 export const HYPERDRIVE_ID_RE = /^[0-9a-f]{32}$/;
@@ -51,7 +73,7 @@ export const HYPERDRIVE_SSLMODES = Object.freeze(['verify-full', 'verify-ca']);
 
 /**
  * Each Hyperdrive config's origin connection cap. To confirm on staging (database review Minor 4): that Cloudflare
- * accepts 5 (the create call fails otherwise), and that 4 x 5 stays within the Supabase session pooler's limits
+ * accepts 5 (the create call fails otherwise), and that 6 x 5 (4 x 5 in D1) stays within the Supabase session pooler's limits
  * (believed per user and database). The staging e2e run records both.
  */
 export const ORIGIN_CONNECTION_LIMIT = 5;
@@ -61,6 +83,11 @@ export const ORIGIN_CONNECTION_LIMIT = 5;
   const logins = LOGIN_ROLES.map((r) => r.login).sort();
   if (planned.join() !== logins.join()) {
     throw new Error('hyperdrive: the plan must give each login role exactly one config');
+  }
+  for (const b of PENDING_BINDINGS) {
+    if (!HYPERDRIVE_PLAN.some((p) => p.binding === b)) {
+      throw new Error(`hyperdrive: the pending binding ${b} is not in the plan`);
+    }
   }
 }
 
@@ -72,9 +99,10 @@ export const bindingsFor = (worker) => HYPERDRIVE_PLAN.filter((p) => p.worker ==
  * `requireStaging` false accepts a staging block with no `hyperdrive` key yet (before the founder has created the
  * configs and their ids are committed); true (the deploy) requires them. Whatever is present must be exact: the
  * plan's bindings with well-formed, distinct ids, no localConnectionString (a credential), and no `hyperdrive` key
- * at the top level or in env.dev (local runs use the local-only URL secrets).
+ * at the top level or in env.dev (local runs use the local-only URL secrets). `allowPending` true (the repository's
+ * bindings test only, never the deploy) also accepts the plan without all of PENDING_BINDINGS.
  */
-export function hyperdriveProblems(worker, config, { requireStaging }) {
+export function hyperdriveProblems(worker, config, { requireStaging, allowPending = false }) {
   const problems = [];
   if (config === null || typeof config !== 'object') return [`${worker}: no wrangler config`];
   if (Object.hasOwn(config, 'hyperdrive')) problems.push(`${worker}: hyperdrive at the top level`);
@@ -96,9 +124,13 @@ export function hyperdriveProblems(worker, config, { requireStaging }) {
   if (!Array.isArray(list)) return [...problems, `${worker}: env.staging.hyperdrive is not a list`];
   const names = list.map((e) => (e && typeof e === 'object' ? e.binding : undefined));
   const want = expected.map((e) => e.binding);
-  if (names.join() !== want.join()) {
+  const pending = allowPending ? want.filter((b) => PENDING_BINDINGS.includes(b)) : [];
+  const withoutPending = want.filter((b) => !pending.includes(b));
+  const exact = names.join() === want.join();
+  if (!exact && !(pending.length > 0 && names.join() === withoutPending.join())) {
+    const alt = pending.length > 0 ? ` (or without the pending ${pending.join(', ')})` : '';
     problems.push(
-      `${worker}: env.staging.hyperdrive must be exactly [${want.join(', ')}] in this order`,
+      `${worker}: env.staging.hyperdrive must be exactly [${want.join(', ')}] in this order${alt}`,
     );
   }
   const ids = new Set();

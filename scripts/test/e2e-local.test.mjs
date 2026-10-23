@@ -521,6 +521,8 @@ describe('main', () => {
     expect(edge).toEqual({ CANDIDATE_TOKEN_PUBLIC_JWK: api.CANDIDATE_TOKEN_PUBLIC_JWK });
     expect(JSON.parse(edge.CANDIDATE_TOKEN_PUBLIC_JWK)[0]).not.toHaveProperty('d');
     expect(Object.keys(jobs).sort()).toEqual([
+      'JOBS_ADMIN_DB_URL',
+      'JOBS_AUTHORING_DB_URL',
       'JOBS_INTEGRITY_DB_URL',
       'JOBS_MIRROR_DB_URL',
       'JOBS_QUALITY_DB_URL',
@@ -531,6 +533,8 @@ describe('main', () => {
       [jobs, 'JOBS_MIRROR_DB_URL', 'jobs_mirror_login'],
       [jobs, 'JOBS_QUALITY_DB_URL', 'jobs_quality_login'],
       [jobs, 'JOBS_INTEGRITY_DB_URL', 'jobs_integrity_login'],
+      [jobs, 'JOBS_AUTHORING_DB_URL', 'jobs_authoring_login'],
+      [jobs, 'JOBS_ADMIN_DB_URL', 'jobs_admin_login'],
     ]) {
       const u = new URL(file[name]);
       expect(u.username).toBe(login);

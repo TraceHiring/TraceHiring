@@ -1756,16 +1756,18 @@ describe('deploy-staging chain (d1 §7.1)', () => {
   });
 
   describe('the public-variable guard (review F4)', () => {
-    it('is required, exactly node scripts/check-deploy-vars.mjs', () => {
+    it('is required, exactly node scripts/check-deploy-vars.mjs --vars', () => {
       expect(
         check(
           (d) => (d.jobs['deploy-staging'].steps = stepsOf(d).filter((s) => s !== find(d, GUARD))),
         ),
-      ).toMatch(/node scripts\/check-deploy-vars\.mjs/);
+      ).toMatch(/node scripts\/check-deploy-vars\.mjs --vars/);
       for (const run of [
-        'node scripts/check-deploy-vars.mjs || true',
-        'node scripts/check-deploy-vars.mjs\necho done',
+        'node scripts/check-deploy-vars.mjs',
+        'node scripts/check-deploy-vars.mjs --vars || true',
+        'node scripts/check-deploy-vars.mjs --vars\necho done',
         'node scripts/check-deploy-vars.mjs --skip',
+        'node scripts/check-deploy-vars.mjs --hyperdrive',
         '# node scripts/check-deploy-vars.mjs',
       ]) {
         expect(
@@ -1811,6 +1813,58 @@ describe('deploy-staging chain (d1 §7.1)', () => {
           (d) => (find(d, GUARD).env.CLOUDFLARE_API_TOKEN = '${{ secrets.CLOUDFLARE_API_TOKEN }}'),
         ),
       ).toMatch(/does not use it/);
+    });
+  });
+
+  // Security review INF-1 (M1 Wave 0): the Hyperdrive ids are checked only after the migrations (the M1 configs need
+  // migration M1-a's roles, so a check before them would deadlock the deploy) and before any Worker deploy.
+  describe('the Hyperdrive guard (INF-1)', () => {
+    const HYPERDRIVE = 'Check the Hyperdrive bindings';
+    const moveBefore = (d, name) => {
+      const s = stepsOf(d);
+      const h = find(d, HYPERDRIVE);
+      s.splice(s.indexOf(h), 1);
+      s.splice(s.indexOf(find(d, name)), 0, h);
+    };
+
+    it('is required, exactly node scripts/check-deploy-vars.mjs --hyperdrive', () => {
+      expect(
+        check(
+          (d) =>
+            (d.jobs['deploy-staging'].steps = stepsOf(d).filter((s) => s !== find(d, HYPERDRIVE))),
+        ),
+      ).toMatch(/node scripts\/check-deploy-vars\.mjs --hyperdrive/);
+      for (const run of [
+        'node scripts/check-deploy-vars.mjs --hyperdrive || true',
+        'node scripts/check-deploy-vars.mjs',
+        'node scripts/check-deploy-vars.mjs --vars',
+        '# node scripts/check-deploy-vars.mjs --hyperdrive',
+      ]) {
+        expect(
+          check((d) => (find(d, HYPERDRIVE).run = run)),
+          run,
+        ).toMatch(/check-deploy-vars\.mjs --hyperdrive/);
+      }
+    });
+
+    it.each([
+      ['before the migrations', 'Apply migrations'],
+      ['before the catalog checks', 'Catalog checks'],
+      ['after the first Worker deploy', 'Deploy the jobs Worker'],
+    ])('refuses it %s', (_label, name) => {
+      expect(check((d) => moveBefore(d, name))).toMatch(
+        /check-deploy-vars\.mjs --hyperdrive must run after the migrations and catalog checks/,
+      );
+    });
+
+    it('accepts it anywhere between the catalog checks and the first Worker deploy', () => {
+      expect(check((d) => moveBefore(d, 'Deploy the api Worker'))).toBe('');
+    });
+
+    it('sets no env (it reads only the committed wrangler files)', () => {
+      expect(check((d) => (find(d, HYPERDRIVE).env = { TRACE_X: '${{ vars.X }}' }))).toMatch(
+        /--hyperdrive step reads only the wrangler files/,
+      );
     });
   });
 
@@ -2849,8 +2903,10 @@ describe('the real ci.yml deploy chain (d1 §7.1)', () => {
 
   it('deploys api, then jobs, then edge, after the guard and the bucket and queue step', () => {
     const at = (re) => steps.findIndex((s) => re.test(s.run ?? ''));
-    const guard = at(/^\s*node scripts\/check-deploy-vars\.mjs\s*$/);
+    const guard = at(/^\s*node scripts\/check-deploy-vars\.mjs --vars\s*$/);
     const migrate = at(/supabase db push/);
+    const catalog = at(/node scripts\/staging-catalog-checks\.mjs/);
+    const hyperdrive = at(/^\s*node scripts\/check-deploy-vars\.mjs --hyperdrive\s*$/);
     const resources = at(/^\s*node scripts\/ensure-staging-resources\.mjs\s*$/);
     const deploys = steps
       .map((s, i) => [s, i])
@@ -2862,6 +2918,10 @@ describe('the real ci.yml deploy chain (d1 §7.1)', () => {
     ]);
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(migrate);
+    // INF-1: the Hyperdrive ids are checked after the migrations and catalog checks, before any deploy.
+    expect(catalog).toBeGreaterThan(migrate);
+    expect(hyperdrive).toBeGreaterThan(catalog);
+    expect(hyperdrive).toBeLessThan(deploys[0][1]);
     expect(resources).toBeGreaterThan(migrate);
     expect(resources).toBeLessThan(deploys[0][1]);
     expect(at(/check-staging-secrets/)).toBeGreaterThan(deploys[2][1]);

@@ -229,24 +229,44 @@ checks that CA (ADR-031 amendment 1). One config per login, one binding per conf
 | `jobs_mirror_login` | `trace_worker` | `trace-staging-jobs-mirror-login` | `JOBS_MIRROR_DB` | `trace-jobs-staging` (`workers/jobs`) |
 | `jobs_quality_login` | `trace_quality_worker` | `trace-staging-jobs-quality-login` | `JOBS_QUALITY_DB` | `trace-jobs-staging` (`workers/jobs`) |
 | `jobs_integrity_login` | `trace_integrity_worker` | `trace-staging-jobs-integrity-login` | `JOBS_INTEGRITY_DB` | `trace-jobs-staging` (`workers/jobs`) |
+| `jobs_authoring_login` (M1) | `trace_authoring_worker` | `trace-staging-jobs-authoring-login` | `JOBS_AUTHORING_DB` | `trace-jobs-staging` (`workers/jobs`) |
+| `jobs_admin_login` (M1) | `trace_admin_worker` | `trace-staging-jobs-admin-login` | `JOBS_ADMIN_DB` | `trace-jobs-staging` (`workers/jobs`) |
+
+The two M1 rows (specs/m1-test-authoring.md R5-11) are new. Their configs need the roles migration M1-a creates,
+so the order after M1 is (security review INF-1):
+
+1. A staging deploy applies the migrations (M1-a included) and runs the catalog checks.
+2. It then stops at "Check the Hyperdrive bindings" (`node scripts/check-deploy-vars.mjs --hyperdrive`),
+   because the two M1 ids are not committed yet; no Worker has been deployed.
+3. You run this script with `--yes`: it creates the two M1 configs and rotates the other four.
+4. You send the printed ids to the lead, who commits them (and empties `PENDING_BINDINGS` in
+   `scripts/lib/hyperdrive.mjs`).
+5. The next staging deploy passes the check and deploys the Workers.
 
 It also sets `MEDIA_LINK_HMAC_KEY` (64 random hex characters) on the api Worker, and deletes the old database
-URL secrets (`API_DB_URL` on api; `JOBS_MIRROR_DB_URL`, `JOBS_QUALITY_DB_URL`, `JOBS_INTEGRITY_DB_URL` on jobs)
+URL secrets (`API_DB_URL` on api; `JOBS_MIRROR_DB_URL`, `JOBS_QUALITY_DB_URL`, `JOBS_INTEGRITY_DB_URL`,
+`JOBS_AUTHORING_DB_URL`, `JOBS_ADMIN_DB_URL` on jobs)
 where a Worker still holds them: they are retired on staging, and the deploy's `check-staging-secrets` step fails
 while one is left. It does **not** set `CANDIDATE_TOKEN_PRIVATE_JWK` (see the key pair section above) and it never
 touches the edge Worker, which holds no secret.
 
+The M1 member provisioning secrets (specs/m1-test-authoring.md R5-12) are allow-listed but not set by this
+script or by `scripts/e2e-local.mjs` yet: `MEMBER_INVITE_PEPPER` (api and jobs, one value for both) and
+`SUPABASE_SECRET_KEY_JOBS` (jobs only). Their readers arrive in M1 Wave 2: stream A2 (the api `members` module)
+reads the pepper, and stream A3 (the jobs member provisioning job) reads both. The lead wires the generation and
+setting of these values in this script and in the local stack together with those streams.
+
 You run it on your own computer, **after the first staging deploy** and before the D1 staging smoke (step 4 of
 "First staging deploy" above). It makes new random passwords, gives them to Postgres, then writes them into the
-four Hyperdrive configs. It never prints, logs or saves a password, a key, the Cloudflare token or your database
+six Hyperdrive configs. It never prints, logs or saves a password, a key, the Cloudflare token or your database
 URL.
 
 Good to know:
 
-- Workers Free allows 10 Hyperdrive configs per account; this uses 4.
+- Workers Free allows 10 Hyperdrive configs per account; this uses 6.
 - Caching is disabled on every config: a cached answer could be served to another role or org.
 - Each config may open at most 5 connections to the database.
-- A re-run makes new passwords and updates the same four configs (matched by name); it never makes a second set.
+- A re-run makes new passwords and updates the same six configs (matched by name); it never makes a second set.
 
 ### Before you start
 

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { WORKERS_OBSERVABILITY, parseJsonc } from '../check-boundaries.mjs';
-import { hyperdriveProblems } from '../lib/hyperdrive.mjs';
+import { PENDING_BINDINGS, hyperdriveProblems } from '../lib/hyperdrive.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const load = (dir) => parseJsonc(readFileSync(path.join(REPO, dir, 'wrangler.jsonc'), 'utf8'));
@@ -23,7 +23,12 @@ const EXPECTED = {
   edge: {
     durableObjects: { SESSION: 'SessionDO', OTP: 'InviteOtpDO' },
     migrations: [{ tag: 'v1', new_sqlite_classes: ['SessionDO', 'InviteOtpDO'] }],
-    r2: { PACKAGES: 'trace-packages-<env>', EVIDENCE: 'trace-evidence-<env>' },
+    // M1 R5-10: ITEM_MEDIA (item images), get/head only (check-boundaries rule 11).
+    r2: {
+      PACKAGES: 'trace-packages-<env>',
+      EVIDENCE: 'trace-evidence-<env>',
+      ITEM_MEDIA: 'trace-item-media-<env>',
+    },
     producers: { MIRROR_QUEUE: 'trace-session-mirror-<env>' },
     consumers: [],
     services: [{ binding: 'API', service: 'trace-api-<env>', entrypoint: 'CandidateRpc' }],
@@ -38,7 +43,8 @@ const EXPECTED = {
     durableObjects: { OUTBOX: 'DemoOutboxDO', MEDIA_LINKS: 'MediaLinkDO' },
     migrations: [{ tag: 'v1', new_sqlite_classes: ['DemoOutboxDO', 'MediaLinkDO'] }],
     r2: { PACKAGES: 'trace-packages-<env>', EVIDENCE: 'trace-evidence-<env>' },
-    producers: {},
+    // M1 R5-13: the api enqueues AI drafting jobs and member invite jobs; workers/jobs consumes them.
+    producers: { AUTHORING_QUEUE: 'trace-authoring-<env>', ADMIN_QUEUE: 'trace-admin-<env>' },
     consumers: [],
     services: [],
     vars: [
@@ -67,6 +73,19 @@ const EXPECTED = {
         max_batch_size: 10,
         max_retries: 5,
         dead_letter_queue: 'trace-session-mirror-dlq-<env>',
+      },
+      // M1 R5-13: one job per message (an LLM call or an admin API call each), 5 tries, then the DLQ.
+      {
+        queue: 'trace-authoring-<env>',
+        max_batch_size: 1,
+        max_retries: 5,
+        dead_letter_queue: 'trace-authoring-dlq-<env>',
+      },
+      {
+        queue: 'trace-admin-<env>',
+        max_batch_size: 1,
+        max_retries: 5,
+        dead_letter_queue: 'trace-admin-dlq-<env>',
       },
     ],
     services: [],
@@ -123,7 +142,7 @@ describe.each(Object.keys(EXPECTED))('%s wrangler.jsonc (spec §4.2)', (worker) 
       expect(bound).toEqual(sub(exp.producers, env));
     });
 
-    it('has the queue consumers of the table (batch 10, 5 retries, a DLQ)', () => {
+    it('has the queue consumers of the table (5 retries, a DLQ each)', () => {
       expect(cfg().queues?.consumers ?? []).toEqual(sub(exp.consumers, env));
     });
 
@@ -166,9 +185,20 @@ describe.each(Object.keys(EXPECTED))('%s wrangler.jsonc (spec §4.2)', (worker) 
   // ADR-031 amendment 1 (revision 4o): staging reaches Postgres only through one Hyperdrive binding per login role;
   // dev and the top level have none (the local stack uses the loopback URL secrets). The founder created the four
   // configs on 2026-10-22 and their ids are committed, so staging must carry them, exact (the deploy's
-  // check-deploy-vars applies the same rule).
+  // check-deploy-vars applies the same rule). M1 R5-11 (DC-M1-6) adds JOBS_AUTHORING_DB and JOBS_ADMIN_DB, whose
+  // configs the founder creates at the next staging go-ahead: until then they are PENDING_BINDINGS and absent here,
+  // and the deploy check (no allowPending) refuses a staging deploy without them.
   it('carries exactly the Hyperdrive bindings of scripts/lib/hyperdrive.mjs, staging only', () => {
-    expect(hyperdriveProblems(worker, CONFIGS[worker], { requireStaging: true })).toEqual([]);
+    expect(
+      hyperdriveProblems(worker, CONFIGS[worker], { requireStaging: true, allowPending: true }),
+    ).toEqual([]);
+  });
+
+  it('commits no binding that is still marked pending (empty PENDING_BINDINGS once the ids land)', () => {
+    for (const env of ENVS) {
+      const bound = names(block(worker, env).hyperdrive, 'binding');
+      for (const b of PENDING_BINDINGS) expect(bound, `env.${env}`).not.toContain(b);
+    }
   });
 
   it('keeps observability exactly as rule 8 requires, with no env override', () => {
@@ -222,26 +252,50 @@ describe('cross-Worker wiring', () => {
     const queue = `trace-session-mirror-${env}`;
     expect(block('edge', env).queues.producers).toEqual([{ binding: 'MIRROR_QUEUE', queue }]);
     expect(block('jobs', env).queues.producers).toEqual([{ binding: 'MIRROR_QUEUE', queue }]);
-    expect(block('jobs', env).queues.consumers).toEqual([
-      {
-        queue,
-        max_batch_size: 10,
-        max_retries: 5,
-        dead_letter_queue: `trace-session-mirror-dlq-${env}`,
-      },
-    ]);
+    expect(block('jobs', env).queues.consumers[0]).toEqual({
+      queue,
+      max_batch_size: 10,
+      max_retries: 5,
+      dead_letter_queue: `trace-session-mirror-dlq-${env}`,
+    });
   });
+
+  // M1 R5-13: the api produces, workers/jobs consumes (5 tries, then <name>-dlq-<env>); nobody else touches them.
+  it.each(ENVS)(
+    'env %s: the api produces and jobs consumes the authoring and admin queues',
+    (env) => {
+      for (const [binding, name] of [
+        ['AUTHORING_QUEUE', 'trace-authoring'],
+        ['ADMIN_QUEUE', 'trace-admin'],
+      ]) {
+        const queue = `${name}-${env}`;
+        expect(block('api', env).queues.producers).toContainEqual({ binding, queue });
+        const consumers = block('jobs', env).queues.consumers.filter((c) => c.queue === queue);
+        expect(consumers).toEqual([
+          { queue, max_batch_size: 1, max_retries: 5, dead_letter_queue: `${name}-dlq-${env}` },
+        ]);
+        for (const worker of ['edge', 'jobs']) {
+          expect(names(block(worker, env).queues?.producers, 'queue')).not.toContain(queue);
+        }
+      }
+    },
+  );
 
   it.each(ENVS)('env %s: the same packages and evidence buckets back edge, api and jobs', (env) => {
     for (const worker of ['edge', 'api']) {
       const buckets = Object.fromEntries(
         block(worker, env).r2_buckets.map((b) => [b.binding, b.bucket_name]),
       );
-      expect(buckets).toEqual({
+      expect(buckets).toMatchObject({
         PACKAGES: `trace-packages-${env}`,
         EVIDENCE: `trace-evidence-${env}`,
       });
     }
+    // M1 R5-10: the edge binds the item media bucket (read only, check-boundaries rule 11). The api's write
+    // binding for image upload is not wired in Wave 0 (a lead change when stream A2 needs it).
+    expect(block('edge', env).r2_buckets.find((b) => b.binding === 'ITEM_MEDIA')?.bucket_name).toBe(
+      `trace-item-media-${env}`,
+    );
     expect(block('jobs', env).r2_buckets).toEqual([
       { binding: 'EVIDENCE', bucket_name: `trace-evidence-${env}` },
     ]);

@@ -43,6 +43,8 @@ export type EnvHoldsOnlyD1Bindings = Assert<
     | 'OTP'
     | 'PACKAGES'
     | 'EVIDENCE'
+    // M1 R5-10: item images, get/head only (check-boundaries rule 11).
+    | 'ITEM_MEDIA'
     | 'MIRROR_QUEUE'
     | 'API'
     | 'LINK_LIMITER'
