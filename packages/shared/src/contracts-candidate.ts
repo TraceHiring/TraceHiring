@@ -487,6 +487,7 @@ const sectionRulesOk = (section: {
     : section.pasteRule === undefined;
 const SECTION_RULES_MESSAGE =
   'a written section is forward-only with a paste rule; no other has one';
+const STRATIFIED_ITEM_MESSAGE = 'an item of a stratified draw names its skill and difficulty band';
 const uniqueStrata = (strata: readonly { skillKey: string; difficultyBand: number }[]) =>
   new Set(strata.map((st) => `${st.skillKey}:${st.difficultyBand}`)).size === strata.length;
 const PackageStratum = z.strictObject({
@@ -564,8 +565,10 @@ export const TestPackageV2 = z
             .min(1)
             .max(4)
             .optional(),
-          skillKey: SkillKey,
-          difficultyBand: DifficultyBand,
+          // R5-57 e (lead decision): optional, both or neither. An item served by an inline section or a draw
+          // without strata may omit both (D1 editor items); every item of a stratified draw names both.
+          skillKey: SkillKey.optional(),
+          difficultyBand: DifficultyBand.optional(),
           // Served count frozen at publish (section_pool_snapshot.exposure_at_publish, R3-2): the draw weight is
           // 1 / (1 + exposureAtPublish) (§6.5). The DO never passes it to the candidate.
           exposureAtPublish: z.int().min(0),
@@ -619,6 +622,9 @@ export const TestPackageV2 = z
           ? item.options !== undefined && item.maxChars === undefined
           : item.options === undefined && item.variants === undefined;
       if (!shapeOk) issue(['items', index], 'options and variants belong to mcq items only');
+      if ((item.skillKey === undefined) !== (item.difficultyBand === undefined)) {
+        issue(['items', index], 'an item names its skill and difficulty band together');
+      }
     });
     let served = 0;
     pkg.sections.forEach((section, s) => {
@@ -634,6 +640,9 @@ export const TestPackageV2 = z
         issue(['sections', s, 'draw', 'count'], 'the draw exceeds the eligible items');
       }
       const strata = section.draw.strata;
+      if (strata.length > 0 && eligible.some((i) => i.skillKey === undefined)) {
+        issue(['sections', s, 'draw', 'strata'], STRATIFIED_ITEM_MESSAGE);
+      }
       if (!uniqueStrata(strata)) {
         issue(['sections', s, 'draw', 'strata'], 'one stratum per skill and difficulty band');
       }
