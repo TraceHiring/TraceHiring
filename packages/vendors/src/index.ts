@@ -1,7 +1,18 @@
 // @trace/vendors: vendor interfaces and their mocks (CLAUDE.md "Vendors behind interfaces"; specs/d1-demo-slice.md
-// §5.3). Each interface arrives with the milestone that first needs it; D1 pulls LlmGrader and Messaging forward.
-// No vendor SDK; this package imports only @trace/shared.
-export const VENDOR_INTERFACES: readonly string[] = ['LlmGrader', 'Messaging'];
+// §5.3). Each interface arrives with the milestone that first needs it; D1 pulls LlmGrader and Messaging forward,
+// M1 adds LlmDrafter (specs/m1-test-authoring.md R5-3). No vendor SDK; this package imports only @trace/shared.
+export const VENDOR_INTERFACES: readonly string[] = ['LlmDrafter', 'LlmGrader', 'Messaging'];
+
+export type {
+  DraftFormat,
+  DraftRequest,
+  DraftResult,
+  DraftedItem,
+  DraftedMcqItem,
+  DraftedMcqOption,
+  DraftedWrittenItem,
+  LlmDrafter,
+} from './llm-drafter.js';
 
 export type {
   GradeRequest,
