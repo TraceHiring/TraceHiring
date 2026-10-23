@@ -12,7 +12,7 @@ describe('@trace/band-engine contract skeleton', () => {
       'computeBand',
       'parseRuleTable',
     ]);
-    expect(engine.BAND_ENGINE_VERSION).toBe('band-engine-1');
+    expect(engine.BAND_ENGINE_VERSION).toBe('band-engine-2');
   });
 
   it('exports the §5.2 vocabulary types', () => {
