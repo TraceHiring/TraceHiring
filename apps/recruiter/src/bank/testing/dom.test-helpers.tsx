@@ -33,7 +33,14 @@ const nameOf = (el: Element): string => el.getAttribute('aria-label') ?? el.text
 
 export async function mountScreen(
   screen: ReactNode,
-  options: { api: ApiClient | null; info: OrgInfo | null; at?: string; path?: string },
+  options: {
+    api: ApiClient | null;
+    info: OrgInfo | null;
+    at?: string;
+    path?: string;
+    /** More routes in the same app, so a screen can navigate to another one. */
+    extra?: { path: string; element: ReactNode }[];
+  },
 ): Promise<Mounted> {
   const container = document.createElement('div');
   document.body.appendChild(container);
@@ -44,6 +51,9 @@ export async function mountScreen(
         <ApiContext value={options.api}>
           <Routes>
             <Route path={options.path ?? '*'} element={screen} />
+            {(options.extra ?? []).map((r) => (
+              <Route key={r.path} path={r.path} element={r.element} />
+            ))}
           </Routes>
         </ApiContext>
       </OrgInfoContext>
