@@ -120,40 +120,57 @@ alter table public.item_versions
   add constraint item_versions_ai_draft_job check ((origin = 'ai_draft') = (ai_draft_job_id is not null));
 create index item_versions_ai_draft_job_idx on public.item_versions (org_id, ai_draft_job_id)
   where ai_draft_job_id is not null;
+-- DB review M3: duplicate_in_bank looks up a content hash among the workspace's bank rows for every imported row.
+create index item_versions_bank_content_idx on public.item_versions (org_id, workspace_id, content_sha256)
+  where section_id is null;
 
 -- ---------------------------------------------------------------------------------------------
 -- The hooks of M1-a's item_versions guard (same signatures; CREATE OR REPLACE keeps the owner and the ACL).
 -- ---------------------------------------------------------------------------------------------
 -- R5-35: an AI draft (and its key) is written only for a running drafting job of the same org and workspace; the cap on
--- the number of drafts is ai_draft_job_has_room below.
+-- the number of drafts is ai_draft_job_has_room below. DB review M1: the job row is locked FOR NO KEY UPDATE (the mode
+-- has_room takes next, so the two never deadlock by upgrading a shared lock), so draft and key writes and the job's end
+-- are serialised: nothing lands after the job ended.
 create or replace function private.ai_draft_job_running(p_org uuid, p_workspace uuid, p_job uuid)
 returns boolean
-language sql
-stable
+language plpgsql
+volatile
 security definer
 set search_path = ''
 as $$
-  select coalesce((
-    select j.status = 'running'
-    from public.ai_draft_jobs as j
-    where j.org_id = p_org and j.id = p_job and j.workspace_id = p_workspace
-  ), false)
+declare
+  v_status text;
+begin
+  select j.status into v_status
+  from public.ai_draft_jobs as j
+  where j.org_id = p_org and j.id = p_job and j.workspace_id = p_workspace
+  for no key update;
+  return coalesce(v_status = 'running', false);
+end
 $$;
 
 -- The job's cap: fewer drafts stored than its count. Only the draft insert checks it (the key of the last draft is added
--- after that draft is counted).
+-- after that draft is counted). DB review M1, security review L-3: the job row is locked FOR NO KEY UPDATE before the
+-- count, so two deliveries of one job take turns and the second sees the first's draft; a job never ends over its count.
 create or replace function private.ai_draft_job_has_room(p_org uuid, p_job uuid)
 returns boolean
-language sql
-stable
+language plpgsql
+volatile
 security definer
 set search_path = ''
 as $$
-  select coalesce((
-    select (select count(*) from public.item_versions as v where v.org_id = j.org_id and v.ai_draft_job_id = j.id) < j.count
-    from public.ai_draft_jobs as j
-    where j.org_id = p_org and j.id = p_job
-  ), false)
+declare
+  v_count int;
+begin
+  select j.count into v_count
+  from public.ai_draft_jobs as j
+  where j.org_id = p_org and j.id = p_job
+  for no key update;
+  if not found then
+    return false;
+  end if;
+  return (select count(*) from public.item_versions as v where v.org_id = p_org and v.ai_draft_job_id = p_job) < v_count;
+end
 $$;
 
 -- The M1-a fix round's third hook (lead, 2026-10-23): true when the org and workspace have a running drafting job. M1-a
@@ -173,18 +190,22 @@ as $$
 $$;
 revoke execute on function private.ai_draft_job_running_in(uuid, uuid) from public, anon, authenticated, service_role;
 
--- An imported row is inserted only while its job (same org and workspace) is open or validating (§4.3).
+-- An imported row is inserted only while its job (same org and workspace) is open or validating (§4.3). DB review H1:
+-- the job row is held FOR SHARE until the batch commits, so a cancel or completion waits for the batch (and then counts
+-- its rows), and a batch that waits for an ending job then finds it ended.
 create or replace function private.import_job_open(p_org uuid, p_workspace uuid, p_job uuid)
 returns boolean
-language sql
-stable
+language plpgsql
+volatile
 security definer
 set search_path = ''
 as $$
-  select exists (
-    select 1 from public.import_jobs as j
+begin
+  perform 1 from public.import_jobs as j
     where j.org_id = p_org and j.id = p_job and j.workspace_id = p_workspace and j.status in ('open', 'validating')
-  )
+    for share;
+  return found;
+end
 $$;
 
 -- ---------------------------------------------------------------------------------------------
@@ -237,7 +258,9 @@ begin
     end if;
     return new;
   end if;
-  if new.status not in ('completed', 'cancelled', 'failed') then
+  -- §4.3 (DB review L1): only a validating job completes; an open job may still be cancelled or fail (a file over the
+  -- row or image limit fails before any batch).
+  if new.status not in ('completed', 'cancelled', 'failed') or (old.status = 'open' and new.status = 'completed') then
     raise exception 'TRACE_GUARD: import job status change not allowed' using errcode = '42501';
   end if;
   select count(*) into new.rows_ok

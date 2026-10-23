@@ -247,6 +247,20 @@ begin
         or new.team_id is distinct from old.team_id or new.display_name is distinct from old.display_name then
         raise exception 'TRACE_GUARD: accepting an invitation changes the status only' using errcode = '42501';
       end if;
+      -- R2-14 (security review M-1): an invitation provisioned from an invite is accepted only while its inviter is
+      -- still an active admin (an owner for an owner invitation) of the active org, as at provisioning; an invited row
+      -- never expires, so a removed or suspended admin leaves no access behind.
+      select i.invited_by into v_inviter from public.member_invites as i
+      where i.org_id = old.org_id and i.membership_id = old.id;
+      if found and not exists (
+        select 1 from public.memberships as m
+        join public.orgs as o on o.id = m.org_id
+        where m.org_id = old.org_id and m.user_id = v_inviter and m.status = 'active' and o.status = 'active'
+          and m.roles && '{org_owner,admin}'::public.org_role[]
+          and (not ('org_owner' = any (old.roles)) or 'org_owner' = any (m.roles))
+      ) then
+        raise exception 'TRACE_GUARD: the inviter is no longer an active admin or owner' using errcode = '42501';
+      end if;
     elsif old.status = 'invited' and new.status = 'removed' then
       null;  -- §4.5, E27: an owner or admin (checked below) withdraws an unaccepted invitation.
     elsif old.status = 'invited' or new.status = 'invited'
@@ -374,6 +388,10 @@ begin
   end if;
   if v_inv.status <> 'pending' then
     raise exception 'TRACE_GUARD: the invite is not pending' using errcode = '42501';
+  end if;
+  -- Security review L-1: checked before the insert, so a failing CHECK never echoes the name in an error detail.
+  if p_display_name is null or char_length(btrim(p_display_name)) not between 1 and 120 then
+    raise exception 'TRACE_BAD_INPUT: display name' using errcode = '22023';
   end if;
   if not exists (
     select 1 from public.memberships as m

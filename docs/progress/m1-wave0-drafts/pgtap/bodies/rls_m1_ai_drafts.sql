@@ -165,4 +165,4 @@ select pg_temp.op();
 -- ===== DB review M1 / security review L-3: the draft cap holds under concurrent deliveries =====
 select is((select provolatile::text from pg_proc where oid = 'private.ai_draft_job_has_room(uuid,uuid)'::regprocedure), 'v', 'M1: ai_draft_job_has_room is volatile (it takes a row lock)');
 select matches(pg_get_functiondef('private.ai_draft_job_has_room(uuid,uuid)'::regprocedure), 'for no key update', 'M1: the cap locks the job row before it counts, so two deliveries cannot both take the last slot and a job never ends over its count');
-select matches(pg_get_functiondef('private.ai_draft_job_running(uuid,uuid,uuid)'::regprocedure), 'for share', 'M1: the running check holds the job row, so no draft or key lands after the job ended');
+select matches(pg_get_functiondef('private.ai_draft_job_running(uuid,uuid,uuid)'::regprocedure), 'for no key update', 'M1: the running check locks the job row in the same mode as the cap (no lock upgrade), so no draft or key lands after the job ended');
