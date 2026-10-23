@@ -117,7 +117,7 @@ export const importsSetup = (
     completed_at: null,
   });
   const media = fakeMedia();
-  const { call } = harness(
+  const { app, call } = harness(
     (org) =>
       createImportsRoutes({
         org,
@@ -127,7 +127,7 @@ export const importsSetup = (
     db,
     callerOf(),
   );
-  return { db, call, media };
+  return { db, call, media, app };
 };
 
 const u32be = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   guardKeyOf,
   handleOrg,
+  pathId,
   RestError,
   restErrorCode,
   type GuardKey,
@@ -18,6 +19,26 @@ const CASES: [text: string, key: GuardKey, code: string, status: number][] = [
   ['an archived pool takes no items', 'pool_archived', 'conflict', 409],
   ['the import job is not open', 'import_not_open', 'conflict', 409],
   ['only approved library items can be copied', 'library_not_approved', 'conflict', 409],
+  // A2a database review D5 (R5-64 b): readiness refusals of submit and approve are a draft that is not complete.
+  ['a multiple-choice item needs its answer key', 'mcq_key_missing', 'draft_incomplete', 422],
+  ['a written item needs its rubric', 'rubric_missing', 'draft_incomplete', 422],
+  ['a parameterised item needs its variants', 'variants_missing', 'draft_incomplete', 422],
+  ['every variant needs its answer key', 'variant_key_missing', 'draft_incomplete', 422],
+  ['variants are numbered 1 to n', 'variants_numbering', 'draft_incomplete', 422],
+  ['a pool holds approved bank items of its format', 'pool_item_ineligible', 'conflict', 409],
+  // R5-64 h: the library expert review (ABH-6, SEC-M1-4).
+  [
+    'a library item needs a reviewer and a key reviewer other than its author',
+    'library_reviewers',
+    'conflict',
+    409,
+  ],
+  ['the key review is recorded in its own update', 'key_review_own_update', 'conflict', 409],
+  ['a library item is approved by an expert review', 'library_expert_review', 'conflict', 409],
+  ['the key reviewer is an active library member', 'key_reviewer_member', 'forbidden', 403],
+  ['the key reviewer records their own review', 'key_reviewer_self', 'forbidden', 403],
+  // Spec review Note 6: a settled invite is a state refusal, never a 404.
+  ['a settled invite is final', 'invite_settled', 'conflict', 409],
 ];
 
 describe('A2a guard keys', () => {
@@ -35,6 +56,20 @@ describe('A2a guard keys', () => {
       expect(body).not.toContain(text);
     });
   }
+
+  it('pathId lower-cases a path uuid (A2a security S1, R5-64 n) and still refuses a malformed one', async () => {
+    expect(pathId('A1000000-0000-4000-8000-00000000000F')).toBe(
+      'a1000000-0000-4000-8000-00000000000f',
+    );
+    expect(pathId('a1000000-0000-4000-8000-00000000000f')).toBe(
+      'a1000000-0000-4000-8000-00000000000f',
+    );
+    const res = await handleOrg(async () => {
+      pathId('not-a-uuid');
+      return new Response(null, { status: 204 });
+    });
+    expect(res.status).toBe(404);
+  });
 
   it('an unknown guard text still answers 404 (nothing widened)', () => {
     expect(restErrorCode(new RestError(403, '42501', 'other'))).toBe('not_found');

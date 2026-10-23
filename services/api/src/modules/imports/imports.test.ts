@@ -134,6 +134,20 @@ describe('PUT …/imports/:id/images/:sha256', () => {
     expect(media.puts).toEqual([]);
   });
 
+  it('writes the lower-case org prefix when the path names the org in upper case (security S1, R5-64 n)', async () => {
+    const { app, media } = importsSetup();
+    const png = pngBytes(10, 10);
+    const sha = await sha256Of(png);
+    const res = await app.request(
+      `https://api.test/v1/orgs/${ORG.toUpperCase()}/imports/${JOB.toUpperCase()}/images/${sha}`,
+      { method: 'PUT', headers: { 'content-type': 'image/png' }, body: png },
+      {} as Env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ key: `item-media/${ORG}/${sha}.png` });
+    expect(media.puts).toEqual([`item-media/${ORG}/${sha}.png`]);
+  });
+
   it('answers 409 for an ended job, 404 for a bad hash path, 503 without the media bucket', async () => {
     const png = pngBytes(10, 10);
     const sha = await sha256Of(png);
