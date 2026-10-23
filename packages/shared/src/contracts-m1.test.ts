@@ -862,7 +862,7 @@ describe('AiDraftRequest and AiDraftJobView', () => {
       difficulty: 0.3,
       count: 5,
       draftsCreated: 0,
-      errorCode: 'drafter_unavailable',
+      errorCode: 'drafter_error',
     };
     expect(AiDraftJobView.parse(view)).toEqual(view);
     expect(
@@ -981,6 +981,9 @@ const SCALAR_EXPORTS = [
   'ImportJobStatus',
   'AiDraftJobStatus',
   'MemberInviteStatus',
+  'ImportField',
+  'ImportJobErrorCode',
+  'AiDraftErrorCode',
 ];
 const m1Exports = (Object.entries(M1) as [string, unknown][]).filter(
   (entry): entry is [string, z.ZodType] => entry[1] instanceof z.ZodType,

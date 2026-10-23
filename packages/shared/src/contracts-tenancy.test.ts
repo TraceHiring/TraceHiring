@@ -15,7 +15,9 @@ import {
 } from './contracts-tenancy.js';
 import {
   ALWAYS_LOCKED_SETTINGS,
+  AiDraftErrorCode,
   IMPORT_ERROR_CODES,
+  ImportJobErrorCode,
   INTEGRITY_CATALOG_VERSION,
   ItemFormat,
   ItemStatus,
@@ -225,7 +227,7 @@ describe('AuditDetails', () => {
     'import.cancel': { import_job_id: ID },
     'import.fail': { import_job_id: ID, error_code: 'row_limit' },
     'ai_draft.complete': { ai_draft_job_id: ID, drafts_created: 5 },
-    'ai_draft.fail': { ai_draft_job_id: ID, error_code: 'drafter_unavailable' },
+    'ai_draft.fail': { ai_draft_job_id: ID, error_code: 'drafter_error' },
     'member_invite.create': { member_invite_id: ID, roles: ['recruiter', 'reviewer'] },
     'member_invite.cancel': { member_invite_id: ID },
     'member_invite.provisioned': { member_invite_id: ID },
@@ -364,12 +366,21 @@ describe('M1 audit details carry ids, enums, counts and booleans only (AT-M1-25,
     expect([...settings.catalog_version.options]).toEqual([INTEGRITY_CATALOG_VERSION]);
     expect([...AuditDetails['item.submit'].shape.from.options]).toEqual([...ItemStatus.options]);
     expect([...AuditDetails['item.create'].shape.format.options]).toEqual([...ItemFormat.options]);
+    // import.fail names a job failure code (import_jobs.error_code), never a per-row code.
+    expect([...AuditDetails['import.fail'].shape.error_code.options]).toEqual([
+      ...ImportJobErrorCode.options,
+    ]);
+    // row_limit is both a row code and a job code; every other row code is refused.
+    const rowOnly = IMPORT_ERROR_CODES.filter((code) => code !== 'row_limit');
     expect(
-      IMPORT_ERROR_CODES.every(
+      rowOnly.some(
         (code) =>
           AuditDetails['import.fail'].safeParse({ import_job_id: ID, error_code: code }).success,
       ),
-    ).toBe(true);
+    ).toBe(false);
+    expect([...AuditDetails['ai_draft.fail'].shape.error_code.options]).toEqual([
+      ...AiDraftErrorCode.options,
+    ]);
   });
   it('counts are non-negative integers and codes are constant lower-snake codes', () => {
     const done = AuditDetails['import.complete'];

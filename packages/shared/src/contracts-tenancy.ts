@@ -131,8 +131,18 @@ const LockableSettingKey = z.enum([
 ]);
 const PresetKey = z.enum(['strict', 'standard', 'open_book']);
 const IntegrityCatalogVersion = z.enum(['m1-settings-v1']);
-/** A job's constant failure code (lower snake case), never a message. */
-const JobErrorCode = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
+/** Why an import job failed: import_jobs.error_code (M1-c), never a message. */
+export const ImportJobErrorCode = z.enum(['row_limit', 'image_limit', 'timeout', 'internal']);
+export type ImportJobErrorCode = z.infer<typeof ImportJobErrorCode>;
+/** Why a drafting job failed: ai_draft_jobs.error_code (M1-c), never a message. */
+export const AiDraftErrorCode = z.enum([
+  'drafter_error',
+  'bad_output',
+  'no_draft_passed',
+  'timeout',
+  'internal',
+]);
+export type AiDraftErrorCode = z.infer<typeof AiDraftErrorCode>;
 /** An import job holds at most 2,000 rows and 2,000 images (§4.3, §6.9). */
 const importCount = () => z.int().min(0).max(2000);
 
@@ -276,11 +286,11 @@ export const AuditDetails = {
     })
     .strict(),
   'import.cancel': z.object({ import_job_id: z.uuid() }).strict(),
-  'import.fail': z.object({ import_job_id: z.uuid(), error_code: JobErrorCode }).strict(),
+  'import.fail': z.object({ import_job_id: z.uuid(), error_code: ImportJobErrorCode }).strict(),
   'ai_draft.complete': z
     .object({ ai_draft_job_id: z.uuid(), drafts_created: z.int().min(0).max(10) })
     .strict(),
-  'ai_draft.fail': z.object({ ai_draft_job_id: z.uuid(), error_code: JobErrorCode }).strict(),
+  'ai_draft.fail': z.object({ ai_draft_job_id: z.uuid(), error_code: AiDraftErrorCode }).strict(),
   'member_invite.create': z.object({ member_invite_id: z.uuid(), roles: Roles }).strict(),
   'member_invite.cancel': z.object({ member_invite_id: z.uuid() }).strict(),
   'member_invite.provisioned': z.object({ member_invite_id: z.uuid() }).strict(),

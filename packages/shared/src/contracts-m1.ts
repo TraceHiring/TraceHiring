@@ -4,7 +4,9 @@
 // shapes (package v2, session view v2) live in contracts-candidate.ts.
 import { z } from 'zod';
 import { UpdateTestDraftRequest } from './contracts-d1.js';
-import { OrgRole } from './contracts-tenancy.js';
+import { AiDraftErrorCode, OrgRole } from './contracts-tenancy.js';
+
+export { AiDraftErrorCode, ImportJobErrorCode } from './contracts-tenancy.js';
 
 // Small factories, so each schema gets its own node.
 const uuid = () => z.uuid();
@@ -14,8 +16,6 @@ const posInt = () => z.int().min(1);
 const count = () => z.int().min(0);
 /** Option ids are short author-chosen strings (item_versions.options, 1..64 chars, as D1). */
 const optionId = () => z.string().min(1).max(64);
-/** A constant lower-snake code (never free text), as D1's ApiError. */
-const code = () => z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 const uniqueBy = <T>(rows: readonly T[], key: (row: T) => unknown) =>
   new Set(rows.map(key)).size === rows.length;
 
@@ -593,13 +593,15 @@ export const ImportRowsRequest = z
   });
 export type ImportRowsRequest = z.infer<typeof ImportRowsRequest>;
 
-/** The template column a row error points at (trace-items-v1 header), or `row` for the whole row. */
-const ImportField = z.enum([
+/** The template column a row error points at (trace-items-v1 header), `options` for the option set as a whole, or
+ * `row` for the whole row (import_row_errors.field, M1-c). */
+export const ImportField = z.enum([
   'row',
   'format',
   'skill',
   'difficulty',
   'stem',
+  'options',
   'option_a',
   'option_b',
   'option_c',
@@ -652,7 +654,7 @@ export const AiDraftJobView = z
     difficulty: Difficulty,
     count: z.int().min(1).max(10),
     draftsCreated: count(),
-    errorCode: code().optional(),
+    errorCode: AiDraftErrorCode.optional(),
   })
   .refine((job) => job.draftsCreated <= job.count, {
     message: 'draftsCreated cannot exceed count',
