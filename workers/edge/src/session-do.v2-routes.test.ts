@@ -91,6 +91,9 @@ describe('package v2 session routes', () => {
     expect((await h.request('GET', `/v1/session/items/1?afterSeq=1e3`, { token })).status).toBe(
       400,
     );
+    expect(
+      (await h.request('GET', `/v1/session/items/${FIRST}?afterSeq=0`, { token })).status,
+    ).toBe(200);
     const ack = await postEvents(h, token, view.streamId, [text(1, FIRST, 0, 0, 'x')]);
     expect(await ack.json()).not.toHaveProperty('refusedSeqs');
   });

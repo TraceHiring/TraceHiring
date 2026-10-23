@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { objectText } from './edge.test-helpers.js';
 import { evidenceKeys, GRACE_MS, type ItemResult } from './session-core.js';
 import { DRAW_PREFIX, type StoredDraw } from './session-core-v2.js';
+import type { StoredEvent } from './session-evidence.js';
 import {
   AUTH,
   choice,
@@ -27,12 +28,19 @@ import {
   INLINE,
   makePackage,
   makePackageV2,
+  MCQ,
+  paste,
   POOL,
   POSITIONS,
   SECTION_SECONDS,
+  serveCore,
   startCore,
   startCoreV2,
+  startInput,
+  tabHidden,
   text,
+  v2ItemVersion,
+  WRITTEN,
   type CoreHarness,
 } from './session.test-helpers.js';
 import { ORG, SESSION } from './token.test-helpers.js';
@@ -211,6 +219,7 @@ describe('section.finish and section deadlines (§4.6, R5-20)', () => {
     const h = await coreHarness(pkgOf(true));
     const t0 = h.clock.ms;
     const { view: v } = await startCoreV2(h);
+    served(await h.core.item(AUTH, 1));
     h.clock.ms = t0 + 30_000;
     const ack = await h.core.events(AUTH, {
       streamId: v.streamId,
@@ -252,6 +261,9 @@ describe('section.finish and section deadlines (§4.6, R5-20)', () => {
     const t0 = h.clock.ms;
     const { view: v } = await startCoreV2(h);
     const deadline = t0 + SECTION_SECONDS * 1000;
+    // Positions 1 and 2 are served before the deadline: the late answers are judged on the clock alone (R5-59 b).
+    served(await h.core.item(AUTH, 1));
+    served(await h.core.item(AUTH, 2));
 
     h.clock.ms = deadline + 1;
     expect(await h.core.item(AUTH, 1)).toMatchObject({ ok: false, error: 'section_closed' });
@@ -455,5 +467,240 @@ describe('package v1 sessions are unchanged (R5-9)', () => {
     expect(item).toMatchObject({ ok: true, item: { position: 1, kind: 'mcq' } });
     expect(draws(h)).toEqual([]);
     expect(h.alarm.at).toBe(h.clock.ms + DURATION_SECONDS * 1000 + GRACE_MS);
+  });
+});
+
+// ---- fix round 1 (R5-59, M1 wave 2 first reviews of A4) -----------------------------------------------------------
+
+const storedEvents = (h: CoreHarness): StoredEvent[] =>
+  [...h.kv.list<StoredEvent>({ prefix: 'ev:' })].map(([, e]) => e);
+
+const finalPositions = (h: CoreHarness): number[] =>
+  (
+    JSON.parse(objectText(h.evidence, evidenceKeys(ORG, SESSION).final)) as {
+      answers: { position: number }[];
+    }
+  ).answers.map((a) => a.position);
+
+const ndjson = (h: CoreHarness): Record<string, unknown>[] =>
+  objectText(h.evidence, evidenceKeys(ORG, SESSION).events)
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+describe('answers only to served positions (R5-59 b)', () => {
+  it('an answer at an unserved position of a free section is acked, refused, stored as refused, never final', async () => {
+    const h = await coreHarness(pkgOf());
+    const { view: v } = await startCoreV2(h);
+    served(await h.core.item(AUTH, 1));
+    // Position 2 is drawn (the untimed pool section is open) but was never served.
+    expect(
+      await h.core.events(AUTH, {
+        streamId: v.streamId,
+        events: [choice(1, 2, 'a'), choice(2, 1, 'b')],
+      }),
+    ).toMatchObject({ ok: true, ackSeq: 2, refusedSeqs: [1] });
+    expect(storedEvents(h).map((e) => [e.seq, e.refused ?? false])).toEqual([
+      [1, true],
+      [2, false],
+    ]);
+    expect((await view(h)).answers).toEqual([{ position: 1, choice: 'b' }]);
+
+    await h.core.submit(AUTH, { streamId: v.streamId, finalSeq: 2 });
+    expect(finalPositions(h)).toEqual([1]);
+    expect(SessionMirrorMessageV2.parse(h.queue.sent[0]).replay).toBe('ok');
+  });
+
+  it('forward-only: an answer at the next position (highest served + 1) before it is served is refused', async () => {
+    const [first, second] = POSITIONS[FORWARD];
+    const h = await coreHarness(pkgOf());
+    const { view: v } = await startCoreV2(h);
+    // Nothing served yet: even the section's first position is refused.
+    expect(
+      await h.core.events(AUTH, { streamId: v.streamId, events: [text(1, first, 0, 0, 'early')] }),
+    ).toMatchObject({ ok: true, ackSeq: 1, refusedSeqs: [1] });
+    served(await h.core.item(AUTH, first, 1));
+    expect(
+      await h.core.events(AUTH, {
+        streamId: v.streamId,
+        events: [text(2, second, 0, 0, 'ahead'), text(3, first, 0, 0, 'kept')],
+      }),
+    ).toMatchObject({ ok: true, ackSeq: 3, refusedSeqs: [2] });
+    expect((await view(h)).answers).toEqual([{ position: first, text: 'kept' }]);
+  });
+
+  it('a package v1 session refuses an answer at a position it has not served, too', async () => {
+    const h = await coreHarness(makePackage());
+    const { view: v } = await startCore(h);
+    await serveCore(h, [MCQ]);
+    expect(
+      await h.core.events(AUTH, {
+        streamId: v.streamId,
+        events: [text(1, WRITTEN, 0, 0, 'unserved'), choice(2, MCQ, 'a')],
+      }),
+    ).toMatchObject({ ok: true, ackSeq: 2, refusedSeqs: [1] });
+    expect(storedEvents(h).find((e) => e.seq === 1)?.refused).toBe(true);
+    // An unknown position is still a bad batch (RT-13), not a refusal.
+    expect(
+      await h.core.events(AUTH, { streamId: v.streamId, events: [text(3, 9, 0, 0, 'x')] }),
+    ).toEqual({ ok: false, error: 'bad_request' });
+
+    await h.core.submit(AUTH, { streamId: v.streamId, finalSeq: 2 });
+    expect(finalPositions(h)).toEqual([MCQ]);
+  });
+
+  it('final.json positions are a subset of the mirror served positions (the jobs map answers through served[])', async () => {
+    const h = await coreHarness(pkgOf());
+    const { view: v } = await startCoreV2(h);
+    served(await h.core.item(AUTH, 1));
+    served(await h.core.item(AUTH, 6));
+    const events = [1, 2, 3, 6, 7].map((position, k) =>
+      choice(k + 1, position, position < 6 ? 'a' : 'x'),
+    );
+    expect(await h.core.events(AUTH, { streamId: v.streamId, events })).toMatchObject({
+      ok: true,
+      refusedSeqs: [2, 3, 5],
+    });
+    // Defence in depth: an accepted edit at an unserved position (an older object's state) is dropped at finalise.
+    h.kv.put('ev:0000001000', {
+      gseq: 1000,
+      streamId: v.streamId,
+      seq: 99,
+      t: 0,
+      tServer: h.clock.ms,
+      body: { kind: 'answer.choice', item: 7, option: 'y' },
+    } satisfies StoredEvent);
+    h.kv.put('ans:7', { kind: 'choice', choice: 'y', gseq: 1000 });
+
+    await h.core.submit(AUTH, { streamId: v.streamId, finalSeq: 5 });
+    const message = SessionMirrorMessageV2.parse(h.queue.sent[0]);
+    const servedPositions = new Set(message.served.map((r) => r.position));
+    expect([...servedPositions].sort((a, b) => a - b)).toEqual([1, 6]);
+    expect(finalPositions(h)).toEqual([1, 6]);
+    for (const position of finalPositions(h)) expect(servedPositions.has(position)).toBe(true);
+  });
+});
+
+describe('two positions: session-wide and draw (R5-59 a)', () => {
+  it('two pool sections: served positions are session-wide; 1 + index in draws[] is the draw position', async () => {
+    const h = await coreHarness(pkgOf());
+    const { view: v } = await startCoreV2(h);
+    for (const position of [...POSITIONS[POOL], ...POSITIONS[FORWARD]]) {
+      served(await h.core.item(AUTH, position));
+    }
+    const second = POSITIONS[FORWARD][1];
+    await h.core.events(AUTH, {
+      streamId: v.streamId,
+      events: [text(1, second, 0, 0, 'answer'), paste(2, second, 6)],
+    });
+    await h.core.submit(AUTH, { streamId: v.streamId, finalSeq: 2 });
+    const message = SessionMirrorMessageV2.parse(h.queue.sent[0]);
+
+    const firstSlot: Record<string, number> = { [POOL]: 1, [FORWARD]: POSITIONS[FORWARD][0] };
+    const count: Record<string, number> = { [POOL]: 3, [FORWARD]: 2 };
+    expect(message.poolSectionIds).toEqual([POOL, FORWARD]);
+    expect(message.served.map((r) => r.position)).toEqual([1, 2, 3, 4, 5]);
+    for (const row of message.served) {
+      const draw = message.draws.find((d) => d.sectionId === row.sectionId);
+      const index = draw?.itemVersionIds.indexOf(row.itemVersionId) ?? -1;
+      expect(index).toBeGreaterThanOrEqual(0);
+      // The k-th drawn item sits at the section's first slot + k (session-wide position)...
+      expect(row.position).toBe((firstSlot[row.sectionId] ?? 0) + index);
+      // ...and its draw position (session_items.position, R5-42) is 1 + k, within the draw count.
+      expect(index + 1).toBeLessThanOrEqual(count[row.sectionId] ?? 0);
+    }
+    // final.json and events.ndjson use the session-wide position too.
+    expect(finalPositions(h)).toEqual([second]);
+    expect(ndjson(h).find((l) => l.sig === 'paste')).toMatchObject({ item: second });
+  });
+});
+
+describe('captureSignals (R5-59 c, §6.7 data minimisation)', () => {
+  it('a signal kind outside captureSignals is acked but never stored nor in events.ndjson', async () => {
+    const pkg = makePackageV2(
+      {},
+      { captureSignals: ['paste', 'drop', 'untrusted_input', 'fullscreen_exit'] },
+    );
+    const h = await coreHarness(pkg);
+    const { view: v } = await startCoreV2(h);
+    expect(
+      await h.core.events(AUTH, {
+        streamId: v.streamId,
+        events: [tabHidden(1, null, 5_000), heartbeat(2), paste(3, null, 4), tabHidden(4, null, 9)],
+      }),
+    ).toEqual(expect.objectContaining({ ok: true, ackSeq: 4 }));
+    expect(storedEvents(h).map((e) => [e.seq, e.body.kind])).toEqual([
+      [2, 'heartbeat'],
+      [3, 'signal'],
+    ]);
+    // Acked: a resend is a duplicate, the next seq follows the high-water mark.
+    expect(
+      await h.core.events(AUTH, {
+        streamId: v.streamId,
+        events: [tabHidden(4, null, 9), heartbeat(5)],
+      }),
+    ).toMatchObject({ ok: true, ackSeq: 5 });
+
+    await h.core.submit(AUTH, { streamId: v.streamId, finalSeq: 5 });
+    const lines = ndjson(h);
+    expect(lines.some((l) => l.sig === 'tab_hidden')).toBe(false);
+    expect(lines.map((l) => l.sig ?? l.kind)).toEqual(['heartbeat', 'paste', 'heartbeat']);
+  });
+
+  it('a captured tab_hidden is stored as before', async () => {
+    const h = await coreHarness(pkgOf());
+    const { view: v } = await startCoreV2(h);
+    await h.core.events(AUTH, { streamId: v.streamId, events: [tabHidden(1, null, 5_000)] });
+    expect(storedEvents(h).map((e) => e.body.kind)).toEqual(['signal']);
+  });
+});
+
+describe('a GET for a section not entered (R5-59 d)', () => {
+  it('409 out_of_order when afterSeq is ahead of the high-water mark; 400 otherwise; 200 after the finish', async () => {
+    const h = await coreHarness(pkgOf(true));
+    const { view: v } = await startCoreV2(h);
+    const s2 = POSITIONS[FORWARD][0];
+    // The client enqueued section.finish(S1) as seq 1 and asks for S2's first position before the batch lands.
+    expect(await h.core.item(AUTH, s2, 1)).toEqual({
+      ok: false,
+      error: 'out_of_order',
+      ackSeq: 0,
+    });
+    expect(await h.core.item(AUTH, s2, 0)).toMatchObject({ ok: false, error: 'bad_request' });
+    expect(await h.core.item(AUTH, s2)).toMatchObject({ ok: false, error: 'bad_request' });
+    expect(
+      await h.core.events(AUTH, { streamId: v.streamId, events: [finish(1, POOL)] }),
+    ).toMatchObject({ ok: true, ackSeq: 1 });
+    expect(served(await h.core.item(AUTH, s2, 1)).position).toBe(s2);
+  });
+});
+
+describe('the served-item cap at start (R5-9, R5-59)', () => {
+  it('a package v2 with 101 served slots is refused at start and nothing is stored', async () => {
+    const base = pkgOf();
+    // 3 (pool) + 2 (forward) + 96 inline items = 101 served slots.
+    const inline = Array.from({ length: 96 }, (_, k) => ({
+      sectionId: INLINE,
+      itemVersionId: v2ItemVersion(3, k + 1),
+      itemId: `abababab-abab-4bab-8bab-${String(k + 1).padStart(12, '0')}`,
+      kind: 'mcq' as const,
+      prompt: `[synthetic] inline question ${k + 1}?`,
+      options: [
+        { id: 'x', label: '[synthetic] x' },
+        { id: 'y', label: '[synthetic] y' },
+      ],
+      exposureAtPublish: 0,
+    }));
+    const pkg = {
+      ...base,
+      items: [...base.items.filter((i) => i.sectionId !== INLINE), ...inline],
+    };
+    const h = await coreHarness(pkg);
+    expect(await h.core.start(startInput(h.sha256))).toMatchObject({
+      ok: false,
+      error: 'unavailable',
+      pkg: 'schema',
+    });
+    expect([...h.kv.list({ prefix: '' })]).toEqual([]);
   });
 });

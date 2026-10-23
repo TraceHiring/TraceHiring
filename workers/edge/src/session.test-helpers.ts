@@ -357,6 +357,33 @@ export const startCore = async (
   return { view: out.view as SessionView, startedAt: out.startedAt };
 };
 
+/**
+ * GETs positions on the bare core (default: every item of makePackage), so answers to them are accepted: the DO
+ * refuses an answer at a position it has not served (R5-59 b). Throws on a refusal.
+ */
+export const serveCore = async (
+  h: CoreHarness,
+  positions: readonly number[] = [MCQ, WRITTEN, SHORT],
+  auth: { nonce: string; orgId: string } = AUTH,
+): Promise<void> => {
+  for (const position of positions) {
+    const out = await h.core.item(auth, position);
+    if (!out.ok) throw new Error(`item ${position} refused: ${out.error}`);
+  }
+};
+
+/** The same through the routes (GET /v1/session/items/:pos); throws unless each answers 200. */
+export const serveHttp = async (
+  h: Harness,
+  token: string,
+  positions: readonly number[] = [MCQ, WRITTEN, SHORT],
+): Promise<void> => {
+  for (const position of positions) {
+    const res = await h.request('GET', `/v1/session/items/${position}`, { token });
+    if (res.status !== 200) throw new Error(`item ${position} answered ${res.status}`);
+  }
+};
+
 // ---- event builders (seq and t set by the caller) --------------------------------------------------------------
 
 export const text = (seq: number, item: number, p: number, d: number, i: string, t = seq * 100) =>

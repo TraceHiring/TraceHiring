@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { sha256HexBytes } from './encoding.js';
 import {
   finish,
+  FORWARD,
   INLINE,
   LIBRARY_ORG,
   makePackage,
@@ -15,6 +16,7 @@ import {
   mediaHash,
   mediaPath,
   POOL,
+  POSITIONS,
   postEvents,
   sessionHarness,
   type SessionRouteHarness,
@@ -28,8 +30,8 @@ const poolItems = pkg.items.filter((i) => i.sectionId === POOL);
 const imageBytes = (n: number) => new TextEncoder().encode(`[synthetic] image bytes ${n}`);
 
 /** The package with real content hashes: image n's bytes hash to the hash its item names (object path to match). */
-const withImages = async () => {
-  const real = structuredClone(pkg);
+const withImages = async (base: typeof pkg = pkg) => {
+  const real = structuredClone(base);
   const objects = new Map<string, Uint8Array>();
   let n = 0;
   for (const item of real.items) {
@@ -46,8 +48,8 @@ const withImages = async () => {
   return { real, objects };
 };
 
-const mediaHarness = async () => {
-  const { real, objects } = await withImages();
+const mediaHarness = async (base: typeof pkg = pkg) => {
+  const { real, objects } = await withImages(base);
   const h = await sessionHarness({ pkg: real });
   for (const [path, bytes] of objects) await h.itemMedia.bucket.put(path, bytes);
   const { token, view } = await h.startSession();
@@ -139,6 +141,37 @@ describe('GET /v1/session/media/:hash (AT-M1-23)', () => {
       json: { streamId: view.streamId, finalSeq: 1 },
     });
     expect((await get(h, token, hash)).status).toBe(404);
+  });
+
+  it('forward-only: the image of a position the candidate has moved past is refused (R5-59, SEC review #3)', async () => {
+    // The forward-only written section with one image per item (n = 201..203).
+    const base = makePackageV2();
+    for (const [k, item] of base.items.filter((i) => i.sectionId === FORWARD).entries()) {
+      const hash = mediaHash(201 + k);
+      item.media = [
+        {
+          hash,
+          ext: 'png',
+          alt: `[synthetic] writing figure ${k}`,
+          objectPath: mediaPath(ORG, hash, 'png'),
+        },
+      ];
+    }
+    const { h, token } = await mediaHarness(base);
+    const [first, second] = POSITIONS[FORWARD];
+    const hashAt = async (position: number) => {
+      const res = await h.request('GET', `/v1/session/items/${position}?afterSeq=0`, { token });
+      expect(res.status).toBe(200);
+      return ((await res.json()) as { media: { hash: string }[] }).media[0]?.hash ?? '';
+    };
+    const firstHash = await hashAt(first);
+    expect((await get(h, token, firstHash)).status).toBe(200);
+    const secondHash = await hashAt(second);
+
+    const behind = await get(h, token, firstHash);
+    expect(behind.status).toBe(404);
+    expect(await behind.json()).toEqual(NOT_FOUND);
+    expect((await get(h, token, secondHash)).status).toBe(200);
   });
 
   it('refuses when the stored object is missing or its bytes do not match the hash', async () => {
