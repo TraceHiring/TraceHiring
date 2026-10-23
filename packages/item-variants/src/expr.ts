@@ -32,6 +32,7 @@ import {
   sub,
   type Rational,
 } from './rational.js';
+import { charge } from './work.js';
 
 export const MAX_EXPR_LENGTH = 200;
 export const MAX_EXPR_DEPTH = 16;
@@ -453,6 +454,8 @@ function integerOf(v: Rational): bigint {
 }
 
 function num(e: Expr, env: ReadonlyMap<string, Rational>): Rational {
+  // Every evaluated node costs at least one unit, variable lookups and literals included (review round 2, F2).
+  charge(1);
   switch (e.t) {
     case 'num':
       return e.v;
@@ -514,6 +517,7 @@ function compareHolds(op: CompareOp, c: -1 | 0 | 1): boolean {
 }
 
 function bool(e: Expr, env: ReadonlyMap<string, Rational>): boolean {
+  charge(1);
   if (e.t === 'cmp') return compareHolds(e.op, compare(num(e.a, env), num(e.b, env)));
   if (e.t === 'not') return !bool(e.a, env);
   if (e.t === 'logic') {

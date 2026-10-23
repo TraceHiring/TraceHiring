@@ -47,14 +47,14 @@ export const MAX_ATTEMPTS_PER_VARIANT = 50;
 
 /**
  * Work units one tuple may spend (draw, derived values, constraints, rendering, checks). The realistic maximal spec
- * of limits.test.ts (a 3,800-character stem, 8 params, 8 derived values, 8 constraints) spends about 2,200 per
+ * of limits.test.ts (a 3,800-character stem, 8 params, 8 derived values, 8 constraints) spends about 4,000 per
  * tuple; the review's adversarial tuple spends far more and is stopped on its first tuple.
  */
 export const TUPLE_WORK_BUDGET = 20_000;
 /**
- * Work units a whole generation may spend, the bound on the CPU any accepted spec can cost: several times what the
- * realistic maximal spec needs at count 200 (measured in the A1 review-round-1 report: roughly 0.5 s of Node CPU
- * at most for bigint-heavy specs, far less for ordinary ones).
+ * Work units a whole generation may spend, the bound on the CPU any accepted spec can cost: well above what the
+ * realistic maximal spec needs at count 200 (about 835,000), while every adversarial spec of the A1 reviews
+ * (bigint-heavy, Fibonacci gcd, 8-argument min/max, text-heavy) stops within about 0.25 s of Node CPU.
  */
 export const GENERATION_WORK_BUDGET = 2_000_000;
 

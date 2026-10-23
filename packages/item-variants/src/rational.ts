@@ -41,10 +41,15 @@ const opUnits = (bits: number): number => {
 
 /** Greatest common divisor of |a| and |b|; gcd(0, 0) = 0. */
 export function bigGcd(a: bigint, b: bigint): bigint {
-  charge(opUnits(Math.max(bitLength(a), bitLength(b))));
+  // Euclid takes up to ~1.44 x bits steps (consecutive Fibonacci numbers), so it is charged per step: 1 + w units
+  // for w 64-bit words of the larger operand (a remainder costs about w word operations). Review round 2, F1.
+  const bits = Math.max(bitLength(a), bitLength(b));
+  const step = 1 + Math.ceil(bits / 64);
+  charge(opUnits(bits));
   let x = babs(a);
   let y = babs(b);
   while (y !== 0n) {
+    charge(step);
     const t = x % y;
     x = y;
     y = t;
@@ -96,11 +101,15 @@ export const abs = (a: Rational): Rational => (a.n < 0n ? neg(a) : a);
 export function pow(a: Rational, e: number): Rational {
   if (!Number.isInteger(e) || e < 0 || e > 6) throw new RationalError('not_integer');
   const be = BigInt(e);
+  // Up to e - 1 multiplications before rational() charges the result: charge them by the operand size.
+  charge(e * opUnits(Math.max(bitLength(a.n), bitLength(a.d))));
   return rational(a.n ** be, a.d ** be);
 }
 
 /** -1, 0 or 1 as a is below, equal to or above b. */
 export function compare(a: Rational, b: Rational): -1 | 0 | 1 {
+  // Two cross products: charged like any operation on operands of this size (review round 2, F2).
+  charge(opUnits(Math.max(bitLength(a.n), bitLength(a.d), bitLength(b.n), bitLength(b.d))));
   const diff = a.n * b.d - b.n * a.d;
   return diff < 0n ? -1 : diff > 0n ? 1 : 0;
 }
