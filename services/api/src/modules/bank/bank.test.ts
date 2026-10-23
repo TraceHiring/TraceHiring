@@ -89,9 +89,15 @@ describe('POST …/bank/items', () => {
         paramSpec: null,
       }),
     );
-    // The origin is never sent: the guard sets it from the write path (carried n-3).
-    const insert = db.calls.find((c) => c.method === 'insert' && c.table === 'item_versions');
-    expect(insert).toBeDefined();
+    // The origin is never sent: the guard sets it from the write path (carried n-3); nor are the id, the status or
+    // the approval columns.
+    const inserts = db.sentInserts.filter((c) => c.table === 'item_versions');
+    expect(inserts).toHaveLength(1);
+    for (const sent of inserts[0]?.body ?? []) {
+      for (const col of ['origin', 'id', 'status', 'approved_by', 'approved_at', 'created_by']) {
+        expect(Object.keys(sent)).not.toContain(col);
+      }
+    }
     expect(db.tables.item_answer_keys).toEqual([
       expect.objectContaining({ item_version_id: version?.id, key: { option_id: 'a' } }),
     ]);
@@ -248,6 +254,86 @@ describe('PUT …/bank/items/:itemId', () => {
     expect(db.tables.item_versions?.[0]?.content_sha256).not.toBe('cd'.repeat(32));
   });
 
+  it('moves the key with the options: a PUT that drops the key option stores the new key on a current option (D1)', async () => {
+    const { db, call } = setup();
+    const created = await jsonOf<{ itemId: string; itemVersionId: string }>(
+      await call('POST', '/bank/items', mcq()),
+    );
+    const newOptions = [
+      { id: 'c', text: 'Chair' },
+      { id: 'd', text: 'Slowly' },
+    ];
+    const res = await call(
+      'PUT',
+      `/bank/items/${created.itemId}`,
+      mcq({ options: newOptions, key: { optionId: 'c' } }),
+    );
+    expect(res.status).toBe(200);
+    expect(BankItemDetail.parse(await res.json()).content).toMatchObject({
+      key: { optionId: 'c' },
+    });
+    expect(db.tables.item_answer_keys).toEqual([
+      expect.objectContaining({ item_version_id: created.itemVersionId, key: { option_id: 'c' } }),
+    ]);
+    // The contract refuses a key that is not one of the request's options (the key travels with the options).
+    const stale = await call(
+      'PUT',
+      `/bank/items/${created.itemId}`,
+      mcq({ options: newOptions, key: { optionId: 'a' } }),
+    );
+    expect(stale.status).toBe(400);
+    const submitted = await call('POST', `/bank/item-versions/${created.itemVersionId}/submit`);
+    expect(submitted.status).toBe(200);
+  });
+
+  it('never leaves the key on a deleted option when the key write fails; submit then answers draft_incomplete (D1)', async () => {
+    const { db, call } = setup();
+    const created = await jsonOf<{ itemId: string; itemVersionId: string }>(
+      await call('POST', '/bank/items', mcq()),
+    );
+    db.failNext('update', 'item_answer_keys', new RestError(503, null));
+    const res = await call(
+      'PUT',
+      `/bank/items/${created.itemId}`,
+      mcq({
+        options: [
+          { id: 'c', text: 'Chair' },
+          { id: 'd', text: 'Slowly' },
+        ],
+        key: { optionId: 'c' },
+      }),
+    );
+    expect(res.status).toBe(503);
+    const options = (db.tables.item_versions?.[0]?.options as { id: string }[]).map((o) => o.id);
+    for (const k of db.tables.item_answer_keys ?? []) {
+      expect(options).toContain((k.key as { option_id: string }).option_id);
+    }
+    // The draft still reads (no key shown on a deleted option) and cannot leave draft until a PUT stores the key.
+    const read = await call('GET', `/bank/items/${created.itemId}`);
+    expect(read.status).toBe(200);
+    expect(BankItemDetail.parse(await read.json()).content).not.toHaveProperty('key');
+    const submit = await call('POST', `/bank/item-versions/${created.itemVersionId}/submit`);
+    expect(submit.status).toBe(422);
+    expect(await codeOf(submit)).toBe('draft_incomplete');
+  });
+
+  it('a submit or an approval the readiness guard refuses answers 422 draft_incomplete, never 404 (D5)', async () => {
+    const { db, call } = setup();
+    const v = seedVersion(db, { status: 'draft' });
+    db.tables.item_answer_keys = [];
+    const submit = await call('POST', `/bank/item-versions/${String(v.id)}/submit`);
+    expect(submit.status).toBe(422);
+    expect(await codeOf(submit)).toBe('draft_incomplete');
+    const r = seedVersion(db, { status: 'in_review' });
+    db.tables.item_answer_keys = [];
+    const review = await call('POST', `/bank/item-versions/${String(r.id)}/review`, {
+      itemVersionId: r.id,
+      decision: 'approve',
+    });
+    expect(review.status).toBe(422);
+    expect(await codeOf(review)).toBe('draft_incomplete');
+  });
+
   it('answers 409 when the latest version has left draft (an edit is a new version, I-M1-3)', async () => {
     const { db, call } = setup();
     const v = seedVersion(db, { status: 'in_review' });
@@ -286,6 +372,43 @@ describe('POST …/bank/items/:itemId/versions', () => {
     expect(body.approvedBy).toBeNull();
     expect(body.content).toMatchObject({ stem: v1.stem, key: { optionId: 'a' } });
     expect(v1.status).toBe('approved');
+  });
+
+  it('answers 409 conflict when the one-open-version index refuses the insert (23505, D4, R5-64 a)', async () => {
+    const { db, call } = setup();
+    const v1 = seedVersion(db);
+    db.failNext('insert', 'item_versions', new RestError(409, '23505'));
+    const res = await call('POST', `/bank/items/${String(v1.item_id)}/versions`);
+    expect(res.status).toBe(409);
+    expect(await codeOf(res)).toBe('conflict');
+    expect(db.tables.item_versions).toHaveLength(1);
+  });
+
+  it('never clones an AI draft that was sent back (D8, R5-64 f)', async () => {
+    const { db, call } = setup();
+    const sentBack = seedVersion(db, { origin: 'ai_draft', status: 'not_approved' });
+    const res = await call('POST', `/bank/items/${String(sentBack.item_id)}/versions`);
+    expect(res.status).toBe(409);
+    expect(await codeOf(res)).toBe('conflict');
+    expect(db.tables.item_versions).toHaveLength(1);
+    // A human version that was sent back may be edited as a new version.
+    const human = seedVersion(db, { status: 'not_approved' });
+    expect((await call('POST', `/bank/items/${String(human.item_id)}/versions`)).status).toBe(201);
+  });
+
+  it('clones an approved or retired AI draft as a human-authored version with its own review (D8, R5-64 f)', async () => {
+    const { db, call } = setup();
+    for (const status of ['approved', 'retired']) {
+      const ai = seedVersion(db, { origin: 'ai_draft', status });
+      const res = await call('POST', `/bank/items/${String(ai.item_id)}/versions`);
+      expect(res.status).toBe(201);
+      const body = BankItemCreateResponse.parse(await res.json());
+      expect(body).toMatchObject({ origin: 'human', status: 'draft', approvedBy: null });
+      expect(ai.origin).toBe('ai_draft');
+    }
+    for (const sent of db.sentInserts.filter((c) => c.table === 'item_versions')) {
+      for (const row of sent.body) expect(Object.keys(row)).not.toContain('origin');
+    }
   });
 
   it('answers 409 while a version is still open, and for a library copy', async () => {

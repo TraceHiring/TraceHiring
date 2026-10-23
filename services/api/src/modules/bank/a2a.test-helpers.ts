@@ -58,6 +58,24 @@ const CONTENT = [
 
 const tableOf = (db: FakeDb, name: string): Row[] => (db.tables[name] ??= []);
 
+/**
+ * `private.item_version_ready` as M1-m (R5-64 b): an mcq key naming one of the version's current options, a written
+ * item's rubric, a parameterised item's variants.
+ */
+const ready = (v: Row, db: FakeDb): void => {
+  if (v.format === 'mcq' && v.is_parameterised !== true) {
+    const options = (v.options as { id: string }[] | null) ?? [];
+    const key = tableOf(db, 'item_answer_keys').find((k) => k.item_version_id === v.id);
+    const optionId = (key?.key as { option_id?: string } | undefined)?.option_id;
+    if (!options.some((o) => o.id === optionId)) throw guard('mcq_key_missing');
+  }
+  if (v.format === 'written' && v.rubric_version_id === null) throw guard('rubric_missing');
+  if (v.is_parameterised === true) {
+    const n = tableOf(db, 'item_variants').filter((x) => x.item_version_id === v.id).length;
+    if (n === 0) throw guard('variants_missing');
+  }
+};
+
 /** The item_versions guard of §4.1 for bank rows (M1-a), reduced to what the routes observe. */
 const versionUpdate = (old: Row, next: Row, db: FakeDb): Row => {
   const content = CONTENT.some((c) => JSON.stringify(old[c]) !== JSON.stringify(next[c]));
@@ -69,18 +87,13 @@ const versionUpdate = (old: Row, next: Row, db: FakeDb): Row => {
   const from = String(old.status);
   const to = String(next.status);
   if (from === 'draft' && to === 'in_review') {
-    if (next.format === 'mcq' && next.is_parameterised !== true) {
-      const key = tableOf(db, 'item_answer_keys').some((k) => k.item_version_id === old.id);
-      if (!key) throw guard('other');
-    }
-    if (next.is_parameterised === true) {
-      const n = tableOf(db, 'item_variants').filter((v) => v.item_version_id === old.id).length;
-      if (n === 0) throw guard('other');
-    }
+    ready(next, db);
     return next;
   }
   if (from === 'in_review' && (to === 'approved' || to === 'not_approved')) {
-    return to === 'approved' ? { ...next, approved_by: USER, approved_at: stamp() } : next;
+    if (to === 'not_approved') return next;
+    ready(next, db);
+    return { ...next, approved_by: USER, approved_at: stamp() };
   }
   if (from === 'approved' && to === 'retired') return next;
   throw guard('item_status_change');
@@ -142,6 +155,17 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
           const item = tableOf(d, 'items').find((i) => i.id === row.item_id);
           if (item === undefined) throw new RestError(409, '23503');
           if (item.format !== row.format) throw guard();
+          // M1-m `item_versions_one_open_per_item` (R5-64 a): one draft or in-review bank version per item.
+          if (
+            tableOf(d, 'item_versions').some(
+              (v) =>
+                v.item_id === row.item_id &&
+                v.section_id === null &&
+                (v.status === 'draft' || v.status === 'in_review'),
+            )
+          ) {
+            throw new RestError(409, '23505');
+          }
           const versionNo =
             Math.max(
               0,
