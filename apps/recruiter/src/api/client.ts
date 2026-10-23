@@ -2,6 +2,7 @@
 // zod contract from @trace/shared/contracts/d1; a body that fails parsing is `invalid_response`, never shown raw.
 // Nothing here logs, and no failure carries the response body, the URL or the token: only a constant code.
 import { ApiError } from '@trace/shared/contracts/d1';
+import { IMPORT_IMAGE_MAX_BYTES } from '@trace/shared/contracts/m1';
 
 /** The part of `fetch` the client uses; tests pass a fake. */
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
@@ -44,8 +45,9 @@ async function readJson(res: Response): Promise<unknown> {
 /** The only content types an import image may be sent as (R5-18, §6.9: the api re-checks the magic bytes). */
 export const IMPORT_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 export type ImportImageType = (typeof IMPORT_IMAGE_TYPES)[number];
-/** One image is at most 1 MiB (§6.9); the api enforces its own limit, this only spares a doomed upload. */
-export const MAX_IMPORT_IMAGE_BYTES = 1_048_576;
+/** One image is at most 1 MiB (§6.9, R5-55 d: the shared contract constant); the api enforces the same limit, this
+ * only spares a doomed upload. */
+export const MAX_IMPORT_IMAGE_BYTES = IMPORT_IMAGE_MAX_BYTES;
 
 export interface PutImageOptions<T> {
   /** Path below `/v1/orgs/:orgId`, starting with a slash. */
