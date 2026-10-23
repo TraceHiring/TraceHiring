@@ -83,3 +83,17 @@ Trigger order, no TOCTOU, digest lifecycle, column grant, SQL = JS digest, keyse
 - Database review of lead migrations M1-f…M1-i: **APPROVE** (Lows: pin `ai_draft_jobs_outcome`; the M1-g comment
   overstates the lookup's binding; the M1-i grant is not used yet).
 
+
+## A2b fix round 1 (`8490579..5c2a892`, branch `m1/a2b-fix-1`) — confirming re-review (Opus, 2026-10-23)
+**Spec: CONFIRMED WITH NOTES. Security: CONFIRMED. Database: CONFIRMED WITH NOTES.** No rule 1-9 issue. All eight claimed
+items (R5-63 a-e, R5-53 a, R5-34 on clone/versions, guard keys, title from `tests.name`) verified; test removals justified.
+Merged `f9a6ad4`; red `ea849cd`, mounts + `LIBRARY_LIMITER` (60/60 s) `fca81ee`; migration M1-k `0b52059`→`9a06211`.
+- Low 1 (test gap): no test for an unbound limiter → **done** by the lead (`templates.test.ts`, 503 before any write).
+- Low 2 (database): the missing-object `uploadedBefore(readAt)` compares R2's clock with the Worker's; the fake assumes R2
+  passes `uploadedBefore` on a missing object → owed: a staging measurement (lead ask 3; FOUNDER-QUEUE staging go-ahead).
+- Low 3: clone answers an error if `pinPresetVersion` fails after `save_test_draft` committed (e.g. 23503 when the
+  catalog differs); from-template archives, clone does not → owed, folds into the R5-63 f atomic RPC work (lead).
+- Note 4: guard keys `invite_settled`, `item_frozen`, `item_status_change`, `approver_required`, `pool_archived`,
+  `import_not_open`, `library_not_approved` still fall to 404 → A2a maps its own keys (in the A2a brief).
+- Note 5: settings PUT and a draft save can interleave (null navigation after defaults) → refused at publish, not
+  corrupted; covered by R5-63 f (one-write derivation in the database).
