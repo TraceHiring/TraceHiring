@@ -1,6 +1,7 @@
 // Synthetic-data renders of the bank screens for tests/m1-guards.test.tsx (AT-M1-24), by name. See
 // src/m1-screen-registry.test-helpers.ts. The route modules themselves are rendered by the guard file.
 import type { ReactNode } from 'react';
+import { AiDraftFormView, AiJobView } from './AiDraftsRoute';
 import { ApprovalQueueTable } from './ApprovalsRoute';
 import { BankTable, StatsPanel } from './BankRoute';
 import { FilterForm } from './FilterForm';
@@ -9,9 +10,11 @@ import { ItemFormView } from './ItemFormView';
 import { ReviewPanel } from './ReviewPanel';
 import { EMPTY_FILTERS } from './filters';
 import { formFromDetail, toDraft } from './item-form';
+import { EMPTY_AI_FORM } from './ai-draft-form';
 import {
   PARAM_SPEC,
   STATS,
+  aiJob,
   mcqDetail,
   summary,
   writtenDetail,
@@ -88,6 +91,19 @@ export function m1Screens(): Record<string, ReactNode> {
       />
     ),
     'approval queue empty': <ApprovalQueueTable rows={[]} openId={null} onOpen={noop} />,
+    'ai draft form': (
+      <AiDraftFormView
+        form={EMPTY_AI_FORM}
+        errors={[{ path: 'topic', message: 'Describe the topic (1 to 500 characters).' }]}
+        busy={false}
+        failure="rate_limited"
+        onChange={noop}
+        onSubmit={noop}
+      />
+    ),
+    'ai draft job queued': <AiJobView job={aiJob()} />,
+    'ai draft job completed': <AiJobView job={aiJob({ status: 'completed', draftsCreated: 2 })} />,
+    'ai draft job failed': <AiJobView job={aiJob({ status: 'failed', errorCode: 'bad_output' })} />,
     'bank share': <StatsPanel stats={STATS} />,
     'bank filters': (
       <FilterForm
