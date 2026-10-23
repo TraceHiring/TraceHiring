@@ -287,7 +287,14 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
               continue;
             }
             const id = ids();
-            lib.push({ ...s, id, org_id: ORG, workspace_id: row.workspace_id, origin: 'library' });
+            lib.push({
+              ...s,
+              id,
+              org_id: ORG,
+              workspace_id: row.workspace_id,
+              origin: 'library',
+              source_item_version_id: src,
+            });
             out.push(id);
           }
           return {
