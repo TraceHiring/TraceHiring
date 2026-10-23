@@ -306,6 +306,45 @@ create policy mt_11_note_job_coalesce_false on public.mt_11_note
 for select
 to trace_worker
 using (coalesce(org_id = (select private.job_org_id()), false) and deleted_at is null);
+-- FR-1 review of fb58605: a sub-select is tied to the policy's table only through a comparison at its own level
+-- that reads both (MT11-1), a scalar or ARRAY sub-select is tied by the comparison around it (MT11-2), and a
+-- caller call with the compared column itself as a fallback (COALESCE, GREATEST) is not bound (MT11-3).
+alter table public.mt_11_note add column membership_id uuid;
+create policy mt_11_note_exists_outer_filter on public.mt_11_note
+for select
+to authenticated
+using (
+  exists (
+    select 1
+    from public.memberships as m
+    where m.user_id = (select auth.uid())
+      and mt_11_note.deleted_at is null
+  )
+);
+create policy mt_11_note_in_outer_filter on public.mt_11_note
+for select
+to authenticated
+using ((select auth.uid()) in (select m.user_id from public.memberships as m where mt_11_note.deleted_at is null));
+create policy mt_11_note_job_fallback on public.mt_11_note
+for select
+to trace_worker
+using (org_id = coalesce((select private.job_org_id()), org_id));
+create policy mt_11_note_job_greatest on public.mt_11_note
+for select
+to trace_worker
+using (org_id::text = greatest((select private.job_org_id())::text, org_id::text));
+create policy mt_11_note_scalar_member on public.mt_11_note
+for select
+to authenticated
+using (membership_id = (select m.id from public.memberships as m where m.user_id = (select auth.uid())));
+create policy mt_11_note_array_member on public.mt_11_note
+for select
+to authenticated
+using (membership_id = any(array(select m.id from public.memberships as m where m.user_id = (select auth.uid()))));
+create policy mt_11_note_job_const_fallback on public.mt_11_note
+for select
+to trace_worker
+using (org_id = coalesce((select private.job_org_id()), '00000000-0000-0000-0000-000000000000'::uuid));
 create temp view mt_11_run as
 -- MT-11 copy begin
 -- MT-11 (spec specs/m0-foundations.md §8.5, separate per-operation policies, CLAUDE.md): a policy on an in-scope
@@ -1295,7 +1334,11 @@ select is_empty(
       ('mt_11_note_in_other on public.mt_11_note', 'caller_bound_elsewhere'),
       ('mt_11_note_case_uid on public.mt_11_note', 'case_branch_without_caller'),
       ('mt_11_note_coalesce_uid on public.mt_11_note', 'coalesce_arg_without_caller'),
-      ('mt_11_note_nested_or_uid on public.mt_11_note', 'nested_or_arm_without_caller')
+      ('mt_11_note_nested_or_uid on public.mt_11_note', 'nested_or_arm_without_caller'),
+      ('mt_11_note_exists_outer_filter on public.mt_11_note', 'caller_bound_elsewhere'),
+      ('mt_11_note_in_outer_filter on public.mt_11_note', 'caller_bound_elsewhere'),
+      ('mt_11_note_job_fallback on public.mt_11_note', 'caller_bound_elsewhere'),
+      ('mt_11_note_job_greatest on public.mt_11_note', 'caller_bound_elsewhere')
   ) as e (object, branch)
   except
   select v.object, v.branch
@@ -1319,7 +1362,10 @@ select is_empty(
       'mt_11_note_uid_in_correlated on public.mt_11_note',
       'mt_11_note_in_nested on public.mt_11_note',
       'mt_11_note_caller_roles on public.mt_11_note',
-      'mt_11_note_job_coalesce_false on public.mt_11_note'
+      'mt_11_note_job_coalesce_false on public.mt_11_note',
+      'mt_11_note_scalar_member on public.mt_11_note',
+      'mt_11_note_array_member on public.mt_11_note',
+      'mt_11_note_job_const_fallback on public.mt_11_note'
     )
   $q$,
   'MT-11: no row for a caller call bound to a column on every path through AND, OR, NOT, CASE, COALESCE (FR-1)'
