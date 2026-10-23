@@ -403,20 +403,7 @@ describe('distText through real gitleaks stdin (N11)', () => {
     expect(keys.filter((k) => !found.has(k)).length, 'keys gitleaks missed').toBe(0);
   });
 
-  it('finds every key in 3,000 single-line ~1.2 KB files', () => {
-    const keys = [];
-    const files = {};
-    for (let i = 0; i < 3_000; i++) {
-      const k = denseKey();
-      keys.push(k);
-      files[`d/assets/chunk-${String(i).padStart(4, '0')}.js`] =
-        `${'a'.repeat(560)}x("${k}");${'b'.repeat(560)}`;
-    }
-    const root = makeTempDir();
-    writeFiles(root, files);
-    const found = stdinSecrets(root, 'd');
-    expect(keys.filter((k) => !found.has(k)).length, 'keys gitleaks missed').toBe(0);
-  });
+  // The 3,000-file case lives in scan-dist.perf.test.mjs and runs on Linux only (D1-LEAD-1).
 
   it('finds every key in a 150 KB file of short lines with no blank line', () => {
     const keys = [];
