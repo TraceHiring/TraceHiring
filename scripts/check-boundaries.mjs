@@ -18,7 +18,13 @@
 //   9. supabase/config.toml Auth settings other than REQUIRED_AUTH_CONFIG, or a magic-link template
 //      without the {{ .Token }} code (specs/m0b-tenancy.md §4.1; checked only when config.toml exists)
 //  10. an @supabase/* import in apps/candidate/, workers/edge/ or packages/shared/ (specs/m0b-tenancy.md §4.3)
-//  11. a use of the PACKAGES binding in workers/edge/ source other than .get/.head or a type declaration (d1 §4.2)
+//  11. a use of the PACKAGES or ITEM_MEDIA binding in workers/edge/ source other than .get/.head or a type
+//      declaration (d1 §4.2; m1 R5-10)
+//  12. `eval` or the `Function` constructor anywhere in packages/item-variants/ source (m1 R5-10, §11.2; the
+//      parameterised-variant generator evaluates specs as data, never as code)
+//  13. a `Mock*` class or `createMock*` / `mock*` factory in packages/vendors/src/ whose constructor (or body) does not
+//      call an `assert*Env(` guard, or a file without such a guard that allow-lists ['dev', 'staging'] and throws
+//      (as messaging.ts; m1 R5-10, §11.2). VENDOR_MOCK_GUARD_EXEMPTIONS lists the one D1 exception.
 // Prints only paths and rule names, never file contents.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -297,24 +303,162 @@ export function checkSupabaseJsScope(files) {
 
 // ---------- rule 11 ----------
 // The edge may only read the published test packages (d1 §4.2: PACKAGES is read only for the edge; an R2 binding is
-// always writable at the platform level, so the source is the guard; bindings security review F2). Every use of the
-// name in edge source must be a `.get(` / `.head(` call or a type declaration (`PACKAGES: R2Bucket`); a put, delete,
-// list, bracket access, alias or destructuring is flagged.
+// always writable at the platform level, so the source is the guard; bindings security review F2) and the item
+// images (m1 R5-10: ITEM_MEDIA, served by GET /v1/session/media/:hash). Every use of either name in edge source must
+// be a `.get(` / `.head(` call or a type declaration (`PACKAGES: R2Bucket`); a put, delete, list, bracket access,
+// alias or destructuring is flagged.
 const PACKAGES_SCOPES = ['workers/edge/'];
-const PACKAGES_USE = /\bPACKAGES\b/g;
-const PACKAGES_ALLOWED = /^PACKAGES(?:\??\.(?:get|head)\s*\(|\??\s*:)/;
+/** The edge R2 bindings that are read only (get/head), with the source of the rule. */
+export const EDGE_READ_ONLY_BUCKETS = Object.freeze(['PACKAGES', 'ITEM_MEDIA']);
+const READ_ONLY_WHY = Object.freeze({ PACKAGES: 'd1 §4.2', ITEM_MEDIA: 'm1 R5-10' });
+const readOnlyUse = (name) => new RegExp(`\\b${name}\\b`, 'g');
+const readOnlyAllowed = (name) => new RegExp(`^${name}(?:\\??\\.(?:get|head)\\s*\\(|\\??\\s*:)`);
 export function checkPackagesReadOnly(files) {
   const out = [];
   for (const { path: p, content } of files) {
     if (!inScope(p, PACKAGES_SCOPES) || !SOURCE_EXT.test(p)) continue;
     if (isGenerated(p) || isTestFile(p)) continue;
-    for (const m of content.matchAll(PACKAGES_USE)) {
-      if (!PACKAGES_ALLOWED.test(content.slice(m.index))) {
-        out.push(
-          violation(11, p, 'uses PACKAGES other than get/head (d1 §4.2: read only for the edge)'),
-        );
-        break;
+    for (const name of EDGE_READ_ONLY_BUCKETS) {
+      const allowed = readOnlyAllowed(name);
+      for (const m of content.matchAll(readOnlyUse(name))) {
+        if (!allowed.test(content.slice(m.index))) {
+          out.push(
+            violation(
+              11,
+              p,
+              `uses ${name} other than get/head (${READ_ONLY_WHY[name]}: read only for the edge)`,
+            ),
+          );
+          break;
+        }
       }
+    }
+  }
+  return out;
+}
+
+// ---------- rule 12 ----------
+// The parameterised-variant generator (packages/item-variants, stream A1) evaluates item specs as data: no string is
+// ever run as code (m1 R5-10, §11.2). Any mention of `eval` or of the `Function` constructor in the package's source
+// (tests included) is flagged; the package not existing yet passes.
+const NO_DYNAMIC_CODE_SCOPES = ['packages/item-variants/'];
+const DYNAMIC_CODE = /\beval\b|\bFunction\b/;
+export function checkNoDynamicCode(files) {
+  const out = [];
+  for (const { path: p, content } of files) {
+    if (!inScope(p, NO_DYNAMIC_CODE_SCOPES) || !SOURCE_EXT.test(p) || isGenerated(p)) continue;
+    if (DYNAMIC_CODE.test(content)) {
+      out.push(
+        violation(12, p, 'uses eval or the Function constructor (m1 R5-10: specs are data)'),
+      );
+    }
+  }
+  return out;
+}
+
+// ---------- rule 13 ----------
+// Every mock vendor adapter refuses production the way messaging.ts does (L-11; m1 R5-10, §11.2): each `Mock*` class's
+// constructor, and each `createMock*` / `mock*` factory, calls an `assert…Env(` guard; the guard is imported, or
+// defined in the file where it throws and allow-lists exactly ['dev', 'staging'] (any other value, 'production'
+// included, is refused). D1's MockLlmGrader takes no env: its production guard is graderFor in
+// workers/jobs/src/queue/wiring.ts (pinned by wiring.test.ts), so it is the one exemption.
+const VENDOR_SCOPES = ['packages/vendors/src/'];
+export const VENDOR_MOCK_GUARD_EXEMPTIONS = Object.freeze({
+  'packages/vendors/src/llm-grader.ts': Object.freeze(['MockLlmGrader']),
+});
+const MOCK_CLASS = /\bclass\s+(Mock[A-Z]\w*)\b/g;
+const MOCK_FUNCTION = /\bfunction\s+((?:createMock|mock)[A-Z]\w*)\s*[<(]/g;
+const MOCK_CONST = /\b(?:const|let|var)\s+((?:createMock|mock)[A-Z]\w*)\b[^=;]*=/g;
+const GUARD_CALL = /\bassert\w*Env\s*\(/;
+const GUARD_IMPORT = /\bimport\s*\{[^}]*\bassert\w*Env\b[^}]*\}\s*from\b/;
+const GUARD_DEFINED = /\bfunction\s+assert\w*Env\s*\(|\b(?:const|let)\s+assert\w*Env\b\s*=/g;
+const DEV_STAGING_ALLOW_LIST = /\[\s*(['"])dev\1\s*,\s*(['"])staging\2\s*\]/;
+
+/**
+ * The index just past the block or statement that starts at `from`: for a `{…}` block (the first `{` at or after
+ * `from`, when `block`), or up to the first top-level `;` (a statement). Skips strings, template literals and
+ * comments. Returns content.length when it runs out.
+ */
+function endOf(content, from, block) {
+  let depth = 0;
+  let started = !block;
+  for (let i = from; i < content.length; i++) {
+    const c = content[i];
+    const next = content[i + 1];
+    if (c === '/' && next === '/') {
+      const nl = content.indexOf('\n', i);
+      if (nl < 0) return content.length;
+      i = nl;
+    } else if (c === '/' && next === '*') {
+      const end = content.indexOf('*/', i + 2);
+      if (end < 0) return content.length;
+      i = end + 1;
+    } else if (c === '"' || c === "'" || c === '`') {
+      let j = i + 1;
+      while (j < content.length && content[j] !== c) j += content[j] === '\\' ? 2 : 1;
+      i = j;
+    } else if (c === '{' || c === '(' || c === '[') {
+      if (c === '{') started = true;
+      depth++;
+    } else if (c === '}' || c === ')' || c === ']') {
+      depth--;
+      if (block && started && depth === 0 && c === '}') return i + 1;
+      if (!block && depth < 0) return i;
+    } else if (!block && c === ';' && depth === 0) {
+      return i + 1;
+    }
+  }
+  return content.length;
+}
+
+/** The text of the `constructor(...) { … }` of a class body, or null. */
+function constructorOf(classBody) {
+  const m = /\bconstructor\s*\(/.exec(classBody);
+  if (!m) return null;
+  return classBody.slice(m.index, endOf(classBody, m.index, true));
+}
+
+export function checkVendorMockGuards(files) {
+  const out = [];
+  for (const { path: p, content } of files) {
+    if (!inScope(p, VENDOR_SCOPES) || !SOURCE_EXT.test(p)) continue;
+    if (isGenerated(p) || isTestFile(p)) continue;
+    const exempt = Object.hasOwn(VENDOR_MOCK_GUARD_EXEMPTIONS, p)
+      ? VENDOR_MOCK_GUARD_EXEMPTIONS[p]
+      : [];
+    const problems = [];
+    let mocks = 0;
+    for (const m of content.matchAll(MOCK_CLASS)) {
+      if (exempt.includes(m[1])) continue;
+      mocks++;
+      const body = content.slice(m.index, endOf(content, m.index, true));
+      const ctor = constructorOf(body);
+      if (ctor === null || !GUARD_CALL.test(ctor)) {
+        problems.push(`${m[1]}'s constructor does not call an assert…Env guard`);
+      }
+    }
+    for (const re of [MOCK_FUNCTION, MOCK_CONST]) {
+      for (const m of content.matchAll(re)) {
+        mocks++;
+        const body = content.slice(m.index, endOf(content, m.index, re === MOCK_FUNCTION));
+        if (!GUARD_CALL.test(body)) problems.push(`${m[1]} does not call an assert…Env guard`);
+      }
+    }
+    if (mocks > 0 && !GUARD_IMPORT.test(content)) {
+      const defined = [...content.matchAll(GUARD_DEFINED)].map((g) =>
+        content.slice(g.index, endOf(content, g.index, g[0].startsWith('function'))),
+      );
+      if (defined.length === 0) problems.push('no assert…Env guard is defined or imported');
+      else if (!defined.some((text) => /\bthrow\b/.test(text))) {
+        problems.push('the assert…Env guard never throws');
+      } else if (!DEV_STAGING_ALLOW_LIST.test(content)) {
+        problems.push("the guard does not allow-list exactly ['dev', 'staging']");
+      }
+    }
+    if (problems.length > 0) {
+      out.push(
+        violation(13, p, `a mock vendor must refuse production: ${problems.join('; ')} (L-11)`),
+      );
     }
   }
   return out;
@@ -532,6 +676,8 @@ export function runChecks(root) {
       : []),
     ...checkSupabaseJsScope(files),
     ...checkPackagesReadOnly(files),
+    ...checkNoDynamicCode(files),
+    ...checkVendorMockGuards(files),
   ];
 }
 

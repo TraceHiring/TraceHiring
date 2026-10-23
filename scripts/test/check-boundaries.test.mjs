@@ -1,15 +1,20 @@
 // AT-14 (script part): scripts/check-boundaries.mjs over fixture trees (spec §10.2).
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CREDENTIAL_NAMES,
   CREDENTIAL_PATTERN_EXEMPTIONS,
+  EDGE_READ_ONLY_BUCKETS,
   REQUIRED_AUTH_CONFIG,
   SUPABASE_JS_FORBIDDEN_SCOPES,
+  VENDOR_MOCK_GUARD_EXEMPTIONS,
   checkAuthConfig,
+  checkNoDynamicCode,
   checkSupabaseJsScope,
   checkPackagesReadOnly,
+  checkVendorMockGuards,
   checkCredentialNames,
   checkCrlf,
   checkEslintDisables,
@@ -33,6 +38,8 @@ import {
 } from './fixtures/checks/temp-repo.mjs';
 
 afterEach(cleanupTempDirs);
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const f = (p, content) => ({ path: p, content });
 
@@ -644,5 +651,198 @@ describe('rule 11: the edge reads PACKAGES only (d1 §4.2; bindings security rev
         f('services/api/src/modules/tests/publish.ts', 'await env.PACKAGES.put(k, b);'),
       ]),
     ).toEqual([]);
+  });
+});
+
+describe('rule 11: the edge reads ITEM_MEDIA only (m1 R5-10)', () => {
+  const edge = (content) => checkPackagesReadOnly([f('workers/edge/src/item-media.ts', content)]);
+  it('names both edge read-only buckets', () => {
+    expect([...EDGE_READ_ONLY_BUCKETS]).toEqual(['PACKAGES', 'ITEM_MEDIA']);
+    expect(Object.isFrozen(EDGE_READ_ONLY_BUCKETS)).toBe(true);
+  });
+  it.each([
+    'const obj = await env.ITEM_MEDIA.get(`item-media/${org}/${hash}.png`);',
+    'const meta = await env.ITEM_MEDIA?.head(key);',
+    'type B = { ITEM_MEDIA: R2Bucket; ITEM_MEDIA_X?: R2Bucket };',
+    'interface X { ITEM_MEDIA?: R2Bucket }',
+  ])('allows %s', (code) => {
+    expect(edge(code)).toEqual([]);
+  });
+  it.each([
+    'await env.ITEM_MEDIA.put(key, body);',
+    'await env.ITEM_MEDIA.delete(key);',
+    'await env.ITEM_MEDIA.list({ prefix: "item-media/" });',
+    'await env.ITEM_MEDIA.createMultipartUpload(key);',
+    "await env.ITEM_MEDIA['get'](key);",
+    'const media = env.ITEM_MEDIA;',
+    'const { ITEM_MEDIA } = env;',
+    'serve(env.ITEM_MEDIA, key);',
+  ])('flags %s', (code) => {
+    const v = edge(code);
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatchObject({ rule: 11, path: 'workers/edge/src/item-media.ts' });
+    expect(v[0].message).toMatch(/ITEM_MEDIA other than get\/head/);
+  });
+  it('reports each bucket once per file', () => {
+    const v = edge(
+      'await env.PACKAGES.put(a, b); await env.ITEM_MEDIA.put(a, b); env.ITEM_MEDIA.list();',
+    );
+    expect(v.map((x) => x.message.split(' ')[1])).toEqual(['PACKAGES', 'ITEM_MEDIA']);
+  });
+  it('ignores tests, generated types and the api (which may write images)', () => {
+    expect(
+      checkPackagesReadOnly([
+        f('workers/edge/src/item-media.test.ts', 'await env.ITEM_MEDIA.put(k, b);'),
+        f('workers/edge/worker-configuration.d.ts', 'ITEM_MEDIA: R2Bucket;'),
+        f('services/api/src/modules/bank/images.ts', 'await env.ITEM_MEDIA.put(k, b);'),
+      ]),
+    ).toEqual([]);
+  });
+});
+
+describe('rule 12: no eval or Function constructor in packages/item-variants (m1 R5-10, §11.2)', () => {
+  const variants = (content, p = 'packages/item-variants/src/generate.ts') =>
+    checkNoDynamicCode([f(p, content)]);
+  it('passes while the package does not exist, and on plain code', () => {
+    expect(checkNoDynamicCode([])).toEqual([]);
+    expect(
+      variants('export const evaluate = (spec: Spec) => spec.min + spec.step * pick(rng);'),
+    ).toEqual([]);
+    expect(variants('const isFunction = (x: unknown) => typeof x === "function";')).toEqual([]);
+  });
+  it.each([
+    'export const run = (src: string) => eval(src);',
+    'const f = eval;',
+    'globalThis.eval(src);',
+    'const g = new Function("a", "return a * 2");',
+    'const h = Function("return 1")();',
+    'const k = new Function ("x", body);',
+    'const m = Function.call(null, "return 1");',
+    'const n = (0, eval)("1");',
+  ])('flags %s', (code) => {
+    const v = variants(code);
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatchObject({ rule: 12, path: 'packages/item-variants/src/generate.ts' });
+  });
+  it('checks every source file of the package, tests included, and nothing outside it', () => {
+    expect(variants('eval("1")', 'packages/item-variants/src/generate.test.ts')).toHaveLength(1);
+    expect(variants('eval("1")', 'packages/item-variants/scripts/x.mjs')).toHaveLength(1);
+    expect(variants('eval("1")', 'packages/item-variants/README.md')).toEqual([]);
+    expect(variants('eval("1")', 'packages/item-delivery/src/draw.ts')).toEqual([]);
+    expect(variants('eval("1")', 'packages/item-variants-old/src/x.ts')).toEqual([]);
+  });
+  it('fails a fixture repository that adds the package with an eval (runChecks)', () => {
+    const repo = initRepo();
+    writeFiles(repo, {
+      'packages/item-variants/src/index.ts': 'export const run = (s: string) => eval(s);\n',
+    });
+    commitAll(repo);
+    expect(runChecks(repo).map((x) => `${x.rule}:${x.path}`)).toEqual([
+      '12:packages/item-variants/src/index.ts',
+    ]);
+  });
+});
+
+describe('rule 13: every vendors Mock* refuses production (m1 R5-10, §11.2; as messaging.ts)', () => {
+  const vendors = (content, p = 'packages/vendors/src/llm-drafter.ts') =>
+    checkVendorMockGuards([f(p, content)]);
+  const GUARD = [
+    "const ALLOWED_ENVS: readonly string[] = ['dev', 'staging'];",
+    'function assertMockEnv(env: unknown): asserts env is "dev" | "staging" {',
+    '  if (typeof env !== "string" || !ALLOWED_ENVS.includes(env)) throw new MockInProductionError();',
+    '}',
+  ].join('\n');
+  const guardedClass = [
+    'export class MockLlmDrafter implements LlmDrafter {',
+    '  readonly #env: string;',
+    '  constructor(env: DrafterEnv) {',
+    '    assertMockEnv(env);',
+    '    this.#env = env;',
+    '  }',
+    '  draft(req: DraftRequest) { return Promise.resolve({ items: [], note: "}" }); }',
+    '}',
+  ].join('\n');
+
+  it('passes a Mock class whose constructor and factory call the env guard', () => {
+    const factory = [
+      'export function createMockLlmDrafter(env: DrafterEnv): LlmDrafter {',
+      '  assertMockEnv(env);',
+      '  return new MockLlmDrafter(env);',
+      '}',
+    ].join('\n');
+    expect(vendors(`${GUARD}\n${guardedClass}\n${factory}\n`)).toEqual([]);
+    // The guard may be imported from a shared module.
+    expect(vendors(`import { assertMockEnv } from './mock-env.js';\n${guardedClass}\n`)).toEqual(
+      [],
+    );
+  });
+
+  it('passes the current vendors sources (messaging.ts guards a non-Mock class; llm-grader.ts is exempt)', () => {
+    for (const name of ['messaging.ts', 'llm-grader.ts', 'index.ts']) {
+      const p = `packages/vendors/src/${name}`;
+      const content = readFileSync(path.join(REPO_ROOT, ...p.split('/')), 'utf8');
+      expect(checkVendorMockGuards([f(p, content)]), name).toEqual([]);
+    }
+  });
+
+  it.each([
+    [
+      'a Mock class with no constructor',
+      `${GUARD}\nexport class MockLlmDrafter { draft() { return 1; } }\n`,
+    ],
+    [
+      'a Mock class whose constructor never calls the guard',
+      `${GUARD}\nexport class MockLlmDrafter {\n  constructor(env: string) { this.env = env; }\n}\n`,
+    ],
+    [
+      'a guard call outside the constructor only',
+      `${GUARD}\nexport class MockLlmDrafter {\n  constructor() {}\n  draft(env: string) { assertMockEnv(env); }\n}\n`,
+    ],
+    ['a guarded class but no guard function defined or imported', `${guardedClass}\n`],
+    [
+      'a deny-list guard (only "production" refused, so an unknown env passes)',
+      `function assertMockEnv(env: string) {\n  if (env === 'production') throw new Error('no');\n}\n${guardedClass}\n`,
+    ],
+    [
+      'a guard that never throws',
+      `const ALLOWED_ENVS = ['dev', 'staging'];\nfunction assertMockEnv(env: string) {\n  return ALLOWED_ENVS.includes(env);\n}\n${guardedClass}\n`,
+    ],
+    [
+      'a factory that skips the guard',
+      `${GUARD}\n${guardedClass}\nexport function createMockLlmDrafter(env: string) {\n  return Object.create(MockLlmDrafter.prototype);\n}\n`,
+    ],
+    [
+      'an arrow factory that skips the guard',
+      `${GUARD}\n${guardedClass}\nexport const createMockLlmDrafter = (env: string) => ({ draft: () => 1 });\n`,
+    ],
+  ])('flags %s', (_name, content) => {
+    const v = vendors(content);
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatchObject({ rule: 13, path: 'packages/vendors/src/llm-drafter.ts' });
+  });
+
+  it('exempts only MockLlmGrader in llm-grader.ts (its production guard is the jobs wiring graderFor)', () => {
+    expect(VENDOR_MOCK_GUARD_EXEMPTIONS).toEqual({
+      'packages/vendors/src/llm-grader.ts': ['MockLlmGrader'],
+    });
+    expect(Object.isFrozen(VENDOR_MOCK_GUARD_EXEMPTIONS)).toBe(true);
+    const bare = 'export class MockLlmGrader { grade() { return 1; } }\n';
+    expect(vendors(bare, 'packages/vendors/src/llm-grader.ts')).toEqual([]);
+    expect(vendors(bare, 'packages/vendors/src/llm-drafter.ts')).toHaveLength(1);
+    expect(
+      vendors(
+        `${bare}export class MockOther { constructor() {} }\n`,
+        'packages/vendors/src/llm-grader.ts',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('ignores tests, other packages and non-Mock names', () => {
+    const bare = 'export class MockLlmDrafter { draft() { return 1; } }\n';
+    expect(vendors(bare, 'packages/vendors/src/llm-drafter.test.ts')).toEqual([]);
+    expect(vendors(bare, 'packages/shared/src/x.ts')).toEqual([]);
+    expect(vendors('export class Mocking { x() {} }\nexport class LlmDrafterMock {}\n')).toEqual(
+      [],
+    );
   });
 });
