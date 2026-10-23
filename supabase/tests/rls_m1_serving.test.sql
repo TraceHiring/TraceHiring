@@ -355,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(63);
+select plan(70);
 -- Fixtures (operator path): pool P (mcq, workspace A1) = approved s1..s8, the parameterised pq (two variants) and cp1, a
 -- copy of the library item lib1; s9 is approved but in no pool; ai1 is an AI draft in review. Version v2 (Standard):
 -- section sp draws 3 from P, section si is inline with ii1. Version v1: D1-style inline section with iv1.
@@ -534,6 +534,19 @@ select is((select count(*)::int from public.sections where org_id = pg_temp.id('
 select is((select count(*)::int from public.item_versions where org_id = pg_temp.id('A')), 0, 'M1-i: trace_worker bound to org B sees no org A item version');
 select pg_temp.w('trace_worker', null);
 select is((select count(*)::int from public.sections), 0, 'M1-i: an unbound trace_worker sees no section');
+select pg_temp.op();
+
+-- ===== Migration M1-k (R5-63, A2b lead ask 1): trace_api reads a test's title for the invite resolve, org-bound =====
+select pg_temp.api(pg_temp.id('A'));
+select ok((select count(*) from (select id, org_id, name from public.tests where org_id = pg_temp.id('A')) as t) > 0, 'M1-k: trace_api bound to org A reads id, org_id and name of its tests');
+select matches(pg_temp.try('select workspace_id from public.tests'), '^42501 permission denied', 'M1-k: trace_api cannot read a test''s workspace');
+select matches(pg_temp.try('select created_by from public.tests'), '^42501 permission denied', 'M1-k: trace_api cannot read who created a test');
+select matches(pg_temp.try($$update public.tests set name = name$$), '^42501 permission denied', 'M1-k: trace_api cannot update tests');
+select matches(pg_temp.try($$delete from public.tests$$), '^42501 permission denied', 'M1-k: trace_api cannot delete tests');
+select pg_temp.api(pg_temp.id('B'));
+select is((select count(*)::int from public.tests where org_id = pg_temp.id('A')), 0, 'M1-k: trace_api bound to org B sees no org A test');
+select pg_temp.api(null);
+select is((select count(*)::int from public.tests), 0, 'M1-k: an unbound trace_api sees no test');
 select pg_temp.op();
 select * from finish();
 rollback;
