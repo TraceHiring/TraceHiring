@@ -203,6 +203,29 @@ describe('drawSection spread (AT-M1-18, R3-2)', async () => {
     expect(chi2(firstPicks(3), weightedExpected)).toBeLessThan(CHI2_BOUND_DF7);
   });
 
+  it('the second pick of a three-item draw follows the exact without-replacement distribution', () => {
+    // Review round 1: enumerate the 8 x 7 ordered (first, second) pairs; P(second = j) =
+    // sum over i != j of w_i / W * w_j / (W - w_i). Unshuffled, the second served item is the second pick.
+    const secondExpected = weights.map((wj, j) => {
+      let p = 0;
+      weights.forEach((wi, i) => {
+        if (i !== j) p += (wi / total) * (wj / (total - wi));
+      });
+      return SEEDS * p;
+    });
+    expect(secondExpected.reduce((a, b) => a + b, 0)).toBeCloseTo(SEEDS, 6);
+    expect(Math.min(...secondExpected)).toBeGreaterThan(5);
+    const observed = EXPOSURES.map(() => 0);
+    const s = section({ draw: { count: 3, strata: [] } });
+    for (const seed of seeds) {
+      const second = drawSection(s, pool, seed).items[1]!;
+      observed[indexOf.get(second.itemVersionId)!]! += 1;
+    }
+    expect(chi2(observed, secondExpected)).toBeLessThan(CHI2_BOUND_DF7);
+    // Power: the first-pick weights are not the second-pick distribution.
+    expect(chi2(observed, weightedExpected)).toBeGreaterThan(CHI2_BOUND_DF7);
+  });
+
   it('within a stratum the weights apply to that stratum only', () => {
     const mixed = [
       ...pool,

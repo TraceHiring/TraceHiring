@@ -7,6 +7,7 @@ describe('@trace/item-delivery exports', () => {
     expect(Object.keys(delivery).sort()).toEqual([
       'DrawError',
       'ITEM_DELIVERY_PACKAGE',
+      'difficultyBand',
       'drawSection',
       'drawSeed',
       'drawWeight',
