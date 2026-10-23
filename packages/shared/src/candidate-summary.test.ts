@@ -449,7 +449,8 @@ describe('purity', () => {
   });
 
   it('refuses settings outside the catalog (missing, unknown or wrong-valued keys)', () => {
-    const { paste_written: _omit, ...missing } = PRESETS.standard;
+    const missing: Partial<IntegritySettingValues> = { ...PRESETS.standard };
+    delete missing.paste_written;
     const bad: unknown[] = [
       missing,
       { ...PRESETS.standard, lab_mode: 'off' },
