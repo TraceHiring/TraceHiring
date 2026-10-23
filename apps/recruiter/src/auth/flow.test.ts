@@ -476,12 +476,19 @@ describe('errors keep the state and show only the generic message (§4.2)', () =
     expect(flow.getSnapshot().state).toEqual({ kind: 'signed_out', error: 'generic' });
   });
 
+  // A failed send is not on this list: it must read exactly like a sent code (M1 AT-M1-27).
+  for (const mode of ['error', 'throw'] as const)
+    it(`signInWithOtp (${mode}) → code_sent with no error, the same as a sent code`, async () => {
+      const { flow } = setup({ ...RECRUITER_IN_A, fail: { signInWithOtp: mode } });
+      await flow.start();
+      await flow.submitEmail(EMAIL);
+      expect(flow.getSnapshot()).toEqual({
+        state: { kind: 'code_sent', email: EMAIL },
+        busy: false,
+      });
+    });
+
   const failing: [FakeCall, (flow: AuthFlow) => Promise<void>, AuthState][] = [
-    [
-      'signInWithOtp',
-      (f) => f.start().then(() => f.submitEmail(EMAIL)),
-      { kind: 'signed_out', error: 'generic' },
-    ],
     ['verifyOtp', otpSignIn, { kind: 'code_sent', email: EMAIL, error: 'code' }],
     ['signInWithPassword', passwordSignIn, { kind: 'signed_out', error: 'generic' }],
     ['getAuthenticatorAssuranceLevel', otpSignIn, { kind: 'session_aal1', error: 'generic' }],
