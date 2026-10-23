@@ -1508,10 +1508,9 @@ const viewV2 = {
 };
 
 describe('TestPackageV2 items without skill and difficulty (R5-57 e, lead decision)', () => {
-  const bare = (item: Record<string, unknown>) => {
-    const { skillKey: _s, difficultyBand: _d, ...rest } = item;
-    return rest;
-  };
+  const without = (item: Record<string, unknown>, ...names: string[]) =>
+    Object.fromEntries(Object.entries(item).filter(([name]) => !names.includes(name)));
+  const bare = (item: Record<string, unknown>) => without(item, 'skillKey', 'difficultyBand');
   it('an inline item (section without a draw) may omit both', () => {
     expect(ok(TestPackageV2, replaceWritten(bare(writtenPkgItem)))).toBe(true);
   });
@@ -1519,8 +1518,8 @@ describe('TestPackageV2 items without skill and difficulty (R5-57 e, lead decisi
     expect(ok(TestPackageV2, replaceFirst(bare(pkgItem(1, sectionA))))).toBe(true);
   });
   it('an item names both or neither', () => {
-    const { difficultyBand: _d, ...skillOnly } = pkgItem(1, sectionA);
-    const { skillKey: _s, ...bandOnly } = pkgItem(1, sectionA);
+    const skillOnly = without(pkgItem(1, sectionA), 'difficultyBand');
+    const bandOnly = without(pkgItem(1, sectionA), 'skillKey');
     expect(ok(TestPackageV2, replaceFirst(skillOnly))).toBe(false);
     expect(ok(TestPackageV2, replaceFirst(bandOnly))).toBe(false);
   });
