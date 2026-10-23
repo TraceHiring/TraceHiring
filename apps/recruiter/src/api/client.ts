@@ -41,6 +41,24 @@ async function readJson(res: Response): Promise<unknown> {
   }
 }
 
+/** The only content types an import image may be sent as (R5-18, §6.9: the api re-checks the magic bytes). */
+export const IMPORT_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
+export type ImportImageType = (typeof IMPORT_IMAGE_TYPES)[number];
+/** One image is at most 1 MiB (§6.9); the api enforces its own limit, this only spares a doomed upload. */
+export const MAX_IMPORT_IMAGE_BYTES = 1_048_576;
+
+export interface PutImageOptions<T> {
+  /** Path below `/v1/orgs/:orgId`, starting with a slash. */
+  path: string;
+  schema: Schema<T>;
+  contentType: ImportImageType;
+  /** The raw image bytes, sent as they are. */
+  bytes: Uint8Array<ArrayBuffer> | ArrayBuffer | Blob;
+}
+
+const byteLengthOf = (bytes: PutImageOptions<unknown>['bytes']): number =>
+  bytes instanceof Blob ? bytes.size : bytes.byteLength;
+
 export class ApiClient {
   readonly orgId: string;
   private readonly origin: string;
@@ -56,6 +74,42 @@ export class ApiClient {
 
   /** Calls `/v1/orgs/:orgId{path}` as the signed-in user and parses the answer with `schema`. */
   async call<T>(options: CallOptions<T>): Promise<ApiResult<T>> {
+    if (options.body === undefined) {
+      return this.send(options.method, options.path, options.schema, undefined, undefined);
+    }
+    return this.send(
+      options.method,
+      options.path,
+      options.schema,
+      JSON.stringify(options.body),
+      'application/json',
+    );
+  }
+
+  /**
+   * PUTs raw image bytes (R5-18: the import image upload) with an explicit content type, through the same injected
+   * fetch, bearer token and error mapping as `call`. Only png, jpeg and webp, 1 byte to 1 MiB, are sent; anything
+   * else is `bad_request` without a request. The body is passed through untouched.
+   */
+  async putImage<T>(options: PutImageOptions<T>): Promise<ApiResult<T>> {
+    const size = byteLengthOf(options.bytes);
+    if (
+      !(IMPORT_IMAGE_TYPES as readonly string[]).includes(options.contentType) ||
+      size < 1 ||
+      size > MAX_IMPORT_IMAGE_BYTES
+    ) {
+      return fail('bad_request');
+    }
+    return this.send('PUT', options.path, options.schema, options.bytes, options.contentType);
+  }
+
+  private async send<T>(
+    method: CallOptions<T>['method'],
+    path: string,
+    schema: Schema<T>,
+    body: BodyInit | undefined,
+    contentType: string | undefined,
+  ): Promise<ApiResult<T>> {
     let token: string | null;
     try {
       token = await this.getAccessToken();
@@ -67,28 +121,23 @@ export class ApiClient {
       accept: 'application/json',
       authorization: `Bearer ${token}`,
     };
-    const init: RequestInit = {
-      method: options.method,
-      headers,
-      credentials: 'omit',
-      cache: 'no-store',
-    };
-    if (options.body !== undefined) {
-      headers['content-type'] = 'application/json';
-      init.body = JSON.stringify(options.body);
+    const init: RequestInit = { method, headers, credentials: 'omit', cache: 'no-store' };
+    if (body !== undefined && contentType !== undefined) {
+      headers['content-type'] = contentType;
+      init.body = body;
     }
     let res: Response;
     try {
-      res = await this.doFetch(`${this.origin}/v1/orgs/${this.orgId}${options.path}`, init);
+      res = await this.doFetch(`${this.origin}/v1/orgs/${this.orgId}${path}`, init);
     } catch {
       return fail('network');
     }
-    const body = await readJson(res);
+    const answer = await readJson(res);
     if (!res.ok) {
-      const error = ApiError.safeParse(body);
+      const error = ApiError.safeParse(answer);
       return fail(error.success ? error.data.error.code : 'unavailable');
     }
-    const parsed = options.schema.safeParse(body);
+    const parsed = schema.safeParse(answer);
     return parsed.success ? { ok: true, data: parsed.data } : fail('invalid_response');
   }
 

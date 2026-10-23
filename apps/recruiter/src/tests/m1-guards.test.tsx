@@ -8,11 +8,15 @@
 // The screens come from two places: the ten route modules, rendered here, and every
 // `m1-screens.test-helpers.tsx` file under src/ (a later stream registers the views it builds there by exporting
 // `m1Screens(): Record<string, ReactNode>` of synthetic-data renders; this file needs no change when it does).
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import type { ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
 import { ApiContext, OrgInfoContext, type OrgInfo } from '../api/runtime';
+import { registeredM1Screens } from '../m1-screen-registry.test-helpers';
 import { AiDraftsRoute } from '../bank/AiDraftsRoute';
 import { ApprovalsRoute } from '../bank/ApprovalsRoute';
 import { BankRoute } from '../bank/BankRoute';
@@ -225,10 +229,6 @@ describe('M1 nav (UX only; the server decides)', () => {
 
 // ---- The screens --------------------------------------------------------------------------------------------------
 
-const helperModules = import.meta.glob('../**/m1-screens.test-helpers.tsx', {
-  eager: true,
-}) as Record<string, { m1Screens?: unknown }>;
-
 /** Every M1 screen, rendered from synthetic data, by name. */
 function screens(): Record<string, string> {
   const out: Record<string, string> = {};
@@ -246,18 +246,12 @@ function screens(): Record<string, string> {
       </SignedInView>,
     );
   }
-  for (const [file, mod] of Object.entries(helperModules)) {
-    if (typeof mod.m1Screens !== 'function') throw new Error(`${file} exports no m1Screens()`);
-    const registered = (mod.m1Screens as () => Record<string, ReactNode>)();
-    for (const [name, node] of Object.entries(registered)) {
-      out[`${file} ${name}`] = wrap(node);
-    }
-  }
+  for (const [name, node] of Object.entries(registeredM1Screens())) out[name] = wrap(node);
   return out;
 }
 
 /** Screens that legitimately say "export" or "CSV": the import errors table (§6.9: an error CSV made in the browser). */
-const EXPORT_ALLOWED = /^(?:route bank\/import|.*\/bank\/import\/.*)/;
+const EXPORT_ALLOWED = /^(?:route bank\/import|\.\/bank\/import\/)/;
 
 describe('M1 screens never show what the product never builds (AT-M1-24)', () => {
   const all = screens();
@@ -345,23 +339,25 @@ describe('the M1 guard patterns (negative controls)', () => {
 
   it('the export exception covers the import screens only', () => {
     expect(EXPORT_ALLOWED.test('route bank/import')).toBe(true);
-    expect(EXPORT_ALLOWED.test('../bank/import/m1-screens.test-helpers.tsx errors')).toBe(true);
+    expect(EXPORT_ALLOWED.test('./bank/import/m1-screens.test-helpers.tsx errors')).toBe(true);
     expect(EXPORT_ALLOWED.test('route bank')).toBe(false);
     expect(EXPORT_ALLOWED.test('route library')).toBe(false);
   });
 });
 
 describe("parity with D1 (R5-22: the word lists are D1's, unchanged)", () => {
-  const d1 = Object.values(
-    import.meta.glob('../d1-guards.test.tsx', { query: '?raw', import: 'default', eager: true }),
-  )[0] as string;
+  const d1 = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'd1-guards.test.tsx'),
+    'utf8',
+  );
 
   it('d1-guards.test.tsx holds the same patterns', () => {
     expect(d1).toContain(CONTROL_WORDS.source);
     expect(d1).toContain(ANYWHERE_WORDS.source);
     expect(d1).toContain(COMBINED.source);
     expect(d1).toContain(GAZE_ASN_IP.source);
-    expect(d1).toContain(NEVER_BUILD_TAIL);
+    // d1 writes the tail inside a template literal, so each backslash is doubled in its source text.
+    expect(d1).toContain(NEVER_BUILD_TAIL.replaceAll('\\', '\\\\'));
     expect(d1).toContain(SELECTION.source);
     expect(d1).toContain(EXPORT.source);
   });

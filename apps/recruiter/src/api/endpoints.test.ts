@@ -1,7 +1,13 @@
 // The M1 typed calls (specs/m1-test-authoring.md §6.11, R5-53 c): method, path, query, body and the contract each
 // answer is parsed with. A request that fails its contract is refused as bad_request before any request is sent;
 // an answer that fails its contract is invalid_response. Synthetic data only.
-import { INTEGRITY_SETTING_VALUES, encodePageCursor } from '@trace/shared/contracts/m1';
+import {
+  INTEGRITY_SETTING_VALUES,
+  encodePageCursor,
+  type BankItemDraft,
+  type ImportRow,
+  type SaveTestDraftRequest,
+} from '@trace/shared/contracts/m1';
 import { describe, expect, it } from 'vitest';
 import { ApiClient, type ApiResult, type FetchLike } from './client';
 import * as m1 from './endpoints';
@@ -47,7 +53,7 @@ const ORG_URL = `${ORIGIN}/v1/orgs/${ORG}`;
 
 // ---- Valid request bodies --------------------------------------------------------------------------------------
 
-const MCQ_DRAFT = {
+const MCQ_DRAFT: BankItemDraft = {
   format: 'mcq',
   stem: 'Synthetic question?',
   options: [
@@ -57,11 +63,11 @@ const MCQ_DRAFT = {
   key: { optionId: 'a' },
   skillKey: 'verbal',
   difficulty: 0.4,
-} as const;
+};
 const SETTINGS = Object.fromEntries(
   Object.entries(INTEGRITY_SETTING_VALUES).map(([key, values]) => [key, values[0]]),
 ) as Parameters<typeof m1.putIntegritySettings>[2]['values'];
-const DRAFT_BODY = {
+const DRAFT_BODY: SaveTestDraftRequest = {
   name: 'Synthetic test',
   durationMinutes: 30,
   qualityCutoff: 50,
@@ -79,15 +85,15 @@ const DRAFT_BODY = {
       navigation: 'free',
     },
   ],
-} as const;
-const IMPORT_ROW = {
+};
+const IMPORT_ROW: ImportRow = {
   rowNo: 2,
   format: 'written',
   skillKey: 'writing',
   difficulty: 0.5,
   stem: 'Describe a synthetic situation.',
   rubricKey: 'clarity',
-} as const;
+};
 
 // ---- Request shapes --------------------------------------------------------------------------------------------
 
