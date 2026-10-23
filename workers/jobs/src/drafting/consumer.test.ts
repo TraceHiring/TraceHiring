@@ -90,7 +90,7 @@ describe('createDraftingConsumer', () => {
     expect(m.acks).toBe(0);
     expect(w.jobs.get(JOB)!.status).toBe('running');
     expect(reports).toHaveLength(1);
-    expect(reports[0]!.message).toBe('drafting_job_error');
+    expect(reports[0]!.code).toBe('drafting_job_error');
     expect(JSON.stringify(reports)).not.toContain('synthetic');
     expect(lines.join('\n')).toContain('"sqlstate":"08006"');
     expect(lines.join('\n')).not.toContain('connection reset');

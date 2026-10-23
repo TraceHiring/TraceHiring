@@ -102,7 +102,7 @@ describe('createMembersConsumer', () => {
     expect(m.retries).toBe(1);
     expect(w.invites.get(INVITE)!.status).toBe('pending');
     expect(reports).toHaveLength(1);
-    expect(reports[0]!.message).toBe('member_invite_job_error');
+    expect(reports[0]!.code).toBe('member_invite_job_error');
     expect(JSON.stringify(reports)).not.toContain('example.test');
     expect(lines.join('\n')).not.toContain('example.test');
   });
