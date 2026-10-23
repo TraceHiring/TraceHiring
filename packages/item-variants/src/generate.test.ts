@@ -277,7 +277,9 @@ describe('validateParamSpec (bad_param_spec)', () => {
   });
 
   // Lead note (security review of the M1 contracts): never look a name up on a plain object. A spec that names a
-  // param after an Object.prototype member works like any other, and one that only references it is refused.
+  // param after an Object.prototype member works like any other (except the names the contract reserves), and one
+  // that only references it is refused.
+  const CONTRACT_RESERVED: readonly string[] = ['constructor', 'prototype'];
   const PROTO_NAMES = [
     'constructor',
     'prototype',
@@ -298,6 +300,12 @@ describe('validateParamSpec (bad_param_spec)', () => {
       constraints: [`a != ${name}`],
       stem: `[synthetic] What is {{a}} + {{${name}}}?`,
     };
+    // R5-54 a: the contract's ParamName reserves `constructor`, `prototype` and `__proto__`, so a spec that names a
+    // param after one of them is refused outright.
+    if (CONTRACT_RESERVED.includes(name)) {
+      expect(reasonOf(named)).not.toBe('ok');
+      return;
+    }
     const plain: ParamSpec = { ...SUM_SPEC, stem: '[synthetic] What is {{a}} + {{b}}?' };
     const got = variantsOf(named);
     const want = variantsOf(plain);
