@@ -335,6 +335,22 @@ describe('mirror stage v2: the layout check before any write (R5-62 b, R5-59 a)'
     nothingWritten(w);
   });
 
+  it('the layout check runs before any evidence read (A3a fix-2 re-review N1)', async () => {
+    const w = await sessionWorldV2({ patch: swapped });
+    // Any R2 read throws: the swapped body must be refused by the layout check before one happens.
+    const evidence = new Proxy(w.evidence, {
+      get: () => () => Promise.reject(new Error('evidence_read_attempted')),
+    });
+    const outcome = await inTx(w.db, w.message.orgId, mirrorHandlers, (tx) =>
+      runMirror(w.message, { tx, evidence }),
+    ).then(
+      () => 'ok',
+      (err: unknown) => (err as Error).message,
+    );
+    expect(outcome).toBe('mirror_bad_served_position');
+    nothingWritten(w);
+  });
+
   it('a pool section of the version missing from poolSectionIds is refused and nothing is written', async () => {
     // sW is a pool section of the version, never entered: the message must still name it.
     const w = await sessionWorldV2({ patch: (m) => ({ ...m, poolSectionIds: [V2.sP] }) });
