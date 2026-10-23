@@ -1,6 +1,7 @@
 // Synthetic-data renders of the bank screens for tests/m1-guards.test.tsx (AT-M1-24), by name. See
 // src/m1-screen-registry.test-helpers.ts. The route modules themselves are rendered by the guard file.
 import type { ReactNode } from 'react';
+import { ApprovalQueueTable } from './ApprovalsRoute';
 import { BankTable, StatsPanel } from './BankRoute';
 import { FilterForm } from './FilterForm';
 import { ItemContentView } from './ItemContentView';
@@ -76,6 +77,17 @@ export function m1Screens(): Record<string, ReactNode> {
     'item form parameter spec': (
       <ItemFormView form={specForm} errors={specErrors} formatLocked onChange={noop} />
     ),
+    'approval queue': (
+      <ApprovalQueueTable
+        rows={[
+          summary(1, { status: 'in_review' }),
+          summary(2, { status: 'in_review', origin: 'ai_draft' }),
+        ]}
+        openId={null}
+        onOpen={noop}
+      />
+    ),
+    'approval queue empty': <ApprovalQueueTable rows={[]} openId={null} onOpen={noop} />,
     'bank share': <StatsPanel stats={STATS} />,
     'bank filters': (
       <FilterForm

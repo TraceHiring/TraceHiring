@@ -74,7 +74,7 @@ describe('ApprovalsRoute', () => {
     const rows = [...mounted.container.querySelectorAll('tbody tr')];
     expect(rows[1]?.textContent).toContain('AI draft — needs approval');
     expect(rows[0]?.textContent).not.toContain('AI draft');
-    expect(mounted.text()).not.toMatch(/model|likeness|score|candidate/i);
+    expect(mounted.text()).not.toMatch(/model|likeness|score/i);
   });
 
   it('opens an item with its content, its key and the two actions', async () => {
