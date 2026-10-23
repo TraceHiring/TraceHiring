@@ -117,3 +117,21 @@ Writer (Opus): red `b0ab28a` (72 failing), api 55 files / 596 tests, typecheck +
 - Notes — `import_item_batch`/`save_item_variants` INVOKER + authenticated EXECUTE make the api's hash/variant checks
   advisory (same org only; R2-5); image sniff checks headers only (serve with fixed type + nosniff); no per-job image cap;
   `POST …/bank/ai-drafts` unlimited (cost exposure when ABH-87 lands a real LLM).
+**Database: APPROVE WITH FIXES** (no rule 1-9 issue):
+- Medium D1 — bank draft PUT is two writes (content, then key); a failed key write or a concurrent submit leaves a key on a
+  deleted option, and `private.item_version_ready` only checks a key exists → the approved version blocks every publish
+  drawing it. Fix (lead migration): `item_version_ready` requires the key's option id among the version's options; later
+  an invoker RPC `save_bank_draft` (create, PUT, clone) — R5-63 f list.
+- Medium D2 — pool reads cost one call per 50 items (~105 per 5,000-item pool; list page up to ~215; OPEN-8a). Fix: a
+  `security_invoker` per-pool counts view (all + approved).
+- Lows — D3 bank pool filter refuses pools > 500 ids (use `pool_items!inner(pool_id)`); D4 "one open version per item"
+  only in the api (partial unique index); D5 guard texts missing from `GUARD_TEXTS` → 404 (`item_version_ready` "needs its
+  answer key/rubric/variants", "variants are numbered 1 to n"; pool guard "a pool holds approved bank items of its
+  format"); D6 `images_ok` client-writable and stale (compute in the guard at completion, revoke the grant); D7 no index
+  for the bank list keyset (`item_versions (org_id, created_at desc, id desc) where section_id is null`); D8 (spec
+  decision) cloning an `ai_draft` version yields `origin = 'human'` (keep the AI origin or refuse cloning a
+  `not_approved` AI draft); D9 R5-51 f: revoke the `id` INSERT grants on ai_draft_jobs, import_jobs, items, pools,
+  library_copy_requests.
+- Notes — D10 failed `queue.send` also strands a `queued` job (one worker sweep fixes S2 and D10); D11 reviewers always
+  see `exposureCount` 0; D12 a lost version-insert response leaves a harmless key-less draft.
+**Spec review: NOT YET RUN** (usage stop) — first in the next session.
