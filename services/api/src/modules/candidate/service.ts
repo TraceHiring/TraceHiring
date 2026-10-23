@@ -46,8 +46,6 @@ export interface CandidateDeps {
   /** The verify keys from CANDIDATE_TOKEN_PUBLIC_JWK. */
   verifyKeys: () => Promise<VerifyKeys>;
   outbox: OutboxWriter;
-  /** Reads the title of the published R2 test package, or null (optional display data). */
-  packageTitle?: (testVersionId: string) => Promise<string | null>;
   /** Epoch milliseconds. */
   now: () => number;
   newId: () => string;
@@ -159,6 +157,7 @@ export const createCandidateService = (deps: CandidateDeps) => {
       if (found === null) return fail('invalid_link');
       let state = found.status;
       let durationMinutes: number | undefined;
+      let title = null as string | null;
       await inOrg(found.orgId, async (s) => {
         if (
           LIVE_BEFORE_START.includes(found.status) &&
@@ -170,14 +169,13 @@ export const createCandidateService = (deps: CandidateDeps) => {
         }
         if (LIVE_BEFORE_START.includes(state) || state === 'started') {
           const tv = await s.testVersion(found.testVersionId);
-          if (tv !== null)
+          if (tv !== null) {
             durationMinutes = Math.min(120, Math.max(1, Math.ceil(tv.totalTimeSeconds / 60)));
+            // Fix round 1 #8: the title is the test's name, read in this transaction; the package is never read.
+            title = await s.testTitle(found.testVersionId);
+          }
         }
       });
-      const title =
-        durationMinutes !== undefined && deps.packageTitle !== undefined
-          ? await deps.packageTitle(found.testVersionId).catch(() => null)
-          : null;
       return {
         invitationId: found.id,
         orgId: found.orgId,

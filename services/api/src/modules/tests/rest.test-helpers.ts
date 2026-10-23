@@ -11,8 +11,8 @@ export type Row = Record<string, unknown>;
 export interface TableHooks {
   /** Defaults and BEFORE INSERT checks; returns the stored row or throws a RestError. */
   insert?: (row: Row, db: FakeDb) => Row;
-  /** BEFORE UPDATE checks; returns the new row or throws. */
-  update?: (oldRow: Row, newRow: Row, db: FakeDb) => Row;
+  /** BEFORE UPDATE checks; returns the new row or throws (async for guards that hash). */
+  update?: (oldRow: Row, newRow: Row, db: FakeDb) => Row | Promise<Row>;
   /** BEFORE DELETE checks; throws to refuse. */
   remove?: (row: Row, db: FakeDb) => void;
   /** Row-level visibility for every operation (RLS). Default: every row is visible. */
@@ -23,17 +23,78 @@ export interface TableHooks {
   updatable?: (row: Row) => boolean;
 }
 
+/** A stand-in for a `public` INVOKER function: returns its JSON value or throws a RestError. */
+export type RpcFake = (args: Readonly<Record<string, unknown>>, db: FakeDb) => unknown;
+
+export type FakeMethod = 'select' | 'insert' | 'update' | 'remove' | 'rpc';
+
 export interface FakeDb {
   tables: Record<string, Row[]>;
   hooks: Record<string, TableHooks>;
-  calls: { method: 'select' | 'insert' | 'update' | 'remove'; table: string; query: Query }[];
-  /** Makes the next call to `table` with this method fail with this status and SQLSTATE. */
-  failNext(method: 'select' | 'insert' | 'update' | 'remove', table: string, err: RestError): void;
+  /** `rpc` stand-ins by function name; an unknown name is 404 (PGRST202). */
+  functions: Record<string, RpcFake>;
+  calls: { method: FakeMethod; table: string; query: Query }[];
+  /** Makes the next call to `table` (or function) with this method fail with this status and SQLSTATE. */
+  failNext(method: FakeMethod, table: string, err: RestError): void;
 }
+
+const unquote = (v: string) => (v.startsWith('"') && v.endsWith('"') ? v.slice(1, -1) : v);
+const compare = (value: unknown, raw: string): number => {
+  const v = unquote(raw);
+  if (typeof value === 'number') return value - Number(v);
+  const s = String(value);
+  return s < v ? -1 : s > v ? 1 : 0;
+};
+
+/** Splits `a,b(c,d),e` at top-level commas (PostgREST logic trees). */
+const splitTop = (text: string): string[] => {
+  const out: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let cur = '';
+  for (const ch of text) {
+    if (ch === '"') quoted = !quoted;
+    if (!quoted && ch === '(') depth += 1;
+    if (!quoted && ch === ')') depth -= 1;
+    if (!quoted && depth === 0 && ch === ',') {
+      out.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+};
+
+/** One `col.op.value` term or a nested `and(…)` / `or(…)` of an `or=(…)` filter. */
+const logic = (row: Row, term: string): boolean => {
+  const m = /^(and|or)\((.*)\)$/.exec(term);
+  if (m !== null) {
+    const parts = splitTop(m[2] ?? '');
+    return m[1] === 'and' ? parts.every((p) => logic(row, p)) : parts.some((p) => logic(row, p));
+  }
+  const dot = term.indexOf('.');
+  return matches(row, term.slice(0, dot), term.slice(dot + 1));
+};
 
 const matches = (row: Row, key: string, filter: string): boolean => {
   const value = row[key];
-  if (filter.startsWith('eq.')) return value !== undefined && String(value) === filter.slice(3);
+  if (key === 'or') {
+    if (!filter.startsWith('(') || !filter.endsWith(')')) throw new Error('fake rest: bad or');
+    return splitTop(filter.slice(1, -1)).some((t) => logic(row, t));
+  }
+  for (const [op, test] of [
+    ['gt.', (c: number) => c > 0],
+    ['gte.', (c: number) => c >= 0],
+    ['lt.', (c: number) => c < 0],
+    ['lte.', (c: number) => c <= 0],
+  ] as const) {
+    if (filter.startsWith(op)) {
+      return value !== undefined && value !== null && test(compare(value, filter.slice(op.length)));
+    }
+  }
+  if (filter.startsWith('eq.')) {
+    return value !== undefined && String(value) === unquote(filter.slice(3));
+  }
   if (filter.startsWith('neq.')) return String(value) !== filter.slice(4);
   if (filter === 'is.null') return value === null || value === undefined;
   if (filter === 'not.is.null') return value !== null && value !== undefined;
@@ -85,11 +146,13 @@ const project = (row: Row, select: string | undefined): Row => {
 export const fakeDb = (
   tables: Record<string, Row[]> = {},
   hooks: Record<string, TableHooks> = {},
+  functions: Record<string, RpcFake> = {},
 ): FakeDb & { rest: Rest } => {
   const failures: { method: string; table: string; err: RestError }[] = [];
   const db: FakeDb = {
     tables,
     hooks,
+    functions,
     calls: [],
     failNext(method, table, err) {
       failures.push({ method, table, err });
@@ -135,10 +198,11 @@ export const fakeDb = (
         rows.filter(visible(table)).filter((r) => db.hooks[table]?.updatable?.(r) ?? true),
         query,
       );
-      const next = targets.map((old) => {
+      const next: { old: Row; row: Row }[] = [];
+      for (const old of targets) {
         const merged = { ...old, ...(patch as Row) };
-        return { old, row: db.hooks[table]?.update?.(old, merged, db) ?? merged };
-      });
+        next.push({ old, row: (await db.hooks[table]?.update?.(old, merged, db)) ?? merged });
+      }
       for (const { old, row } of next) rows[rows.indexOf(old)] = row;
       return next.map(({ row }) => project(row, query.select)) as T[];
     },
@@ -153,6 +217,20 @@ export const fakeDb = (
       for (const row of targets) db.hooks[table]?.remove?.(row, db);
       db.tables[table] = rows.filter((r) => !targets.includes(r));
       return targets.map((r) => project(r, query.select)) as T[];
+    },
+    rpc: async <T>(fn: string, args: Readonly<Record<string, unknown>>) => {
+      db.calls.push({ method: 'rpc', table: fn, query: {} });
+      take('rpc', fn);
+      const impl = db.functions[fn];
+      if (impl === undefined) throw new RestError(404, 'PGRST202');
+      // One transaction: a throw leaves every table as it was.
+      const snapshot = structuredClone(db.tables);
+      try {
+        return (await impl(args, db)) as T;
+      } catch (err) {
+        db.tables = snapshot;
+        throw err;
+      }
     },
   };
   return Object.assign(db, { rest });

@@ -2,7 +2,8 @@
 // them. The Answer Quality cutoff is mandatory (editor default 40, L-15): `setCutoffInput` refuses any text that is
 // not an integer 0-100, so the field can never be cleared, and no request is built without a valid cutoff. There is
 // no paste-policy setting anywhere (any paste or drop is a D1-PASTE event).
-import { UpdateTestDraftRequest, type TestDetailResponse } from '@trace/shared/contracts/d1';
+import { UpdateTestDraftRequest } from '@trace/shared/contracts/d1';
+import type { TestDraftView } from '@trace/shared/contracts/m1';
 
 export const MAX_ITEMS = 10;
 export const DEFAULT_CUTOFF = '40';
@@ -221,12 +222,51 @@ export function toRequest(form: DraftForm): BuiltRequest {
   return parsed.success ? { ok: true, request: parsed.data } : { ok: false, reason: 'invalid' };
 }
 
-/** The editor form for a stored draft (or the read-only view of a published version). */
-export function fromDetail(detail: TestDetailResponse): DraftForm {
+type ViewSection = TestDraftView['version']['sections'][number];
+
+/** The navigation a draft with settings stores for a section that names none (R5-63 b); D1's PUT keeps it. */
+const D1_NAVIGATION: Record<SectionKey, 'free' | 'forward_only'> = {
+  mcq: 'free',
+  written: 'forward_only',
+};
+
+/**
+ * Whether D1's editor can show and save this version without losing anything (R5-53 a): every section inline,
+ * unshuffled, untimed, without a blueprint, with no navigation or the default one, and at most one section per format.
+ * D1's PUT rewrites every section that way, so any other draft is shown read-only here.
+ */
+export function d1Editable(detail: TestDraftView): boolean {
+  const sections = detail.version.sections;
+  const formats = new Set(sections.map((s) => s.format));
+  return (
+    formats.size === sections.length &&
+    sections.every(
+      (s: ViewSection) =>
+        s.mode === 'inline' &&
+        !s.shuffleItems &&
+        !s.shuffleOptions &&
+        s.timeLimitSeconds === undefined &&
+        s.blueprint === undefined &&
+        (s.navigation === null || s.navigation === D1_NAVIGATION[s.format]),
+    )
+  );
+}
+
+/**
+ * The editor form for a stored draft (or the read-only view of a published version), adapted from the M1 read-model
+ * (R5-53 a): the inline sections only, the first of each format by position, as D1 writes them.
+ */
+export function fromDetail(detail: TestDraftView): DraftForm {
   const form = emptyDraft(detail.test.name);
   form.durationMinutes = String(detail.version.durationMinutes);
   form.qualityCutoff = String(detail.version.qualityCutoff);
-  for (const section of detail.version.sections) {
+  const seen = new Set<SectionKey>();
+  const inline = [...detail.version.sections]
+    .filter((s) => s.mode === 'inline')
+    .sort((a, b) => a.position - b.position);
+  for (const section of inline) {
+    if (seen.has(section.format)) continue;
+    seen.add(section.format);
     form[section.format] = {
       name: section.name,
       weight: String(section.weight),

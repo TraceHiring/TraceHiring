@@ -1,6 +1,7 @@
 // The test editor's pure model (specs/d1-demo-slice.md §6.1, L-15): the Answer Quality cutoff is mandatory (default
 // 40) and cannot be cleared; at most 10 items; the request always passes the shared contract.
-import { TestDetailResponse, UpdateTestDraftRequest } from '@trace/shared/contracts/d1';
+import { UpdateTestDraftRequest } from '@trace/shared/contracts/d1';
+import { TestDraftView } from '@trace/shared/contracts/m1';
 import { describe, expect, it } from 'vitest';
 import {
   MAX_ITEMS,
@@ -8,6 +9,7 @@ import {
   addMcqItem,
   addOption,
   addWrittenItem,
+  d1Editable,
   emptyDraft,
   fromDetail,
   isCutoffValid,
@@ -126,48 +128,126 @@ describe('toRequest', () => {
     expect(toRequest(form).ok).toBe(false);
   });
 
-  it('round-trips a stored draft', () => {
-    const detail = TestDetailResponse.parse({
-      test: {
-        id: '00000000-0000-4000-8000-000000000001',
-        name: 'T',
-        createdAt: '2026-10-19T10:00:00.000Z',
-      },
-      version: {
-        id: '00000000-0000-4000-8000-000000000002',
-        versionNo: 1,
-        status: 'draft',
-        durationMinutes: 30,
-        qualityCutoff: 55,
-        publishedAt: null,
-        sections: [
-          {
-            id: '00000000-0000-4000-8000-000000000003',
-            position: 1,
-            name: 'Multiple choice',
-            format: 'mcq',
-            weight: 40,
-            items: [
-              {
-                id: '00000000-0000-4000-8000-000000000004',
-                position: 1,
-                format: 'mcq',
-                prompt: 'Q?',
-                options: [
-                  { id: 'a', text: 'A' },
-                  { id: 'b', text: 'B' },
-                ],
-                correctOptionId: 'a',
-              },
-            ],
-          },
-        ],
-      },
-    });
+  it('round-trips a stored draft (the TestDraftView the api answers, R5-53 a)', () => {
+    const detail = TestDraftView.parse(view());
     const form = fromDetail(detail);
     expect(form.qualityCutoff).toBe('55');
     expect(form.mcq.weight).toBe('40');
     expect(itemCount(form)).toBe(1);
     expect(toRequest(form).ok).toBe(true);
+  });
+});
+
+/** A stored draft as `GET …/tests/:testId` answers it (TestDraftView): one inline mcq section, as D1 writes it. */
+function view(patch: Record<string, unknown> = {}, sections?: unknown[]) {
+  return {
+    test: {
+      id: '00000000-0000-4000-8000-000000000001',
+      workspaceId: '00000000-0000-4000-8000-000000000009',
+      name: 'T',
+      createdAt: '2026-10-19T10:00:00.000Z',
+    },
+    version: {
+      id: '00000000-0000-4000-8000-000000000002',
+      versionNo: 1,
+      status: 'draft',
+      durationMinutes: 30,
+      qualityCutoff: 55,
+      publishedAt: null,
+      sections: sections ?? [section()],
+      ...patch,
+    },
+  };
+}
+function section(patch: Record<string, unknown> = {}) {
+  return {
+    id: '00000000-0000-4000-8000-000000000003',
+    position: 1,
+    mode: 'inline',
+    name: 'Multiple choice',
+    format: 'mcq',
+    weight: 40,
+    items: [
+      {
+        id: '00000000-0000-4000-8000-000000000004',
+        position: 1,
+        format: 'mcq',
+        prompt: 'Q?',
+        options: [
+          { id: 'a', text: 'A' },
+          { id: 'b', text: 'B' },
+        ],
+        correctOptionId: 'a',
+      },
+    ],
+    shuffleItems: false,
+    shuffleOptions: false,
+    navigation: null,
+    ...patch,
+  };
+}
+
+describe('the D1 editor on the M1 read-model (R5-53 a, A2b fix round 1 #3)', () => {
+  it('loads inline sections into the D1 form: names, weights, items, keys and rubrics', () => {
+    const written = section({
+      id: '00000000-0000-4000-8000-000000000005',
+      position: 2,
+      name: 'Writing',
+      format: 'written',
+      weight: 60,
+      navigation: 'forward_only',
+      pasteRule: 'blocked',
+      items: [
+        {
+          id: '00000000-0000-4000-8000-000000000006',
+          position: 1,
+          format: 'written',
+          prompt: 'Describe it.',
+          rubric: {
+            criteria: [{ id: 'c1', label: 'Clear', maxPoints: 4, anchors: ['a', 'b'], minHits: 1 }],
+          },
+        },
+      ],
+    });
+    const detail = TestDraftView.parse(view({}, [section({ navigation: 'free' }), written]));
+    const form = fromDetail(detail);
+    expect(form.name).toBe('T');
+    expect([form.mcq.name, form.mcq.weight, form.written.name, form.written.weight]).toEqual([
+      'Multiple choice',
+      '40',
+      'Writing',
+      '60',
+    ]);
+    expect(form.written.items[0]).toEqual({
+      format: 'written',
+      prompt: 'Describe it.',
+      criteria: [{ id: 'c1', label: 'Clear', maxPoints: '4', anchors: 'a, b', minHits: '1' }],
+    });
+    expect(toRequest(form)).toMatchObject({ ok: true });
+  });
+
+  it('the D1 editor edits only a D1-shaped draft: inline, unshuffled, untimed, one section per format', () => {
+    expect(d1Editable(TestDraftView.parse(view()))).toBe(true);
+    // R5-63 b: a draft with settings stores the default navigation; still D1-shaped.
+    expect(d1Editable(TestDraftView.parse(view({}, [section({ navigation: 'free' })])))).toBe(true);
+    for (const other of [
+      section({
+        mode: 'pool',
+        items: [],
+        poolId: '00000000-0000-4000-8000-000000000007',
+        drawCount: 2,
+        navigation: 'free',
+      }),
+      section({ navigation: 'free', shuffleItems: true }),
+      section({ navigation: 'free', timeLimitSeconds: 600 }),
+      section({ navigation: 'forward_only' }),
+    ]) {
+      expect(d1Editable(TestDraftView.parse(view({}, [other])))).toBe(false);
+    }
+    const twoMcq = view({}, [
+      section(),
+      section({ id: '00000000-0000-4000-8000-000000000008', position: 2 }),
+    ]);
+    expect(d1Editable(TestDraftView.parse(twoMcq))).toBe(false);
   });
 });

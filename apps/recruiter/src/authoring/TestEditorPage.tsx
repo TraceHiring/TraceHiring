@@ -1,8 +1,9 @@
 // The test editor screens (specs/d1-demo-slice.md §6.1): `/tests/new` creates a draft, `/tests/:testId` edits it
 // (draft only; a published version is read-only in D1). Publish opens a dialog with the Q20 freeze copy and is
 // refused without a valid cutoff. M1 extends `/tests/new` in place (specs/m1-test-authoring.md §6.1, R5-15, R5-55 b):
-// step 1 shows the role-template choice next to D1's own start, whose create path is unchanged.
-import type { TestDetailResponse } from '@trace/shared/contracts/d1';
+// step 1 shows the role-template choice next to D1's own start, whose create path is unchanged. The editor loads and
+// saves through the M1 read-model, TestDraftView (R5-53 a), adapted to D1's form (inline sections only).
+import type { TestDraftView } from '@trace/shared/contracts/m1';
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import type { ApiClient, ApiResult } from '../api/client';
@@ -14,7 +15,7 @@ import ui from '../common/Ui.module.css';
 import { DraftFormView } from './DraftFormView';
 import { publishDraft, saveDraft } from './editor-actions';
 import { FromTemplateRoute } from './FromTemplateRoute';
-import { fromDetail, isCutoffValid, toRequest, type DraftForm } from './editor-model';
+import { d1Editable, fromDetail, isCutoffValid, toRequest, type DraftForm } from './editor-model';
 import { ReviewersPanel } from './ReviewersPanel';
 import { NO_ACCESS_TEXT, isStaff } from '../shell/nav';
 
@@ -61,14 +62,16 @@ export function EditorBody({
   onPublished,
 }: {
   api: ApiClient;
-  detail: TestDetailResponse;
+  detail: TestDraftView;
   onPublished(): void;
 }) {
   const [form, setForm] = useState<DraftForm>(() => fromDetail(detail));
   const [dialog, setDialog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
-  const draft = detail.version.status === 'draft';
+  // R5-53 a: D1's editor saves only a D1-shaped draft (its PUT rewrites every section); any other is read-only here.
+  const editable = d1Editable(detail);
+  const draft = detail.version.status === 'draft' && editable;
   const testId = detail.test.id;
   const cutoffOk = isCutoffValid(form.qualityCutoff);
   const built = toRequest(form);
@@ -98,7 +101,9 @@ export function EditorBody({
       <p className={ui.note}>
         {draft
           ? `Draft, version ${detail.version.versionNo}`
-          : `Published, version ${detail.version.versionNo}. Settings are frozen; a new version comes in a later release.`}
+          : detail.version.status === 'draft'
+            ? `Draft, version ${detail.version.versionNo}. It uses sections this editor cannot change, so it is shown read-only.`
+            : `Published, version ${detail.version.versionNo}. Settings are frozen; a new version comes in a later release.`}
       </p>
       <form className={ui.stack} onSubmit={(e) => void save(e)}>
         <DraftFormView form={form} readOnly={!draft} onChange={setForm} />
@@ -159,7 +164,7 @@ export function testDetailLoader(
   api: ApiClient,
   testId: string,
   roles: readonly string[] | null,
-): (() => Promise<ApiResult<TestDetailResponse>>) | null {
+): (() => Promise<ApiResult<TestDraftView>>) | null {
   if (roles === null || !isStaff(roles)) return null;
   return () => getTest(api, testId);
 }

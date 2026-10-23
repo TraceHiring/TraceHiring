@@ -1,8 +1,11 @@
-// Test authoring routes (spec §6.2 rows GET/POST /tests and GET/PUT /tests/:testId; L-8, L-15, R-8 path org filter).
-// The draft starts at cutoff 40 in the default workspace; PUT replaces the draft's children (answer keys, items,
-// sections, then new rubric versions) and reads the result back; every query is filtered by the path org; errors are
-// constant codes. Runs on the fake PostgREST of tests.test-helpers.ts.
-import { TestDetailResponse, TestListResponse } from '@trace/shared/contracts/d1';
+// Test authoring routes (spec §6.2 rows GET/POST /tests and GET/PUT /tests/:testId; L-8, L-15, R-8 path org filter;
+// spec m1 R5-53 a: GET, the POST 201 and D1's PUT answer TestDraftView). The draft starts at cutoff 40 in the default
+// workspace; D1's PUT maps its body to inline sections (navigation null, package v1) and replaces the draft's children
+// in one `public.save_test_draft` call (M1-18, fixes D1 r3 m-4), then reads the result back; every query is filtered by
+// the path org; errors are constant codes. Runs on the fake PostgREST of tests.test-helpers.ts.
+import { TestListResponse } from '@trace/shared/contracts/d1';
+import { TestDraftView } from '@trace/shared/contracts/m1';
+import { itemContentSha256 } from '@trace/shared/item-hash';
 import { describe, expect, it } from 'vitest';
 import { MAX_LIST_ROWS, RestError, orgFail } from './org-context.js';
 import { createTestsRoutes } from './routes.js';
@@ -20,7 +23,7 @@ describe('POST /v1/orgs/:orgId/tests', () => {
     const res = await create(call, { name: 'Synthetic Test', durationMinutes: 25 });
     expect(res.status).toBe(201);
     expect(res.headers.get('cache-control')).toBe('no-store');
-    const body = TestDetailResponse.parse(await res.json());
+    const body = TestDraftView.parse(await res.json());
     expect(body.version).toMatchObject({
       versionNo: 1,
       status: 'draft',
@@ -46,7 +49,7 @@ describe('POST /v1/orgs/:orgId/tests', () => {
     const ws2 = 'b1000000-0000-4000-8000-000000000002';
     const res = await create(call, { name: 'Synthetic Test', workspaceId: ws2 });
     expect(res.status).toBe(201);
-    expect(TestDetailResponse.parse(await res.json()).version.durationMinutes).toBe(30);
+    expect(TestDraftView.parse(await res.json()).version.durationMinutes).toBe(30);
     expect(rowsOf(db, 'tests')[0]?.workspace_id).toBe(ws2);
     db.tables.workspaces = [
       { id: 'b1000000-0000-4000-8000-000000000004', org_id: ORG_B, is_default: true },
@@ -130,7 +133,7 @@ describe('GET /v1/orgs/:orgId/tests and /tests/:testId', () => {
   it('lists the tests of the path org with their newest version and invitation count', async () => {
     const db = authoringDb();
     const { call } = testsApp(db);
-    const created = TestDetailResponse.parse(await (await create(call)).json());
+    const created = TestDraftView.parse(await (await create(call)).json());
     const t = rowsOf(db, 'tests')[0];
     if (t !== undefined) t.invitation_seq = 3;
     db.tables.tests?.push({
@@ -188,10 +191,10 @@ describe('PUT /v1/orgs/:orgId/tests/:testId', () => {
   it('writes the draft and reads it back: options, key, rubric (camelCase on the wire, max_points in the row)', async () => {
     const db = authoringDb();
     const { call } = testsApp(db);
-    const created = TestDetailResponse.parse(await (await create(call)).json());
+    const created = TestDraftView.parse(await (await create(call)).json());
     const res = await call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, draftBody());
     expect(res.status).toBe(200);
-    const detail = TestDetailResponse.parse(await res.json());
+    const detail = TestDraftView.parse(await res.json());
     expect(detail.test.name).toBe('Synthetic Support Test');
     expect(detail.version).toMatchObject({ durationMinutes: 20, qualityCutoff: 55 });
     expect(detail.version.sections.map((s) => [s.position, s.format, s.name, s.weight])).toEqual([
@@ -236,10 +239,10 @@ describe('PUT /v1/orgs/:orgId/tests/:testId', () => {
       expect(item.content_sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('a second PUT replaces every child of the draft (keys, items, sections) in order', async () => {
+  it('a second PUT replaces every child of the draft in one save_test_draft call (atomic, M1-18)', async () => {
     const db = authoringDb();
     const { call } = testsApp(db);
-    const created = TestDetailResponse.parse(await (await create(call)).json());
+    const created = TestDraftView.parse(await (await create(call)).json());
     await call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, draftBody());
     const before = db.calls.length;
     const res = await call(
@@ -255,27 +258,80 @@ describe('PUT /v1/orgs/:orgId/tests/:testId', () => {
       .slice(before)
       .filter((c) => c.method !== 'select')
       .map((c) => `${c.method}:${c.table}`);
-    expect(writes).toEqual([
-      'update:test_versions',
-      'update:tests',
-      'remove:item_answer_keys',
-      'remove:item_versions',
-      'remove:sections',
-      'insert:sections',
-      'insert:rubric_versions',
-      'insert:item_versions',
-    ]);
-    // Every write is filtered by the path org and the draft.
-    for (const c of db.calls
-      .slice(before)
-      .filter((x) => x.method === 'remove' || x.method === 'update'))
-      expect(c.query.org_id).toBe(`eq.${ORG}`);
+    expect(writes).toEqual(['rpc:save_test_draft']);
+    // D1's body is package v1: inline sections with no M1 field and no settings.
+    const payload = db.savePayloads.at(-1) as Record<string, unknown>;
+    expect(payload).toMatchObject({ name: 'Synthetic Support Test', totalTimeSeconds: 1200 });
+    expect(payload).not.toHaveProperty('settings');
+    expect((payload.sections as Record<string, unknown>[])[0]).toEqual({
+      name: 'Writing',
+      format: 'written',
+      weight: 60,
+      shuffleItems: false,
+      shuffleOptions: false,
+      navigation: null,
+      items: [
+        expect.objectContaining({
+          format: 'written',
+          stem: 'Describe a synthetic refund process.',
+        }),
+      ],
+    });
+    const view = TestDraftView.parse(await res.json());
+    expect(view.version.sections[0]).toMatchObject({ mode: 'inline', navigation: null });
+  });
+
+  it('a written item whose rubric is unchanged reuses its rubric version (R5-51 f, DB L6)', async () => {
+    const db = authoringDb();
+    const { call } = testsApp(db);
+    const created = TestDraftView.parse(await (await create(call)).json());
+    await call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, draftBody());
+    expect(rowsOf(db, 'rubric_versions')).toHaveLength(1);
+    await call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, draftBody({ name: 'Renamed' }));
+    expect(rowsOf(db, 'rubric_versions')).toHaveLength(1);
+    const payload = db.savePayloads.at(-1) as { sections: { items: Record<string, unknown>[] }[] };
+    expect(payload.sections[1]?.items[0]?.rubricVersionId).toBe(
+      rowsOf(db, 'rubric_versions')[0]?.id,
+    );
+    const changed = draftBody();
+    const item = changed.sections[1]?.items[0];
+    if (item?.format === 'written') item.rubric.criteria[0]!.maxPoints = 5;
+    await call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, changed);
+    expect(rowsOf(db, 'rubric_versions')).toHaveLength(2);
+  });
+
+  it('item content hashes are the R5-49 a canonical hash (key excluded)', async () => {
+    const db = authoringDb();
+    const { call } = testsApp(db);
+    const created = TestDraftView.parse(await (await create(call)).json());
+    await call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, draftBody());
+    const mcq = rowsOf(db, 'item_versions').find((i) => i.format === 'mcq');
+    expect(mcq?.content_sha256).toBe(
+      await itemContentSha256({
+        format: 'mcq',
+        stem: 'Which colour is the synthetic sky?',
+        options: [
+          { id: 'a', text: 'Blue' },
+          { id: 'b', text: 'Green' },
+        ],
+        media: null,
+        paramSpec: null,
+      }),
+    );
+    // Another key, same served content: same hash.
+    const other = draftBody();
+    const first = other.sections[0]?.items[0];
+    if (first?.format === 'mcq') first.correctOptionId = 'b';
+    await call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, other);
+    expect(rowsOf(db, 'item_versions').find((i) => i.format === 'mcq')?.content_sha256).toBe(
+      mcq?.content_sha256,
+    );
   });
 
   it('refuses a body that breaks the contract with 400 bad_request (cutoff valid)', async () => {
     const db = authoringDb();
     const { call } = testsApp(db);
-    const created = TestDetailResponse.parse(await (await create(call)).json());
+    const created = TestDraftView.parse(await (await create(call)).json());
     const twoMcq = draftBody({ sections: [draftBody().sections[0]!, draftBody().sections[0]!] });
     for (const body of [twoMcq, { ...draftBody(), extra: true }, [], null]) {
       const res = await call('PUT', `/v1/orgs/${ORG}/tests/${created.test.id}`, body);
@@ -306,7 +362,7 @@ describe('PUT /v1/orgs/:orgId/tests/:testId', () => {
     for (const { roles, status, code } of cases) {
       const db = authoringDb();
       const { call } = testsApp(db);
-      const created = TestDetailResponse.parse(await (await create(call)).json());
+      const created = TestDraftView.parse(await (await create(call)).json());
       const member = rowsOf(db, 'memberships')[0];
       if (member === undefined) throw new Error('fixture: no membership row');
       member.roles = roles;
@@ -334,7 +390,7 @@ describe('PUT /v1/orgs/:orgId/tests/:testId', () => {
     for (const { roles, status, code } of cases) {
       const db = authoringDb();
       const { call } = testsApp(db);
-      const created = TestDetailResponse.parse(await (await create(call)).json());
+      const created = TestDraftView.parse(await (await create(call)).json());
       const member = rowsOf(db, 'memberships')[0];
       if (member === undefined) throw new Error('fixture: no membership row');
       member.roles = roles;
@@ -379,7 +435,7 @@ describe('the tests router: caller and contract failures', () => {
   it('a stored row that does not fit the contract is 503 unavailable, never echoed', async () => {
     const db = authoringDb();
     const { call } = testsApp(db);
-    const created = TestDetailResponse.parse(await (await create(call)).json());
+    const created = TestDraftView.parse(await (await create(call)).json());
     const t = rowsOf(db, 'tests')[0];
     if (t !== undefined) t.name = 'x'.repeat(201);
     for (const path of [`/v1/orgs/${ORG}/tests`, `/v1/orgs/${ORG}/tests/${created.test.id}`]) {

@@ -678,3 +678,90 @@ describe('M1 endpoints: answers are parsed with their contract (R5-53 c)', () =>
     expect(await m1.bankStats(odd.api)).toEqual({ ok: false, code: 'unavailable' });
   });
 });
+
+// ---- D1's editor calls answer the M1 read-model (R5-53 a, A2b fix round 1 #3) ------------------------------------
+
+/** A D1-shaped draft as the api answers it now: TestDraftView, inline sections with navigation null. */
+const D1_DRAFT_VIEW = {
+  test: { id: uid(50), workspaceId: uid(49), name: 'Synthetic test', createdAt: NOW },
+  version: {
+    id: uid(51),
+    versionNo: 1,
+    status: 'draft',
+    durationMinutes: 30,
+    qualityCutoff: 55,
+    publishedAt: null,
+    sections: [
+      {
+        id: uid(52),
+        position: 1,
+        mode: 'inline',
+        format: 'mcq',
+        name: 'Multiple choice',
+        weight: 40,
+        items: [
+          {
+            id: uid(53),
+            position: 1,
+            format: 'mcq',
+            prompt: 'Synthetic question?',
+            options: [
+              { id: 'a', text: 'First' },
+              { id: 'b', text: 'Second' },
+            ],
+            correctOptionId: 'a',
+          },
+        ],
+        shuffleItems: false,
+        shuffleOptions: false,
+        navigation: null,
+      },
+    ],
+  },
+};
+
+describe('getTest, createTest and updateDraft parse TestDraftView (R5-53 a)', () => {
+  const calls: [string, (api: ApiClient) => Promise<ApiResult<unknown>>][] = [
+    ['getTest', (api) => m1.getTest(api, uid(50))],
+    ['createTest', (api) => m1.createTest(api, { name: 'Synthetic test' })],
+    [
+      'updateDraft',
+      (api) =>
+        m1.updateDraft(api, uid(50), {
+          name: 'Synthetic test',
+          durationMinutes: 30,
+          qualityCutoff: 55,
+          sections: [],
+        }),
+    ],
+  ];
+
+  it.each(calls)('%s accepts the draft view', async (_name, run) => {
+    const { api } = harness(() => json(D1_DRAFT_VIEW, 200));
+    const res = await run(api);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data).toEqual(D1_DRAFT_VIEW);
+  });
+
+  it.each(calls)(
+    "%s refuses D1's old detail shape (no workspace id, no section mode)",
+    async (_name, run) => {
+      const old = {
+        test: { id: uid(50), name: 'Synthetic test', createdAt: NOW },
+        version: {
+          ...D1_DRAFT_VIEW.version,
+          sections: D1_DRAFT_VIEW.version.sections.map((x) => ({
+            id: x.id,
+            position: x.position,
+            name: x.name,
+            format: x.format,
+            weight: x.weight,
+            items: x.items,
+          })),
+        },
+      };
+      const { api } = harness(() => json(old, 200));
+      expect(await run(api)).toEqual({ ok: false, code: 'invalid_response' });
+    },
+  );
+});

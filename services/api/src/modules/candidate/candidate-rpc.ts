@@ -69,7 +69,6 @@ export const depsFromEnv = (env: Env): CandidateCall => {
   const privateJwk = env.CANDIDATE_TOKEN_PRIVATE_JWK;
   const publicJwk = env.CANDIDATE_TOKEN_PUBLIC_JWK;
   const outbox = createDemoOutbox(env, outboxNamespace(env));
-  const packages = env.PACKAGES;
   const deps: CandidateDeps = {
     store: createSqlCandidateStore(handle.db),
     signer: async () =>
@@ -87,18 +86,6 @@ export const depsFromEnv = (env: Env): CandidateCall => {
     now: () => Date.now(),
     newId: () => crypto.randomUUID(),
     newNonce: DEFAULT_NONCE,
-    ...(packages === undefined
-      ? {}
-      : {
-          packageTitle: async (testVersionId: string) => {
-            const object = await packages.get(`packages/${testVersionId}.json`);
-            if (object === null) return null;
-            const title = z
-              .object({ title: z.string().min(1).max(200) })
-              .safeParse(await object.json());
-            return title.success ? title.data.title : null;
-          },
-        }),
   };
   return { deps, close: () => handle.close() };
 };
