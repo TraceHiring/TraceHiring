@@ -582,7 +582,8 @@ export const SectionDraft = z
 export type SectionDraft = z.infer<typeof SectionDraft>;
 
 /** The section rules of SectionDraft, shared with the draft read-model (TestDraftView). `navigation` null is a D1
- * section (package v1, R2-1); the request never sends null. */
+ * section (package v1, R2-1): both the view and the request carry it only for an inline, unshuffled section with no
+ * paste rule, so a D1 draft round-trips unchanged (the v2 publish guard refuses null). */
 function sectionChecks(
   section: {
     mode: 'inline' | 'pool';
