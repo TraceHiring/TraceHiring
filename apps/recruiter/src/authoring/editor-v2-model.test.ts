@@ -116,10 +116,8 @@ const writtenSection = {
   timeLimitSeconds: 900,
 };
 
-const strip = <T extends { id?: string; position?: number }>(s: T) => {
-  const { id: _id, position: _position, ...rest } = s;
-  return rest;
-};
+const strip = (s: object): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(s).filter(([k]) => k !== 'id' && k !== 'position'));
 /** The request a stored view stands for: its sections without ids and positions, items without theirs. */
 const requestOf = (v: TestDraftView): SaveTestDraftRequest =>
   SaveTestDraftRequest.parse({

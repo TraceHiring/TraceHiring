@@ -21,7 +21,11 @@ import {
   uuid,
   type Mounted,
 } from './dom.test-helpers';
-import { FromTemplateRoute, FromTemplateView } from './FromTemplateRoute';
+import {
+  FromTemplateRoute,
+  FromTemplateView,
+  type FromTemplateViewProps,
+} from './FromTemplateRoute';
 
 const AT = '2026-10-23T10:00:00.000Z';
 const page1 = RoleTemplateListResponse.parse({
@@ -68,8 +72,8 @@ afterEach(async () => {
 });
 
 describe('FromTemplateView (static)', () => {
-  const props = {
-    status: 'ready' as const,
+  const props: FromTemplateViewProps = {
+    status: 'ready',
     templates: page1.templates,
     hasMore: true,
     loadingMore: false,

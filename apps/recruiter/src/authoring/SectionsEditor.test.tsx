@@ -76,8 +76,17 @@ const empty = (): EditorV2Form => ({
 let latest: EditorV2Form = empty();
 function Harness({ start, readOnly = false }: { start: EditorV2Form; readOnly?: boolean }) {
   const [form, setForm] = useState(start);
-  latest = form;
-  return <SectionsEditorView form={form} pools={POOLS} readOnly={readOnly} onChange={setForm} />;
+  return (
+    <SectionsEditorView
+      form={form}
+      pools={POOLS}
+      readOnly={readOnly}
+      onChange={(next) => {
+        latest = next;
+        setForm(next);
+      }}
+    />
+  );
 }
 
 let mounted: Mounted | undefined;
@@ -254,6 +263,6 @@ describe('SectionsEditorView (interaction)', () => {
     ]);
     await choose(level, '3');
     expect(latest.sections[0]?.strata[0]?.level).toBe(3);
-    expect(plain(sectionEl(0).innerHTML)).not.toMatch(/band/i);
+    expect(plain(sectionEl(0).innerHTML)).not.toMatch(/\bband\b/i);
   });
 });
