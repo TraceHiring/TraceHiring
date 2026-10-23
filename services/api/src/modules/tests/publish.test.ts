@@ -3,7 +3,8 @@
 // open draft -> 409; a hash mismatch after the guarded UPDATE retires the version (500). The package is key-free.
 // Runs on the fake PostgREST of tests.test-helpers.ts (the triggers it models are tested in supabase/tests).
 import { TestPackage } from '@trace/shared/contracts/candidate';
-import { PublishTestResponse, TestDetailResponse } from '@trace/shared/contracts/d1';
+import { PublishTestResponse } from '@trace/shared/contracts/d1';
+import { TestDraftView } from '@trace/shared/contracts/m1';
 import { describe, expect, it } from 'vitest';
 import { sha256Hex } from '../candidate/encoding.js';
 import { RestError } from './org-context.js';
@@ -13,7 +14,7 @@ const setup = async (opts: { draft?: unknown } = {}) => {
   const db = authoringDb();
   const bucket = fakeBucket();
   const { call } = testsApp(db, bucket);
-  const created = TestDetailResponse.parse(
+  const created = TestDraftView.parse(
     await (await call('POST', `/v1/orgs/${ORG}/tests`, { name: 'Synthetic Test' })).json(),
   );
   const testId = created.test.id;
@@ -223,7 +224,7 @@ describe('POST …/tests/:testId/publish', () => {
     expect(rowsOf(s.db, 'test_versions').find((v) => v.id === s.versionId)?.status).toBe('draft');
     const db = authoringDb();
     const { call } = testsApp(db, null);
-    const created = TestDetailResponse.parse(
+    const created = TestDraftView.parse(
       await (await call('POST', `/v1/orgs/${ORG}/tests`, { name: 'Synthetic Test' })).json(),
     );
     const r = await call('POST', `/v1/orgs/${ORG}/tests/${created.test.id}/publish`, {
@@ -309,7 +310,7 @@ describe('PUT …/tests/:testId (cutoff required, draft only)', () => {
         draftBody({ qualityCutoff }),
       );
       expect(res.status).toBe(200);
-      expect(TestDetailResponse.parse(await res.json()).version.qualityCutoff).toBe(qualityCutoff);
+      expect(TestDraftView.parse(await res.json()).version.qualityCutoff).toBe(qualityCutoff);
     }
   });
 
@@ -329,7 +330,7 @@ describe('PUT …/tests/:testId (cutoff required, draft only)', () => {
 
   it('a freeze-trigger refusal during the replace (published meanwhile) is 409', async () => {
     const s = await setup();
-    s.db.failNext('remove', 'item_versions', new RestError(403, '42501'));
+    s.db.failNext('rpc', 'save_test_draft', new RestError(403, '42501', 'version_frozen'));
     const res = await s.call('PUT', `/v1/orgs/${ORG}/tests/${s.testId}`, draftBody());
     expect(res.status).toBe(409);
   });

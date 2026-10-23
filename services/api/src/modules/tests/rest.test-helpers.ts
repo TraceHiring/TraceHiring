@@ -11,8 +11,8 @@ export type Row = Record<string, unknown>;
 export interface TableHooks {
   /** Defaults and BEFORE INSERT checks; returns the stored row or throws a RestError. */
   insert?: (row: Row, db: FakeDb) => Row;
-  /** BEFORE UPDATE checks; returns the new row or throws. */
-  update?: (oldRow: Row, newRow: Row, db: FakeDb) => Row;
+  /** BEFORE UPDATE checks; returns the new row or throws (async for guards that hash). */
+  update?: (oldRow: Row, newRow: Row, db: FakeDb) => Row | Promise<Row>;
   /** BEFORE DELETE checks; throws to refuse. */
   remove?: (row: Row, db: FakeDb) => void;
   /** Row-level visibility for every operation (RLS). Default: every row is visible. */
@@ -198,10 +198,11 @@ export const fakeDb = (
         rows.filter(visible(table)).filter((r) => db.hooks[table]?.updatable?.(r) ?? true),
         query,
       );
-      const next = targets.map((old) => {
+      const next: { old: Row; row: Row }[] = [];
+      for (const old of targets) {
         const merged = { ...old, ...(patch as Row) };
-        return { old, row: db.hooks[table]?.update?.(old, merged, db) ?? merged };
-      });
+        next.push({ old, row: (await db.hooks[table]?.update?.(old, merged, db)) ?? merged });
+      }
       for (const { old, row } of next) rows[rows.indexOf(old)] = row;
       return next.map(({ row }) => project(row, query.select)) as T[];
     },
