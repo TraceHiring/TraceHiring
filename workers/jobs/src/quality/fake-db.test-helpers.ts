@@ -106,6 +106,89 @@ export const qualityHandlers: Record<string, Handler> = {
       .filter((r) => used.has(r['id']))
       .map((r) => ({ id: r['id'], criteria: r['criteria'], content_sha256: r['content_sha256'] }));
   },
+  // Package v2 (spec m1 R5-19): the same joins as the SQL, over plain rows.
+  [SQL.versionV2]: (db, [org, tv]) =>
+    visible(db, 'test_versions', org)
+      .filter((r) => r['id'] === tv)
+      .map((r) => ({
+        quality_cutoff: r['quality_cutoff'],
+        package_version: r['package_version'] ?? 1,
+      })),
+  [SQL.sectionsV2]: (db, [org, tv]) =>
+    visible(db, 'sections', org)
+      .filter((r) => r['test_version_id'] === tv)
+      .sort((a, b) => Number(a['position']) - Number(b['position']))
+      .map((r) => ({
+        id: r['id'],
+        position: r['position'],
+        weight: r['weight'],
+        draw_count: r['draw_count'] ?? null,
+      })),
+  [SQL.drawn]: (db, [org, s]) => {
+    const sectionOf = (r: Row) =>
+      visible(db, 'sections', org).find((x) => x['id'] === r['section_id']);
+    return visible(db, 'session_items', org)
+      .filter((r) => r['session_id'] === s && (sectionOf(r)?.['draw_count'] ?? null) !== null)
+      .map((r) => ({
+        r,
+        i: visible(db, 'item_versions', org).find((x) => x['id'] === r['item_version_id']),
+      }))
+      .filter((x): x is { r: Row; i: Row } => x.i !== undefined)
+      .sort(
+        (a, b) =>
+          Number(sectionOf(a.r)?.['position']) - Number(sectionOf(b.r)?.['position']) ||
+          Number(a.r['position']) - Number(b.r['position']),
+      )
+      .map(({ r, i }) => ({
+        id: r['id'],
+        item_version_id: r['item_version_id'],
+        section_id: r['section_id'],
+        position: r['position'],
+        item_variant_id: r['item_variant_id'] ?? null,
+        format: i['format'],
+        stem: i['stem'],
+        rubric_version_id: i['rubric_version_id'] ?? null,
+      }));
+  },
+  [SQL.drawnKeys]: (db, [org, s]) => {
+    const items = new Set(
+      visible(db, 'session_items', org)
+        .filter((r) => r['session_id'] === s && r['item_variant_id'] == null)
+        .map((r) => r['item_version_id']),
+    );
+    return visible(db, 'item_answer_keys', org)
+      .filter((r) => items.has(r['item_version_id']))
+      .map((r) => ({ item_version_id: r['item_version_id'], option_id: r['option_id'] }));
+  },
+  [SQL.variantKeys]: (db, [org, s]) => {
+    const variants = new Set(
+      visible(db, 'session_items', org)
+        .filter((r) => r['session_id'] === s && r['item_variant_id'] != null)
+        .map((r) => r['item_variant_id']),
+    );
+    return visible(db, 'item_variant_keys', org)
+      .filter((r) => variants.has(r['item_variant_id']))
+      .map((r) => ({ item_variant_id: r['item_variant_id'], option_id: r['option_id'] }));
+  },
+  [SQL.rubricsV2]: (db, [org, tv, s]) => {
+    const drawnItems = new Set(
+      visible(db, 'session_items', org)
+        .filter((r) => r['session_id'] === s)
+        .map((r) => r['item_version_id']),
+    );
+    const used = new Set(
+      visible(db, 'item_versions', org)
+        .filter(
+          (r) =>
+            (r['test_version_id'] === tv || drawnItems.has(r['id'])) &&
+            r['rubric_version_id'] != null,
+        )
+        .map((r) => r['rubric_version_id']),
+    );
+    return visible(db, 'rubric_versions', org)
+      .filter((r) => used.has(r['id']))
+      .map((r) => ({ id: r['id'], criteria: r['criteria'], content_sha256: r['content_sha256'] }));
+  },
   [SQL.served]: (db, [org, s]) =>
     visible(db, 'session_items', org)
       .filter((r) => r['session_id'] === s)

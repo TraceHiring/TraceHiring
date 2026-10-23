@@ -9,11 +9,17 @@
 // (rule 9) -> hash-check final.json and the start photo (R2) -> sessions, session_items, responses, media_objects
 // (verified photo only), reports, invitation `submitted`, key.
 //
+// Package v2 (spec m1 R5-19, R5-42, R5-47, R5-59 a): the session_items rows are built by ./draws.ts before anything is
+// read (one per drawn pool item at its draw position, served facts merged; inline rows as D1) and inserted in one
+// statement; answers still map to items only through served[] (position -> item), so an answer at a position with
+// no served row is `mirror_final_invalid` (retry, then the DLQ).
+//
 // The job writes the rows itself rather than through private.mirror_session because the carried C1b binding needs
 // a photo the head check refused to be dropped while the message still names it, and mirror_session refuses a
 // message with neither a photo nor a skip reason (see docs/reviews/D1-r2-writer-report.md).
 import { isStorableText, type SessionMirrorMessage } from '@trace/shared/contracts/candidate';
 import { jobKey, type EvidenceReader, type SqlTx } from '@trace/shared/jobs';
+import { sessionItemsV2 } from './draws.js';
 import { readFinalAnswers, sha256Hex, verifiedPhoto } from './evidence.js';
 import {
   consentExists,
@@ -25,6 +31,7 @@ import {
   lockInvitation,
   submitInvitation,
   upsertItems,
+  upsertItemsV2,
   upsertSession,
   type ResponseInsert,
 } from './writes.js';
@@ -106,6 +113,8 @@ const runMirrorUnsafe = async (message: SessionMirrorMessage, deps: MirrorDeps):
   if (message.served.some((s) => !Number.isInteger(s.position) || s.position < 1)) {
     return fail('mirror_bad_message');
   }
+  // Package v2 (spec m1 R5-42): every row is built, and every invariant checked, before anything is read or written.
+  const rowsV2 = message.v === 2 ? sessionItemsV2(message) : null;
 
   const invitation = await lockInvitation(tx, orgId, message.invitationId);
   if (invitation === null) return fail('mirror_invitation_missing');
@@ -144,16 +153,19 @@ const runMirrorUnsafe = async (message: SessionMirrorMessage, deps: MirrorDeps):
     mirrorSeq: message.mirrorSeq,
     receiptRef: message.receiptRef,
   });
-  const sessionItem = await upsertItems(
-    tx,
-    orgId,
-    sessionId,
-    message.served.map((s) => ({
-      item_version_id: s.itemVersionId,
-      position: s.position,
-      served_at: s.servedAt,
-    })),
-  );
+  const sessionItem =
+    rowsV2 === null
+      ? await upsertItems(
+          tx,
+          orgId,
+          sessionId,
+          message.served.map((s) => ({
+            item_version_id: s.itemVersionId,
+            position: s.position,
+            served_at: s.servedAt,
+          })),
+        )
+      : await upsertItemsV2(tx, orgId, sessionId, rowsV2);
   await insertResponses(
     tx,
     orgId,

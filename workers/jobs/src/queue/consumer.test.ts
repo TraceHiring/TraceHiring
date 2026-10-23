@@ -548,7 +548,7 @@ describe('processBatch: v1 and v2 (spec m1 R5-8)', () => {
       level: 'error',
       service: 'jobs',
       event: 'queue.mirror_invariant',
-      data: { code: 'served_missing_from_draw' },
+      data: { invariant: 'served_missing_from_draw' },
     });
     expect(reports).toHaveLength(1);
     expect(JSON.stringify(reports)).toContain('served_missing_from_draw');

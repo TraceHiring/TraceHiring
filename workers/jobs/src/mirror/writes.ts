@@ -8,6 +8,7 @@
 // same message serialise: the second waits, then (READ COMMITTED) finds the committed key and stops. Every insert is
 // ON CONFLICT DO NOTHING followed by a re-read, so a replay returns the same ids.
 import type { SqlTx } from '@trace/shared/jobs';
+import type { SessionItemInsert } from './draws.js';
 
 export const SQL = {
   lockInvitation:
@@ -32,6 +33,18 @@ export const SQL = {
     'as x(item_version_id uuid, position int, served_at timestamptz) on conflict do nothing',
   items:
     'select id::text as id, item_version_id::text as item_version_id, position::int as position ' +
+    'from public.session_items where org_id = $1::uuid and session_id = $2::uuid',
+  // Package v2 (spec m1 R5-19, R5-39 a, R5-42): the section, variant, option order and draw seed hash are written; a
+  // drawn item never served has served_at null. One statement per session, so every row is inserted exactly once.
+  insertItemsV2:
+    'insert into public.session_items (org_id, session_id, section_id, item_version_id, position, served_at, ' +
+    'item_variant_id, option_order, draw_seed_sha256) select $1::uuid, $2::uuid, x.section_id, x.item_version_id, ' +
+    'x.position, x.served_at, x.item_variant_id, x.option_order, x.draw_seed_sha256 ' +
+    'from jsonb_to_recordset($3::text::jsonb) as x(section_id uuid, item_version_id uuid, position int, ' +
+    'served_at timestamptz, item_variant_id uuid, option_order jsonb, draw_seed_sha256 text) on conflict do nothing',
+  itemsV2:
+    'select id::text as id, item_version_id::text as item_version_id, section_id::text as section_id, ' +
+    'position::int as position, (served_at is not null) as served ' +
     'from public.session_items where org_id = $1::uuid and session_id = $2::uuid',
   insertResponses:
     'insert into public.responses (org_id, session_id, session_item_id, answer_kind, final_text, final_choice, ' +
@@ -152,6 +165,42 @@ export const upsertItems = async (
   for (const s of served)
     if (!byItem.has(s.item_version_id)) throw new Error('mirror_items_not_stored');
   return byItem;
+};
+
+/**
+ * Package v2: inserts the session's rows (once) and returns session_item ids by item version id. The stored rows
+ * must be exactly the ones built from the message (same section, position and served state), else nothing commits.
+ */
+export const upsertItemsV2 = async (
+  tx: SqlTx,
+  orgId: string,
+  sessionId: string,
+  rows: readonly SessionItemInsert[],
+): Promise<Map<string, string>> => {
+  if (rows.length > 0) {
+    await tx.query(SQL.insertItemsV2, [orgId, sessionId, JSON.stringify(rows)]);
+  }
+  const stored = await tx.query<{
+    id: string;
+    item_version_id: string;
+    section_id: string;
+    position: number;
+    served: boolean;
+  }>(SQL.itemsV2, [orgId, sessionId]);
+  const byItem = new Map(stored.map((r) => [r.item_version_id, r]));
+  if (stored.length !== rows.length) throw new Error('mirror_items_mismatch');
+  for (const row of rows) {
+    const s = byItem.get(row.item_version_id);
+    if (s === undefined) throw new Error('mirror_items_not_stored');
+    if (
+      s.section_id !== row.section_id ||
+      s.position !== row.position ||
+      s.served !== (row.served_at !== null)
+    ) {
+      throw new Error('mirror_items_mismatch');
+    }
+  }
+  return new Map(stored.map((r) => [r.item_version_id, r.id]));
 };
 
 export const insertResponses = async (
