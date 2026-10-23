@@ -46,14 +46,24 @@ import {
   SessionGrantRpcIn,
   SessionGrantRpcOut,
   SessionMirrorMessage,
+  SessionMirrorMessageV1,
+  SessionMirrorMessageV2,
   SessionStartedRpcIn,
   SessionStartedRpcOut,
   SessionStartReq,
   SessionStartRes,
   SessionView,
+  SessionViewV2,
+  ServedItemV2,
+  SessionStartResV2,
+  SessionAttachResV2,
   SubmitReq,
   TestPackage,
+  TestPackageV2,
   discardIdentityKeys,
+  checkMirrorV2,
+  ItemGetQuery,
+  MirrorInvariantError,
 } from './contracts-candidate.js';
 import {
   allObjectsStrict,
@@ -430,6 +440,7 @@ describe('CandidateError codes (§4.2)', () => {
     link_expired: 410,
     link_revoked: 410,
     closed: 410,
+    section_closed: 410, // M1 R5-20: an item GET for a closed or passed forward-only position
     out_of_order: 409,
     too_large: 413,
     bad_media: 415,
@@ -800,6 +811,11 @@ describe('candidate-facing responses carry no score, band, grade, outcome, cutof
     ['EventBatchAck', EventBatchAck],
     ['OkRes', OkRes],
     ['CandidateErrorBody', CandidateErrorBody],
+    // M1 (R5-9): the v2 session shapes the candidate reads.
+    ['SessionViewV2', SessionViewV2],
+    ['ServedItemV2', ServedItemV2],
+    ['SessionStartResV2', SessionStartResV2],
+    ['SessionAttachResV2', SessionAttachResV2],
   ];
   it.each(responses)('%s', (_name, schema) => {
     expect(keysMatching(schema, FORBIDDEN)).toEqual([]);
@@ -818,6 +834,7 @@ describe('candidate-facing responses carry no score, band, grade, outcome, cutof
       ClientEvent,
       CandidateTokenClaims,
       SessionMirrorMessage,
+      TestPackageV2,
       ...Object.values(CandidateRpcSchemas).flatMap((pair) => [pair.in, pair.out]),
     ];
     for (const schema of all) expect(allObjectsStrict(schema)).toBe(true);
@@ -919,7 +936,8 @@ describe('EvidenceEventLine (events.ndjson, L-21, rule 7)', () => {
 
 /** Keys of the signal envelope and payload (everything in ClientEvent except answer-only keys). */
 function isSignalKey(key: string): boolean {
-  return !['p', 'd', 'i', 'option'].includes(key);
+  // Answer-edit keys, and section.finish's sectionId (M1): neither kind is an evidence line.
+  return !['p', 'd', 'i', 'option', 'sectionId'].includes(key);
 }
 
 describe('FinalAnswers (final.json, §4.4)', () => {
@@ -1100,5 +1118,647 @@ describe('candidate text is storable (no NUL, no lone surrogate)', () => {
     });
     expect(r.success).toBe(false);
     expect(JSON.stringify(r.error?.issues)).not.toContain('secret');
+  });
+});
+
+// ==== M1 candidate session v2 (specs/m1-test-authoring.md §4.6, §5; R5-8, R5-9, R5-19, R5-20, R5-42) ===============
+
+const KEY_LIKE = /^key$|answer|correct|rubric|solution|weight|cutoff|score|grade|outcome/i;
+
+describe('M1 client events and ack (R5-20)', () => {
+  const finish = { seq: 3, t: 9000, kind: 'section.finish', sectionId: id(20) };
+  it('section.finish {sectionId} joins the union; the v1 events are unchanged', () => {
+    expect(ClientEvent.parse(finish)).toEqual(finish);
+    expect(ok(ClientEvent, { ...finish, sectionId: 'x' })).toBe(false);
+    expect(ok(ClientEvent, { seq: 3, t: 0, kind: 'section.finish' })).toBe(false);
+    expect(ok(ClientEvent, { ...finish, position: 2 })).toBe(false);
+    expect(ok(EventBatchReq, { streamId: id(31), events: [finish] })).toBe(true);
+  });
+  it('item.view is not an event (dropped by R5-20)', () => {
+    expect(ok(ClientEvent, { seq: 3, t: 0, kind: 'item.view', position: 2 })).toBe(false);
+  });
+  it('section.finish is not an evidence line and not a signal', () => {
+    expect(ok(ClientSignal, finish)).toBe(false);
+    const line = { gseq: 1, streamId: id(31), t: 0, tServer: T1, kind: 'section.finish' };
+    expect(ok(EvidenceEventLine, { ...line, sectionId: id(20) })).toBe(false);
+  });
+  const ack = { ackSeq: 12, serverNow: T0, deadlineAt: T1, state: 'in_progress' };
+  it('the ack may list refusedSeqs: acknowledged, never applied', () => {
+    expect(EventBatchAck.parse(ack)).toEqual(ack);
+    const refused = { ...ack, refusedSeqs: [11, 12] };
+    expect(EventBatchAck.parse(refused)).toEqual(refused);
+    expect(ok(EventBatchAck, { ...ack, refusedSeqs: [] })).toBe(true);
+    expect(ok(EventBatchAck, { ...ack, refusedSeqs: [13] })).toBe(false); // beyond the acknowledged mark
+    expect(ok(EventBatchAck, { ...ack, refusedSeqs: [0] })).toBe(false);
+    expect(ok(EventBatchAck, { ...ack, refusedSeqs: [11, 11] })).toBe(false);
+    expect(ok(EventBatchAck, { ...ack, refusedSeqs: [1.5] })).toBe(false);
+    const many = {
+      ...ack,
+      ackSeq: 500,
+      refusedSeqs: Array.from({ length: 101 }, (_v, i) => i + 1),
+    };
+    expect(ok(EventBatchAck, many)).toBe(false);
+  });
+  it('section_closed is a 410 with a plain {error} body', () => {
+    expect(CANDIDATE_ERROR_STATUS.section_closed).toBe(410);
+    expect(CandidateErrorBody.parse({ error: 'section_closed' })).toEqual({
+      error: 'section_closed',
+    });
+    expect(ok(OutOfOrderBody, { error: 'section_closed', ackSeq: 1 })).toBe(false);
+  });
+});
+
+const sectionA = id(70);
+const sectionB = id(71);
+const twoOptions = [
+  { id: 'a', label: 'One' },
+  { id: 'b', label: 'Two' },
+];
+const pkgItem = (n: number, sectionId: string, extra: Record<string, unknown> = {}) => ({
+  sectionId,
+  itemVersionId: id(1000 + n),
+  itemId: id(2000 + n),
+  kind: 'mcq',
+  prompt: `[synthetic] Item ${n}`,
+  options: twoOptions,
+  skillKey: 'quant',
+  difficultyBand: n % 5,
+  exposureAtPublish: n % 3,
+  ...extra,
+});
+const writtenPkgItem = {
+  sectionId: sectionB,
+  itemVersionId: id(1004),
+  itemId: id(2004),
+  kind: 'written',
+  prompt: '[synthetic] Write a reply',
+  maxChars: 2000,
+  skillKey: 'written_communication',
+  difficultyBand: 2,
+  exposureAtPublish: 0,
+};
+const secA = {
+  id: sectionA,
+  title: 'Quant',
+  position: 1,
+  format: 'mcq',
+  navigation: 'free',
+  shuffleItems: true,
+  shuffleOptions: true,
+  draw: { count: 2, strata: [] as unknown[] },
+};
+const secB = {
+  id: sectionB,
+  title: 'Writing',
+  position: 2,
+  format: 'written',
+  navigation: 'forward_only',
+  shuffleItems: false,
+  shuffleOptions: false,
+  pasteRule: 'allowed_logged',
+  draw: null,
+};
+const variantItem = pkgItem(2, sectionA, {
+  media: [{ hash: HEX, ext: 'png', alt: 'A chart' }],
+  variants: [
+    {
+      variantId: id(3001),
+      prompt: '[synthetic] Variant 1',
+      options: [
+        { id: 'a', label: '3' },
+        { id: 'b', label: '4' },
+      ],
+    },
+  ],
+});
+const pkgV2 = {
+  v: 2,
+  testVersionId: id(50),
+  rulesetVersionId: id(51),
+  title: 'Sample v2 test',
+  language: 'en',
+  durationSeconds: 1800,
+  heartbeatSeconds: 10,
+  signalCatalogVersion: 'd1-signals-v1',
+  captureSignals: ['paste', 'drop', 'untrusted_input'],
+  sections: [secA, secB],
+  items: [pkgItem(1, sectionA), variantItem, pkgItem(3, sectionA), writtenPkgItem],
+};
+const withItems = (items: unknown[]) => ({ ...pkgV2, items });
+const withSections = (sections: unknown[]) => ({ ...pkgV2, sections });
+const replaceFirst = (item: unknown) => withItems([item, ...pkgV2.items.slice(1)]);
+const replaceWritten = (item: unknown) => withItems([...pkgV2.items.slice(0, 3), item]);
+
+describe('TestPackageV2 (§5; AT-M1-20)', () => {
+  it('accepts a package with a pool section and an inline section', () => {
+    expect(TestPackageV2.parse(pkgV2)).toEqual(pkgV2);
+  });
+  it('the v1 package is unchanged and is not a v2 package', () => {
+    expect(ok(TestPackageV2, { ...pkgV2, v: 1 })).toBe(false);
+    expect(ok(TestPackage, pkgV2)).toBe(false);
+  });
+  it('AT-M1-20: no key-like field at any depth (schema walk); skillKey is the only "key" name', () => {
+    expect(keysMatching(TestPackageV2, KEY_LIKE)).toEqual([]);
+    expect(keysMatching(TestPackageV2, /key/i)).toEqual(['skillKey']);
+    // `difficultyBand` is a difficulty stratum (0-4), not an integrity band; it is the only "band" name.
+    expect(keysMatching(TestPackageV2, /band/i)).toEqual(['difficultyBand']);
+    for (const extra of ['key', 'correctOptionId', 'answer', 'answerKey', 'rubric', 'weight']) {
+      expect(
+        ok(TestPackageV2, replaceFirst({ ...pkgItem(1, sectionA), [extra]: 'a' })),
+        extra,
+      ).toBe(false);
+    }
+    expect(ok(TestPackageV2, { ...pkgV2, qualityCutoff: 40 })).toBe(false);
+  });
+  const strata = (rows: unknown[], count = 2) =>
+    withSections([{ ...secA, draw: { count, strata: rows } }, secB]);
+  it.each([
+    ['an item in an unknown section', () => withItems([...pkgV2.items, pkgItem(9, id(99))])],
+    ['a draw larger than the section', () => strata([], 4)],
+    ['a draw of 0', () => strata([], 0)],
+    [
+      'strata that do not sum to the draw',
+      () => strata([{ skillKey: 'quant', difficultyBand: 1, count: 1 }]),
+    ],
+    [
+      'a stratum beyond its eligible items',
+      () => strata([{ skillKey: 'quant', difficultyBand: 1, count: 2 }]),
+    ],
+    [
+      'a section without items',
+      () => withSections([secA, secB, { ...secB, id: id(72), position: 3 }]),
+    ],
+    ['duplicate section ids', () => withSections([secA, { ...secB, id: sectionA }])],
+    ['duplicate section positions', () => withSections([secA, { ...secB, position: 1 }])],
+    ['an item version twice', () => withItems([...pkgV2.items, pkgItem(1, sectionA)])],
+    [
+      'an mcq item without options',
+      () => replaceFirst({ ...pkgItem(1, sectionA), options: undefined }),
+    ],
+    [
+      'a written item with options',
+      () => replaceWritten({ ...writtenPkgItem, options: twoOptions }),
+    ],
+    [
+      'variants on a written item',
+      () =>
+        replaceWritten({
+          ...writtenPkgItem,
+          variants: [{ variantId: id(3009), prompt: 'x', options: twoOptions }],
+        }),
+    ],
+    ['a timer on one section only', () => withSections([{ ...secA, timeLimitSeconds: 600 }, secB])],
+    ['an unknown navigation', () => withSections([{ ...secA, navigation: 'back' }, secB])],
+    ['a difficulty band of 5', () => replaceFirst({ ...pkgItem(1, sectionA), difficultyBand: 5 })],
+    ['an unknown captured signal', () => ({ ...pkgV2, captureSignals: ['gaze'] })],
+    ['a duplicate captured signal', () => ({ ...pkgV2, captureSignals: ['paste', 'paste'] })],
+    [
+      'an image with a bad extension',
+      () => replaceFirst({ ...pkgItem(1, sectionA), media: [{ hash: HEX, ext: 'gif', alt: 'x' }] }),
+    ],
+    [
+      'an image without alt text',
+      () => replaceFirst({ ...pkgItem(1, sectionA), media: [{ hash: HEX, ext: 'png', alt: '' }] }),
+    ],
+    ['a heartbeat other than 10', () => ({ ...pkgV2, heartbeatSeconds: 5 })],
+    // Review fixes (R3-2, R5-24, strata): exposure frozen at publish; section format drives the paste rule.
+    [
+      'an item without exposureAtPublish',
+      () => replaceFirst({ ...pkgItem(1, sectionA), exposureAtPublish: undefined }),
+    ],
+    [
+      'a negative exposureAtPublish',
+      () => replaceFirst({ ...pkgItem(1, sectionA), exposureAtPublish: -1 }),
+    ],
+    [
+      'a fractional exposureAtPublish',
+      () => replaceFirst({ ...pkgItem(1, sectionA), exposureAtPublish: 1.5 }),
+    ],
+    ['a section without a format', () => withSections([{ ...secA, format: undefined }, secB])],
+    ['a section of format voice', () => withSections([{ ...secA, format: 'voice' }, secB])],
+    [
+      'a paste rule on an mcq section',
+      () => withSections([{ ...secA, pasteRule: 'blocked' }, secB]),
+    ],
+    [
+      'a written section without a paste rule',
+      () => withSections([secA, { ...secB, pasteRule: undefined }]),
+    ],
+    [
+      'a written section free to navigate',
+      () => withSections([secA, { ...secB, navigation: 'free' }]),
+    ],
+    [
+      'an item whose kind differs from its section format',
+      () =>
+        withItems([
+          ...pkgV2.items,
+          { ...writtenPkgItem, itemVersionId: id(1005), sectionId: sectionA },
+        ]),
+    ],
+    [
+      'a repeated (skillKey, difficultyBand) stratum',
+      () =>
+        strata([
+          { skillKey: 'quant', difficultyBand: 1, count: 1 },
+          { skillKey: 'quant', difficultyBand: 1, count: 1 },
+        ]),
+    ],
+  ])('refuses %s', (_label, make) => {
+    expect(ok(TestPackageV2, make())).toBe(false);
+  });
+  it('R3-2: exposureAtPublish is in the package and never reaches the candidate', () => {
+    expect(keysMatching(TestPackageV2, /exposure/i)).toEqual(['exposureAtPublish']);
+    expect(keysMatching(ServedItemV2, /exposure/i)).toEqual([]);
+    expect(keysMatching(SessionViewV2, /exposure/i)).toEqual([]);
+    expect(ok(ServedItemV2, { ...servedV2, exposureAtPublish: 0 })).toBe(false);
+  });
+  it('accepts timers on every section and strata that fit', () => {
+    const timed = withSections([
+      { ...secA, timeLimitSeconds: 900 },
+      { ...secB, timeLimitSeconds: 900 },
+    ]);
+    expect(ok(TestPackageV2, timed)).toBe(true);
+    const fits = [
+      { skillKey: 'quant', difficultyBand: 1, count: 1 },
+      { skillKey: 'quant', difficultyBand: 2, count: 1 },
+    ];
+    expect(ok(TestPackageV2, strata(fits))).toBe(true);
+  });
+  it('holds up to 5,000 eligible items but serves a candidate at most 100 (R5-9)', () => {
+    const big = Array.from({ length: 4999 }, (_v, i) => pkgItem(10 + i, sectionA));
+    const pkg5000 = withItems([...big, writtenPkgItem]);
+    expect(ok(TestPackageV2, pkg5000)).toBe(true);
+    expect(ok(TestPackageV2, withItems([...big, pkgItem(9000, sectionA), writtenPkgItem]))).toBe(
+      false,
+    );
+    const drawOf = (count: number) => [{ ...secA, draw: { count, strata: [] } }, secB];
+    expect(ok(TestPackageV2, { ...pkg5000, sections: drawOf(100) })).toBe(false); // 100 drawn + 1 inline
+    expect(ok(TestPackageV2, { ...pkg5000, sections: drawOf(99) })).toBe(true);
+  });
+});
+
+const servedV2 = {
+  position: 1,
+  kind: 'mcq',
+  sectionId: sectionA,
+  prompt: '[synthetic] Variant 1',
+  options: [
+    { id: 'b', label: '4' },
+    { id: 'a', label: '3' },
+  ],
+  media: [{ hash: HEX, alt: 'A chart' }],
+  variantId: id(3001),
+  servedAt: T0,
+};
+const sectionViewA = {
+  id: sectionA,
+  title: 'Quant',
+  position: 1,
+  format: 'mcq',
+  navigation: 'free',
+  state: 'open',
+  deadlineAt: T1,
+};
+const sectionViewB = {
+  id: sectionB,
+  title: 'Writing',
+  position: 2,
+  format: 'written',
+  navigation: 'forward_only',
+  pasteRule: 'allowed_logged',
+  state: 'not_entered',
+};
+const viewV2 = {
+  v: 2,
+  sessionId: id(30),
+  state: 'in_progress',
+  serverNow: T0,
+  startedAt: T0,
+  deadlineAt: T1,
+  streamId: id(31),
+  heartbeatSeconds: 10,
+  title: 'Sample v2 test',
+  sections: [sectionViewA, sectionViewB],
+  items: [{ position: 1, sectionId: sectionA, kind: 'mcq', servedAt: T0 }],
+  answers: [{ position: 1, choice: 'b' }],
+};
+
+describe('ServedItemV2 and SessionViewV2 (R5-9, §4.6)', () => {
+  it('a served item carries media {hash, alt}, options in served order and its variant id', () => {
+    expect(ServedItemV2.parse(servedV2)).toEqual(servedV2);
+    const plain = { ...servedV2, media: undefined, variantId: undefined };
+    expect(ok(ServedItemV2, plain)).toBe(true);
+    const keyed = { ...servedV2, media: [{ hash: HEX, alt: 'x', key: 'item-media/x.png' }] };
+    expect(ok(ServedItemV2, keyed)).toBe(false);
+    const five = { ...servedV2, media: Array.from({ length: 5 }, () => ({ hash: HEX, alt: 'x' })) };
+    expect(ok(ServedItemV2, five)).toBe(false);
+    expect(ok(ServedItemV2, { ...servedV2, kind: 'written' })).toBe(false);
+    expect(ok(ServedItemV2, { ...servedV2, correctOptionId: 'b' })).toBe(false);
+    expect(keysMatching(ServedItemV2, KEY_LIKE)).toEqual([]);
+  });
+  it('a view lists per-section navigation, paste rule, state and deadline', () => {
+    expect(SessionViewV2.parse(viewV2)).toEqual(viewV2);
+    const closed = { ...viewV2, sections: [{ ...sectionViewA, state: 'closed' }, sectionViewB] };
+    expect(ok(SessionViewV2, closed)).toBe(true);
+    const receipt = { receiptRef: 'ABCD1234', submittedAt: T1 };
+    expect(ok(SessionViewV2, { ...viewV2, receipt })).toBe(true);
+  });
+  it.each([
+    ['the v1 pasteBlocked flag', { pasteBlocked: true }],
+    ['v 1', { v: 1 }],
+    [
+      'an unknown section state',
+      { sections: [{ ...sectionViewA, state: 'paused' }, sectionViewB] },
+    ],
+    [
+      'an unknown paste rule',
+      { sections: [sectionViewA, { ...sectionViewB, pasteRule: 'allowed' }] },
+    ],
+    // R5-24: the paste rule belongs to written sections only, and every written section has one.
+    [
+      'a paste rule on an mcq section',
+      { sections: [{ ...sectionViewA, pasteRule: 'blocked' }, sectionViewB] },
+    ],
+    [
+      'a written section without a paste rule',
+      { sections: [sectionViewA, { ...sectionViewB, pasteRule: undefined }] },
+    ],
+    [
+      'a written section free to navigate',
+      { sections: [sectionViewA, { ...sectionViewB, navigation: 'free' }] },
+    ],
+    [
+      'a section without a format',
+      { sections: [{ ...sectionViewA, format: undefined }, sectionViewB] },
+    ],
+    [
+      '11 sections',
+      {
+        sections: Array.from({ length: 11 }, (_v, i) => ({
+          ...sectionViewA,
+          id: id(80 + i),
+          position: i + 1,
+        })),
+      },
+    ],
+    [
+      '101 items',
+      {
+        items: Array.from({ length: 101 }, (_v, i) => ({
+          position: i + 1,
+          sectionId: sectionA,
+          kind: 'mcq',
+          servedAt: null,
+        })),
+      },
+    ],
+    [
+      'an item in an unknown section',
+      { items: [{ position: 1, sectionId: id(99), kind: 'mcq', servedAt: T0 }] },
+    ],
+  ])('refuses %s', (_label, patch) => {
+    expect(ok(SessionViewV2, { ...viewV2, ...patch })).toBe(false);
+  });
+  it('the v1 view is unchanged and is not a v2 view', () => {
+    expect(ok(SessionView, view)).toBe(true);
+    expect(ok(SessionViewV2, view)).toBe(false);
+    expect(ok(SessionView, viewV2)).toBe(false);
+  });
+  it('start and attach responses carry the v2 view', () => {
+    expect(ok(SessionAttachResV2, { view: viewV2 })).toBe(true);
+    expect(ok(SessionAttachResV2, { view })).toBe(false);
+    expect(ok(SessionStartResV2, { sessionToken: FAKE_JWS, expiresAt: T1, view: viewV2 })).toBe(
+      true,
+    );
+    const receipt = { receiptRef: 'ABCD1234', submittedAt: T1 };
+    expect(ok(SessionStartResV2, { state: 'submitted', receipt })).toBe(true);
+  });
+});
+
+// A v1 mirror message exactly as the D1 jobs fixture builds it (workers/jobs/src/queue/test-fixtures.ts), so a v1
+// message and a sweep-re-enqueued v1 mirror.json keep parsing through the union (R5-8, AT-M1-21).
+const mirrorV1 = {
+  v: 1,
+  jobKind: 'session_mirror',
+  mirrorSeq: 1,
+  jobKey: `${id(60)}:session_mirror:${id(51)}`,
+  sessionId: id(60),
+  orgId: id(42),
+  invitationId: id(41),
+  testVersionId: id(50),
+  rulesetVersionId: id(51),
+  consentId: id(61),
+  state: 'submitted',
+  receiptRef: 'ABCD1234',
+  startedAt: '2026-10-15T09:00:00.000Z',
+  deadlineAt: '2026-10-15T10:00:00.000Z',
+  submittedAt: '2026-10-15T09:30:00.000Z',
+  lastEventSeq: 42,
+  streamCount: 2,
+  resumeCount: 1,
+  served: [{ position: 1, itemVersionId: id(52), servedAt: '2026-10-15T09:00:05.000Z' }],
+  evidence: {
+    finalKey: `sessions/${id(42)}/${id(60)}/final.json`,
+    finalSha256: HEX,
+    eventsKey: `sessions/${id(42)}/${id(60)}/events.ndjson`,
+    eventsSha256: HEX,
+  },
+  replay: 'ok',
+  signalCatalogVersion: 'd1-signals-v1',
+  coverage: { activeMs: 600000, coveredMs: 590000 },
+  gaps: [],
+  photo: null,
+  photoSkippedReason: 'declined',
+};
+const servedPool = {
+  position: 1,
+  itemVersionId: id(1002),
+  servedAt: T0,
+  sectionId: sectionA,
+  itemVariantId: id(3001),
+  optionOrder: ['b', 'a'],
+  drawSeedSha256: HEX,
+};
+const servedInline = { position: 3, itemVersionId: id(1004), servedAt: T1, sectionId: sectionB };
+const drawA = {
+  sectionId: sectionA,
+  itemVersionIds: [id(1002), id(1001)],
+  itemVariantIds: [id(3001), null],
+};
+const mirrorV2 = {
+  ...mirrorV1,
+  v: 2,
+  served: [servedPool, servedInline],
+  poolSectionIds: [sectionA],
+  draws: [drawA],
+};
+
+describe('SessionMirrorMessage v1 | v2 (R5-8, R5-19, R5-42; AT-M1-21)', () => {
+  it('a v1 message (the D1 jobs fixture) still parses, through the union and the v1 member', () => {
+    expect(SessionMirrorMessage.parse(mirrorV1)).toEqual(mirrorV1);
+    expect(SessionMirrorMessageV1.parse(mirrorV1)).toEqual(mirrorV1);
+    expect(ok(SessionMirrorMessageV2, mirrorV1)).toBe(false);
+  });
+  it('a sweep-re-enqueued v1 mirror.json (JSON round trip) still parses', () => {
+    expect(ok(SessionMirrorMessage, JSON.parse(JSON.stringify(mirrorV1)))).toBe(true);
+  });
+  it('a v2 message with draws parses and narrows on v', () => {
+    const parsed = SessionMirrorMessage.parse(mirrorV2);
+    expect(parsed).toEqual(mirrorV2);
+    if (parsed.v === 2) {
+      expectTypeOf(parsed.draws).toEqualTypeOf<
+        { sectionId: string; itemVersionIds: string[]; itemVariantIds: (string | null)[] }[]
+      >();
+    }
+    expect(ok(SessionMirrorMessage, { ...mirrorV2, served: [], draws: [] })).toBe(true);
+  });
+  it.each([
+    ['a v1 served row (no sectionId) in a v2 message', { served: mirrorV1.served }],
+    ['no draws', { draws: undefined }],
+    ['no pool section list', { poolSectionIds: undefined }],
+    ['a bad draw seed hash', { served: [{ ...servedPool, drawSeedSha256: 'x' }] }],
+    ['an option order of one', { served: [{ ...servedPool, optionOrder: ['a'] }] }],
+    [
+      '101 served rows',
+      {
+        served: Array.from({ length: 101 }, (_v, i) => ({
+          ...servedInline,
+          position: i + 1,
+          itemVersionId: id(5000 + i),
+        })),
+      },
+    ],
+    [
+      'a draw of 101 items',
+      {
+        draws: [
+          {
+            sectionId: sectionA,
+            itemVersionIds: Array.from({ length: 101 }, (_v, i) => id(6000 + i)),
+            itemVariantIds: Array.from({ length: 101 }, () => null),
+          },
+        ],
+      },
+    ],
+    ['an extra key', { score: 1 }],
+  ])('refuses the structural fault %s at parse', (_label, patch) => {
+    expect(ok(SessionMirrorMessage, { ...mirrorV2, ...patch })).toBe(false);
+  });
+  it('v2 carries no signal list, answer text, answer key or identity beyond ids', () => {
+    expect(
+      keysMatching(
+        SessionMirrorMessageV2,
+        /signals|text|answer|score|band|name|email|ip$|correct|rubric/i,
+      ),
+    ).toEqual([]);
+    // The only "key" names are v1's storage keys (jobKey, evidence keys, photo key); v2 adds none.
+    expect(keysMatching(SessionMirrorMessageV2, /key/i)).toEqual(
+      keysMatching(SessionMirrorMessageV1, /key/i),
+    );
+    expect(allObjectsStrict(SessionMirrorMessageV2)).toBe(true);
+  });
+});
+
+// Cross-field invariants are not schema refusals: D1's consumer acks a schema failure with no retry, which would drop
+// a session silently. The mirror stage calls checkMirrorV2, so a violation retries and reaches the DLQ (R5-8, R5-42).
+describe('checkMirrorV2 (R5-42, R5-9; review fix 2)', () => {
+  const parse = (patch: Record<string, unknown>) =>
+    SessionMirrorMessageV2.parse({ ...mirrorV2, ...patch });
+  const codeOf = (patch: Record<string, unknown>): string | null => {
+    try {
+      checkMirrorV2(parse(patch));
+      return null;
+    } catch (error) {
+      expect(error).toBeInstanceOf(MirrorInvariantError);
+      return (error as MirrorInvariantError).code;
+    }
+  };
+  it('a valid v2 message passes, with or without served items', () => {
+    expect(codeOf({})).toBeNull();
+    expect(codeOf({ served: [], draws: [] })).toBeNull();
+    expect(codeOf({ served: [servedInline], draws: [] })).toBeNull(); // pool section never entered
+  });
+  it.each([
+    [
+      'a served pool item missing from its draw',
+      { served: [{ ...servedPool, itemVersionId: id(1003) }] },
+      'served_missing_from_draw',
+    ],
+    ['a served pool item whose section has no draw', { draws: [] }, 'served_missing_from_draw'],
+    [
+      'a draw of a section that is not a pool section',
+      { poolSectionIds: [] },
+      'draw_not_pool_section',
+    ],
+    [
+      'a pool section listed twice',
+      { poolSectionIds: [sectionA, sectionA] },
+      'duplicate_pool_section',
+    ],
+    ['two draws for one section', { draws: [drawA, drawA] }, 'duplicate_draw'],
+    [
+      'variant ids not parallel to the draw',
+      { draws: [{ ...drawA, itemVariantIds: [id(3001)] }] },
+      'variant_ids_not_parallel',
+    ],
+    [
+      'an item drawn twice',
+      { draws: [{ ...drawA, itemVersionIds: [id(1002), id(1002)] }] },
+      'item_drawn_twice',
+    ],
+    [
+      'a served variant other than the drawn one',
+      { served: [{ ...servedPool, itemVariantId: id(3002) }] },
+      'served_variant_mismatch',
+    ],
+    [
+      'a served item without its drawn variant',
+      { served: [{ ...servedPool, itemVariantId: undefined }] },
+      'served_variant_mismatch',
+    ],
+    [
+      'an option order with a repeat',
+      { served: [{ ...servedPool, optionOrder: ['a', 'a'] }] },
+      'option_order_not_permutation',
+    ],
+  ])('throws on %s', (_label, patch, code) => {
+    expect(ok(SessionMirrorMessage, { ...mirrorV2, ...patch })).toBe(true); // structurally fine
+    expect(codeOf(patch)).toBe(code);
+  });
+  it('caps the drawn items across all draws at 100 (R5-9)', () => {
+    const sections = Array.from({ length: 3 }, (_v, i) => id(7000 + i));
+    const drawOf = (sectionId: string, n: number, base: number) => ({
+      sectionId,
+      itemVersionIds: Array.from({ length: n }, (_v, i) => id(base + i)),
+      itemVariantIds: Array.from({ length: n }, () => null),
+    });
+    const at = (sizes: number[]) => ({
+      served: [],
+      poolSectionIds: sections,
+      draws: sizes.map((n, k) => drawOf(sections[k] ?? sectionA, n, 8000 + 200 * k)),
+    });
+    expect(codeOf(at([40, 40, 20]))).toBeNull();
+    expect(codeOf(at([40, 40, 21]))).toBe('too_many_drawn');
+  });
+  it('the error names a constant code and carries no message data', () => {
+    const error = new MirrorInvariantError('item_drawn_twice');
+    expect(error.message).toBe('mirror v2 invariant: item_drawn_twice');
+    expect(error.name).toBe('MirrorInvariantError');
+    expect(error).toBeInstanceOf(Error);
+  });
+});
+
+describe('ItemGetQuery (R5-45)', () => {
+  it('coerces afterSeq from the query string', () => {
+    expect(ItemGetQuery.parse({ afterSeq: '5' })).toEqual({ afterSeq: 5 });
+    expect(ItemGetQuery.parse({ afterSeq: '0' })).toEqual({ afterSeq: 0 });
+    expect(ItemGetQuery.parse({})).toEqual({});
+  });
+  it.each([['-1'], ['1.5'], ['x'], ['']])('refuses afterSeq %j', (afterSeq) => {
+    expect(ok(ItemGetQuery, { afterSeq })).toBe(false);
+  });
+  it('refuses any other query key', () => {
+    expect(ok(ItemGetQuery, { afterSeq: '1', position: '2' })).toBe(false);
   });
 });

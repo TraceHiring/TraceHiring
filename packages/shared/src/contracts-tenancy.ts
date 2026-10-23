@@ -104,6 +104,37 @@ const InvitationStatus = z.enum([
   'revoked',
   'blocked_age',
 ]);
+// M1 value lists, repeated here so this file imports no other contract (contracts-m1 imports this one).
+// contracts-tenancy.test.ts proves each equals its contracts-m1 list.
+const ItemFormat = z.enum(['mcq', 'written']); // public.section_format
+const ItemStatus = z.enum(['draft', 'in_review', 'approved', 'not_approved', 'retired']); // public.item_status
+const itemTransition = z
+  .object({
+    item_version_id: z.uuid(),
+    from: ItemStatus,
+    to: ItemStatus,
+    self_approved: z.boolean(),
+  })
+  .strict();
+/** Catalog m1-settings-v1 minus the always-locked settings (a lock row on those is refused). */
+const LockableSettingKey = z.enum([
+  'calibration_warmup',
+  'typing_provenance',
+  'burst_after_tab',
+  'fullscreen_tab_focus',
+  'single_screen',
+  'camera_face_presence',
+  'mic_speech_presence',
+  'explain_probe',
+  'question_copy',
+  'paste_written',
+]);
+const PresetKey = z.enum(['strict', 'standard', 'open_book']);
+const IntegrityCatalogVersion = z.enum(['m1-settings-v1']);
+/** A job's constant failure code (lower snake case), never a message. */
+const JobErrorCode = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
+/** An import job holds at most 2,000 rows and 2,000 images (§4.3, §6.9). */
+const importCount = () => z.int().min(0).max(2000);
 
 export const AUDIT_ACTIONS = [
   'org.create',
@@ -135,6 +166,29 @@ export const AUDIT_ACTIONS = [
   // D1 migration 4: media grants (one media.view per fetch; rule 8).
   'media.link_issued',
   'media.view',
+  // M1 (specs/m1-test-authoring.md R5-14, R5-26): bank, library, pools, templates, settings, imports, drafts, invites.
+  'item.create',
+  'item.submit',
+  'item.approve',
+  'item.not_approved',
+  'item.retire',
+  'item.ai_drafted',
+  'library.copy',
+  'pool.archive',
+  'role_template.publish',
+  'integrity_lock.create',
+  'integrity_lock.delete',
+  'test.integrity_settings',
+  'test.new_version',
+  'import.complete',
+  'import.cancel',
+  'import.fail',
+  'ai_draft.complete',
+  'ai_draft.fail',
+  'member_invite.create',
+  'member_invite.cancel',
+  'member_invite.provisioned',
+  'member_invite.failed',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -194,4 +248,39 @@ export const AuditDetails = {
     })
     .strict(),
   'media.view': z.object({ media_id: z.uuid(), session_id: z.uuid(), link_id: z.uuid() }).strict(),
+  // M1: the exact keys the M1 migrations write. Ids, enums, counts and booleans only; never a stem, topic, email or
+  // name (B0-SEC7, AT-M1-25).
+  'item.create': z.object({ format: ItemFormat }).strict(),
+  'item.submit': itemTransition,
+  'item.approve': itemTransition,
+  'item.not_approved': itemTransition,
+  'item.retire': itemTransition,
+  'item.ai_drafted': z.object({ item_version_id: z.uuid(), ai_draft_job_id: z.uuid() }).strict(),
+  'library.copy': z.object({ count: z.int().min(0), reused: z.int().min(0) }).strict(),
+  'pool.archive': z.object({ pool_id: z.uuid() }).strict(),
+  'role_template.publish': z.object({ version: z.int().min(1) }).strict(),
+  'integrity_lock.create': z.object({ setting_key: LockableSettingKey }).strict(),
+  'integrity_lock.delete': z.object({ setting_key: LockableSettingKey }).strict(),
+  'test.integrity_settings': z
+    .object({ preset_key: PresetKey.nullable(), catalog_version: IntegrityCatalogVersion })
+    .strict(),
+  'test.new_version': z.object({ version_no: z.int().min(1) }).strict(),
+  'import.complete': z
+    .object({
+      import_job_id: z.uuid(),
+      rows_ok: importCount(),
+      rows_error: importCount(),
+      images_ok: importCount(),
+    })
+    .strict(),
+  'import.cancel': z.object({ import_job_id: z.uuid() }).strict(),
+  'import.fail': z.object({ import_job_id: z.uuid(), error_code: JobErrorCode }).strict(),
+  'ai_draft.complete': z
+    .object({ ai_draft_job_id: z.uuid(), drafts_created: z.int().min(0).max(10) })
+    .strict(),
+  'ai_draft.fail': z.object({ ai_draft_job_id: z.uuid(), error_code: JobErrorCode }).strict(),
+  'member_invite.create': z.object({ member_invite_id: z.uuid(), roles: Roles }).strict(),
+  'member_invite.cancel': z.object({ member_invite_id: z.uuid() }).strict(),
+  'member_invite.provisioned': z.object({ member_invite_id: z.uuid() }).strict(),
+  'member_invite.failed': z.object({ member_invite_id: z.uuid() }).strict(),
 } as const satisfies Record<AuditAction, z.ZodType>;

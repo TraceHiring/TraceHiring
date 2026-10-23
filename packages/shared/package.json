@@ -12,6 +12,7 @@
     "./contracts/tenancy": "./src/contracts-tenancy.ts",
     "./contracts/candidate": "./src/contracts-candidate.ts",
     "./contracts/d1": "./src/contracts-d1.ts",
+    "./contracts/m1": "./src/contracts-m1.ts",
     "./canonical-json": "./src/canonical-json.ts",
     "./signal-catalog": "./src/signal-catalog.ts",
     "./canonical-notice": "./src/canonical-notice.ts",
