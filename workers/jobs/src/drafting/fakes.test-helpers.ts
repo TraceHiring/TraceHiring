@@ -115,8 +115,18 @@ const storeOf = (w: FakeWorld, org: string, fail: (m: StoreMethod) => void): Dra
       fail('lockJob');
       const j = visible(jobId);
       if (j === null) return null;
-      const { org_id: _o, drafts_discarded: _d, error_code: _e, ...row } = j;
-      return { ...row };
+      return {
+        id: j.id,
+        workspace_id: j.workspace_id,
+        format: j.format,
+        skill_key: j.skill_key,
+        difficulty: j.difficulty,
+        count: j.count,
+        status: j.status,
+        provider: j.provider,
+        model_id: j.model_id,
+        prompt_version: j.prompt_version,
+      };
     },
     async claim(jobId) {
       fail('claim');

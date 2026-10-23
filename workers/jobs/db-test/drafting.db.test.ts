@@ -175,11 +175,11 @@ describe('drafting job on the real schema', () => {
 
   it('a re-delivery is skipped and adds no draft', async () => {
     expect(await handleDraftMessage(msg(jobId), deps())).toBe('skipped');
-    const [{ n }] = await h.admin.unsafe<{ n: number }[]>(
+    const [count] = await h.admin.unsafe<{ n: number }[]>(
       'select count(*)::int as n from public.item_versions where org_id = $1 and ai_draft_job_id = $2',
       [org, jobId],
     );
-    expect(n).toBe(3);
+    expect(count?.n).toBe(3);
   });
 
   it('the exact-duplicate lookup normalises as the job does', async () => {

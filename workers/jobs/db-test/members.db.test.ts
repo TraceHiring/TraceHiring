@@ -116,7 +116,7 @@ beforeAll(async () => {
   );
   await h.admin.unsafe(
     'insert into public.memberships (org_id, user_id, roles, display_name, status) values ' +
-      "($1, $2, '{admin}', '[synthetic] Admin', 'active'), ($1, $3, '{recruiter}', '[synthetic] Recruiter', 'active')",
+      "($1, $2, '{org_owner,admin}', '[synthetic] Admin', 'active'), ($1, $3, '{recruiter}', '[synthetic] Recruiter', 'active')",
     [org, admin, recruiter],
   );
 });
@@ -177,9 +177,10 @@ describe('member provisioning on the real schema (AT-M1-26)', () => {
       display_name: '[synthetic] Invitee',
     });
     const audit = await h.admin.unsafe<{ action: string }[]>(
-      "select action from public.audit_log where org_id = $1 and action in ('membership.create', " +
-        "'member_invite.provisioned') order by action",
-      [org],
+      'select action from public.audit_log where org_id = $1 and (' +
+        "(action = 'member_invite.provisioned' and object_id = $2::uuid) or " +
+        "(action = 'membership.create' and object_id = $3::uuid)) order by action",
+      [org, id, inv.membership_id],
     );
     expect(audit.map((r) => r.action)).toEqual(['member_invite.provisioned', 'membership.create']);
 
@@ -187,11 +188,11 @@ describe('member provisioning on the real schema (AT-M1-26)', () => {
     const a = auth();
     expect(await handleInviteMessage(msg(id, address('invitee')), deps(a))).toBe('skipped');
     expect(a.calls).toBe(0);
-    const [{ n }] = await h.admin.unsafe<{ n: number }[]>(
+    const [count] = await h.admin.unsafe<{ n: number }[]>(
       'select count(*)::int as n from public.memberships where org_id = $1 and user_id = $2',
       [org, invitee],
     );
-    expect(n).toBe(1);
+    expect(count?.n).toBe(1);
   });
 
   it('E26: a second invite for a user who already holds a live membership is settled as failed', async () => {

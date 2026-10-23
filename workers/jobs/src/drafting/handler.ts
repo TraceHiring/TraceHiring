@@ -123,7 +123,7 @@ const callDrafter = async (
     // The drafter's error text is never kept: it may echo the request.
     return { ok: false, code: timedOut ? 'timeout' : 'drafter_error' };
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
   }
 };
 
