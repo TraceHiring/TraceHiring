@@ -2,8 +2,9 @@
 // `POST/DELETE …/pools/:id/items`; R2-9, R5-54 a, R5-55 a; E3, E4). A pool is a working set of approved bank items of one
 // format in one workspace (the pool_items guard checks both); what a test serves is frozen in section_pool_snapshot at
 // publish, so editing a pool never changes a published test. Every read and write is the caller's (RLS decides).
-// PoolDetail counts the items and the approved ones (a retired item stays in the pool and stops counting, E3) and names
-// the tests whose sections draw from the pool, with their largest draw (the editor shows the size against 10x the draw).
+// PoolDetail counts the items and the approved ones from v_pool_item_counts (R5-64 d; a retired item stays in the pool
+// and stops counting, E3; no pool size cap) and names the tests whose sections draw from the pool, with their largest
+// draw (the editor shows the size against 10x the draw).
 // Adding an item already in the pool is a no-op; ids are checked as a batch of distinct uuids (PoolItemsRequest).
 import {
   PoolDetail,
@@ -50,71 +51,63 @@ const PoolRow = z.object({
 });
 type PoolRow = z.infer<typeof PoolRow>;
 
-/** A package holds at most 5,000 items; the pools one page reads hold at most this many members in all. */
-const MAX_MEMBERS = 10_000;
 /** PoolDetail lists at most this many drawing tests (usedByDrawsTotal counts all of them). */
 const MAX_DRAWS_LISTED = 50;
 
-const MemberRow = z.object({ pool_id: z.uuid(), item_version_id: z.uuid() });
+const CountRow = z.object({
+  pool_id: z.uuid(),
+  item_count: z.coerce.number().int().min(0),
+  approved_count: z.coerce.number().int().min(0),
+});
 const SectionRow = z.object({
   pool_id: z.uuid(),
   test_id: z.uuid(),
   draw_count: z.coerce.number().int().min(1),
 });
 
-/** Every member of these pools, read in keyset pages of PostgREST's max_rows (never a silently cut list). */
-const membersOf = async (
+/**
+ * Items and approved items per pool from the M1-m view `v_pool_item_counts` (database D2, R5-64 d): one read per page
+ * (a page holds at most 50 pools, one `in.(…)` chunk) and no pool size cap. A pool with no item has no row (0 and 0).
+ */
+const countsOf = async (
   ctx: OrgContext,
   orgId: string,
   poolIds: readonly string[],
-): Promise<z.infer<typeof MemberRow>[]> => {
-  const out: z.infer<typeof MemberRow>[] = [];
+): Promise<Map<string, { items: number; approved: number }>> => {
+  const out = new Map<string, { items: number; approved: number }>();
   for (const part of chunks(poolIds)) {
-    let after: { pool: string; item: string } | null = null;
-    for (;;) {
-      const rows: z.infer<typeof MemberRow>[] = parseRows(
-        MemberRow,
-        await ctx.rest.select('pool_items', {
-          select: 'pool_id,item_version_id',
-          org_id: eq(orgId),
-          pool_id: inList(part),
-          order: 'pool_id.asc,item_version_id.asc',
-          limit: String(PGRST_MAX_ROWS),
-          ...(after === null
-            ? {}
-            : {
-                or: `(pool_id.gt.${after.pool},and(pool_id.eq.${after.pool},item_version_id.gt.${after.item}))`,
-              }),
-        }),
-      );
-      out.push(...rows);
-      if (out.length > MAX_MEMBERS) return orgFail('unavailable');
-      const last: z.infer<typeof MemberRow> | undefined = rows[rows.length - 1];
-      if (rows.length < PGRST_MAX_ROWS || last === undefined) break;
-      after = { pool: last.pool_id, item: last.item_version_id };
-    }
+    const rows = parseRows(
+      CountRow,
+      await ctx.rest.select('v_pool_item_counts', {
+        select: 'pool_id,item_count,approved_count',
+        org_id: eq(orgId),
+        pool_id: inList(part),
+      }),
+    );
+    for (const r of rows) out.set(r.pool_id, { items: r.item_count, approved: r.approved_count });
   }
   return out;
 };
 
-/** The approved ones among these item versions. */
-const approvedOf = async (
+/** The ones among these item versions that are already in the pool (read by the requested ids, never the pool). */
+const presentOf = async (
   ctx: OrgContext,
   orgId: string,
+  poolId: string,
   versionIds: readonly string[],
 ): Promise<Set<string>> => {
   const out = new Set<string>();
   for (const part of chunks(versionIds)) {
     const rows = parseRows(
-      z.object({ id: z.uuid() }),
-      await ctx.rest.select('item_versions', {
-        select: 'id',
+      z.object({ item_version_id: z.uuid() }),
+      await ctx.rest.select('pool_items', {
+        select: 'item_version_id',
         org_id: eq(orgId),
-        id: inList(part),
-        status: 'eq.approved',
+        pool_id: eq(poolId),
+        item_version_id: inList(part),
       }),
     );
-    for (const r of rows) out.add(r.id);
+    for (const r of rows) out.add(r.item_version_id);
   }
   return out;
 };
@@ -149,15 +142,10 @@ const detailsOf = async (
   pools: readonly PoolRow[],
 ): Promise<PoolDetail[]> => {
   const ids = pools.map((p) => p.id);
-  const members = ids.length === 0 ? [] : await membersOf(ctx, orgId, ids);
-  const approved = await approvedOf(
-    ctx,
-    orgId,
-    members.map((m) => m.item_version_id),
-  );
+  const counts = await countsOf(ctx, orgId, ids);
   const sections = ids.length === 0 ? [] : await drawsOf(ctx, orgId, ids);
   return pools.map((p) => {
-    const mine = members.filter((m) => m.pool_id === p.id);
+    const count = counts.get(p.id) ?? { items: 0, approved: 0 };
     const byTest = new Map<string, number>();
     for (const s of sections) {
       if (s.pool_id !== p.id) continue;
@@ -172,8 +160,8 @@ const detailsOf = async (
       format: p.format,
       skillKey: p.skill_key,
       status: p.status,
-      itemCount: mine.length,
-      approvedCount: mine.filter((m) => approved.has(m.item_version_id)).length,
+      itemCount: count.items,
+      approvedCount: count.approved,
       usedByDraws: draws.slice(0, MAX_DRAWS_LISTED),
       usedByDrawsTotal: draws.length,
     };
@@ -289,9 +277,7 @@ export const createPoolsRoutes = (deps: PoolsDeps): Hono<{ Bindings: Env }> => {
       await requireRole(ctx.rest, ctx.caller, orgId, AUTHORS);
       const req = parseBody(PoolItemsRequest, await readJson(c.req.raw));
       const pool = await findPool(ctx, orgId, poolId);
-      const present = new Set(
-        (await membersOf(ctx, orgId, [pool.id])).map((m) => m.item_version_id),
-      );
+      const present = await presentOf(ctx, orgId, pool.id, req.itemVersionIds);
       const fresh = req.itemVersionIds.filter((id) => !present.has(id));
       if (fresh.length > 0) {
         // One statement: the guard checks each (approved, same org and format, pool active) and all or none land.
