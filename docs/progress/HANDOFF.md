@@ -1,5 +1,5 @@
-# HANDOFF — 2026-10-23 07:45 IST (M1 BUILD 1 = Wave 0 part 2 done on `m1/integration`; next: Wave 0 part 3)
-Reason for stopping: context at 60% (chat rule). Wave 0 split again at the migration boundary (spec §11.4): M1-c and M1-d move to part 3. Start from `docs/progress/RESUME-PROMPT.md` on **`m1/integration`** (worktree `.claude/worktrees/m1-integration`). The repo wins over this file.
+# HANDOFF — 2026-10-23 10:25 IST (M1 BUILD 1 = Wave 0 part 3 on `m1/integration`; next: Wave 0 tail, then BUILD 2)
+Reason for stopping: usage guard (5-hour window ~88%, resets 11:10 IST); Wave 0c's work is placed, reviewed, fixed and fully verified. Start from `docs/progress/RESUME-PROMPT.md` on **`m1/integration`** (worktree `.claude/worktrees/m1-integration`). The repo wins over this file.
 
 ## Paused: D1 (founder, 2026-10-22 night: paused, not closed)
 D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/worktrees/d1-integration`). Nothing is committed to `d1/integration` or `main` from M1. Copied from the `d1/integration` HANDOFF (`3c2e42a`, tip `1547fd0`):
@@ -9,42 +9,41 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
 - **D1 founder items:** AT-D2 screen capture (`pnpm e2e:record`); Workers Paid (OPEN-8a) "not yet", decide before any load test (M3a); Dependabot PRs #7-#12 not merged blind; after D1 merges, `e2e-local` back on the required checks.
 
 ## Where we are (verified this chat)
-- Milestone **M1 · Test authoring**, phase **BUILD 1 = Wave 0, part 2 of 3 done**. Founder (chat, 2026-10-23): "work in multi agent … time and quality … production ready … if it won't break anything": writers ran in parallel on disjoint files; the lead kept every migration, `supabase test db`, db reset and verify (build-notes "Autopilot changes", second 2026-10-23 row).
-- `m1/integration` HEAD = this handoff commit; code tip `018d856`. `d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged.
-- `pnpm test:rls` green on `36d7375`'s tree from a fresh reset: rls_* **3262** (floor 2870 → 3262), catalog_* **150** (floor 144 → 150), db-types current. Full `pnpm verify` on `018d856`: typecheck + lint green; `pnpm test` OOM'd in parallel (memory allocation failed), re-run serially `pnpm -r --workspace-concurrency=1 test` exit 0 plus `vitest run --root scripts` 2819 passed / 2 skipped; `pnpm build` exit 0 (check-headers, scan-dist OK); test:rls as above.
-- Pushed `76ba806` mid-chat (draft PR TraceHiring/TraceHiring#14 CI); the wrap-up push sends the rest. No staging dispatch.
+- Milestone **M1 · Test authoring**, phase **BUILD 1 = Wave 0, part 3 done** (all four migrations M1-a…d placed and reviewed). A short Wave 0 tail is left (Next step 1) before BUILD 2.
+- `m1/integration` HEAD = this handoff commit; code tip `45a19cc` (+ spec-only `4cce92f`). `d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged.
+- `pnpm test:rls` green on `45a19cc`'s tree from a fresh reset: rls_* **3632** (floor 3262 → 3610 → 3632), catalog_* **150**, db-types current. Full verify on `45a19cc`: `pnpm -s typecheck` exit 0; lint, `pnpm -r --workspace-concurrency=1 --if-present test`, `vitest run --root scripts` (2819 passed / 2 skipped), `pnpm -s build` all exit 0 (scratchpad `verify.sh`).
+- Linux CI on PR TraceHiring/TraceHiring#14: `7cc340c` all green; `2250ccc` **static red** (db-types type test did not list the M1-c/M1-d tables) → fixed in `45a19cc`; on `45a19cc` migrations, rls, security pass, static was still pending at the handoff. **Check it first** (`gh pr checks 14 --repo TraceHiring/TraceHiring`).
+- `verify:fast` at session start on `7cc340c`: exit 0 (319 s).
 
-## Done this chat (each branch: Opus first reviews, fixes test first, a confirming re-review, then `--no-ff`)
-- `9cb9ca5` pgTAP red first for M1-b (`rls_m1_snapshot/publish_v2/serving/settings/templates_jobs/carried/candidate_denied`); `76ba806` **migration M1-b** `supabase/migrations/20261023020000_m1_tests.sql` (provisional ts) + rls_roles R5-32 adds + db-types.
-- `36d7375` merge `m1/w0-dbfix`: Opus security **BLOCK** (SEC-M1-1 library `param_spec.correctOptionId` key leak; SEC-M1-2..5) and Opus database **APPROVE WITH FIXES** (DB-M1-1 a written section's `paste_rule` must equal settings `paste_written`; snapshot insert while draft; draw cap; truncate; catalog seal; indexes; strata) all fixed in place in M1-a/M1-b; Opus re-review CONFIRMED WITH NOTES.
-- `cae300c` merge `m1/w0-contracts`: `contracts-m1.ts`, candidate v2 (TestPackageV2 with `exposureAtPublish` and section `format`, SessionViewV2, ServedItemV2, `section.finish`, `refusedSeqs`, `section_closed` 410, `ItemGetQuery`), mirror v1|v2 union + `checkMirrorV2()`, AUDIT_ACTIONS R5-14/R5-26 (Opus spec PASS WITH FIXES, Sonnet CONFIRMED). `0ab7df3` jobs retry v2 mirror messages until A3; candidate ERROR_STATUS.
-- `8362f3a` merge `m1/w0-adr-vendors-carried`: ADR-033 (worker unzips with streaming `Unzip`, page parses with `DOMParser`; spec **R5-48**), VENDOR_INTERFACES + `llm-drafter.ts` types, D1-LEAD-1 perf split, recruiter B2-SEC-1/B2-SEC-4/account copy + `main.tsx` wiring.
-- `b811408` merge `m1/w0-mt11-fr1`: M0b FR-1 closed in MT-11 (four new branches).
-- `018d856` merge `m1/w0-infra`: R5-11 logins (Hyperdrive ids PENDING), R5-12 secrets list + D1 spec **4q**, R5-13 queues/DLQs/bucket + jobs `queue()` dispatch with throwing stubs, boundary rules 11–15, post-migration "Check the Hyperdrive bindings" CI step (INF-1).
-- `4ba07c9` M1-c/M1-d drafts in `docs/progress/m1-wave0-drafts/m1cd/` (helper-written, checked only rolled back; NOT placed, NOT reviewed).
+## Done this chat (tests first; Opus first reviews, fixes test first, a confirming re-review)
+- Carried M1-a/M1-b notes: red `8680713`, fix `dfd177e` (spec **R5-49**): written item needs its rubric (`item_version_ready` + publish over approved pool items; D1's shape CHECK already held it), strata whole numbers ≥ 1, publish reads the ruleset `for share`, `item.key_review` audit + AUDIT_ACTIONS (48), sealed-catalog assert.
+- M1-c/M1-d: red `fa904d3`, placed `2250ccc` = `supabase/migrations/20261023030000_m1_imports_drafts.sql` + `20261023040000_m1_members.sql` (provisional ts, R5-30); pgTAP `rls_m1_imports`, `rls_m1_ai_drafts`, `rls_m1_members`; preamble `pg_temp.ai_draft` via a running job; hook split `ai_draft_job_has_room` (new stub in M1-a). Supersessions recorded in spec **R5-50** (L-20 six→eight, `rls_memberships:404` explicit 42501, `rls_roles` worker lists, `rls_d1_invariants:23` DB-M1-11).
+- `renderCandidateSummary` (AT-M1-31): writer branch `m1/w0c-candidate-summary` (`16abda6`, `90d7d0e`, review fixes `7a3ad3e`, `d7b676e`) merged `66555a1`: `packages/shared/src/candidate-summary.ts` (+ `captureSignalsFor`, `SETTING_CAPTURE_SIGNALS`, `CANDIDATE_SUMMARY_VERSION = 'candidate-summary-1'`), exported from `index.ts`.
+- Reviews (reports in the shared notes folder `…/side-session-notes/local_83768b5d-…/review-{spec,sec,db,confirm}-m1cd.md`): Opus spec PASS WITH FIXES, Opus security PASS WITH FIXES (summary PASS), Opus database APPROVE WITH FIXES (1 High, 3 Medium); Sonnet confirming re-review **CONFIRMED WITH NOTES**.
+- Fixes: `ee2f7fc` contracts = DB CHECK lists (`contracts-m1-db.test.ts`; `ImportField` + `options`; `ImportJobErrorCode`, `AiDraftErrorCode` enums); red `162e374` + fix `89c1030` (accept re-checks the inviter R2-14; display name 22023; `import_job_open` FOR SHARE; drafting hooks FOR NO KEY UPDATE; open→completed refused; partial index `item_versions_bank_content_idx`); `45a19cc` RLS matrix cells (DB M2), candidate_denied fixtures, synthetic names, db-types pins, floor; spec **R5-51** (decisions + A2 notes), `4cce92f` R5-51 (h).
 
-## Next step (one precise action)
-**M1 BUILD 1 part 3 (Wave 0c), lead + parallel writers as in part 2:**
-1. Carried review notes first, test first, in M1-a/M1-b (in place, R5-30): **Medium** a written bank item can be approved without a rubric and drawn from a pool (`private.item_version_ready` must refuse; publish rubric check over the snapshot rows). Lows: `for share` on the ruleset read in publish; strata counts integers ≥ 1; audit the key review (`item.key_review` + AUDIT_ACTIONS); a spec sentence that item/variant `content_sha256` excludes keys and `correctOptionId` (or recompute the copy hash); a pgTAP assert that the current catalog is sealed.
-2. Place M1-c then M1-d from `m1cd/` (read its `notes.md`: the `pg_temp.ai_draft` preamble change; the D1/M0b assertions it changes — `rls_memberships:404`, `rls_d1_idempotency` L-20 policy count — need an R5-28-style supersession row, recorded; `rls_roles` and candidate_denied lists; floors; db-types). Opus database + security first reviews, fixes test first, re-review.
-3. Then `renderCandidateSummary` (AT-M1-31) unless a stream owns it; full `pnpm verify`; CI on PR #14; Wave 0 done → BUILD 2 = Wave 1 (A1, A6, A5) after a pre-flight agent.
+## Next step (one precise action list)
+1. **Wave 0 tail (lead, small, tests first):** (a) confirm CI green on the PR head; (b) a `rls_m1_members` case: an owner invitation cannot be accepted after its owner inviter was removed (confirming re-review Low); (c) a two-connection case in `scripts/test-concurrency-local.mjs` for DB H1 (cancel waits for a running import batch and counts its rows) and DB M1 (two deliveries cannot overfill a count-1 drafting job) — today only function-body pgTAP checks guard them; (d) DC-M1-1 (PostgREST calls an INVOKER function with the caller's JWT, local) recorded in spec §8. Then Wave 0 is done.
+2. **BUILD 2 = Wave 1:** pre-flight agent (AUTOPILOT §2 efficiency rules), then writers A1, A6, A5 in `m1/<stream>` worktrees reset to the Wave 0 tip; Opus first reviews per §11.3; fixes test first; confirming re-review; merges; full verify; CI.
 
 ## Notes for later streams (from reviews; not defects now)
-- A3: call `checkMirrorV2()` in the mirror stage (retry → DLQ); check `poolSectionIds` against `sections.pool_id`; remove the v2 retry guard in `workers/jobs/src/queue/consumer.ts` once v2 is stored. Admin consumer treats messages as ids only.
-- A5 import: per-XML-part cap ~10–20 MB; render rows only as React text; validate the postMessage shape.
-- A6: rule 13 needs an `assert*Env` call in `MockLlmDrafter`'s constructor.
-- Infra Lows: `if:` on deploy steps is not pinned by check-workflows; the edge no-secrets test pattern is looser than rule 11. MT-11: ≈0.5 s on 209 clauses; non-equality ties count as correlation.
-- DB-M1-11: `rls_d1_invariants.test.sql:23` (`app_roles()` add-only edit from part 1) is outside R5-28's list; record it in the next spec revision.
+- **A2 (spec R5-51 f):** pin `provider`, `model_id`, `prompt_version`, `images_ok` in the api; insert jobs with `returning id` and then drop `id` from the import_jobs/ai_draft_jobs insert grants (security L-2); `save_test_draft` reuses an unchanged rubric version (DB L6). DB L2: drafter may over-generate (R5-51 d).
+- A3: call `checkMirrorV2()` in the mirror stage; check `poolSectionIds` against `sections.pool_id`; remove the v2 retry guard in `workers/jobs/src/queue/consumer.ts` once v2 is stored. Use `captureSignalsFor` for `TestPackageV2.captureSignals` (A2/A4).
+- A5 import: per-XML-part cap ~10–20 MB; render rows only as React text; validate the postMessage shape. A6: rule 13 needs an `assert*Env` call in `MockLlmDrafter`'s constructor.
+- Infra Lows: `if:` on deploy steps is not pinned by check-workflows; the edge no-secrets test pattern is looser than rule 11.
+- Out of this diff (security review): M0b's owner/admin `active` membership insert for a known user id skips consent (R2-15 model); needs a plan-conflicts/ADR note later.
 
 ## Founder items
-- New FOUNDER-QUEUE row 2026-10-23: M1 staging Hyperdrive configs + `MEMBER_INVITE_PEPPER` / `SUPABASE_SECRET_KEY_JOBS` (after the D1 CLOSE and a staging go-ahead; not blocking BUILD). Unchanged: Q-M1-1…Q-M1-4.
+- New FOUNDER-QUEUE row 2026-10-23: import cancel keeps the rows already imported (default (a); not rules 1-9; not blocking). Unchanged: M1 staging Hyperdrive configs + secrets row; Q-M1-1…Q-M1-4.
 
 ## Gotchas
-- The worktree guard refuses `cd …&&` + git, `$(...)`, chained git calls and heredocs that mention git words; commit messages via `git commit -F <file>`; commitlint body lines ≤ 100 chars; merge subjects `chore: merge …`.
-- Python `open(...,'w')` on Windows writes CRLF unless `newline='\n'`.
-- The local `postgres` is not a superuser: no `SET SESSION AUTHORIZATION` in pgTAP.
-- Never hand-edit generated `rls_m1_*.test.sql`: edit `docs/progress/m1-wave0-drafts/pgtap/bodies/*.sql`, then `node docs/progress/m1-wave0-drafts/pgtap/gen.mjs <repo root>`.
-- RAM: parallel writers + verify:fast OOM'd once (exit 134); run verify alone.
+- The worktree guard refuses `cd …&&` + chained git, `$(...)`, `git -C`, and heredocs that mention git; commit messages via `git commit -F <file>`; merge subjects `chore: merge …` (amend a default merge message before pushing).
+- Writers share the lead's scratchpad: give lead commit-message files unique names (a writer overwrote `msg1.txt`).
+- Python `open(...,'w')` on Windows writes CRLF unless `newline='
+'`. The local `postgres` is not a superuser.
+- Never hand-edit generated `rls_m1_*.test.sql`: edit `docs/progress/m1-wave0-drafts/pgtap/bodies/*.sql`, then `node docs/progress/m1-wave0-drafts/pgtap/gen.mjs <repo root>`; `node …/pgtap/run.mjs <names>` runs them.
+- Run `pnpm -s typecheck` before pushing a migration (db-types type test pins tables/functions; CI static failed once).
+- RAM: run tests serially (`pnpm -r --workspace-concurrency=1`), never alongside writers.
 
 ## Verify first
-`git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `pnpm -s verify:fast`
+`git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `gh pr checks 14 --repo TraceHiring/TraceHiring` · `pnpm -s verify:fast`
