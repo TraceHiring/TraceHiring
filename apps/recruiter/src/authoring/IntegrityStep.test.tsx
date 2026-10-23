@@ -154,6 +154,51 @@ describe('IntegrityStep (load and save)', () => {
     expect(plain(c.innerHTML)).toContain('Settings saved.');
   });
 
+  it('hands the saved settings to the editor, so every written section follows paste_written (rule 3)', async () => {
+    const savedViews: { values: { paste_written: string } }[] = [];
+    const { api } = fakeApi({
+      [`GET /tests/${uuid(9)}/integrity`]: () => ({ body: viewOf(INTEGRITY_PRESETS.standard) }),
+      [`PUT /tests/${uuid(9)}/integrity`]: (call) => {
+        const b = call.body as { values: typeof INTEGRITY_PRESETS.strict };
+        return { body: viewOf(b.values, {}, null) };
+      },
+    });
+    mounted = await mountScreen(
+      <IntegrityStep
+        api={api}
+        testId={uuid(9)}
+        onSaved={(view) => {
+          savedViews.push(view);
+        }}
+      />,
+      api,
+      ['recruiter'],
+    );
+    const c = mounted.container;
+    await choose(field(c, 'Paste on written answers'), 'blocked');
+    expect(savedViews).toEqual([]);
+    await click(button(c, 'Save settings'));
+    expect(savedViews.map((v) => v.values.paste_written)).toEqual(['blocked']);
+  });
+
+  it('a refused save hands nothing to the editor', async () => {
+    const savedViews: unknown[] = [];
+    const { api } = fakeApi({
+      [`GET /tests/${uuid(9)}/integrity`]: () => ({ body: viewOf() }),
+      [`PUT /tests/${uuid(9)}/integrity`]: () => ({
+        status: 409,
+        body: { error: { code: 'conflict' } },
+      }),
+    });
+    mounted = await mountScreen(
+      <IntegrityStep api={api} testId={uuid(9)} onSaved={(v) => savedViews.push(v)} />,
+      api,
+      ['recruiter'],
+    );
+    await click(button(mounted.container, 'Save settings'));
+    expect(savedViews).toEqual([]);
+  });
+
   it('changing a setting updates what candidates will see at once', async () => {
     const { api } = fakeApi({
       [`GET /tests/${uuid(9)}/integrity`]: () => ({

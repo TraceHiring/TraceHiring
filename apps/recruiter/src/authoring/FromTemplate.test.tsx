@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
 // Create a test from a role template (specs/m1-test-authoring.md §6.1, M1-16, E18, R5-54 a): templates are listed in
-// cursor pages, the draft is created from the chosen one, and the typing and voice sections the blueprint lists but
-// cannot serve yet are shown as a visible note. Synthetic data only.
+// cursor pages, a pasted job description proposes one (`POST …/blueprints/propose`, ABH-5: a match of at least 0.15 is
+// preselected, else "Pick a template"), the draft is created from the chosen one, and the typing and voice sections
+// the blueprint lists but cannot serve yet are shown as a visible note. Synthetic data only.
 import {
+  BlueprintProposeResponse,
   CreateTestFromTemplateResponse,
   encodePageCursor,
   RoleTemplateListResponse,
@@ -83,10 +85,12 @@ describe('FromTemplateView (static)', () => {
     busy: false,
     error: null,
     created: null,
+    proposal: { kind: 'none' },
     onSelect: () => undefined,
     onJobTitle: () => undefined,
     onJdText: () => undefined,
     onMore: () => undefined,
+    onPropose: () => undefined,
     onCreate: () => undefined,
   };
   const render = (over: Partial<typeof props> = {}) =>
@@ -108,6 +112,39 @@ describe('FromTemplateView (static)', () => {
     expect(plain(html)).toContain('BPO Voice');
     expect(html).toMatch(/type="radio"/);
     expect(html).not.toMatch(/type="checkbox"| style=/);
+  });
+
+  it('says what the job description is used for, and no longer that it shapes the draft', () => {
+    const text = plain(render());
+    expect(text).not.toContain('read once to shape the draft');
+    expect(text).toContain('The job description is used only to suggest a template');
+    expect(text).toContain('Its text is not stored.');
+  });
+
+  it('embedded in the tests/new wizard, it is a step section under the page heading', () => {
+    const html = render({ embedded: true });
+    expect(plain(html)).toContain('Or start from a role template');
+    expect(html).not.toMatch(/<h2\b/);
+  });
+
+  it('shows the proposal, or "Pick a template" when nothing matches', () => {
+    const matched = plain(
+      render({
+        proposal: {
+          kind: 'matched',
+          name: 'BPO Voice',
+          sections: [
+            { title: 'Verbal', available: true },
+            { title: 'Spoken English', available: false },
+          ],
+        },
+      }),
+    );
+    expect(matched).toContain('Suggested from the job description: BPO Voice.');
+    expect(matched).toContain('Spoken English (not available yet)');
+    expect(plain(render({ proposal: { kind: 'no_match' } }))).toContain(
+      'No template matches this job description closely enough. Pick a template.',
+    );
   });
 
   it('shows the skipped sections as a note once created', () => {
@@ -150,11 +187,11 @@ describe('FromTemplateRoute', () => {
     const { api } = fakeApi(routes(seen));
     mounted = await mountScreen(<FromTemplateRoute />, api, ['recruiter']);
     const c = mounted.container;
-    expect(button(c, 'Create draft').disabled).toBe(true);
+    expect(button(c, 'Create draft from template').disabled).toBe(true);
     await typeInto(field(c, 'Job title'), 'Support associate');
     await click(field(c, 'Customer Support (version 1, Standard)'));
-    expect(button(c, 'Create draft').disabled).toBe(false);
-    await click(button(c, 'Create draft'));
+    expect(button(c, 'Create draft from template').disabled).toBe(false);
+    await click(button(c, 'Create draft from template'));
     expect(seen).toEqual([
       { jobTitle: 'Support associate', templateKey: 'customer_support', templateVersion: 1 },
     ]);
@@ -174,7 +211,7 @@ describe('FromTemplateRoute', () => {
     await typeInto(field(c, 'Job title'), 'Support associate');
     await typeInto(field(c, 'Job description (optional)'), 'Answers synthetic questions.');
     await click(field(c, 'BPO Voice (version 1, Strict)'));
-    await click(button(c, 'Create draft'));
+    await click(button(c, 'Create draft from template'));
     expect(seen).toEqual([
       {
         jobTitle: 'Support associate',
@@ -183,6 +220,101 @@ describe('FromTemplateRoute', () => {
         jdText: 'Answers synthetic questions.',
       },
     ]);
+  });
+
+  const proposed = (matchPermille: number) =>
+    BlueprintProposeResponse.parse({
+      proposal: {
+        templateKey: 'bpo_voice',
+        version: 1,
+        matchPermille,
+        sections: [
+          { title: 'Verbal', format: 'mcq', skillKey: 'verbal', drawCount: 10, available: true },
+          {
+            title: 'Spoken English',
+            format: 'voice',
+            skillKey: 'spoken_english',
+            drawCount: 1,
+            available: false,
+          },
+        ],
+      },
+    });
+
+  it('proposes a template from the pasted job description and preselects it (ABH-5)', async () => {
+    const seen: unknown[] = [];
+    const proposeBodies: unknown[] = [];
+    const { api } = fakeApi({
+      ...routes(seen),
+      'POST /blueprints/propose': (call) => {
+        proposeBodies.push(call.body);
+        return { body: proposed(400) };
+      },
+    });
+    mounted = await mountScreen(<FromTemplateRoute />, api, ['recruiter']);
+    const c = mounted.container;
+    expect(button(c, 'Suggest a template').disabled).toBe(true);
+    await typeInto(field(c, 'Job title'), 'Voice associate');
+    await typeInto(field(c, 'Job description (optional)'), 'Synthetic calls in English.');
+    await click(button(c, 'Suggest a template'));
+    expect(proposeBodies).toEqual([{ jdText: 'Synthetic calls in English.' }]);
+    expect(field<HTMLInputElement>(c, 'BPO Voice (version 1, Strict)').checked).toBe(true);
+    expect(field<HTMLInputElement>(c, 'Customer Support (version 1, Standard)').checked).toBe(
+      false,
+    );
+    expect(plain(c.innerHTML)).toContain('Suggested from the job description: BPO Voice.');
+    await click(button(c, 'Create draft from template'));
+    expect(seen).toEqual([
+      {
+        jobTitle: 'Voice associate',
+        templateKey: 'bpo_voice',
+        templateVersion: 1,
+        jdText: 'Synthetic calls in English.',
+      },
+    ]);
+  });
+
+  it('with no proposal, selects nothing and asks to pick a template', async () => {
+    const { api } = fakeApi({
+      ...routes(),
+      'POST /blueprints/propose': () => ({ body: { proposal: null } }),
+    });
+    mounted = await mountScreen(<FromTemplateRoute />, api, ['recruiter']);
+    const c = mounted.container;
+    await typeInto(field(c, 'Job title'), 'Clerk');
+    await typeInto(field(c, 'Job description (optional)'), 'Unrelated synthetic text.');
+    await click(button(c, 'Suggest a template'));
+    expect(plain(c.innerHTML)).toContain('Pick a template.');
+    expect(
+      [...c.querySelectorAll('input[type="radio"]')].some((r) => (r as HTMLInputElement).checked),
+    ).toBe(false);
+    expect(button(c, 'Create draft from template').disabled).toBe(true);
+  });
+
+  it('never preselects a match below 0.15', async () => {
+    const { api } = fakeApi({
+      ...routes(),
+      'POST /blueprints/propose': () => ({ body: proposed(149) }),
+    });
+    mounted = await mountScreen(<FromTemplateRoute />, api, ['recruiter']);
+    const c = mounted.container;
+    await typeInto(field(c, 'Job description (optional)'), 'Synthetic text.');
+    await click(button(c, 'Suggest a template'));
+    expect(field<HTMLInputElement>(c, 'BPO Voice (version 1, Strict)').checked).toBe(false);
+    expect(plain(c.innerHTML)).toContain('Pick a template.');
+  });
+
+  it('a refused proposal shows a fixed failure text and keeps the choice open', async () => {
+    const { api } = fakeApi({
+      ...routes(),
+      'POST /blueprints/propose': () => ({ status: 400, body: { error: { code: 'bad_request' } } }),
+    });
+    mounted = await mountScreen(<FromTemplateRoute />, api, ['recruiter']);
+    const c = mounted.container;
+    await typeInto(field(c, 'Job description (optional)'), 'Synthetic text.');
+    await click(button(c, 'Suggest a template'));
+    expect(plain(c.innerHTML)).toContain('Some values were not accepted. Check the form.');
+    expect(plain(c.innerHTML)).toContain('Customer Support');
   });
 
   it('shows a fixed failure text and keeps the form when the api refuses', async () => {
@@ -197,7 +329,7 @@ describe('FromTemplateRoute', () => {
     const c = mounted.container;
     await typeInto(field(c, 'Job title'), 'Clerk');
     await click(field(c, 'Back Office (version 2, Open-book)'));
-    await click(button(c, 'Create draft'));
+    await click(button(c, 'Create draft from template'));
     expect(plain(c.innerHTML)).toContain('Some values were not accepted. Check the form.');
     expect(field<HTMLInputElement>(c, 'Job title').value).toBe('Clerk');
   });

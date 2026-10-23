@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // The v2 sections editor (specs/m1-test-authoring.md §6.5, §6.1): pool sections with strata, navigation, timers,
-// shuffle flags, the paste rule, all as controls a recruiter can use, and none that D1's guards ban (no checkbox).
+// shuffle flags, all as controls a recruiter can use, and none that D1's guards ban (no checkbox). The paste rule of a
+// written section is shown read-only: it is always the test's paste_written integrity setting (rule 3).
 // Rendered here with synthetic data; the A2+A5 switch wires it into the live editor later (R5-53 b).
 import { TestDraftView, type PoolDetail } from '@trace/shared/contracts/m1';
 import { useState } from 'react';
@@ -21,7 +22,9 @@ import {
   addStratum,
   fromDraftView,
   setDrawCount,
+  setPasteWritten,
   setPool,
+  setTimeLimitMinutes,
   type EditorV2Form,
 } from './editor-v2-model';
 import { SectionsEditorView } from './SectionsEditor';
@@ -114,7 +117,7 @@ describe('SectionsEditorView (static render)', () => {
       'Question source',
       'Navigation',
       'Time limit (minutes)',
-      'Paste rule',
+      'Paste on written answers',
       'Pool',
       'Questions to draw',
     ]) {
@@ -167,20 +170,53 @@ describe('SectionsEditorView (interaction)', () => {
     });
   });
 
-  it('a written section has no way to choose free navigation or shuffle options, and picks a paste rule', async () => {
+  it('a written section has no way to choose free navigation or shuffle options', async () => {
     mounted = await mountScreen(<Harness start={addSection(empty(), 'inline', 'written')} />, null);
     const nav = field<HTMLSelectElement>(sectionEl(0), 'Navigation');
     expect([...nav.options].map((o) => o.value)).toEqual(['forward_only']);
     expect(plain(sectionEl(0).innerHTML)).not.toContain('Shuffle answer options');
-    await choose(field(sectionEl(0), 'Paste rule'), 'blocked');
-    expect(latest.sections[0]?.pasteRule).toBe('blocked');
-    await choose(field(sectionEl(0), 'Paste rule'), '');
-    expect(latest.sections[0]?.pasteRule).toBeNull();
   });
 
-  it('a multiple-choice section has no paste rule control', async () => {
+  it("shows a written section's paste rule read-only, from the test's paste_written (rule 3)", async () => {
+    const start = setPasteWritten(addSection(empty(), 'inline', 'written'), 'allowed_logged');
+    mounted = await mountScreen(<Harness start={start} />, null);
+    const section = sectionEl(0);
+    // No control of its own: no select or input carries the paste rule.
+    expect(() => field(section, 'Paste on written answers')).toThrow();
+    expect([...section.querySelectorAll('option')].map((o) => o.value)).not.toContain(
+      'allowed_logged',
+    );
+    expect(plain(section.innerHTML)).toContain(
+      'Paste on written answers: Allowed, logged. Set in the integrity settings.',
+    );
+    await mounted.unmount();
+    mounted = await mountScreen(<Harness start={setPasteWritten(start, 'blocked')} />, null);
+    expect(plain(sectionEl(0).innerHTML)).toContain(
+      'Paste on written answers: Blocked, attempts logged.',
+    );
+  });
+
+  it('a multiple-choice section shows no paste rule', async () => {
     mounted = await mountScreen(<Harness start={addSection(empty(), 'inline', 'mcq')} />, null);
-    expect(plain(sectionEl(0).innerHTML)).not.toContain('Paste rule');
+    expect(plain(sectionEl(0).innerHTML)).not.toContain('Paste');
+  });
+
+  it('shows the publish rules of the whole test: weights add up to 100, timers on every section or none', async () => {
+    let start = addSection(addSection(empty(), 'inline', 'mcq'), 'inline', 'written');
+    start = {
+      ...start,
+      sections: start.sections.map((s, i) =>
+        i === 0 ? setTimeLimitMinutes({ ...s, weight: '40' }, '10') : { ...s, weight: '40' },
+      ),
+    };
+    mounted = await mountScreen(<Harness start={start} />, null);
+    const text = () => plain(mounted?.container.innerHTML ?? '');
+    expect(text()).toContain('Section weights add up to 80. They must add up to 100 to publish.');
+    expect(text()).toContain('Give every section a time limit, or none, to publish.');
+    await typeInto(field(sectionEl(1), 'Weight'), '60');
+    await typeInto(field(sectionEl(1), 'Time limit (minutes)'), '20');
+    expect(text()).not.toContain('They must add up to 100');
+    expect(text()).not.toContain('Give every section a time limit');
   });
 
   it('a pool section picks a pool of its own format, a draw count and strata, and shows the sum and the gap', async () => {

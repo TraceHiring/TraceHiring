@@ -1,7 +1,8 @@
 // The v2 editor model (specs/m1-test-authoring.md §6.5; R5-53 b, R5-54 a): fromDraftView / toSaveTestDraftRequest
-// round trips, including a D1 section whose navigation is null, and the section rules the editor enforces: pools with
-// strata that add up to the draw count, navigation (a written section is forward-only), per-section timers, shuffle
-// flags and the paste rule. Synthetic data only.
+// round trips, including a D1 section whose navigation is null (kept only while the whole draft is package v1), and
+// the section rules the editor enforces: pools with strata that add up to the draw count, navigation (a written section
+// is forward-only), per-section timers, shuffle flags, the paste rule (always the test's paste_written, rule 3) and the
+// publish rules of a v2 draft (weights add up to 100, timers on every section or none). Synthetic data only.
 import { SaveTestDraftRequest, TestDraftView } from '@trace/shared/contracts/m1';
 import { describe, expect, it } from 'vitest';
 import {
@@ -9,6 +10,7 @@ import {
   addSection,
   addStratum,
   fromDraftView,
+  isPackageV2,
   moveSection,
   newSection,
   poolGap,
@@ -19,7 +21,7 @@ import {
   setFormat,
   setMode,
   setNavigation,
-  setPasteRule,
+  setPasteWritten,
   setPool,
   setShuffle,
   setTimeLimitMinutes,
@@ -134,8 +136,8 @@ const built = (form: EditorV2Form) => {
 };
 
 describe('fromDraftView / toSaveTestDraftRequest', () => {
-  it('round-trips a v2 draft with a D1 section, a pool with strata and a written section', () => {
-    const v = view([d1Section, poolSection, writtenSection]);
+  it('round-trips a v2 draft with a pool with strata and a written section', () => {
+    const v = view([{ ...d1Section, navigation: 'free' }, poolSection, writtenSection]);
     const form = fromDraftView(v);
     expect(built(form)).toEqual(requestOf(v));
     expect(form.testId).toBe(ID(1));
@@ -144,13 +146,23 @@ describe('fromDraftView / toSaveTestDraftRequest', () => {
     expect(form.status).toBe('draft');
   });
 
-  it('keeps a D1 section as it is: navigation null, no M1 field', () => {
-    const v = view([d1Section]);
+  it('keeps a D1 draft as it is: navigation null, no M1 field, no paste rule', () => {
+    const d1Written = {
+      ...writtenSection,
+      id: ID(13),
+      position: 2,
+      weight: 60,
+      navigation: null,
+      pasteRule: undefined,
+      timeLimitSeconds: undefined,
+    };
+    const v = view([d1Section, d1Written]);
     const form = fromDraftView(v);
+    expect(isPackageV2(form)).toBe(false);
     expect(form.sections[0]?.navigation).toBeNull();
     const request = built(form);
-    expect(request.sections[0]?.navigation).toBeNull();
-    expect(request.sections[0]).not.toHaveProperty('pasteRule');
+    expect(request.sections.map((s) => s.navigation)).toEqual([null, null]);
+    expect(request.sections[1]).not.toHaveProperty('pasteRule');
     expect(request.sections[0]).not.toHaveProperty('blueprint');
     expect(request).toEqual(requestOf(v));
   });
@@ -200,20 +212,12 @@ describe('fromDraftView / toSaveTestDraftRequest', () => {
 describe('sections', () => {
   const empty: EditorV2Form = { ...fromDraftView(view([])), sections: [] };
 
-  it('adds an inline mcq section (free navigation) and a written one (forward-only, paste follows the test setting)', () => {
+  it('adds an inline mcq section (free navigation) and a written one (forward-only, no paste choice of its own)', () => {
     const a = addSection(empty, 'inline', 'mcq');
-    expect(a.sections[0]).toMatchObject({
-      mode: 'inline',
-      format: 'mcq',
-      navigation: 'free',
-      pasteRule: null,
-    });
+    expect(a.sections[0]).toMatchObject({ mode: 'inline', format: 'mcq', navigation: 'free' });
     const b = addSection(a, 'inline', 'written');
-    expect(b.sections[1]).toMatchObject({
-      format: 'written',
-      navigation: 'forward_only',
-      pasteRule: null,
-    });
+    expect(b.sections[1]).toMatchObject({ format: 'written', navigation: 'forward_only' });
+    expect(b.sections[1]).not.toHaveProperty('pasteRule');
   });
 
   it('adds a pool section needing a pool and a draw count', () => {
@@ -290,10 +294,55 @@ describe('navigation (§6.5)', () => {
         { ...writtenSection, navigation: null, pasteRule: undefined, timeLimitSeconds: undefined },
       ]),
     ).sections[0] as SectionForm;
-    expect(setPasteRule(d1Written, 'blocked')).toMatchObject({
+    expect(setTimeLimitMinutes(d1Written, '10')).toMatchObject({
       navigation: 'forward_only',
-      pasteRule: 'blocked',
+      timeLimitSeconds: 600,
     });
+  });
+
+  it('a D1 section keeps navigation null only while the whole draft is package v1 (publish guard v2)', () => {
+    // Another section uses an M1 feature (a pool): every D1 section takes its format's default.
+    const mixed = fromDraftView(
+      view([
+        d1Section,
+        {
+          ...writtenSection,
+          navigation: null,
+          pasteRule: undefined,
+          timeLimitSeconds: undefined,
+        },
+        poolSection,
+      ]),
+    );
+    expect(isPackageV2(mixed)).toBe(true);
+    expect(built(mixed).sections.map((s) => s.navigation)).toEqual([
+      'free',
+      'forward_only',
+      'free',
+    ]);
+    // Integrity settings saved for the test make it a v2 draft too.
+    const withSettings = fromDraftView(view([d1Section]), { paste_written: 'allowed_logged' });
+    expect(isPackageV2(withSettings)).toBe(true);
+    expect(built(withSettings).sections[0]?.navigation).toBe('free');
+    // A D1 section next to a freshly added one (which has navigation) is v2 as well.
+    const added = addSection(fromDraftView(view([d1Section])), 'inline', 'written');
+    expect(built(added).sections.map((s) => s.navigation)).toEqual(['free', 'forward_only']);
+    // No M1 feature anywhere and no settings: still D1.
+    expect(built(fromDraftView(view([d1Section]))).sections[0]?.navigation).toBeNull();
+  });
+
+  it('a draft built for a v2 test never carries a null navigation', () => {
+    const d1 = fromDraftView(view([d1Section]));
+    const shuffled = setShuffle(d1.sections[0] as SectionForm, 'items', true);
+    const forms: EditorV2Form[] = [
+      fromDraftView(view([d1Section, poolSection])),
+      fromDraftView(view([d1Section]), { paste_written: 'blocked' }),
+      addSection(d1, 'inline', 'mcq'),
+      { ...d1, sections: [...d1.sections, { ...shuffled, key: 'other' }] },
+    ];
+    for (const form of forms) {
+      expect(built(form).sections.every((s) => s.navigation !== null)).toBe(true);
+    }
   });
 
   it('every state reachable by these edits is accepted by the contract', () => {
@@ -318,19 +367,52 @@ describe('shuffle, timers and the paste rule', () => {
     expect(setShuffle(written, 'items', true).shuffleItems).toBe(true);
   });
 
-  it('the paste rule belongs to written sections; null follows the test setting', () => {
-    const mcq = newSection('inline', 'mcq');
-    expect(setPasteRule(mcq, 'blocked')).toBe(mcq);
-    const written = newSection('inline', 'written');
-    expect(setPasteRule(written, 'allowed_logged').pasteRule).toBe('allowed_logged');
-    expect(setPasteRule(setPasteRule(written, 'blocked'), null).pasteRule).toBeNull();
-    const request = built({
-      ...fromDraftView(view([])),
-      sections: [setPasteRule(written, 'blocked')],
-    });
-    expect(request.sections[0]?.pasteRule).toBe('blocked');
-    const none = built({ ...fromDraftView(view([])), sections: [written] });
-    expect(none.sections[0]).not.toHaveProperty('pasteRule');
+  it("a written v2 section takes its paste rule from the test's paste_written, never a choice of its own (rule 3)", () => {
+    // The stored section says allowed_logged, the settings say blocked: the settings win.
+    const form = fromDraftView(view([poolSection, writtenSection]), { paste_written: 'blocked' });
+    expect(form.pasteWritten).toBe('blocked');
+    const request = built(form);
+    expect(request.sections[1]?.pasteRule).toBe('blocked');
+    expect(request.sections[0]).not.toHaveProperty('pasteRule');
+    expect(newSection('inline', 'written')).not.toHaveProperty('pasteRule');
+  });
+
+  it('changing paste_written updates every written section, and only written ones', () => {
+    let form = fromDraftView(
+      view([
+        { ...d1Section, navigation: 'free' },
+        writtenSection,
+        { ...writtenSection, id: ID(14), position: 4 },
+      ]),
+      { paste_written: 'allowed_logged' },
+    );
+    const rules = () => built(form).sections.map((s) => s.pasteRule);
+    expect(rules()).toEqual([undefined, 'allowed_logged', 'allowed_logged']);
+    form = setPasteWritten(form, 'blocked');
+    expect(rules()).toEqual([undefined, 'blocked', 'blocked']);
+    form = setPasteWritten(form, 'allowed_logged');
+    expect(rules()).toEqual([undefined, 'allowed_logged', 'allowed_logged']);
+  });
+
+  it('never emits a written v2 section with no paste rule, or one that differs from paste_written', () => {
+    const cases: EditorV2Form[] = [
+      // No settings saved yet: the D1 behaviour (paste blocked), so the candidate is never told paste is allowed.
+      addSection(fromDraftView(view([])), 'inline', 'written'),
+      addSection(fromDraftView(view([d1Section])), 'inline', 'written'),
+      fromDraftView(view([writtenSection]), { paste_written: 'blocked' }),
+      setPasteWritten(fromDraftView(view([writtenSection])), 'blocked'),
+      fromDraftView(view([{ ...writtenSection, pasteRule: 'blocked' }]), {
+        paste_written: 'allowed_logged',
+      }),
+    ];
+    for (const form of cases) {
+      const written = built(form).sections.filter((x) => x.format === 'written');
+      expect(written.length).toBeGreaterThan(0);
+      for (const s of written) expect(s.pasteRule).toBe(form.pasteWritten ?? 'blocked');
+    }
+    expect(
+      built(addSection(fromDraftView(view([])), 'inline', 'written')).sections[0]?.pasteRule,
+    ).toBe('blocked');
   });
 
   it('a timer is whole minutes from 1 to 120, or none; other text is ignored', () => {
@@ -363,7 +445,10 @@ describe('pools, draw count and strata', () => {
     s = updateStratum(s, 0, { count: '4' });
     expect(strataSum(s)).toBe(4);
     const form = { ...fromDraftView(view([])), sections: [s] };
-    expect(sectionIssues(form)).toEqual([{ section: 0, code: 'strata_sum' }]);
+    // (The one section weighs 10, so the test-wide weight rule is reported too; only the section's own issues here.)
+    expect(sectionIssues(form).filter((i) => i.section === 0)).toEqual([
+      { section: 0, code: 'strata_sum' },
+    ]);
     expect(toSaveTestDraftRequest(form)).toEqual({ ok: false, reason: 'invalid' });
     s = addStratum(s, 'verbal');
     s = updateStratum(s, 1, { level: 3, count: '6' });
@@ -434,8 +519,33 @@ describe('section issues', () => {
   });
 
   it('a clean draft has none', () => {
-    expect(sectionIssues(fromDraftView(view([d1Section, poolSection, writtenSection])))).toEqual(
-      [],
+    expect(
+      sectionIssues(
+        fromDraftView(view([{ ...d1Section, timeLimitSeconds: 300 }, poolSection, writtenSection])),
+      ),
+    ).toEqual([]);
+  });
+
+  it('surfaces the publish rules of a v2 draft: weights add up to 100 (R2-13), timers on all or none (M1-11)', () => {
+    const light = fromDraftView(view([poolSection, writtenSection]));
+    expect(sectionIssues(light)).toEqual([{ section: null, code: 'weights_sum' }]);
+    const mixed = fromDraftView(
+      view([
+        { ...poolSection, weight: 50 },
+        { ...writtenSection, weight: 50, timeLimitSeconds: undefined },
+      ]),
     );
+    expect(sectionIssues(mixed)).toEqual([{ section: null, code: 'timers_mixed' }]);
+    const untimed = fromDraftView(
+      view([
+        { ...poolSection, weight: 50, timeLimitSeconds: undefined },
+        { ...writtenSection, weight: 50, timeLimitSeconds: undefined },
+      ]),
+    );
+    expect(sectionIssues(untimed)).toEqual([]);
+  });
+
+  it('leaves a D1 (package v1) draft to D1 rules: no weight sum or timer rule', () => {
+    expect(sectionIssues(fromDraftView(view([d1Section])))).toEqual([]);
   });
 });
