@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { inTx, qualityHandlers, table, type FakeDb } from './fake-db.test-helpers.js';
 import { runQuality } from './handler.js';
 import { SQL } from './store.js';
-import { HASH_RW1, Q2, qualityWorldV2 } from './world-v2.test-helpers.js';
+import { HASH_RW1, Q2, SLOT, qualityWorldV2 } from './world-v2.test-helpers.js';
 
 const run = (
   db: FakeDb,
@@ -33,7 +33,8 @@ describe('quality v2: the scored item set is the candidate own set (R5-19, R5-47
     expect(table(w.db, 'scores')[0]).toMatchObject({
       score: 40,
       meets_cutoff: true,
-      scoring_version: 'd1-scoring-v1',
+      // Lead decision (A3a fix round 1): a v2 session records its own scoring version; v1 keeps d1-scoring-v1.
+      scoring_version: 'm1-scoring-v1',
       grader_model_id: 'none',
     });
     expect(table(w.db, 'quality_cards')).toHaveLength(1);
@@ -118,6 +119,90 @@ describe('quality v2: the scored item set is the candidate own set (R5-19, R5-47
     expect(SQL.variantKeys).toContain('public.item_variant_keys');
     expect(SQL.variantKeys).toContain('public.session_items');
     expect(SQL.rubricsV2).toContain('public.session_items');
+  });
+});
+
+describe('quality v2: served positions and pool sections are checked against the version (R5-59 a)', () => {
+  const positionOf = (w: ReturnType<typeof qualityWorldV2>, item: string, position: number) => {
+    const row = w.message.served.find((s) => s.itemVersionId === item);
+    if (row === undefined) throw new Error('no served row');
+    row.position = position;
+  };
+
+  it('two pool items with swapped served positions are refused before any score is written', async () => {
+    const w = qualityWorldV2();
+    positionOf(w, Q2.b2, SLOT.b1);
+    positionOf(w, Q2.b1, SLOT.b2);
+    await expect(run(w.db, w.message)).rejects.toThrow(/^quality_bad_served_position$/);
+    expect(table(w.db, 'scores')).toHaveLength(0);
+    expect(table(w.db, 'quality_cards')).toHaveLength(0);
+    expect(table(w.db, 'idempotency_keys')).toHaveLength(0);
+  });
+
+  it('a pool item served at the slot of a drawn-but-unserved item is refused', async () => {
+    const w = qualityWorldV2();
+    positionOf(w, Q2.b1, SLOT.b3);
+    await expect(run(w.db, w.message)).rejects.toThrow(/^quality_bad_served_position$/);
+    expect(table(w.db, 'scores')).toHaveLength(0);
+  });
+
+  it('an inline item served outside its section slots is refused', async () => {
+    const w = qualityWorldV2({ b3Answered: false });
+    positionOf(w, Q2.iA2, SLOT.b3);
+    await expect(run(w.db, w.message)).rejects.toThrow(/^quality_bad_served_position$/);
+    expect(table(w.db, 'scores')).toHaveLength(0);
+  });
+
+  it('a served row naming a section of another version is refused', async () => {
+    const w = qualityWorldV2();
+    const row = w.message.served.find((s) => s.itemVersionId === Q2.iA1);
+    if (row === undefined) throw new Error('no served row');
+    row.sectionId = Q2.org;
+    await expect(run(w.db, w.message)).rejects.toThrow(/^quality_bad_served_position$/);
+    expect(table(w.db, 'scores')).toHaveLength(0);
+  });
+
+  it('a pool section of the version missing from poolSectionIds is refused', async () => {
+    const w = qualityWorldV2();
+    w.message.poolSectionIds = [Q2.sP];
+    await expect(run(w.db, w.message)).rejects.toThrow(/^quality_bad_draws$/);
+    expect(table(w.db, 'scores')).toHaveLength(0);
+  });
+
+  it('an inline section named as a pool section is refused', async () => {
+    const w = qualityWorldV2();
+    w.message.poolSectionIds = [Q2.sP, Q2.sW, Q2.sA];
+    await expect(run(w.db, w.message)).rejects.toThrow(/^quality_bad_draws$/);
+    expect(table(w.db, 'scores')).toHaveLength(0);
+  });
+
+  it('a draw longer than the section draw_count is refused', async () => {
+    const w = qualityWorldV2();
+    const draw = w.message.draws[0];
+    if (draw === undefined) throw new Error('no draw');
+    draw.itemVersionIds = [...draw.itemVersionIds, Q2.w1];
+    draw.itemVariantIds = [...draw.itemVariantIds, null];
+    await expect(run(w.db, w.message)).rejects.toThrow(/^quality_bad_draws$/);
+    expect(table(w.db, 'scores')).toHaveLength(0);
+  });
+
+  it('every served position at its slot scores (the written pool section at slot 6)', async () => {
+    const w = qualityWorldV2({ written: true, b3Answered: true });
+    await run(w.db, w.message);
+    expect(table(w.db, 'scores')).toHaveLength(1);
+  });
+});
+
+describe('quality: the package version of the message must be the version package (fails closed)', () => {
+  it('a v1 message with no served item on a package v2 version is quality_bad_package', async () => {
+    const w = qualityWorldV2();
+    const v1 = { ...w.message, v: 1, served: [] } as Record<string, unknown>;
+    delete v1['poolSectionIds'];
+    delete v1['draws'];
+    await expect(run(w.db, v1 as Parameters<typeof runQuality>[0])).rejects.toThrow(
+      /^quality_bad_package$/,
+    );
+    expect(table(w.db, 'scores')).toHaveLength(0);
   });
 });
 

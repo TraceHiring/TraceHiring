@@ -54,6 +54,12 @@ export interface QualityWorldV2Options {
   noVariantKeys?: boolean;
 }
 
+/**
+ * The candidate positions of this version (R5-59 a): sA inline takes slots 1-2, sP (draw 3) slots 3-5, sW (draw 1)
+ * slot 6. A pool item's slot is its section's first slot + its index in the draw.
+ */
+export const SLOT = { iA1: 1, iA2: 2, b2: 3, b1: 4, b3: 5, w1: 6 } as const;
+
 export const qualityWorldV2 = (
   opts: QualityWorldV2Options = {},
 ): { db: FakeDb; message: SessionMirrorMessageV2 } => {
@@ -194,6 +200,32 @@ export const qualityWorldV2 = (
   });
 
   const hex = 'e'.repeat(64);
+  // served[] as the edge mirrors it: the candidate's session-wide slot, the section, variant and option order.
+  const served: SessionMirrorMessageV2['served'] = [
+    { position: SLOT.iA1, itemVersionId: Q2.iA1, servedAt: at(1), sectionId: Q2.sA },
+    { position: SLOT.iA2, itemVersionId: Q2.iA2, servedAt: at(2), sectionId: Q2.sA },
+    {
+      position: SLOT.b2,
+      itemVersionId: Q2.b2,
+      servedAt: at(3),
+      sectionId: Q2.sP,
+      itemVariantId: Q2.v2b,
+      optionOrder: ['d', 'c', 'b', 'a'],
+    },
+    {
+      position: SLOT.b1,
+      itemVersionId: Q2.b1,
+      servedAt: at(4),
+      sectionId: Q2.sP,
+      optionOrder: ['c', 'a', 'd', 'b'],
+    },
+  ];
+  if (opts.b3Answered === true) {
+    served.push({ position: SLOT.b3, itemVersionId: Q2.b3, servedAt: at(5), sectionId: Q2.sP });
+  }
+  if (opts.written === true) {
+    served.push({ position: SLOT.w1, itemVersionId: Q2.w1, servedAt: at(6), sectionId: Q2.sW });
+  }
   const message: SessionMirrorMessageV2 = {
     v: 2,
     jobKind: 'session_mirror',
@@ -213,7 +245,7 @@ export const qualityWorldV2 = (
     lastEventSeq: 0,
     streamCount: 1,
     resumeCount: 0,
-    served: [],
+    served,
     evidence: {
       finalKey: `sessions/${org}/${Q2.session}/final.json`,
       finalSha256: hex,
@@ -227,7 +259,16 @@ export const qualityWorldV2 = (
     photo: null,
     photoSkippedReason: 'declined',
     poolSectionIds: [Q2.sP, Q2.sW],
-    draws: [],
+    draws: [
+      {
+        sectionId: Q2.sP,
+        itemVersionIds: [Q2.b2, Q2.b1, Q2.b3],
+        itemVariantIds: [Q2.v2b, null, null],
+      },
+      ...(opts.written === true
+        ? [{ sectionId: Q2.sW, itemVersionIds: [Q2.w1], itemVariantIds: [null] }]
+        : []),
+    ],
   };
   return { db, message };
 };
