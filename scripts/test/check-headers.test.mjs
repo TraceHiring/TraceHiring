@@ -167,6 +167,23 @@ describe('checkCsp', () => {
     expect(checkCsp('recruiter', csp).length).toBeGreaterThan(0);
   });
 
+  // ADR-033 §4 (specs/m1-test-authoring.md R5-48): the recruiter's import Web Worker is a same-origin module.
+  it("requires exactly worker-src 'self' on the recruiter and no worker-src on the candidate app", () => {
+    expect(base).toContain("worker-src 'self'");
+    expect(checkCsp('recruiter', base)).toEqual([]);
+    expect(checkCsp('recruiter', base.replace("; worker-src 'self'", ''))).toContain(
+      'CSP is missing worker-src',
+    );
+    expect(
+      joined(checkCsp('recruiter', base.replace("worker-src 'self'", "worker-src 'self' blob:"))),
+    ).toMatch(/CSP worker-src must be exactly "'self'"/);
+    const candidate = cspOf(CANDIDATE);
+    expect(candidate).not.toContain('worker-src');
+    expect(checkCsp('candidate', `${candidate}; worker-src 'self'`)).toContain(
+      'CSP has an unexpected directive worker-src',
+    );
+  });
+
   it.each([
     ['candidate', 'https://trace-edge-staging.sub.workers.dev', true],
     ['candidate', 'https://*.workers.dev', false],
@@ -214,7 +231,9 @@ describe('checkCsp', () => {
     ['candidate', 'http://127.0.0.1:8787', false],
     ['candidate', 'http://localhost:8787', false],
   ])('connect-src for %s with %s: allowed=%s', (app, origin, allowed) => {
-    const csp = base.replace("connect-src 'self'", `connect-src 'self' ${origin}`);
+    // The recruiter base carries worker-src (ADR-033 §4), which the candidate app may not have.
+    const forApp = app === 'candidate' ? base.replace("; worker-src 'self'", '') : base;
+    const csp = forApp.replace("connect-src 'self'", `connect-src 'self' ${origin}`);
     expect(checkCsp(app, csp)).toEqual(
       allowed ? [] : [expect.stringMatching(/not on the .* allow-list/)],
     );
@@ -342,6 +361,9 @@ describe('runChecks and the CLI over a fixture repository', () => {
     const r = run(root);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/apps\/candidate\/dist\/_headers: permissions-policy must be/);
-    expect(r.stderr).toMatch(/1 violation/);
+    expect(r.stderr).toMatch(
+      /apps\/candidate\/dist\/_headers: CSP has an unexpected directive worker-src/,
+    );
+    expect(r.stderr).toMatch(/2 violation/);
   });
 });

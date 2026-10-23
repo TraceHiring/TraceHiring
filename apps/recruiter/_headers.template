@@ -1,6 +1,6 @@
 # Source of dist/_headers (specs/m0b-tenancy.md §2.7): the headers-template Vite plugin fills the connect-src origin tokens, each dropped when its build variable is unset. The first is the origin of VITE_SUPABASE_URL. From D1 the second is the staging api Worker origin of VITE_API_ORIGIN (d1 spec §7.1) and the third the Sentry ingest origin of VITE_SENTRY_DSN (d1 AT-D22).
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' __SUPABASE_ORIGIN__ __API_ORIGIN__ __SENTRY_ORIGIN__; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' __SUPABASE_ORIGIN__ __API_ORIGIN__ __SENTRY_ORIGIN__; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'; worker-src 'self'
   Strict-Transport-Security: max-age=31536000; includeSubDomains
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer

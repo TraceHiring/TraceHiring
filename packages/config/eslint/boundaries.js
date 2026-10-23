@@ -18,6 +18,8 @@ export const workspacePackages = {
   '@trace/ui': 'packages/ui',
   '@trace/vendors': 'packages/vendors',
   '@trace/band-engine': 'packages/band-engine',
+  '@trace/item-variants': 'packages/item-variants',
+  '@trace/item-delivery': 'packages/item-delivery',
   '@trace/db-types': 'packages/db-types',
   '@trace/workers-http': 'packages/workers-http',
   '@trace/edge': 'workers/edge',
@@ -40,6 +42,11 @@ const elements = [
   // Pure integrity band engine (specs/d1-demo-slice.md §5.2): imports nothing, not even @trace/shared. Only
   // integrity files, services/api and the recruiter app may import it; quality files never (rule 1).
   { type: 'band-engine', pattern: 'packages/band-engine' },
+  // M1 pure packages (specs/m1-test-authoring.md §11.3 A1): parameterised variants (§6.3; the api generates them)
+  // and section draws (§6.5; the edge SessionDO and the api's publish check). They import only @trace/shared; the
+  // candidate app never draws (the server holds the truth).
+  { type: 'item-variants', pattern: 'packages/item-variants' },
+  { type: 'item-delivery', pattern: 'packages/item-delivery' },
   // Playwright end-to-end package (specs/d1-demo-slice.md §7.2): imports no workspace code; nothing imports it.
   { type: 'e2e', pattern: 'e2e' },
   // Workers-only HTTP helpers (specs/m0b-tenancy.md §1.1 item 9b): never imported by an app or a package.
@@ -133,6 +140,9 @@ const policies = [
   // (rule1('integrity') below), so neutral jobs code, edge and the other apps cannot.
   { from: element('api'), allow: { to: element('band-engine') } },
   { from: fileIn('recruiter-app'), allow: { to: element('band-engine') } },
+  { from: element(['item-variants', 'item-delivery']), allow: { to: element('shared') } },
+  { from: element('api'), allow: { to: element(['item-variants', 'item-delivery']) } },
+  { from: element('edge'), allow: { to: element('item-delivery') } },
   // shared, db-types, band-engine, e2e, config, scripts and supabase import no other element.
   // Nothing allows importing an app, a Worker or a service.
   ...rule1('quality'),

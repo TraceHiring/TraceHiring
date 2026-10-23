@@ -49,6 +49,9 @@ catalog:
   # Workers -> Postgres driver (ADR-031, DC-D7): services/api and workers/jobs only, exactly 3.4.9
   # (published 2026-04-05).
   postgres: 3.4.9
+  # Zip reader for the item import Web Worker (ADR-033, specs/m1-test-authoring.md R5-48): apps/recruiter only,
+  # streaming Unzip + UnzipInflate only; exactly 0.8.3 (published 2026-05-16).
+  fflate: 0.8.3
 
 # Build-script allow-list (pnpm 12 key, checked in S1.0).
 allowBuilds:

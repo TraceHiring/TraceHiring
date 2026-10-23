@@ -16,6 +16,7 @@
     "@trace/band-engine": "workspace:*",
     "@trace/shared": "workspace:*",
     "@trace/ui": "workspace:*",
+    "fflate": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-router": "catalog:"
@@ -24,6 +25,7 @@
     "@trace/config": "workspace:*",
     "@types/node": "catalog:",
     "eslint": "catalog:",
+    "happy-dom": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "@types/react": "catalog:",
