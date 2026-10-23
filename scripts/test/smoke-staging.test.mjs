@@ -49,12 +49,16 @@ const ALIAS_URLS = {
   recruiter: 'https://trace-recruiter-staging.pages.dev',
 };
 
-/** The §10.3 headers as the apps' _headers files set them (candidate connect-src: §10.3 extra). */
+/**
+ * The §10.3 headers as the apps' _headers files set them (candidate connect-src: §10.3 extra; recruiter
+ * worker-src 'self': ADR-033 §4, scripts/check-headers.mjs APP_CSP_DIRECTIVES).
+ */
 const securityHeaders = (app) => ({
   'content-security-policy':
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'" +
     (app === 'candidate' ? ' https://trace-edge-staging.fixture-sub.workers.dev' : '') +
-    "; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
+    "; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'" +
+    (app === 'recruiter' ? "; worker-src 'self'" : ''),
   'strict-transport-security': 'max-age=31536000; includeSubDomains',
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
