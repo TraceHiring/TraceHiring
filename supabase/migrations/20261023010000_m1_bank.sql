@@ -594,6 +594,13 @@ begin
   ) then
     raise exception 'TRACE_GUARD: a multiple-choice item needs its answer key' using errcode = '42501';
   end if;
+  -- Carried Medium (defence in depth behind D1's shape CHECK): a written item reaches review, approval and a pool only
+  -- with its rubric. The stored row is read: content (the rubric) and status never change in the same update.
+  if p_format = 'written' and exists (
+    select 1 from public.item_versions as i where i.org_id = p_org and i.id = p_id and i.rubric_version_id is null
+  ) then
+    raise exception 'TRACE_GUARD: a written item needs its rubric' using errcode = '42501';
+  end if;
   if p_param then
     if not exists (select 1 from public.item_variants as v where v.org_id = p_org and v.item_version_id = p_id) then
       raise exception 'TRACE_GUARD: a parameterised item needs its variants' using errcode = '42501';
@@ -986,6 +993,11 @@ begin
         p_actor_kind => v_kind);
     end if;
     return null;
+  end if;
+  -- Carried Low: the library key review (SEC-M1-4) is recorded in an update of its own; it is audited by its reviewer.
+  if old.key_reviewed_by is null and new.key_reviewed_by is not null then
+    perform private.audit(new.org_id, 'item.key_review', 'item_versions', new.id,
+      jsonb_build_object('item_version_id', new.id), new.workspace_id, p_actor_kind => v_kind);
   end if;
   if new.status is not distinct from old.status then
     return null;

@@ -716,7 +716,8 @@ begin
     raise exception 'TRACE_GUARD: publish needs the pinned ruleset and notice' using errcode = '42501';
   end if;
   select r.band_rule_version_id, r.settings, r.catalog_version into v_band, v_settings, v_catalog
-  from public.ruleset_versions as r where r.org_id = new.org_id and r.id = new.ruleset_version_id;
+  from public.ruleset_versions as r where r.org_id = new.org_id and r.id = new.ruleset_version_id
+  for share;
   if v_band is null then
     raise exception 'TRACE_GUARD: publish needs a ruleset with a band rule version' using errcode = '42501';
   end if;
@@ -781,6 +782,13 @@ begin
   if exists (
     select 1 from public.item_versions as i
     where i.org_id = new.org_id and i.test_version_id = new.id and i.format = 'written'
+      and i.rubric_version_id is null
+  ) or exists (
+    -- Carried Medium (defence in depth): the same for the approved written pool items a pool section can draw.
+    select 1 from public.sections as s
+    join public.pool_items as pi on pi.org_id = s.org_id and pi.pool_id = s.pool_id
+    join public.item_versions as i on i.org_id = pi.org_id and i.id = pi.item_version_id
+    where s.org_id = new.org_id and s.test_version_id = new.id and i.status = 'approved' and i.format = 'written'
       and i.rubric_version_id is null
   ) then
     raise exception 'TRACE_GUARD: every written item needs a rubric' using errcode = '42501';
@@ -865,7 +873,12 @@ begin
         and (s.pool_id is null
           or jsonb_typeof(s.blueprint -> 'strata') is distinct from 'array'
           or exists (
-            select 1 from jsonb_array_elements(b.strata) as e where jsonb_typeof(e -> 'count') is distinct from 'number'
+            -- Carried Low: every quota is a whole number of at least 1.
+            select 1 from jsonb_array_elements(b.strata) as e
+            cross join lateral (
+              select case when jsonb_typeof(e -> 'count') = 'number' then (e ->> 'count')::numeric end as n
+            ) as q
+            where q.n is null or q.n < 1 or q.n <> trunc(q.n)
           )
           or (select coalesce(sum(case when jsonb_typeof(e -> 'count') = 'number' then (e ->> 'count')::numeric end), 0)
               from jsonb_array_elements(b.strata) as e) <> s.draw_count)
