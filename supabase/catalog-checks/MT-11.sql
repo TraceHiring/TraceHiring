@@ -40,7 +40,9 @@
 --     deleted_at is null and (select auth.uid()) is not null, which only asks whether someone is signed in.
 --   caller_bound_elsewhere: no caller call is bound, but one is compared to a column of another table only, such as
 --     deleted_at is null and exists (select 1 from memberships as m where m.user_id = (select auth.uid())), where
---     the EXISTS is not correlated to the policy's table: any member of any org passes.
+--     the EXISTS is not correlated to the policy's table (a filter such as and t.deleted_at is null inside it is no
+--     correlation): any member of any org passes. Also org_id = coalesce((select private.job_org_id()), org_id),
+--     where the compared column is the call's own fallback.
 --   caller_unbound (M0b FIX re-review FR-1): no caller call is bound or compared to any column:
 --     deleted_at is null and (select auth.jwt() ->> 'role') = 'authenticated', (select auth.uid()) =
 --     (select auth.uid()), or org_id in (select m.org_id from memberships as m where (select auth.jwt() ->> 'role')
@@ -53,10 +55,24 @@
 --     such as status = 'draft' and (owner_id = (select auth.uid()) or deleted_at is null), or
 --     not (deleted_at is not null and owner_id = (select auth.uid())).
 --   Still not followed (the check is a net, and each table's rls_* tests, allowed and denied cases per role, remain
---   the proof): the boolean structure inside a sub-select (an OR in an EXISTS's WHERE), what the comparison is (a
---   caller compared with <> to a column counts as bound), a simple CASE (case x when ...: its WHEN compares the
---   operand, not a column, so a caller call there is not bound, and the check may report a compliant clause), and a
---   boolean function that takes a caller call and a column (not a comparison, so not bound).
+--   the proof), each with the form to write instead:
+--   - the boolean structure inside a sub-select, such as an OR in an EXISTS's WHERE: keep each OR arm's caller check
+--     in that arm, or split the policy.
+--   - what the comparison is: owner_id <> (select auth.uid()), or not (owner_id = (select auth.uid())), counts as
+--     bound although it lets in every row but the caller's own: compare with = (or = any, in, exists).
+--   - (owner_id = (select auth.uid())) is not false (or is not true below a NOT, any BOOLEANTEST) counts as guarded
+--     although it is true when owner_id is null: write owner_id = (select auth.uid()), or
+--     coalesce(owner_id = (select auth.uid()), false).
+--   - a simple CASE (case x when ...): its WHEN compares the operand, not a column, so a caller call there is not
+--     bound and the check may report a compliant clause: write case when x = ... then ... end.
+--   - a boolean function that takes a caller call and a column is no comparison, so not bound (reported): compare the
+--     column to the caller call directly.
+--   - (select m.id from memberships as m where m.user_id = (select auth.uid()) and m.org_id = t.org_id) is not null
+--     is reported as caller_only_null_tested, since the call sits inside a NULLTEST (fails closed): write
+--     exists (select 1 from memberships as m where m.user_id = (select auth.uid()) and m.org_id = t.org_id).
+--   Cost (FR-1 review MT11-5): the node-tree CTEs pair nodes within a clause, so time grows with the square of a
+--   clause's size and linearly with the number of clauses. 209 clauses (the local stack with M1-a, 2026-10-23) take
+--   0.38 to 0.44 s. Revisit near 600 policies.
 --   system_list_policy (M0b, M0a catalog pass C review E3): any policy on any relation in a system-list schema,
 --     whoever owns the relation (supautils lets postgres create policies on auth, storage and realtime tables).
 --     Trace uses R2 and Durable Objects, not Supabase Storage or Realtime, and adds no policy there.
@@ -286,53 +302,13 @@ var_ref (oid, clause, ord, ref_level, ref_query, ref_sublink) as (
   ) as s on true
   where v.piece like '{VAR %'
 ),
--- anchored_sublink: a SUBLINK node that reads a column of the policy's table (in its test expression or as a
--- correlation), or that sits inside the sub-select of an anchored SUBLINK and reads a column of that sub-select's
--- tables, such as the inner sub-select of test_id in (select t.id from tests as t where t.workspace_id in (...)).
-anchored_sublink (oid, clause, ord) as (
-  select s.oid, s.clause, s.ord
-  from tree_node as s
-  where s.piece like '{SUBLINK %'
-    and exists (
-      select 1
-      from var_ref as v
-      where v.oid = s.oid
-        and v.clause = s.clause
-        and v.ref_level = 0
-        and s.ord < v.ord
-        and v.ord < s.end_ord
-    )
-  union
-  select s.oid, s.clause, s.ord
-  from anchored_sublink as a
-  join var_ref as v on v.oid = a.oid and v.clause = a.clause and v.ref_sublink = a.ord
-  join tree_node as s on s.oid = v.oid
-    and s.clause = v.clause
-    and s.piece like '{SUBLINK %'
-    and v.ref_query < s.ord
-    and s.ord < v.ord
-    and v.ord < s.end_ord
-),
--- anchored_var: a VAR that reads the policy's table, or a table of the sub-select of an anchored SUBLINK.
-anchored_var (oid, clause, ord) as (
-  select v.oid, v.clause, v.ord
-  from var_ref as v
-  where v.ref_level = 0
-    or exists (
-      select 1
-      from anchored_sublink as a
-      where a.oid = v.oid
-        and a.clause = v.clause
-        and a.ord = v.ref_sublink
-    )
-),
 -- pred_node: the comparisons a caller call can be bound by: a boolean operator (OPEXPR with opresulttype 16),
 -- SCALARARRAYOPEXPR, DISTINCTEXPR, NULLIFEXPR, ROWCOMPAREEXPR, an EXISTS, ALL, ANY/IN or row-compare sub-select
--- (subLinkType 0 to 3), and NULLTEST, which binds nothing. The test expression of an ALL, ANY/IN or row-compare
--- sub-select (any node in it with no QUERY node between it and that SUBLINK) is left out: it compares with the
--- sub-select's output, so the SUBLINK node stands for it.
-pred_node (oid, clause, ord, end_ord, null_test) as (
-  select p.oid, p.clause, p.ord, p.end_ord, p.piece like '{NULLTEST %'
+-- (subLinkType 0 to 3, is_sublink), and NULLTEST, which binds nothing. The test expression of an ALL, ANY/IN or
+-- row-compare sub-select (any node in it with no QUERY node between it and that SUBLINK) is left out: it compares
+-- with the sub-select's output, so the SUBLINK node stands for it.
+pred_node (oid, clause, ord, end_ord, null_test, is_sublink) as (
+  select p.oid, p.clause, p.ord, p.end_ord, p.piece like '{NULLTEST %', p.piece like '{SUBLINK %'
   from tree_node as p
   where (
       (p.piece like '{OPEXPR %' and p.piece like '% :opresulttype 16 %')
@@ -362,16 +338,120 @@ pred_node (oid, clause, ord, end_ord, null_test) as (
         )
     )
 ),
+-- sublink_query: each SUBLINK node with its subLinkType and its own sub-select (the QUERY node right below it).
+sublink_query (oid, clause, ord, end_ord, sublink_type, query_ord) as (
+  select s.oid, s.clause, s.ord, s.end_ord, substring(s.piece from '^\{SUBLINK :subLinkType ([0-9]+) ')::int, q.ord
+  from tree_node as s
+  join tree_node as q on q.oid = s.oid
+    and q.clause = s.clause
+    and q.piece like '{QUERY %'
+    and q.depth = s.depth + 1
+    and s.ord < q.ord
+    and q.ord < s.end_ord
+  where s.piece like '{SUBLINK %'
+),
+-- tie_candidate (FR-1 review MT11-1, MT11-2): the column references (var_ord) that tie a sub-select to the query
+-- around it when that column is itself tied (anchored_sublink): a column in the test expression of an ALL, ANY/IN or
+-- row-compare sub-select, such as org_id in (select ...), a column in a comparison at the sub-select's own level
+-- that also reads a column of the sub-select's own tables (a real correlation, such as m.org_id = t.org_id, not a
+-- filter such as t.deleted_at is null), or, for a scalar or ARRAY sub-select, a column outside it in the innermost
+-- comparison around it, such as membership_id = (select m.id from memberships as m where ...).
+tie_candidate (oid, clause, sublink_ord, var_ord) as (
+  select s.oid, s.clause, s.ord, v.ord
+  from sublink_query as s
+  join var_ref as v on v.oid = s.oid and v.clause = s.clause and s.ord < v.ord and v.ord < s.query_ord
+  where s.sublink_type between 1 and 3
+  union all
+  select s.oid, s.clause, s.ord, v.ord
+  from sublink_query as s
+  join pred_node as p on p.oid = s.oid
+    and p.clause = s.clause
+    and s.query_ord < p.ord
+    and p.ord < s.end_ord
+    and not p.null_test
+    and not p.is_sublink
+  join var_ref as v on v.oid = p.oid and v.clause = p.clause and p.ord < v.ord and v.ord < p.end_ord
+  where not exists (
+      select 1
+      from query_node as q
+      where q.oid = p.oid
+        and q.clause = p.clause
+        and s.query_ord < q.ord
+        and q.ord < p.ord
+        and p.ord < q.end_ord
+    )
+    and exists (
+      select 1
+      from var_ref as w
+      where w.oid = p.oid
+        and w.clause = p.clause
+        and p.ord < w.ord
+        and w.ord < p.end_ord
+        and w.ref_query = s.query_ord
+    )
+  union all
+  select s.oid, s.clause, s.ord, v.ord
+  from sublink_query as s
+  cross join lateral (
+    select p.ord, p.end_ord, p.null_test
+    from pred_node as p
+    where p.oid = s.oid
+      and p.clause = s.clause
+      and p.ord < s.ord
+      and s.end_ord < p.end_ord
+    order by p.ord desc
+    limit 1
+  ) as p
+  join var_ref as v on v.oid = s.oid
+    and v.clause = s.clause
+    and p.ord < v.ord
+    and v.ord < p.end_ord
+    and (v.ord < s.ord or s.end_ord < v.ord)
+  where s.sublink_type in (4, 6)
+    and not p.null_test
+),
+-- anchored_sublink: a SUBLINK node tied to the policy's table: a tie_candidate column reads the policy's table, or
+-- reads, from inside the sub-select of an anchored SUBLINK, that sub-select's tables, such as the inner sub-select of
+-- test_id in (select t.id from tests as t where t.workspace_id in (...)).
+anchored_sublink (oid, clause, ord) as (
+  select t.oid, t.clause, t.sublink_ord
+  from tie_candidate as t
+  join var_ref as v on v.oid = t.oid and v.clause = t.clause and v.ord = t.var_ord
+  where v.ref_level = 0
+  union
+  select t.oid, t.clause, t.sublink_ord
+  from anchored_sublink as a
+  join var_ref as v on v.oid = a.oid and v.clause = a.clause and v.ref_sublink = a.ord
+  join tie_candidate as t on t.oid = v.oid
+    and t.clause = v.clause
+    and t.var_ord = v.ord
+    and v.ref_query < t.sublink_ord
+),
+-- anchored_var: a VAR that reads the policy's table, or a table of the sub-select of an anchored SUBLINK.
+anchored_var (oid, clause, ord) as (
+  select v.oid, v.clause, v.ord
+  from var_ref as v
+  where v.ref_level = 0
+    or exists (
+      select 1
+      from anchored_sublink as a
+      where a.oid = v.oid
+        and a.clause = v.clause
+        and a.ord = v.ref_sublink
+    )
+),
 -- tree_call: each function a clause calls (a function, an operator's function, an aggregate or a window function)
 -- that is in private or auth, with its schema, its node, whether it depends on the caller and whether it sits
 -- inside an IS [NOT] NULL test (a NULLTEST node), which only asks whether there is a caller. bound (M0b FR-1): the
 -- helper returns boolean itself (a predicate on the caller, such as private.is_operator), or the innermost
--- comparison around the call (pred_node) is not a NULLTEST and reads an anchored column (anchored_var), such as
--- org_id = any((select private.my_org_ids(...))), org_id in (select unnest((select private.my_org_ids(...)))),
--- membership_id in (select m.id from memberships as m where m.user_id = (select auth.uid())) or an EXISTS
--- correlated to the policy's table. A call compared only to a constant, such as (select auth.jwt() ->> 'role') =
--- 'authenticated', to itself, or to a column of a sub-select not tied to the policy's table, is not bound: it does
--- not pick rows. bound_elsewhere: that comparison reads some column, only not an anchored one.
+-- comparison around the call (pred_node) is an anchored sub-select (anchored_sublink), or is not a NULLTEST and
+-- reads an anchored column (anchored_var), such as org_id = any((select private.my_org_ids(...))),
+-- org_id in (select unnest((select private.my_org_ids(...)))) or membership_id in (select m.id from memberships as m
+-- where m.user_id = (select auth.uid())), unless a COALESCE, CASE, GREATEST or LEAST between that comparison and
+-- the call also reads an anchored column (FR-1 review MT11-3): org_id = coalesce((select private.job_org_id()),
+-- org_id) is true for every row when no job org is set. A call compared only to a constant, such as
+-- (select auth.jwt() ->> 'role') = 'authenticated', to itself, or to a column of a sub-select not tied to the
+-- policy's table, is not bound: it does not pick rows. bound_elsewhere: that comparison reads some column.
 tree_call (oid, clause, nspname, ord, caller, null_tested, bound, bound_elsewhere) as (
   select
     fn.oid,
@@ -399,15 +479,35 @@ tree_call (oid, clause, nspname, ord, caller, null_tested, bound, bound_elsewher
     )::oid
   left join lateral (
     select
-      not p.null_test
-      and exists (
-        select 1
-        from anchored_var as v
-        where v.oid = p.oid
-          and v.clause = p.clause
-          and p.ord < v.ord
-          and v.ord < p.end_ord
-      ) as anchored,
+      case
+        when p.is_sublink then exists (
+          select 1
+          from anchored_sublink as a
+          where a.oid = p.oid
+            and a.clause = p.clause
+            and a.ord = p.ord
+        )
+        else not p.null_test
+        and exists (
+          select 1
+          from anchored_var as v
+          where v.oid = p.oid
+            and v.clause = p.clause
+            and p.ord < v.ord
+            and v.ord < p.end_ord
+        )
+        and not exists (
+          select 1
+          from tree_node as x
+          join anchored_var as v on v.oid = x.oid and v.clause = x.clause and x.ord < v.ord and v.ord < x.end_ord
+          where x.oid = p.oid
+            and x.clause = p.clause
+            and (x.piece like '{COALESCEEXPR %' or x.piece like '{CASEEXPR %' or x.piece like '{MINMAXEXPR %')
+            and p.ord < x.ord
+            and x.ord < fn.ord
+            and fn.ord < x.end_ord
+        )
+      end as anchored,
       not p.null_test
       and exists (
         select 1
@@ -791,7 +891,7 @@ finding (oid, branch, detail) as (
         cf.clause
       )
       when not cf.has_bound and cf.has_bound_elsewhere then format(
-        '%s compares the caller only to columns of a sub-select not tied to its table, so it picks no rows',
+        '%s compares the caller to no column of its table (only other columns, or the column as a fallback)',
         cf.clause
       )
       when not cf.has_bound then format(
