@@ -213,6 +213,7 @@ describe('AuditDetails', () => {
     },
     'item.retire': { item_version_id: ID, from: 'approved', to: 'retired', self_approved: false },
     'item.ai_drafted': { item_version_id: ID, ai_draft_job_id: ID2 },
+    'item.key_review': { item_version_id: ID },
     'library.copy': { count: 1, reused: 0 },
     'pool.archive': { pool_id: ID },
     'role_template.publish': { version: 1 },
@@ -230,8 +231,8 @@ describe('AuditDetails', () => {
     'member_invite.provisioned': { member_invite_id: ID },
     'member_invite.failed': { member_invite_id: ID },
   };
-  it('covers exactly the 16 events of spec §2.4, the 9 of D1 (specs/d1-demo-slice.md §3.4; test.retire: DB review m1 m-5) and the 22 of M1 (R5-14, R5-26)', () => {
-    expect(AUDIT_ACTIONS).toHaveLength(47);
+  it('covers exactly the 16 events of spec §2.4, the 9 of D1 (specs/d1-demo-slice.md §3.4; test.retire: DB review m1 m-5) and the 23 of M1 (R5-14, R5-26; item.key_review)', () => {
+    expect(AUDIT_ACTIONS).toHaveLength(48);
     expect(Object.keys(AuditDetails).sort()).toEqual([...AUDIT_ACTIONS].sort());
   });
   it('limits a media link to 5 minutes and media details to ids (rule 8)', () => {
@@ -292,6 +293,7 @@ const M1_ACTIONS = [
   'item.not_approved',
   'item.retire',
   'item.ai_drafted',
+  'item.key_review',
   'library.copy',
   'pool.archive',
   'role_template.publish',

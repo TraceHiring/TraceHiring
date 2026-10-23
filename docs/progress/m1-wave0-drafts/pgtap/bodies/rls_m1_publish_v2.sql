@@ -83,6 +83,13 @@ select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD
 update public.sections set blueprint = '{"strata": [{"skillKey": "verbal", "difficultyBand": 2, "count": 1}]}' where id = pg_temp.id('ps3');
 select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a section''s strata quotas sum to its draw', 'publish (DB-M1-12): an inline section takes no strata');
 update public.sections set blueprint = null where id = pg_temp.id('ps3');
+update public.sections set blueprint = '{"strata": [{"skillKey": "verbal", "difficultyBand": 2, "count": 0.5}, {"skillKey": "quant", "difficultyBand": 2, "count": 0.5}]}' where id = pg_temp.id('ps1');
+select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a section''s strata quotas sum to its draw', 'publish (carried Low): a fractional quota is refused even when the quotas sum to the draw');
+update public.sections set blueprint = '{"strata": [{"skillKey": "verbal", "difficultyBand": 2, "count": 1}, {"skillKey": "quant", "difficultyBand": 2, "count": 0}]}' where id = pg_temp.id('ps1');
+select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a section''s strata quotas sum to its draw', 'publish (carried Low): a zero quota is refused');
+update public.sections set blueprint = '{"strata": [{"skillKey": "verbal", "difficultyBand": 2, "count": 2}, {"skillKey": "quant", "difficultyBand": 2, "count": -1}]}' where id = pg_temp.id('ps1');
+select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a section''s strata quotas sum to its draw', 'publish (carried Low): a negative quota is refused');
+select matches(pg_get_functiondef('private.test_versions_guard'::regproc), 'from public\.ruleset_versions as r where r\.org_id = new\.org_id and r\.id = new\.ruleset_version_id\s+for share;', 'publish (carried Low): the pinned ruleset is read for share, so its settings cannot change under the publish');
 update public.sections set blueprint = '{"strata": [{"skillKey": "verbal", "difficultyBand": 2, "count": 1}]}' where id = pg_temp.id('ps1');
 select pg_temp.sec('ps4', 'p', 4, 'mcq', null, null, 1);
 select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: every section needs at least one item', 'publish (R2-1): an inline section without items is refused');
