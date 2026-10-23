@@ -30,11 +30,17 @@ const unavailable = (): Promise<never> => Promise.reject(new Error(BINDING_UNAVA
 /** The evidence reader when the EVIDENCE binding is not configured: every read fails closed. */
 export const unavailableEvidence: EvidenceReader = { get: unavailable, head: unavailable };
 
-/** The mock grader outside production only (as the mock Messaging, L-11). */
+/** The environments where the mock grader may run (security review INF-2: an allow-list, as the mock Messaging). */
+const MOCK_GRADER_ENVS: readonly string[] = ['dev', 'staging'];
+
+/**
+ * The mock grader in dev and staging only (L-11). Any other TRACE_ENV, unset, empty or 'production' included, gets
+ * a grader that always fails closed; real adapters are M5.
+ */
 export const graderFor = (env: Env): LlmGrader =>
-  env.TRACE_ENV === 'production'
-    ? { grade: () => Promise.reject(new Error(GRADER_UNAVAILABLE)) }
-    : new MockLlmGrader();
+  typeof env.TRACE_ENV === 'string' && MOCK_GRADER_ENVS.includes(env.TRACE_ENV)
+    ? new MockLlmGrader()
+    : { grade: () => Promise.reject(new Error(GRADER_UNAVAILABLE)) };
 
 export const stagesFor = (env: Env, open: OpenStage = withStageConnection): Stages =>
   createStages({

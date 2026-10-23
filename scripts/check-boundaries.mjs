@@ -25,6 +25,9 @@
 //  13. a `Mock*` class or `createMock*` / `mock*` factory in packages/vendors/src/ whose constructor (or body) does not
 //      call an `assert*Env(` guard, or a file without such a guard that allow-lists ['dev', 'staging'] and throws
 //      (as messaging.ts; m1 R5-10, §11.2). VENDOR_MOCK_GUARD_EXEMPTIONS lists the one D1 exception.
+//  14. MockLlmGrader named in a non-test source file other than workers/jobs/src/queue/wiring.ts and the vendors
+//      package (security review INF-2)
+//  15. SUPABASE_SECRET_KEY named in apps/, packages/, workers/ or services/ outside workers/jobs/ (INF-5)
 // Prints only paths and rule names, never file contents.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -312,12 +315,19 @@ const PACKAGES_SCOPES = ['workers/edge/'];
 export const EDGE_READ_ONLY_BUCKETS = Object.freeze(['PACKAGES', 'ITEM_MEDIA']);
 const READ_ONLY_WHY = Object.freeze({ PACKAGES: 'd1 §4.2', ITEM_MEDIA: 'm1 R5-10' });
 const readOnlyUse = (name) => new RegExp(`\\b${name}\\b`, 'g');
-const readOnlyAllowed = (name) => new RegExp(`^${name}(?:\\??\\.(?:get|head)\\s*\\(|\\??\\s*:)`);
+/** Test support that is never deployed: `*.test-helpers.ts` and the vitest config build fake envs. */
+const isTestSupport = (p) =>
+  /\.test-helpers\.[cm]?[jt]sx?$/.test(p) ||
+  /^vitest(?:\.[\w-]+)?\.config\.[cm]?[jt]s$/.test(path.posix.basename(p));
+// A type declaration is `NAME: R2Bucket` / `NAME?: R2Bucket` only: any other `NAME:` is a renaming destructure or an
+// object property, both aliases (security review INF-4).
+const readOnlyAllowed = (name) =>
+  new RegExp(`^${name}(?:\\??\\.(?:get|head)\\s*\\(|\\??\\s*:\\s*R2Bucket\\b)`);
 export function checkPackagesReadOnly(files) {
   const out = [];
   for (const { path: p, content } of files) {
     if (!inScope(p, PACKAGES_SCOPES) || !SOURCE_EXT.test(p)) continue;
-    if (isGenerated(p) || isTestFile(p)) continue;
+    if (isGenerated(p) || isTestFile(p) || isTestSupport(p)) continue;
     for (const name of EDGE_READ_ONLY_BUCKETS) {
       const allowed = readOnlyAllowed(name);
       for (const m of content.matchAll(readOnlyUse(name))) {
@@ -342,7 +352,8 @@ export function checkPackagesReadOnly(files) {
 // ever run as code (m1 R5-10, §11.2). Any mention of `eval` or of the `Function` constructor in the package's source
 // (tests included) is flagged; the package not existing yet passes.
 const NO_DYNAMIC_CODE_SCOPES = ['packages/item-variants/'];
-const DYNAMIC_CODE = /\beval\b|\bFunction\b/;
+// INF-4: `fn.constructor(...)` / `fn['constructor'](...)` reaches the Function constructor without naming it.
+const DYNAMIC_CODE = /\beval\b|\bFunction\b|\.constructor\s*\(|\[\s*(['"`])constructor\1\s*\]/;
 export function checkNoDynamicCode(files) {
   const out = [];
   for (const { path: p, content } of files) {
@@ -367,6 +378,8 @@ export const VENDOR_MOCK_GUARD_EXEMPTIONS = Object.freeze({
   'packages/vendors/src/llm-grader.ts': Object.freeze(['MockLlmGrader']),
 });
 const MOCK_CLASS = /\bclass\s+(Mock[A-Z]\w*)\b/g;
+// INF-3: a class expression bound to a Mock* name (`const MockX = class …`, optionally typed).
+const MOCK_CLASS_EXPR = /\b(?:const|let|var)\s+(Mock[A-Z]\w*)\b[^=;]*=\s*class\b/g;
 const MOCK_FUNCTION = /\bfunction\s+((?:createMock|mock)[A-Z]\w*)\s*[<(]/g;
 const MOCK_CONST = /\b(?:const|let|var)\s+((?:createMock|mock)[A-Z]\w*)\b[^=;]*=/g;
 const GUARD_CALL = /\bassert\w*Env\s*\(/;
@@ -411,6 +424,35 @@ function endOf(content, from, block) {
   return content.length;
 }
 
+/**
+ * The text with every line and block comment replaced by a space (strings and template literals kept, so a URL in a
+ * string is not a comment). A guard call that is only a comment must not count (INF-3).
+ */
+function stripComments(content) {
+  let out = '';
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i];
+    const next = content[i + 1];
+    if (c === '/' && next === '/') {
+      const nl = content.indexOf('\n', i);
+      i = nl < 0 ? content.length : nl - 1;
+      out += ' ';
+    } else if (c === '/' && next === '*') {
+      const end = content.indexOf('*/', i + 2);
+      i = end < 0 ? content.length : end + 1;
+      out += ' ';
+    } else if (c === '"' || c === "'" || c === '`') {
+      let j = i + 1;
+      while (j < content.length && content[j] !== c) j += content[j] === '\\' ? 2 : 1;
+      out += content.slice(i, j + 1);
+      i = j;
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
 /** The text of the `constructor(...) { … }` of a class body, or null. */
 function constructorOf(classBody) {
   const m = /\bconstructor\s*\(/.exec(classBody);
@@ -420,21 +462,24 @@ function constructorOf(classBody) {
 
 export function checkVendorMockGuards(files) {
   const out = [];
-  for (const { path: p, content } of files) {
+  for (const { path: p, content: raw } of files) {
     if (!inScope(p, VENDOR_SCOPES) || !SOURCE_EXT.test(p)) continue;
     if (isGenerated(p) || isTestFile(p)) continue;
+    const content = stripComments(raw);
     const exempt = Object.hasOwn(VENDOR_MOCK_GUARD_EXEMPTIONS, p)
       ? VENDOR_MOCK_GUARD_EXEMPTIONS[p]
       : [];
     const problems = [];
     let mocks = 0;
-    for (const m of content.matchAll(MOCK_CLASS)) {
-      if (exempt.includes(m[1])) continue;
-      mocks++;
-      const body = content.slice(m.index, endOf(content, m.index, true));
-      const ctor = constructorOf(body);
-      if (ctor === null || !GUARD_CALL.test(ctor)) {
-        problems.push(`${m[1]}'s constructor does not call an assert…Env guard`);
+    for (const re of [MOCK_CLASS, MOCK_CLASS_EXPR]) {
+      for (const m of content.matchAll(re)) {
+        if (exempt.includes(m[1])) continue;
+        mocks++;
+        const body = content.slice(m.index, endOf(content, m.index, true));
+        const ctor = constructorOf(body);
+        if (ctor === null || !GUARD_CALL.test(ctor)) {
+          problems.push(`${m[1]}'s constructor does not call an assert…Env guard`);
+        }
       }
     }
     for (const re of [MOCK_FUNCTION, MOCK_CONST]) {
@@ -459,6 +504,47 @@ export function checkVendorMockGuards(files) {
       out.push(
         violation(13, p, `a mock vendor must refuse production: ${problems.join('; ')} (L-11)`),
       );
+    }
+  }
+  return out;
+}
+
+// ---------- rule 14 ----------
+// MockLlmGrader carries no production guard of its own (the rule 13 exemption): its guard is graderFor in the jobs
+// wiring, which allow-lists dev and staging. So no other source file may name it (security review INF-2); tests and
+// the vendors package itself (definition and re-export) are exempt.
+export const MOCK_GRADER_ALLOWED_FILE = 'workers/jobs/src/queue/wiring.ts';
+export function checkMockGraderScope(files) {
+  const out = [];
+  for (const { path: p, content } of files) {
+    if (!inScope(p, SOURCE_SCOPES) || !SOURCE_EXT.test(p)) continue;
+    if (isGenerated(p) || isTestFile(p) || inScope(p, VENDOR_SCOPES)) continue;
+    if (p === MOCK_GRADER_ALLOWED_FILE) continue;
+    if (/\bMockLlmGrader\b/.test(content)) {
+      out.push(
+        violation(
+          14,
+          p,
+          `names MockLlmGrader outside ${MOCK_GRADER_ALLOWED_FILE} (its graderFor guard)`,
+        ),
+      );
+    }
+  }
+  return out;
+}
+
+// ---------- rule 15 ----------
+// The Supabase secret key (member provisioning, M1 R5-12: SUPABASE_SECRET_KEY_JOBS) is a jobs-only secret (security
+// review INF-5). Outside workers/jobs/ no app, package, Worker or service file may name it, tests included; scripts/
+// (the ops runbooks) are not scanned, and docs are Markdown. Rule 1 already covers apps, packages and the edge.
+const SECRET_KEY_ALLOWED_SCOPES = ['workers/jobs/'];
+export function checkSupabaseSecretKeyScope(files) {
+  const out = [];
+  for (const { path: p, content } of files) {
+    if (!inScope(p, SOURCE_SCOPES) || isMarkdown(p) || inScope(p, SECRET_KEY_ALLOWED_SCOPES))
+      continue;
+    if (/supabase_secret_key/i.test(content)) {
+      out.push(violation(15, p, 'names SUPABASE_SECRET_KEY outside workers/jobs (M1 R5-12)'));
     }
   }
   return out;
@@ -678,6 +764,8 @@ export function runChecks(root) {
     ...checkPackagesReadOnly(files),
     ...checkNoDynamicCode(files),
     ...checkVendorMockGuards(files),
+    ...checkMockGraderScope(files),
+    ...checkSupabaseSecretKeyScope(files),
   ];
 }
 

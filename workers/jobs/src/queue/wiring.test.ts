@@ -89,6 +89,22 @@ describe('evidence and grader fail closed', () => {
     ).rejects.toThrow(GRADER_UNAVAILABLE);
   });
 
+  // Security review INF-2: an allow-list, as the mock Messaging: an unset, empty or unknown TRACE_ENV refuses too.
+  it.each([undefined, '', 'prod', 'Production', 'test', 'staging ', 'DEV'])(
+    'refuses the mock grader when TRACE_ENV is %j (only dev and staging may use it)',
+    async (name) => {
+      const grader = graderFor(env({ TRACE_ENV: name }));
+      expect(grader.constructor.name).not.toBe('MockLlmGrader');
+      await expect(
+        grader.grade({
+          rubric: { rubricVersionId: 'r', criteria: [] },
+          item: { id: 'i', promptText: 'p' },
+          answer: 'a',
+        }),
+      ).rejects.toThrow(GRADER_UNAVAILABLE);
+    },
+  );
+
   it('dev and staging use the deterministic mock grader', () => {
     for (const name of ['dev', 'staging']) {
       expect(graderFor(env({ TRACE_ENV: name })).constructor.name).toBe('MockLlmGrader');

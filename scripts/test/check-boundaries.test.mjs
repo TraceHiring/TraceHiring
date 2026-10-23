@@ -7,11 +7,14 @@ import {
   CREDENTIAL_NAMES,
   CREDENTIAL_PATTERN_EXEMPTIONS,
   EDGE_READ_ONLY_BUCKETS,
+  MOCK_GRADER_ALLOWED_FILE,
   REQUIRED_AUTH_CONFIG,
   SUPABASE_JS_FORBIDDEN_SCOPES,
   VENDOR_MOCK_GUARD_EXEMPTIONS,
   checkAuthConfig,
+  checkMockGraderScope,
   checkNoDynamicCode,
+  checkSupabaseSecretKeyScope,
   checkSupabaseJsScope,
   checkPackagesReadOnly,
   checkVendorMockGuards,
@@ -677,6 +680,11 @@ describe('rule 11: the edge reads ITEM_MEDIA only (m1 R5-10)', () => {
     'const media = env.ITEM_MEDIA;',
     'const { ITEM_MEDIA } = env;',
     'serve(env.ITEM_MEDIA, key);',
+    // Security review INF-4: a renaming destructure or object property aliases the bucket.
+    'const { ITEM_MEDIA: media } = env; await media.put(k, b);',
+    'const { ITEM_MEDIA : m } = env;',
+    'function f({ ITEM_MEDIA: b }: Env) { return b.delete(k); }',
+    'const deps = { ITEM_MEDIA: env.ITEM_MEDIA };',
   ])('flags %s', (code) => {
     const v = edge(code);
     expect(v).toHaveLength(1);
@@ -695,6 +703,9 @@ describe('rule 11: the edge reads ITEM_MEDIA only (m1 R5-10)', () => {
         f('workers/edge/src/item-media.test.ts', 'await env.ITEM_MEDIA.put(k, b);'),
         f('workers/edge/worker-configuration.d.ts', 'ITEM_MEDIA: R2Bucket;'),
         f('services/api/src/modules/bank/images.ts', 'await env.ITEM_MEDIA.put(k, b);'),
+        // Test support is never deployed: helpers and the vitest config build fake envs.
+        f('workers/edge/src/edge.test-helpers.ts', 'const env = { ITEM_MEDIA: media.bucket };'),
+        f('workers/edge/vitest.config.ts', "r2Buckets: { ITEM_MEDIA: 'test-item-media' },"),
       ]),
     ).toEqual([]);
   });
@@ -719,6 +730,10 @@ describe('rule 12: no eval or Function constructor in packages/item-variants (m1
     'const k = new Function ("x", body);',
     'const m = Function.call(null, "return 1");',
     'const n = (0, eval)("1");',
+    // Security review INF-4: the Function constructor reached through any function's constructor.
+    'const p = (() => 0).constructor("return 1");',
+    'const q = run.constructor ("return 1");',
+    "const r = (async () => 0)['constructor']('return 1');",
   ])('flags %s', (code) => {
     const v = variants(code);
     expect(v).toHaveLength(1);
@@ -771,6 +786,12 @@ describe('rule 13: every vendors Mock* refuses production (m1 R5-10, §11.2; as 
       '}',
     ].join('\n');
     expect(vendors(`${GUARD}\n${guardedClass}\n${factory}\n`)).toEqual([]);
+    // INF-3: a guarded class expression passes too, and a URL in a string is not a comment.
+    const expr = guardedClass.replace(
+      'export class MockLlmDrafter implements LlmDrafter {',
+      'export const MockLlmDrafter = class implements LlmDrafter {',
+    );
+    expect(vendors(`${GUARD}\nconst u = 'https://example.test/x';\n${expr};\n`)).toEqual([]);
     // The guard may be imported from a shared module.
     expect(vendors(`import { assertMockEnv } from './mock-env.js';\n${guardedClass}\n`)).toEqual(
       [],
@@ -815,6 +836,23 @@ describe('rule 13: every vendors Mock* refuses production (m1 R5-10, §11.2; as 
       'an arrow factory that skips the guard',
       `${GUARD}\n${guardedClass}\nexport const createMockLlmDrafter = (env: string) => ({ draft: () => 1 });\n`,
     ],
+    // Security review INF-3: a class expression, and a guard call that is only a comment.
+    [
+      'a Mock class expression with no guarded constructor',
+      `${GUARD}\nexport const MockLlmDrafter = class {\n  constructor(env: string) { this.env = env; }\n};\n`,
+    ],
+    [
+      'a typed Mock class expression with no constructor',
+      `${GUARD}\nexport const MockLlmDrafter: Ctor = class implements LlmDrafter { draft() { return 1; } };\n`,
+    ],
+    [
+      'a constructor whose guard call is commented out',
+      `${GUARD}\nexport class MockLlmDrafter {\n  constructor(env: string) {\n    // assertMockEnv(env);\n    /* assertMockEnv(env); */\n  }\n}\n`,
+    ],
+    [
+      'a factory whose guard call is commented out',
+      `${GUARD}\n${guardedClass}\nexport function createMockLlmDrafter(env: string) {\n  // assertMockEnv(env);\n  return new MockLlmDrafter(env);\n}\n`,
+    ],
   ])('flags %s', (_name, content) => {
     const v = vendors(content);
     expect(v).toHaveLength(1);
@@ -844,5 +882,75 @@ describe('rule 13: every vendors Mock* refuses production (m1 R5-10, §11.2; as 
     expect(vendors('export class Mocking { x() {} }\nexport class LlmDrafterMock {}\n')).toEqual(
       [],
     );
+  });
+});
+
+// Security review INF-2: the exempt MockLlmGrader has no guard of its own, so only the jobs wiring (whose graderFor
+// allow-lists dev and staging) may name it outside tests and the vendors package.
+describe('rule 14: MockLlmGrader only in workers/jobs/src/queue/wiring.ts (INF-2)', () => {
+  const at = (p, content = "import { MockLlmGrader } from '@trace/vendors';\n") =>
+    checkMockGraderScope([f(p, content)]);
+  it('allows the jobs wiring, tests and the vendors package itself', () => {
+    expect(MOCK_GRADER_ALLOWED_FILE).toBe('workers/jobs/src/queue/wiring.ts');
+    for (const p of [
+      'workers/jobs/src/queue/wiring.ts',
+      'workers/jobs/src/quality/handler.test.ts',
+      'workers/jobs/db-test/stages.db.test.ts',
+      'packages/vendors/src/llm-grader.ts',
+      'packages/vendors/src/index.ts',
+      'services/api/README.md',
+    ]) {
+      expect(at(p), p).toEqual([]);
+    }
+  });
+  it.each([
+    'workers/jobs/src/quality/handler.ts',
+    'workers/jobs/src/index.ts',
+    'workers/jobs/src/drafting/job.ts',
+    'services/api/src/modules/ai-drafts/routes.ts',
+    'workers/edge/src/app.ts',
+    'apps/recruiter/src/x.tsx',
+    'packages/shared/src/x.ts',
+  ])('flags %s', (p) => {
+    const v = at(p);
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatchObject({ rule: 14, path: p });
+  });
+  it('flags any mention, not only an import', () => {
+    expect(at('workers/jobs/src/x.ts', 'const g = new vendors.MockLlmGrader();')).toHaveLength(1);
+  });
+});
+
+// Security review INF-5: the Supabase secret key (member provisioning, M1 R5-12) lives on workers/jobs only;
+// scripts (the ops runbooks) may name it. Rule 1 already covers apps, packages and the edge; this adds the api.
+describe('rule 15: SUPABASE_SECRET_KEY only in workers/jobs (and scripts) (INF-5)', () => {
+  const at = (p, content = 'const k = env.SUPABASE_SECRET_KEY_JOBS;\n') =>
+    checkSupabaseSecretKeyScope([f(p, content)]);
+  it('allows workers/jobs, scripts and docs', () => {
+    for (const p of [
+      'workers/jobs/src/members/provision.ts',
+      'workers/jobs/src/members/provision.test.ts',
+      'workers/jobs/src/queue/env.ts',
+      'scripts/ops/staging-worker-secrets.mjs',
+      'services/api/README.md',
+    ]) {
+      expect(at(p), p).toEqual([]);
+    }
+  });
+  it.each([
+    'services/api/src/modules/members/routes.ts',
+    'services/api/src/modules/members/routes.test.ts',
+    'services/api/wrangler.jsonc',
+    'workers/edge/src/app.ts',
+    'apps/recruiter/src/x.ts',
+    'packages/shared/src/env.ts',
+    'workers/jobs-old/src/x.ts',
+  ])('flags %s', (p) => {
+    const v = at(p);
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatchObject({ rule: 15, path: p });
+  });
+  it('matches in any case', () => {
+    expect(at('services/api/src/x.ts', 'const n = "supabase_secret_key";')).toHaveLength(1);
   });
 });
