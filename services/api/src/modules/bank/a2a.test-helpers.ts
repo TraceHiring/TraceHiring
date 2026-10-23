@@ -383,15 +383,32 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
     return update<T>(table, query, patch);
   };
   // The fake applies `or=(…)` logic trees only: an `and=(…)` filter is moved into a one-arm `or` (first pages only).
+  // A pool filter is PostgREST's inner embed `pool_items!inner(pool_id)` with `pool_items.pool_id=eq.<id>` (database
+  // D3): the fake keeps the versions that pool holds and drops the embed from the projection.
+  const sentSelects: { table: string; query: Query }[] = [];
   const select = db.rest.select.bind(db.rest);
   db.rest.select = <T>(table: string, query: Query): Promise<T[]> => {
+    sentSelects.push({ table, query: { ...query } });
     if (table === 'v_pool_item_counts') db.tables.v_pool_item_counts = poolCounts(db);
-    const { and, ...rest } = query;
-    if (and === undefined) return select<T>(table, query);
+    const { and, 'pool_items.pool_id': poolFilter, ...others } = query;
+    const rest: Record<string, string> = { ...others };
+    const embed = ',pool_items!inner(pool_id)';
+    if ((rest.select ?? '').includes(embed) !== (poolFilter !== undefined)) {
+      throw new Error('fake rest: an inner embed needs its filter');
+    }
+    if (poolFilter !== undefined) {
+      if (table !== 'item_versions' || rest.id !== undefined) throw new Error('fake rest: embed');
+      const held = tableOf(db, 'pool_items')
+        .filter((p) => `eq.${String(p.pool_id)}` === poolFilter)
+        .map((p) => String(p.item_version_id));
+      rest.select = (rest.select ?? '').replace(embed, '');
+      rest.id = `in.(${held.join(',')})`;
+    }
+    if (and === undefined) return select<T>(table, rest);
     if (rest.or !== undefined) throw new Error('fake rest: and with or');
     return select<T>(table, { ...rest, or: `(and${and})` });
   };
-  return Object.assign(db, { sentInserts, sentUpdates });
+  return Object.assign(db, { sentInserts, sentUpdates, sentSelects });
 };
 
 export type A2aDb = ReturnType<typeof a2aDb>;

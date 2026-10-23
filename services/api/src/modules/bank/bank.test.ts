@@ -583,4 +583,33 @@ describe('GET …/bank/items', () => {
     expect(body.items.map((i) => i.itemVersionId)).toEqual([a.id]);
     expect((await call('GET', '/bank/items?sort=stem')).status).toBe(400);
   });
+
+  it('filters a pool of more than 500 items through an inner embed, paged, never 503 (database D3)', async () => {
+    const { db, call } = setup();
+    const pool = 'c6000000-0000-4000-8000-000000000002';
+    const held: string[] = [];
+    for (let n = 0; n < 501; n += 1) {
+      const v = seedVersion(db);
+      held.push(String(v.id));
+      (db.tables.pool_items ??= []).push({ org_id: ORG, pool_id: pool, item_version_id: v.id });
+    }
+    seedVersion(db);
+    db.calls.length = 0;
+    const res = await call('GET', `/bank/items?poolId=${pool}`);
+    expect(res.status).toBe(200);
+    const first = BankItemListResponse.parse(await res.json());
+    expect(first.items).toHaveLength(50);
+    expect(first.nextCursor).not.toBeNull();
+    for (const i of first.items) expect(held).toContain(i.itemVersionId);
+    const reads = db.sentSelects.filter((c) => c.table === 'item_versions');
+    expect(reads.at(-1)?.query).toMatchObject({ 'pool_items.pool_id': `eq.${pool}` });
+    expect(reads.at(-1)?.query.select).toContain('pool_items!inner(pool_id)');
+    expect(reads.at(-1)?.query).not.toHaveProperty('id');
+    expect(db.calls.some((c) => c.table === 'pool_items')).toBe(false);
+    // An empty pool is an empty page.
+    const none = BankItemListResponse.parse(
+      await (await call('GET', '/bank/items?poolId=c6000000-0000-4000-8000-0000000000ee')).json(),
+    );
+    expect(none).toEqual({ items: [], nextCursor: null });
+  });
 });
