@@ -92,3 +92,25 @@ select matches(pg_temp.try('truncate public.item_variants cascade'), '^42501 TRA
 select matches(pg_temp.try('truncate public.item_variant_keys'), '^42501 TRACE_GUARD: bank content is never truncated', 'DB-M1-6: TRUNCATE item_variant_keys is refused on the operator path');
 select is((select string_agg(tgname || '=' || tgenabled::text, ',' order by tgname) from pg_trigger where tgname in ('item_variants_no_truncate', 'item_variant_keys_no_truncate')), 'item_variant_keys_no_truncate=A,item_variants_no_truncate=A', 'DB-M1-6: both truncate triggers are ENABLE ALWAYS');
 select is((select count(*)::int from public.item_variants) > 0, true, 'DB-M1-6: the variants are still there');
+
+-- ===== Migration M1-e (A1 DB review Lows): a difficulty has at most two decimals (never rounded); variants are 1..n =====
+select pg_temp.op();
+insert into public.items (id, org_id, workspace_id, format, skill_key) values
+  ('c2000000-0000-4000-8000-000000000003', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'quant');
+insert into public.item_versions (id, org_id, item_id, format, stem, options, skill_key, difficulty, is_parameterised, param_spec, content_sha256) values
+  ('c2100000-0000-4000-8000-000000000003', pg_temp.id('A'), 'c2000000-0000-4000-8000-000000000003', 'mcq', '[synthetic] P3',
+   '[{"id": "o1", "text": "a + 1"}, {"id": "o2", "text": "a"}]', 'quant', 0.50, true,
+   '{"params": {"a": {"kind": "int", "min": 1, "max": 9, "step": 1}}, "stem": "What is {{a}} + 1?", "options": [{"id": "o1", "text": "{{a}} + 1"}, {"id": "o2", "text": "{{a}}"}], "correctOptionId": "o1", "count": 5}',
+   repeat('c', 64));
+select pg_temp.u('owner');
+select matches(pg_temp.try($$update public.item_versions set difficulty = 0.505 where id = 'c2100000-0000-4000-8000-000000000003'$$), '^23514', 'M1-e: an item difficulty with a third decimal is refused, never rounded to 0.51');
+select is((select difficulty::text from public.item_versions where id = 'c2100000-0000-4000-8000-000000000003'), '0.50', 'M1-e: the item difficulty is unchanged');
+select matches(pg_temp.try($$insert into public.item_variants (org_id, item_version_id, variant_no, params, stem, options, difficulty, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c2100000-0000-4000-8000-000000000003', 1, '{"a": 3}', '[synthetic] What is 3 + 1?', '[{"id": "o1", "text": "4"}, {"id": "o2", "text": "3"}]', 0.405, repeat('c', 64))$$), '^23514', 'M1-e: a variant difficulty of 0.405 is refused, never rounded to 0.41');
+select is(pg_temp.try($$insert into public.item_variants (org_id, item_version_id, variant_no, params, stem, options, difficulty, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c2100000-0000-4000-8000-000000000003', 1, '{"a": 3}', '[synthetic] What is 3 + 1?', '[{"id": "o1", "text": "4"}, {"id": "o2", "text": "3"}]', 0.55, repeat('c', 64))$$), 'OK 1', 'M1-e: variant 1 at 0.55 is stored');
+select is(pg_temp.try($$insert into public.item_variants (org_id, item_version_id, variant_no, params, stem, options, difficulty, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c2100000-0000-4000-8000-000000000003', 3, '{"a": 5}', '[synthetic] What is 5 + 1?', '[{"id": "o1", "text": "6"}, {"id": "o2", "text": "5"}]', 0.45, repeat('c', 64))$$), 'OK 1', 'M1-e: variant 3 is stored (number 2 is missing)');
+select is(pg_temp.try($$insert into public.item_variant_keys (org_id, item_variant_id, key) select org_id, id, '{"option_id": "o1"}' from public.item_variants where item_version_id = 'c2100000-0000-4000-8000-000000000003'$$), 'OK 2', 'M1-e: both variants are keyed');
+select matches(pg_temp.try($$update public.item_versions set status = 'in_review' where id = 'c2100000-0000-4000-8000-000000000003'$$), '^42501 TRACE_GUARD: variants are numbered 1 to n', 'M1-e: variants 1 and 3 without 2 cannot be submitted');
+select is(pg_temp.try($$insert into public.item_variants (org_id, item_version_id, variant_no, params, stem, options, difficulty, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c2100000-0000-4000-8000-000000000003', 2, '{"a": 4}', '[synthetic] What is 4 + 1?', '[{"id": "o1", "text": "5"}, {"id": "o2", "text": "4"}]', 0.50, repeat('c', 64))$$), 'OK 1', 'M1-e: variant 2 fills the gap');
+select is(pg_temp.try($$insert into public.item_variant_keys (org_id, item_variant_id, key) select org_id, id, '{"option_id": "o1"}' from public.item_variants where item_version_id = 'c2100000-0000-4000-8000-000000000003' and variant_no = 2$$), 'OK 1', 'M1-e: variant 2 is keyed');
+select is(pg_temp.try($$update public.item_versions set status = 'in_review' where id = 'c2100000-0000-4000-8000-000000000003'$$), 'OK 1', 'M1-e: variants 1 to 3 are submitted');
+select pg_temp.op();

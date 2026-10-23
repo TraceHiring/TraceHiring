@@ -8,7 +8,9 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-23 14:40 IST, M1 BUILD 2 = Wave 1 done (newest):** A1 (+ jobs signalSettings patch, R5-52 f amended) `74b6b2c`, A5a `4364a33`, A5b `8e2a75b`, A5c `03a56c8` merged after Opus first reviews, fixes test first and confirming re-reviews; full serial verify green on `4364a33`; test:rls rls 3638 / catalog 150. Next chat: HANDOFF "Next step" (CI on PR #14, then **BUILD 3 = Wave 2**: A2, A3, A4).
+- **Update 2026-10-23 16:20 IST, M1 BUILD 3 = Wave 2 part 2 (newest):** lead migration M1-e merged `8050482` (spec R5-57; CI green; Opus DB review owed). A4 built on `m1/a4-edge-delivery` `7f2fb9c` (unreviewed); zip reader fix rounds 2-4 all NOT CONFIRMED → FOUNDER-QUEUE (none merged). Writers A3a, A3b, A2b, A2a not started (reset to `a3e9123`). HANDOFF "In flight" and "Next step".
+- **Update 2026-10-23 15:35 IST, M1 BUILD 3 = Wave 2 started:** Wave 2 pre-flight done, lead scaffolding `03693fb` (spec R5-56). Writers A4, A3a, A3b, A2b, then A2a not started; lead migration M1-e (snapshot_digest, library cursor) not started. **Two Claude Code accounts now alternate** (founder, 2026-10-23): each session works to 95% of its 5-hour window, wraps up and prints §4 for the other account. HANDOFF "Next step".
+- **Update 2026-10-23 14:40 IST, M1 BUILD 2 = Wave 1 done:** A1 (+ jobs signalSettings patch, R5-52 f amended) `74b6b2c`, A5a `4364a33`, A5b `8e2a75b`, A5c `03a56c8` merged after Opus first reviews, fixes test first and confirming re-reviews; full serial verify green on `4364a33`; test:rls rls 3638 / catalog 150. Next chat: HANDOFF "Next step" (CI on PR #14, then **BUILD 3 = Wave 2**: A2, A3, A4).
 - **Update 2026-10-23 13:20 IST, M1 BUILD 2 = Wave 1 part 1:** Wave 0 tail done (`60fa656`, `0fd37fe`; DC-M1-1 local PASS). Wave 1: lead scaffolding `240f102` (R5-52); merged A6 `6819874`, contracts `7edae27`, A5-0 `72ca88e` (spec R5-53…R5-55); code tip `f860a6c`, verify:fast green. Open stream branches: `m1/a1-packages` (fix round 2 for the CPU-DoS meter), `m1/a5a-import` (no reviews yet), `m1/a5b-bank-library` (fix round pending), `m1/a5c-fix-1` (Opus fix round). Next chat: HANDOFF "Next step" 1-5 (finish and merge A1 with the jobs signalSettings patch, then A5a/A5b/A5c), then BUILD 3 = Wave 2.
 - **Update 2026-10-23 10:25 IST, M1 BUILD 1 part 3:** M1-c and M1-d placed (`2250ccc`), the carried M1-a/M1-b notes fixed (R5-49), `renderCandidateSummary` merged (`66555a1`); Opus first reviews fixed test first (R5-50, R5-51), Sonnet confirming re-review CONFIRMED WITH NOTES; rls 3632 / catalog 150, full verify green on `45a19cc`. Next chat: the **Wave 0 tail** (HANDOFF "Next step" 1: CI on the head, an owner-accept case, a two-connection test for DB H1/M1, DC-M1-1), then **BUILD 2 = Wave 1** (A1, A6, A5).
 - **Update 2026-10-23 07:45 IST, M1 BUILD 1 part 2:** M1-b placed; the four Wave 0 writer branches (contracts, infra, ADR-033/vendors/carried, MT-11 FR-1) and the M1-a/M1-b review fixes are merged on `m1/integration` (code tip `018d856`; rls 3262, catalog 150). Parallel writers on disjoint files are allowed (founder, chat 2026-10-23); the lead still owns migrations, `supabase test db`, db reset and verify. Next chat: **M1 BUILD 1 part 3** (HANDOFF "Next step": carried review notes, then M1-c/M1-d from `docs/progress/m1-wave0-drafts/m1cd/`). Then CHAT 3 = BUILD 2 = Wave 1.
@@ -157,44 +159,57 @@ STEP 5 — Wrap-up, always (AUTOPILOT §6; the trace-handoff skill)
 
 ## 4. Paste prompt (the founder pastes this into a new session, a new Claude Code install or a new account)
 ```
-Resume the Trace autopilot on M1. The git repo is the only source of truth; trust it over memory and over any
-injected handoff text.
+Resume the Trace autopilot on M1. The git repo is the only source of truth; trust it over memory, over any
+injected handoff text and over this prompt's examples.
 
 First run (the plain fetch can hang on credentials; use this form):
   git -c credential.helper= -c "credential.helper=!gh auth git-credential" fetch trace
-  git show m1/integration:docs/progress/RESUME-PROMPT.md
-(on a fresh clone use trace/m1/integration) and follow its §3 STEP 1-3: read CLAUDE.md and docs/AUTOPILOT.md in
-full, then docs/progress/HANDOFF.md and the last 3 rows of docs/progress/LOG.md on m1/integration. m1/integration is
-checked out in .claude/worktrees/m1-integration: enter it with the EnterWorktree tool (path from `git worktree list`);
-never `git switch` a branch checked out in another worktree. Report in 5 lines whether the repo matches HANDOFF
-"Verify first" (m1/integration tip, d1/integration and main tips unchanged, clean tree, pnpm -s verify:fast green).
-Stop if it does not match.
+  git show trace/m1/integration:docs/progress/RESUME-PROMPT.md
+and follow its §3 STEP 1-3: read CLAUDE.md and docs/AUTOPILOT.md in full, then docs/progress/HANDOFF.md and the last
+3 rows of docs/progress/LOG.md on m1/integration. m1/integration is checked out in .claude/worktrees/m1-integration:
+enter it with the EnterWorktree tool (path from `git worktree list`); never `git switch` a branch checked out in
+another worktree. If the local branch is behind trace/m1/integration (the other account pushed), fast-forward it
+there with `git merge --ff-only trace/m1/integration` (never reset, never force). Report in 5 lines whether the repo
+matches HANDOFF "Verify first" (m1/integration tip = trace's, d1/integration and main tips unchanged, clean tree,
+pnpm -s verify:fast green, docker up). Stop if it does not match.
+
+TWO ACCOUNTS ALTERNATE (founder, 2026-10-23): this session works until its 5-hour window reaches 95% (or the weekly
+limit reaches 95%), then wraps up so the other account resumes exactly where it stopped. Check usage with get_usage
+at the start, after every agent result and before starting any agent. On a Pro plan: at most 2 agents at once, one
+Opus agent at a time, start no new agent after 85%; on Max: up to 4 writers and 6 read-only reviewers, no new agent
+after 90%. From 90% (Pro: 85%) do only lead work that ends in a commit; at 95% stop and wrap up. Never leave a writer
+running at wrap-up without recording its branch and state in HANDOFF "In flight".
 
 D1 is PAUSED, not closed (founder, 2026-10-22): its remaining steps are in HANDOFF "Paused: D1" and belong to a D1
 chat, not this one. Never commit to d1/integration or main. M1 merges to main only after the D1 CLOSE and with the
 founder's go-ahead.
 
-THIS CHAT = the task HANDOFF names under "Next step" (M1 BUILD, in the order of specs/m1-test-authoring.md §11.4;
-the first BUILD chat is Wave 0: lead-only migrations M1-a…d with pgTAP written red first (.claude/allow-red), then
-green; shared contracts; the rest of §11.2; full verify; a draft PR m1/integration -> main for Linux CI only, never
-merged). Spec: specs/m1-test-authoring.md revision 5 (binding rows §1.8 R5-n win over older text).
+THIS CHAT = HANDOFF "Next step", in order: first the "In flight" items (re-run verify:fast; check branch
+m1/a5a-fix-2), then M1 BUILD 3 = Wave 2 (spec specs/m1-test-authoring.md revision 5, binding rows §1.8 R5-n, R5-56
+for Wave 2): lead migration M1-e with pgTAP red first, writers A4, A3a, A3b, A2b, then A2a in their own worktrees
+reset to the exact SHA HANDOFF names, Opus first reviews (spec, security, database), fixes test first, confirming
+re-reviews, merges with the lead mounts, test:rls, full verify, Linux CI on PR #14. Then BUILD 4 = Wave 3 (A7, E2E,
+measurement) per spec §11.4.
 
 RULES (never break): CLAUDE.md rules 1-9; tests first; Opus first reviews, fixes test first, a confirming
-re-review, full pnpm verify (pnpm -r --workspace-concurrency=1; this machine is short of RAM) and Linux CI before any
-merge into m1/integration. If something touching rules 1-9 is ambiguous, do not guess: add a FOUNDER-QUEUE row,
-leave that part out, keep working on the rest. Founder gates (AUTOPILOT §3) go to FOUNDER-QUEUE; do not wait. No
-staging dispatch unless HANDOFF says the founder approved it. Never force-push; never move or delete branches, tags
-(cp/*, m*-reviewed, staging-applied-*) or worktrees; never rewrite pushed history; never deploy to production; never
-read .env* or secret values; never merge Dependabot PRs #7-#12; never re-enable .git/hooks/post-commit.disabled.
-Only the lead runs supabase start/stop, db reset, test:rls, gen types and pnpm verify. Up to 4 writer agents in
-their own worktrees reset to an exact SHA with strict directories, up to 6 read-only reviewers. Commit at every
-green step (conventional commits, lowercase subject, body lines <= 100 chars, messages via git commit -F <file>).
-Usage: no new agent at 90%, wrap up at 95% (5-hour and weekly); context: wrap up at ~60%.
+re-review, full pnpm verify (pnpm -r --workspace-concurrency=1 test plus vitest run --root scripts; this machine is
+short of RAM; never run workspace tests while writers run) and Linux CI before any merge into m1/integration. If
+something touching rules 1-9 is ambiguous, do not guess: add a FOUNDER-QUEUE row, leave that part out, keep working
+on the rest. Founder gates (AUTOPILOT §3) go to FOUNDER-QUEUE; do not wait. No staging dispatch unless HANDOFF says
+the founder approved it. Never force-push; never move or delete branches, tags (cp/*, m*-reviewed,
+staging-applied-*) or worktrees; never rewrite pushed history; never deploy to production; never read .env* or
+secret values; never merge Dependabot PRs #7-#12; never re-enable .git/hooks/post-commit.disabled. Only the lead runs
+supabase start/stop, db reset, test:rls, gen types and pnpm verify. Writers get self-contained briefs, strict
+directories and `git reset --hard <exact SHA>`. Commit at every green step (conventional commits, lowercase subject,
+body lines <= 100 chars, messages via git commit -F <uniquely named scratchpad file>, merges `chore: merge …`).
+Push m1/integration and every stream branch after each merge or green lead step, so the other account can resume
+from trace at any time. Context: wrap up at ~60%.
 
-Wrap-up (trace-handoff skill, on m1/integration): HANDOFF.md keeps its "Paused: D1" section; LOG row;
-RESUME-PROMPT if a branch, SHA or step changed; scripts/backup.sh; full-history gitleaks; plain push of
-m1/integration, stream branches with new commits and tags. Then check usage: if the 5-hour window is under 80% and
-weekly under 90%, start the next chat yourself (start_session, fresh context, this project) with the next-chat
-prompt (this §4 with HANDOFF's next step); otherwise create a one-time scheduled task a few minutes after the
-window resets with that prompt; if you cannot, print the prompt and stop.
+Wrap-up at 95% (trace-handoff skill, on m1/integration): commit everything (a partial step as `wip(...)` with
+.claude/allow-red and a note); overwrite HANDOFF.md (< 150 lines, keep its "Paused: D1" section, exact SHAs, every
+stream branch and its state, an "In flight" list, the exact next action); append a LOG row; update RESUME-PROMPT §1
+with a dated line; scripts/backup.sh; plain push of m1/integration, every stream branch with new commits, and tags
+(the pre-push hook runs the full-history gitleaks scan; it must pass). Do not start another session or a scheduled
+task. Last, print this §4 prompt exactly as it stands in docs/progress/RESUME-PROMPT.md on trace/m1/integration, for
+the founder to paste into the other account.
 ```

@@ -243,9 +243,32 @@ begin
 end
 $f$;
 -- publish(version key): operator-path publish with a content hash (the publish guard runs in full).
+-- live_digest(version key): what the api sends as snapshotDigest (R5-56 d): the rows a package built now would use
+-- (approved pool items of pool sections, inline items of inline sections) with their exposure, as @trace/shared
+-- snapshotDigest computes it. publish() sends it, so a v2 publish passes the M1-e digest check.
+create function pg_temp.live_digest(p_tv text) returns text language sql stable as $f$
+  select encode(sha256(convert_to(coalesce(string_agg(x.l, E'\n' order by x.l collate "C"), ''), 'UTF8')), 'hex')
+  from (
+    select s.id::text || ':' || i.id::text || ':' ||
+      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text as l
+    from public.sections as s
+    join public.pool_items as pi on pi.org_id = s.org_id and pi.pool_id = s.pool_id
+    join public.item_versions as i on i.org_id = pi.org_id and i.id = pi.item_version_id and i.status = 'approved'
+    where s.test_version_id = pg_temp.id(p_tv)
+    union all
+    select s.id::text || ':' || i.id::text || ':' ||
+      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text
+    from public.sections as s
+    join public.item_versions as i on i.org_id = s.org_id and i.section_id = s.id
+    where s.test_version_id = pg_temp.id(p_tv) and s.pool_id is null
+  ) as x
+$f$;
+grant execute on function pg_temp.live_digest(text) to public;
 create function pg_temp.publish(p_tv text) returns void language plpgsql as $f$
+declare v_digest text := pg_temp.live_digest(p_tv);
 begin
-  update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = pg_temp.id(p_tv);
+  update public.test_versions set status = 'published', content_sha256 = repeat('b', 64), snapshot_digest = v_digest
+    where id = pg_temp.id(p_tv);
 end
 $f$;
 -- session(key, version key, n): one submitted session of a published version through the real roles, in D1's order:
@@ -334,7 +357,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(59);
+select plan(63);
 select pg_temp.bank('qa1', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'approved');
 select pg_temp.bank('q2a', pg_temp.id('A'), pg_temp.id('A2'), 'mcq', 'verbal', 0.50, 'approved');
 select pg_temp.bank('qd1', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'draft');
@@ -398,7 +421,7 @@ select pg_temp.op();
 insert into public.items (id, org_id, workspace_id, format, skill_key) values
   ('c2000000-0000-4000-8000-000000000009', pg_temp.id('A'), pg_temp.id('A2'), 'mcq', 'quant');
 select matches(pg_temp.try($$insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, is_parameterised, param_spec, origin, source_item_version_id, content_sha256) values ('a1000000-0000-4000-8000-000000000001', 'c2000000-0000-4000-8000-000000000009', 'mcq', '[synthetic] Copy with key', '[{"id": "o1", "text": "a + 1"}, {"id": "o2", "text": "a"}]', 'quant', 0.50, true, '{"params": {"a": {"kind": "int", "min": 1, "max": 9, "step": 1}}, "stem": "What is {{a}} + 1?", "options": [{"id": "o1", "text": "{{a}} + 1"}, {"id": "o2", "text": "{{a}}"}], "correctOptionId": "o1", "count": 5}', 'library', 'c2100000-0000-4000-8000-000000000002', repeat('c', 64))$$), '^23514', 'SEC-M1-1: a library-origin row carrying correctOptionId breaks its CHECK, even on the operator path');
-select is((select pg_get_function_result('private.library_browse(uuid, text, text[], text, public.section_format, numeric, numeric, uuid, int)'::regprocedure) !~ '(param_spec|correct|answer|option_id)'), true, 'SEC-M1-1: library browse returns no param_spec and no key-like column');
+select is((select pg_get_function_result('private.library_browse(uuid, text, text[], text, public.section_format, numeric, numeric, timestamptz, uuid, int)'::regprocedure) !~ '(param_spec|correct|answer|option_id)'), true, 'SEC-M1-1: library browse returns no param_spec and no key-like column');
 
 -- ===== I-M1-5 / AT-M1-22: library-sourced keys are invisible to every org role =====
 select is((select count(*)::int from public.item_answer_keys where library_sourced) || '/' || (select count(*)::int from public.item_variant_keys where library_sourced), '1/1', 'fixture: the copy brought one base key and one variant key, both library_sourced');
@@ -474,16 +497,21 @@ select matches(pg_temp.try($$delete from public.item_variant_keys where item_var
 
 -- ===== Library browse never carries a key (R2-5, R3-7, LibraryItemCard) =====
 select pg_temp.api(pg_temp.id('A'));
-select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, null, 50)), 2, 'library browse: an owner of the api org sees the two approved library items');
-select is((select options from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], 'verbal', null, null, null, null, 50)), '["One", "Two"]'::jsonb, 'library browse: options are texts only (no option ids, no key)');
-select is((select count(*)::int from private.library_browse(null, null, null, null, null, null, null, null, 50)), 0, 'library browse: no viewer (the candidate path) sees nothing (R3-7)');
-select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000008', 'aal1', array['otp'], null, null, null, null, null, 50)), 0, 'library browse: a hiring manager sees nothing');
-select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000003', 'aal1', array['otp'], null, null, null, null, null, 50)), 0, 'library browse: an admin at aal1 sees nothing');
-select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-00000000000e', 'aal2', array['otp', 'totp'], null, null, null, null, null, 50)), 0, 'library browse: an org B admin sees nothing through the org A api context');
+select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, null, null, 50)), 2, 'library browse: an owner of the api org sees the two approved library items');
+select is((select options from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], 'verbal', null, null, null, null, null, 50)), '["One", "Two"]'::jsonb, 'library browse: options are texts only (no option ids, no key)');
+select is((select count(*)::int from private.library_browse(null, null, null, null, null, null, null, null, null, 50)), 0, 'library browse: no viewer (the candidate path) sees nothing (R3-7)');
+select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000008', 'aal1', array['otp'], null, null, null, null, null, null, 50)), 0, 'library browse: a hiring manager sees nothing');
+select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000003', 'aal1', array['otp'], null, null, null, null, null, null, 50)), 0, 'library browse: an admin at aal1 sees nothing');
+select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-00000000000e', 'aal2', array['otp', 'totp'], null, null, null, null, null, null, 50)), 0, 'library browse: an org B admin sees nothing through the org A api context');
+-- Migration M1-e: a keyset page on (created_at, id), the PageCursor of the api (R5-53), returning created_at.
+select is((select pg_get_function_result('private.library_browse(uuid, text, text[], text, public.section_format, numeric, numeric, timestamptz, uuid, int)'::regprocedure) ~ 'created_at timestamp with time zone'), true, 'library browse (M1-e): each row carries its created_at for the next cursor');
+select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, null, null, 1)), 1, 'library browse (M1-e): a page of one');
+select is((with p1 as (select created_at, library_item_version_id from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, null, null, 1)), p2 as (select b.created_at, b.library_item_version_id from p1, lateral private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, p1.created_at, p1.library_item_version_id, 1) as b) select count(*)::int from p2 where (p2.created_at, p2.library_item_version_id) > (select p1.created_at, p1.library_item_version_id from p1)), 1, 'library browse (M1-e): the page after the cursor holds the next item in (created_at, id) order');
+select is((with p1 as (select created_at, library_item_version_id from private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, null, null, 2) order by created_at desc, library_item_version_id desc limit 1) select count(*)::int from p1, lateral private.library_browse('00000000-0000-4000-8000-000000000001', 'aal2', array['otp', 'totp'], null, null, null, null, p1.created_at, p1.library_item_version_id, 50) as b), 0, 'library browse (M1-e): nothing after the last item');
 select pg_temp.api(pg_temp.id('L'));
-select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000020', 'aal2', array['otp', 'totp'], null, null, null, null, null, 50)), 0, 'library browse: customers only (library staff use the bank itself)');
+select is((select count(*)::int from private.library_browse('00000000-0000-4000-8000-000000000020', 'aal2', array['otp', 'totp'], null, null, null, null, null, null, 50)), 0, 'library browse: customers only (library staff use the bank itself)');
 select pg_temp.u('owner');
-select matches(pg_temp.try($$select * from private.library_browse(null, null, null, null, null, null, null, null, 50)$$), '^42501', 'library browse: authenticated cannot call it');
+select matches(pg_temp.try($$select * from private.library_browse(null, null, null, null, null, null, null, null, null, 50)$$), '^42501', 'library browse: authenticated cannot call it');
 select pg_temp.op();
 
 -- ===== SEC-M1-5: a library copy keeps the library prefix of its images (the one cross-org prefix allowed) =====

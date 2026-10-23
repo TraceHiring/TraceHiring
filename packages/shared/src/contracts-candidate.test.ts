@@ -1507,6 +1507,54 @@ const viewV2 = {
   answers: [{ position: 1, choice: 'b' }],
 };
 
+describe('TestPackageV2 items without skill and difficulty (R5-57 e, lead decision)', () => {
+  const without = (item: Record<string, unknown>, ...names: string[]) =>
+    Object.fromEntries(Object.entries(item).filter(([name]) => !names.includes(name)));
+  const bare = (item: Record<string, unknown>) => without(item, 'skillKey', 'difficultyBand');
+  it('an inline item (section without a draw) may omit both', () => {
+    expect(ok(TestPackageV2, replaceWritten(bare(writtenPkgItem)))).toBe(true);
+  });
+  it('an item of a draw without strata may omit both', () => {
+    expect(ok(TestPackageV2, replaceFirst(bare(pkgItem(1, sectionA))))).toBe(true);
+  });
+  it('an item names both or neither', () => {
+    const skillOnly = without(pkgItem(1, sectionA), 'difficultyBand');
+    const bandOnly = without(pkgItem(1, sectionA), 'skillKey');
+    expect(ok(TestPackageV2, replaceFirst(skillOnly))).toBe(false);
+    expect(ok(TestPackageV2, replaceFirst(bandOnly))).toBe(false);
+  });
+  it('every item of a section with strata names both', () => {
+    const items = [
+      pkgItem(1, sectionA, { difficultyBand: 1 }),
+      pkgItem(2, sectionA, { difficultyBand: 1 }),
+      bare(pkgItem(3, sectionA)),
+      writtenPkgItem,
+    ];
+    const stratified = {
+      ...pkgV2,
+      items,
+      sections: [
+        {
+          ...secA,
+          draw: { count: 2, strata: [{ skillKey: 'quant', difficultyBand: 1, count: 2 }] },
+        },
+        secB,
+      ],
+    };
+    const result = TestPackageV2.safeParse(stratified);
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((i) => i.message)).toContain(
+      'an item of a stratified draw names its skill and difficulty band',
+    );
+    expect(
+      ok(TestPackageV2, {
+        ...stratified,
+        items: [...items.slice(0, 2), pkgItem(3, sectionA), writtenPkgItem],
+      }),
+    ).toBe(true);
+  });
+});
+
 describe('ServedItemV2 and SessionViewV2 (R5-9, §4.6)', () => {
   it('a served item carries media {hash, alt}, options in served order and its variant id', () => {
     expect(ServedItemV2.parse(servedV2)).toEqual(servedV2);

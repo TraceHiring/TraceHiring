@@ -164,5 +164,5 @@ export async function drawSeed(sessionId: string, sectionId: string): Promise<Ui
     throw new RangeError('drawSeed: a lower-case uuid section id');
   }
   const bytes = new TextEncoder().encode(`${sessionId}${sectionId}`);
-  return new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes));
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
 }

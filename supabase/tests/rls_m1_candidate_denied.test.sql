@@ -243,9 +243,32 @@ begin
 end
 $f$;
 -- publish(version key): operator-path publish with a content hash (the publish guard runs in full).
+-- live_digest(version key): what the api sends as snapshotDigest (R5-56 d): the rows a package built now would use
+-- (approved pool items of pool sections, inline items of inline sections) with their exposure, as @trace/shared
+-- snapshotDigest computes it. publish() sends it, so a v2 publish passes the M1-e digest check.
+create function pg_temp.live_digest(p_tv text) returns text language sql stable as $f$
+  select encode(sha256(convert_to(coalesce(string_agg(x.l, E'\n' order by x.l collate "C"), ''), 'UTF8')), 'hex')
+  from (
+    select s.id::text || ':' || i.id::text || ':' ||
+      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text as l
+    from public.sections as s
+    join public.pool_items as pi on pi.org_id = s.org_id and pi.pool_id = s.pool_id
+    join public.item_versions as i on i.org_id = pi.org_id and i.id = pi.item_version_id and i.status = 'approved'
+    where s.test_version_id = pg_temp.id(p_tv)
+    union all
+    select s.id::text || ':' || i.id::text || ':' ||
+      (select count(*) from public.item_exposure_events as e where e.org_id = i.org_id and e.item_id = i.item_id)::text
+    from public.sections as s
+    join public.item_versions as i on i.org_id = s.org_id and i.section_id = s.id
+    where s.test_version_id = pg_temp.id(p_tv) and s.pool_id is null
+  ) as x
+$f$;
+grant execute on function pg_temp.live_digest(text) to public;
 create function pg_temp.publish(p_tv text) returns void language plpgsql as $f$
+declare v_digest text := pg_temp.live_digest(p_tv);
 begin
-  update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = pg_temp.id(p_tv);
+  update public.test_versions set status = 'published', content_sha256 = repeat('b', 64), snapshot_digest = v_digest
+    where id = pg_temp.id(p_tv);
 end
 $f$;
 -- session(key, version key, n): one submitted session of a published version through the real roles, in D1's order:
@@ -454,7 +477,7 @@ select pg_temp.op();
 -- ===== Direct calls by the candidate roles =====
 set local role trace_candidate;
 select is(pg_temp.visible(), 'skill_taxonomy=- items=- item_variants=- item_variant_keys=- item_exposure_events=- pools=- pool_items=- library_copy_requests=- role_templates=- jobs=- section_pool_snapshot=- integrity_setting_defs=- integrity_presets=- org_integrity_locks=- v_item_exposure=- v_item_bank_quant_share=- import_jobs=- import_row_errors=- ai_draft_jobs=- member_invites=-', 'trace_candidate: every M1 table and view is permission denied');
-select matches(pg_temp.try($$select * from private.library_browse(null, null, null, null, null, null, null, null, 10)$$), '^42501 permission denied', 'trace_candidate: library_browse is denied');
+select matches(pg_temp.try($$select * from private.library_browse(null, null, null, null, null, null, null, null, null, 10)$$), '^42501 permission denied', 'trace_candidate: library_browse is denied');
 select matches(pg_temp.try($$select private.library_reference(null, null, null, 'templates')$$), '^42501 permission denied', 'trace_candidate: library_reference is denied');
 reset role;
 set local role anon;
