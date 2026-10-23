@@ -1,5 +1,7 @@
-# HANDOFF — 2026-10-23 21:50 IST (M1 BUILD 3 = Wave 2 part 5: A2b merged; M1-l; A2a built, security + database reviewed)
-Reason for stopping: 5-hour window at ~85% (Pro account: no new agent after 85%; the A2a spec review would not finish before 95%). No agent is running. Start from `docs/progress/RESUME-PROMPT.md` §4 on **`m1/integration`** (worktree `.claude/worktrees/m1-integration`). The repo wins over this file.
+# HANDOFF — 2026-10-24 01:00 IST (M1 BUILD 3 = Wave 2 part 6: A2a spec review, lead M1-m + M1-n + jobs sweep, A2a fix round 1)
+Reason for stopping: the founder asked to stop after this chat (and at 95% of the 5-hour window; Max account, ~83% at
+the last lead step). Start from `docs/progress/RESUME-PROMPT.md` §4 on **`m1/integration`** (worktree
+`.claude/worktrees/m1-integration`). The repo wins over this file.
 
 ## Paused: D1 (founder, 2026-10-22 night: paused, not closed)
 D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/worktrees/d1-integration`). Nothing is committed to `d1/integration` or `main` from M1. Copied from the `d1/integration` HANDOFF (`3c2e42a`, tip `1547fd0`):
@@ -9,34 +11,70 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
 - **D1 founder items:** AT-D2 screen capture (`pnpm e2e:record`); Workers Paid (OPEN-8a) "not yet", decide before any load test (M3a); Dependabot PRs #7-#12 not merged blind; after D1 merges, `e2e-local` back on the required checks.
 
 ## Where we are (verified this chat)
-- Milestone **M1 · Test authoring**, phase **BUILD 3 = Wave 2**. Spec `specs/m1-test-authoring.md` rev 5, rows up to **R5-63 (i)**. Reviews: `docs/reviews/M1-wave2-first-reviews.md`.
-- `m1/integration` tip = this handoff on **`18df9eb`** (+ the review record of A2a database). `trace/d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged. `pnpm -s verify:fast` exit 0 on `18df9eb`'s tree (21:45 IST, 236 s).
-- **Full serial verify GREEN on `4fca331`** (21:00 IST; test:rls 46 files, catalog 150, **rls 3716**, floor 3716). After it only `0eb91ac` (item-variants typing; its 197 tests green) and `8f040f8`/`35925e0` (shared scrubber; shared 2129 green) changed code. **Linux CI green** on `4fca331`, `620065a`, `32a7f72`, `0eb91ac`; run 39984455564 on `18df9eb` was in progress at writing — check it.
+- Milestone **M1 · Test authoring**, phase **BUILD 3 = Wave 2**. Spec `specs/m1-test-authoring.md` rev 5, rows up to
+  **R5-64 (n)**. Reviews: `docs/reviews/M1-wave2-first-reviews.md` (A2a: all three first reviews now recorded).
+- `m1/integration` tip = this handoff on top of **`134ca37`** (pushed). `trace/d1/integration` = `1547fd0`,
+  `trace/main` = `da5380d`: unchanged. `pnpm -s verify:fast`: see LOG row of this chat (run at the end).
+- The last **full serial verify** is still the one on `4fca331` (rls 3716). Since then: lead code `0eb91ac`, `35925e0`
+  and this chat's commits below; each was checked by its own package tests / named pgTAP files only (no full verify yet).
 
-## Done this chat (commits on m1/integration)
-- Migration **M1-k** (`0b52059` red → `9a06211`): trace_api column SELECT on `tests (id, org_id, name)`. The full verify then failed `rls_d1_api` 41 ("tests: trace_api has no SELECT privilege", a D1 pin outside the R5-28/R5-50 lists) → **M1-l** `20261023120000_m1_api_test_title_fn.sql` (`d1342de` red → `4fca331`): drops M1-k's grant/policy, adds `private.api_test_title(uuid)` (DEFINER, empty search_path, bound to `api_org_id()`, EXECUTE trace_api only); candidate store calls it. Spec **R5-63 (i)**. Opus DB review of M1-k/M1-l + mounts: **APPROVE** (Low 1 documented in the store header).
-- **A2b merged** `f9a6ad4` (`m1/a2b-fix-1` @ `5c2a892`; Opus confirming re-review: spec CONFIRMED WITH NOTES, security CONFIRMED, database CONFIRMED WITH NOTES). Lead: `ea849cd` red (route inventory + log hygiene for the 13 A2b routes; unbound-limiter 503 test), `fca81ee` mounts in `services/api/src/app.ts` (`createTestDraftRoutes`, `createIntegritySettingsRoutes`, `createTemplatesRoutes` with `libraryLimiterFromEnv`, `createMembersRoutes`, `reference` on `createTestsRoutes`) + wrangler `ratelimits` **`LIBRARY_LIMITER` 60/60 s, namespace 1201 dev / 1202 staging** (bindings test pins it).
-- Review records `e457d68`, `620065a`.
-- Later this chat: **A2a writer** (Opus) → `m1/a2a-api-bank` `08b27ce`; Opus security + database first reviews (both WITH FIXES, recorded); lead `0eb91ac` item-variants `crypto.subtle` (A2a ask 1); `8f040f8` red → `35925e0` `scrubDraftTopic` never cuts a surrogate pair (security S2, shared half).
+## Done this chat (commits on m1/integration, all pushed)
+- **A2a Opus spec first review: PASS WITH FIXES** (Medium: library items can never be approved through the api, no
+  key-review route; Lows: import variant seeds, `library: null` stats, `MAX_MEMBERS` pool cap, two hollow assertions;
+  Note: org-context.ts edit). Recorded in the review report; decisions in spec row **R5-64 (a)-(n)**.
+- **Migration M1-m** `20261024010000_m1_bank_fixes.sql` (red `7323091` → green `09bb62b`): D1 key must name a current
+  option (`item_version_ready`), D4 `item_versions_one_open_per_item`, D7 `item_versions_bank_page_idx`, D2 view
+  `v_pool_item_counts` (security_invoker, select for authenticated), D6 `images_ok` counted by the import guard
+  (update grant revoked). New pgTAP `rls_m1_bank_fixes` (23); `rls_m1_imports` D6 cases; `rls_m1_bank` v2 insert moved
+  after v1 retires; candidate-denied list + db-types regenerated (view list test).
+- **`KeyReviewItemRequest`** contract + test, spec R5-64, review record: `4d8504d`.
+- **Migration M1-n** `20261024020000_m1_draft_sweep.sql` (red `76131db` → green `d510bd6`):
+  `private.fail_stranded_ai_draft_jobs(limit)` (DEFINER, EXECUTE trace_authoring_worker only; queued > 15 min →
+  `failed`/`timeout`). pgTAP `rls_m1_draft_sweep` (12); `rls_roles` and candidate-denied pins.
+- **Jobs cron** (red `668f452` → green `134ca37`): `workers/jobs/src/drafting/sweep.ts`, stage `authoring_sweep` in
+  `queue/stage-db.ts`, `scheduled()` runs both sweeps (`queue/handlers.ts`), wired in `index.ts`.
+- Named pgTAP runs green after M1-m/M1-n: all 15 `rls_m1_*` + `rls_m1_draft_sweep` + `rls_roles` (after the db-types
+  reset; a stray committed `import.cancel` audit row in the local DB had broken one imports assertion before it).
 
 ## In flight at handoff (check first, trust nothing)
-1. **A2a — BUILT, two of three Opus first reviews done, NOT MERGED.** Branch **`m1/a2a-api-bank`** @ **`08b27ce`** on `trace` (base `620065a`, red `b0ab28a` 72 failing; api 55 files / 596 tests, typecheck + lint clean). Writer worktree `.claude/worktrees/agent-ad374be8d5b9e51d9` (leave it). Reviews in `docs/reviews/M1-wave2-first-reviews.md` "A2a api": **security APPROVE WITH FIXES** (S1 upper-case org UUID → R2 key outside the prefix: lower-case in `pathId`; S2 stuck `queued` job: parse the message before the insert — the shared scrubber half is DONE `35925e0`), **database APPROVE WITH FIXES** (D1 Medium key on a deleted option → lead migration: `item_version_ready` checks the key option; D2 Medium pool reads N+1 → per-pool counts view; Lows D3-D9; notes D10-D12). **Spec review NOT RUN.**
-   Writer lead asks: (1) DONE `0eb91ac`; (2) mounts — `createBankRoutes({ org, variants: () => itemVariantsEngine })`, `createPoolsRoutes({ org })`, `createLibraryRoutes({ org, source: libraryFromEnv, limiter: libraryLimiterFromEnv })`, `createImportsRoutes({ org, media: itemMediaFromEnv, variants: () => itemVariantsEngine })`, `createAiDraftsRoutes({ org, queue: authoringQueueFromEnv })` with `const itemVariantsEngine = { check: (s: unknown) => validateParamSpec(s).ok, generate: generateVariants }`, plus the 25 `A2A_NEW_ROUTES` (`services/api/src/modules/bank/m1-a2a-routes-mount.test.ts`) in route-inventory + log-hygiene (31 → 56 org routes); (3) a jobs sweep `queued` → `failed` (`enqueue_failed`) for stranded ai-draft jobs (S2/D10); (4) atomic bank create/version RPC (R5-63 f, with D1). Writer questions: `row_limit` cannot come from a row (400 for the batch); no `open → failed` import endpoint (R5-51 c); pool archive has no contract field.
+1. **A2a fix round 1 — writer (Opus) on `m1/a2a-fix-1`** (base `08b27ce` + merge of `4d8504d`; it pushes each green
+   commit to `trace`). State at writing: see the "A2a fix round 1" line appended below by the lead. Brief = the 12 fix
+   items of R5-64 / the review report (S1 pathId lower-case, S2 parse before insert, D1 api half, D4 409, D5 guard
+   texts, D6 no images_ok, D2 view + no MAX_MEMBERS, D3 inner embed, spec 1 key-review route, D8 clone rule, spec 5
+   real assertions, invite_settled). Not in it: D9 (deferred, R5-64 g), migrations, mounts, contracts.
 
 ## Stream branches
-Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · `m1/a5c-fix-1` · `m1/a4-edge-delivery` `7f2fb9c` · `m1/a4-fix-1` `a0c1d46` · `m1/a3a-jobs-v2` `74d9891` · `m1/a3a-fix-1` `402a3ac` · `m1/a3a-fix-2` `8af7845` · `m1/a3b-jobs-authoring` `2b706d0` · `m1/a3b-fix-1` `1866c92` · `m1/a2b-api-tests` `8f7b52c` · `m1/a2b-fix-1` `5c2a892` (all on `trace`). Unmerged by founder answer (b): `m1/a5a-fix-2/-3/-4` (zip reader, M8). Open: **`m1/a2a-api-bank` `08b27ce`** (on `trace`; reviews 2/3).
+Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · `m1/a5c-fix-1` · `m1/a4-edge-delivery` `7f2fb9c` · `m1/a4-fix-1` `a0c1d46` · `m1/a3a-jobs-v2` `74d9891` · `m1/a3a-fix-1` `402a3ac` · `m1/a3a-fix-2` `8af7845` · `m1/a3b-jobs-authoring` `2b706d0` · `m1/a3b-fix-1` `1866c92` · `m1/a2b-api-tests` `8f7b52c` · `m1/a2b-fix-1` `5c2a892` (all on `trace`). Unmerged by founder answer (b): `m1/a5a-fix-2/-3/-4` (zip reader, M8). Open: **`m1/a2a-api-bank` `08b27ce`** (reviews 3/3 done) and **`m1/a2a-fix-1`** (fix round 1, see In flight).
 
 ## Next step (one precise action list)
-1. Verify first (below). Then the **A2a Opus spec first review** on `620065a..08b27ce` (tell it security + database are done; give it their findings so it does not repeat them).
-2. **A2a fix round** (Opus fix writer: approval/AI-draft paths are rule-adjacent) on a new `m1/a2a-fix-1` reset to `08b27ce` merged with the then tip, tests first: S1, S2 (parse before insert), D3, D5 (guard texts), D8 (lead decision: keep the AI origin on a clone, refuse cloning a `not_approved` AI draft — record as a spec row), spec findings. **Lead, same time, tests first:** migration for D1 (`item_version_ready` key option check), D4 (partial unique index one open version per item), D6 (`images_ok` computed in the guard + grant revoked), D7 (bank list index), D9 (revoke `id` INSERT grants, R5-51 f), D2 (per-pool counts view); jobs sweep for stranded `queued` ai-draft jobs. Then one confirming re-review, merge with the mounts above, full serial verify, CI.
-3. **Lead, owed before the M1 exit (R5-63 f):** one SQL function for the publish reads (N+1; OPEN-8a), atomic `create_test_from_template` (also A2b Low 3) and bank create/version RPCs (A2a D1), written paste rule derived in the database (A2b Note 5), template list paging. R5-61 h: indexed duplicate hash, jobs `SUPABASE_URL` with the M1 staging half, a drafting lease. R5-62 b: jobs db-test for the "more than one account" lookup branch. A2b Low 2: staging check of R2 `onlyIf` at the next founder-approved staging dispatch.
-4. After each merge: full serial `pnpm verify` (raise `supabase/tests/rls-min-count`, now 3716) and Linux CI on PR #14.
-5. Then BUILD 4 = Wave 3 (A7, E2E, measurement) per spec §11.4. DC-M1-2 still to run.
+1. Verify first (below). Read the "A2a fix round 1" line at the end of this file. If the writer finished: check its
+   report claims against `git log`/diff of `m1/a2a-fix-1`. If it did not finish: continue it with a new Opus fix writer
+   on the same branch from its pushed tip (same brief: R5-64 + review report "A2a api"), only the items not done.
+2. **One Opus confirming re-review** of `08b27ce..<m1/a2a-fix-1 tip>` (spec + security + database in one agent, a
+   verdict per area; the M1-m/M1-n migrations and the jobs sweep `4d3cb7f..134ca37` in the same review, database area).
+3. **Merge** `m1/a2a-fix-1` into `m1/integration` (`chore: merge …`) with the lead mounts in `services/api/src/app.ts`:
+   `createBankRoutes({ org, variants: () => itemVariantsEngine })`, `createPoolsRoutes({ org })`,
+   `createLibraryRoutes({ org, source: libraryFromEnv, limiter: libraryLimiterFromEnv })`,
+   `createImportsRoutes({ org, media: itemMediaFromEnv, variants: () => itemVariantsEngine })`,
+   `createAiDraftsRoutes({ org, queue: authoringQueueFromEnv })`, with
+   `const itemVariantsEngine = { check: (s: unknown) => validateParamSpec(s).ok, generate: generateVariants }`; the
+   A2a routes (`A2A_NEW_ROUTES` in `services/api/src/modules/bank/m1-a2a-routes-mount.test.ts`, 25 + key-review = 26)
+   in `route-inventory.test.ts` and `log-hygiene.test.ts` (31 → 57 org routes). Red test first for the mounts.
+4. Full serial `pnpm verify` (`pnpm -r --workspace-concurrency=1 test` + `vitest run --root scripts`; raise
+   `supabase/tests/rls-min-count`, now 3716, to the new count) and Linux CI on PR #14 (TraceHiring/TraceHiring#14).
+5. **Lead, owed before the M1 exit:** R5-63 f (publish-read SQL function, atomic `create_test_from_template`,
+   `save_bank_draft` RPC, paste rule in the database, template paging); R5-64 g (revoke `id` INSERT grants after a pgTAP
+   fixture rewrite); R5-61 h (indexed duplicate hash, jobs `SUPABASE_URL` staging half, drafting lease); R5-62 b (jobs
+   db-test, "more than one account" branch); A2b Low 2 staging R2 `onlyIf` check (needs a founder-approved dispatch).
+6. Then BUILD 4 = Wave 3 (A7, E2E, measurement) per spec §11.4. DC-M1-2 still to run.
 
-## Notes for Wave 2 (carried; not defects now)
-- A2 (A2a part): per-route body caps; body reader refuses `__proto__`; ApproveItemRequest body id = path id; option `text` ↔ package `label`; content hash per R5-49 a; RESERVED_NAMES vs ParamName (`reserved_name`); A5c N1 (`fromDraftView(view, integrity)` + `onSaved` → `setPasteWritten` → re-save, recruiter app, lead); A5a S7 (image PUT refusal codes; else `image_refused`).
+## Notes for Wave 2/3 (carried; not defects now)
 - A7 (Wave 3): sends `afterSeq` on every v2 GET (R5-59 d); copy warns that finishing an untimed section is final (R5-59 e).
-- R2-5 gap: re-copying a retired library copy hands back the retired copy. DC-M1-4 — OPEN-8a founder gate. `ratelimits` on staging (edge and now api) confirmed only by a staging dispatch (ADR-032).
+- A5c N1 (`fromDraftView(view, integrity)` + `onSaved` → `setPasteWritten` → re-save, recruiter app, lead); A5a S7.
+- R2-5 gap: re-copying a retired library copy hands back the retired copy. DC-M1-4 — OPEN-8a founder gate.
+  `ratelimits` on staging (edge and api) confirmed only by a staging dispatch (ADR-032).
+- New jobs cron path: `authoring_sweep` needs `JOBS_AUTHORING_DB` (staging Hyperdrive) — already listed under the M1
+  staging founder item.
 
 ## Founder items
 - Unchanged: coverage when tab focus is off (default a); D1 integrity job re-delivered after M1 (default a); M1-15 "shared-device" copy (default: leave out); import cancel keeps rows (default a); M1 staging Hyperdrive configs + secrets (+ jobs `SUPABASE_URL`, + api `MEMBER_INVITE_PEPPER` ≥ 32 bytes); Q-M1-1…Q-M1-4; OPEN-8a Workers Paid; written AI drafts; zip reader answered (b).
@@ -44,9 +82,13 @@ Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · 
 ## Gotchas
 - Worktree guard: no `cd …&&`, `git -C`, `$(...)`, loops, compound or piped node-script commands; write scripts with the Write tool and run them plainly; commit messages via `git commit -F <unique file>`; merges `chore: merge …`. A refused compound command runs NOTHING.
 - `node scripts/db-types.mjs` and `pnpm test:rls` RESET the local database: never while a writer runs db-tests. `pnpm exec supabase migration up --local` applies a new migration without a reset.
+- Named pgTAP runs on a non-reset local DB can trip over rows committed by earlier e2e/db-tests (2026-10-24: a stray `import.cancel` audit row); reset (db-types or test:rls) before trusting a failure there.
 - D1 pgTAP pins (`rls_d1_*`) change only via an R5-28/R5-50 supersession row and only add-only; a new grant that loosens one needs another design (M1-l).
 - RAM: never run workspace tests while writers run; writers run only their own package tests.
 - Never hand-edit generated `rls_m1_*.test.sql`: edit `docs/progress/m1-wave0-drafts/pgtap/bodies/*.sql`/`preamble.sql`, run `node docs/progress/m1-wave0-drafts/pgtap/gen.mjs .`, run named files with `node docs/progress/m1-wave0-drafts/pgtap/run.mjs <names>`.
 
 ## Verify first
 `git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `git branch -a -v --list '*a2a*'` · `gh run list --repo TraceHiring/TraceHiring --branch m1/integration --limit 3` · `pnpm -s verify:fast` · `docker ps` (supabase_db_trace up)
+
+## A2a fix round 1 (lead, at the stop)
+- PENDING: filled in when the writer reports.
