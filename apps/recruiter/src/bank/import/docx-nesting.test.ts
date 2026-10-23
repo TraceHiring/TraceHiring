@@ -55,7 +55,8 @@ describe('readDocxRows with nested paragraphs (X3)', () => {
     if (!outcome.ok) return;
     expect(outcome.rows).toHaveLength(1);
     expect(outcome.rows[0]?.values.stem).toBe('A stem');
-    expect(spent).toBeLessThan(2000);
+    // About 0.4 s alone and 2.3 s on a loaded CI runner; the quadratic walk took about 16 s. 8 s keeps that apart.
+    expect(spent).toBeLessThan(8000);
   });
 
   it('gives a nested paragraph its own text and leaves the outer text as it was', () => {
