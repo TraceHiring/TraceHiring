@@ -259,6 +259,7 @@ export const REQUIRED_SCREEN_REGISTRIES: readonly string[] = [
   'settings',
   'bank',
   'library',
+  'bank/import',
 ];
 
 /** The required directories with no registered screen (`names` are the registry keys: `./<dir>/m1-screens... <name>`). */
