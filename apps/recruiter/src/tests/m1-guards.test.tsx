@@ -254,7 +254,7 @@ function screens(): Record<string, string> {
  * lead appends 'bank', 'bank/import', 'library', 'settings' and 'authoring' as each stream merges, so the registry
  * cannot stay opt-in and leave the guards checking nothing.
  */
-export const REQUIRED_SCREEN_REGISTRIES: readonly string[] = [];
+export const REQUIRED_SCREEN_REGISTRIES: readonly string[] = ['authoring', 'settings'];
 
 /** The required directories with no registered screen (`names` are the registry keys: `./<dir>/m1-screens... <name>`). */
 const missingRegistries = (required: readonly string[], names: readonly string[]): string[] =>
