@@ -23,6 +23,7 @@ import {
   makePackage,
   PACKAGE_KEY,
   postEvents,
+  serveHttp,
   sessionHarness,
   WRITTEN,
 } from './session.test-helpers.js';
@@ -362,11 +363,14 @@ describe('edge log lines carry no payload, token or code (AT-D32, edge half)', (
   it('a mirror that fails for 24 h logs session.mirror_failed with sessionId and n only', async () => {
     const h = await sessionHarness();
     const { token, view } = await h.startSession();
+    await serveHttp(h, token, [WRITTEN]);
     const answer = `${SECRETS.answer} ${SECRETS.email} ${SECRETS.mobile} ${SECRETS.label}`;
     const typed = await postEvents(h, token, view.streamId, [
       { seq: 1, t: 100, kind: 'answer.text', item: WRITTEN, p: 0, d: 0, i: answer },
     ]);
     expect(typed.status).toBe(200);
+    // R5-59 b: the planted answer lands (its position was served), so it reaches the final and mirror path.
+    expect(await typed.json()).not.toHaveProperty('refusedSeqs');
     // Every send fails with an error whose message is full of planted values.
     h.queue.queue.send = () => Promise.reject(boom());
     h.clock.ms += 1000;
