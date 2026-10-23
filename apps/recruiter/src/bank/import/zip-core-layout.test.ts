@@ -24,6 +24,8 @@ interface Rec {
   raw: Uint8Array;
   method: 0 | 8;
   descriptor?: 'sig' | 'nosig';
+  /** Descriptor values that disagree with the directory (default: honest). */
+  descriptorFields?: Partial<{ crc: number; csize: number; usize: number }>;
 }
 interface Cen {
   name: string;
@@ -79,9 +81,10 @@ function local(rec: Rec): Uint8Array<ArrayBuffer> {
       dv.setUint32(0, 0x08074b50, true);
       at = 4;
     }
-    dv.setUint32(at, crc, true);
-    dv.setUint32(at + 4, rec.data.length, true);
-    dv.setUint32(at + 8, rec.raw.length, true);
+    const f = rec.descriptorFields ?? {};
+    dv.setUint32(at, f.crc ?? crc, true);
+    dv.setUint32(at + 4, f.csize ?? rec.data.length, true);
+    dv.setUint32(at + 8, f.usize ?? rec.raw.length, true);
     parts.push(d);
   }
   return concat(parts);
@@ -221,10 +224,97 @@ describe('extractArchive: the directory must describe the streamed layout', () =
     expect(await outcome(bytes, 'x.docx', 'docx')).toBe('bad_archive');
   });
 
+  // Both streamed names are in the directory, so a name-set check alone is satisfied (this was green before the
+  // layout check only for the wrong reason); only comparing each entry's own local name catches the swap.
+  it('rejects a swap of two same-size names between the directory and the local headers', async () => {
+    const first = stored('word/styles.xml', REAL);
+    const second = stored('word/other1.bin', DECOY);
+    expect(strToU8(first.name)).toHaveLength(strToU8(second.name).length);
+    const bytes = build([first, second], {
+      cen: (honest) => [
+        { ...at(honest, 0), name: second.name },
+        { ...at(honest, 1), name: first.name },
+      ],
+    });
+    expect(await outcome(bytes, 'x.docx', 'docx')).toBe('bad_archive');
+  });
+
   it('rejects a directory offset that is not a local header', async () => {
     const bytes = build([stored('word/document.xml', REAL)], {
       cen: (honest) => [{ ...at(honest, 0), offset: 4 }],
     });
+    expect(await outcome(bytes, 'x.docx', 'docx')).toBe('bad_archive');
+  });
+
+  it.each([
+    ['stored locally, deflate in the directory', stored('word/document.xml', REAL), 8],
+    ['deflate locally, stored in the directory', deflated('word/document.xml', REAL), 0],
+    ['descriptor entry, method differs', deflated('word/document.xml', REAL, 'sig'), 0],
+  ] as const)(
+    'rejects a directory method that differs from the local header (%s)',
+    async (_n, rec, method) => {
+      const bytes = build([rec], { cen: (honest) => [{ ...at(honest, 0), method }] });
+      expect(await outcome(bytes, 'x.docx', 'docx')).toBe('bad_archive');
+    },
+  );
+
+  it.each([
+    ['a signed', 'sig'],
+    ['an unsigned', 'nosig'],
+  ] as const)(
+    'rejects %s data descriptor whose sizes or crc differ from the directory',
+    async (_n, kind) => {
+      for (const fields of [{ crc: 1 }, { csize: 1 }, { usize: 1 }] as const) {
+        const rec: Rec = { ...deflated('word/document.xml', REAL, kind), descriptorFields: fields };
+        const bytes = build([rec, stored('word/styles.xml', strToU8('<s/>'))]);
+        expect(await outcome(bytes, 'x.docx', 'docx')).toBe('bad_archive');
+      }
+    },
+  );
+
+  it('rejects a data-descriptor entry whose data hides a local record (carrier for a decoy part)', async () => {
+    const header = (name: string, flags: number, csize: number): Uint8Array<ArrayBuffer> => {
+      const nameBytes = strToU8(name);
+      const h = new Uint8Array(30);
+      const v = new DataView(h.buffer);
+      v.setUint32(0, 0x04034b50, true);
+      v.setUint16(4, 20, true);
+      v.setUint16(6, flags, true);
+      v.setUint32(18, csize, true);
+      v.setUint32(22, csize, true);
+      v.setUint16(26, nameBytes.length, true);
+      return concat([h, nameBytes]);
+    };
+    const real = deflated('word/document.xml', REAL);
+    const realBytes = local(real);
+    const tail = local(stored('word/b.bin', new Uint8Array(1)));
+    const descriptorLength = 12;
+    // The decoy record and a stored header whose csize swallows everything up to the directory both sit inside entry A's data.
+    const decoyBytes = local(stored('word/document.xml', DECOY));
+    const swallow = header('word/b.bin', 0, descriptorLength + tail.length + realBytes.length);
+    const dataLength = decoyBytes.length + swallow.length;
+    const descriptor = new Uint8Array(12);
+    const dv = new DataView(descriptor.buffer);
+    dv.setUint32(4, dataLength, true);
+    dv.setUint32(8, dataLength, true);
+    const carrier = concat([header('word/a.bin', 8, 0), decoyBytes, swallow, descriptor]);
+    const tailAt = carrier.length;
+    const realAt = tailAt + tail.length;
+    const dirAt = realAt + realBytes.length;
+    const entries: Cen[] = [
+      {
+        name: 'word/a.bin',
+        method: 0,
+        flags: 8,
+        crc: 0,
+        csize: dataLength,
+        usize: dataLength,
+        offset: 0,
+      },
+      cenOf(stored('word/b.bin', new Uint8Array(1)), tailAt),
+      cenOf(real, realAt),
+    ];
+    const bytes = concat([carrier, tail, realBytes, directory(entries, dirAt)]);
     expect(await outcome(bytes, 'x.docx', 'docx')).toBe('bad_archive');
   });
 
