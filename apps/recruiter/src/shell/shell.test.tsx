@@ -27,14 +27,34 @@ const html = (roles: string[]) =>
   );
 
 describe('navFor', () => {
-  it('staff: Tests and the demo outbox when the build has it', () => {
-    for (const role of ['org_owner', 'admin', 'recruiter'])
-      expect(labels([role])).toEqual(['Tests', 'Demo outbox']);
-    expect(navFor(['recruiter'], null).map((i) => i.label)).toEqual(['Tests']);
+  it('staff: Tests and the M1 bank screens, then the demo outbox when the build has it', () => {
+    for (const role of ['org_owner', 'recruiter'])
+      expect(labels([role])).toEqual([
+        'Tests',
+        'Item bank',
+        'Item approvals',
+        'Library',
+        'Demo outbox',
+      ]);
+    expect(labels(['admin'])).toEqual([
+      'Tests',
+      'Item bank',
+      'Item approvals',
+      'Library',
+      'Integrity settings',
+      'Members',
+      'Demo outbox',
+    ]);
+    expect(navFor(['recruiter'], null).map((i) => i.label)).toEqual([
+      'Tests',
+      'Item bank',
+      'Item approvals',
+      'Library',
+    ]);
   });
 
-  it('reviewer: Tests and Review queue, never the outbox', () => {
-    expect(labels(['reviewer'])).toEqual(['Tests', 'Review queue']);
+  it('reviewer: Tests, Item approvals and Review queue, never the outbox', () => {
+    expect(labels(['reviewer'])).toEqual(['Tests', 'Item approvals', 'Review queue']);
   });
 
   it('a hiring_manager gets no links', () => {

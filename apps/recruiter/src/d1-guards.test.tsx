@@ -447,7 +447,7 @@ describe('D1 route table (AT-D13)', () => {
     return (gate?.children ?? []).map((child) => child.path ?? '').sort();
   };
 
-  it('has exactly the D1 screens behind the signed-in gate', () => {
+  it('has exactly the D1 screens and the M1 screens (m1-guards.test.tsx) behind the signed-in gate', () => {
     expect(paths(buildRoutes(null))).toEqual(
       [
         'review',
@@ -458,6 +458,17 @@ describe('D1 route table (AT-D13)', () => {
         'tests/:testId/invite',
         'tests/:testId/reviewers',
         'tests/:testId/results',
+        // M1 (specs/m1-test-authoring.md §6.10, R5-54): the route list only; the word lists above are unchanged.
+        'bank',
+        'bank/ai-drafts',
+        'bank/approvals',
+        'bank/import',
+        'bank/items/:itemId',
+        'bank/items/new',
+        'bank/pools',
+        'library',
+        'settings/integrity',
+        'settings/members',
       ].sort(),
     );
   });
