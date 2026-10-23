@@ -218,9 +218,10 @@ describe('section.finish and section deadlines (§4.6, R5-20)', () => {
     });
     expect(ack).toMatchObject({ ok: true, ackSeq: 3, refusedSeqs: [3] });
 
+    // A finished section keeps its own deadline (opened + time limit); the next one runs from the finish.
     const after = await view(h);
     expect(after.sections.map((s) => [s.state, s.deadlineAt])).toEqual([
-      ['closed', new Date(t0 + 30_000).toISOString()],
+      ['closed', new Date(t0 + SECTION_SECONDS * 1000).toISOString()],
       ['open', new Date(t0 + 30_000 + SECTION_SECONDS * 1000).toISOString()],
       ['not_entered', undefined],
     ]);
@@ -229,10 +230,11 @@ describe('section.finish and section deadlines (§4.6, R5-20)', () => {
     // A finish of a section that is not open changes nothing; it never reopens.
     expect(
       await h.core.events(AUTH, {
-        streamId: v.streamId,
-        events: [finish(4, POOL), finish(5, INLINE)],
+        // The attach above opened a new stream; its seqs start again at 1.
+        streamId: after.streamId,
+        events: [finish(1, POOL), finish(2, INLINE)],
       }),
-    ).toMatchObject({ ok: true, ackSeq: 5 });
+    ).toMatchObject({ ok: true, ackSeq: 2 });
     expect((await view(h)).sections.map((s) => s.state)).toEqual(['closed', 'open', 'not_entered']);
   });
 
