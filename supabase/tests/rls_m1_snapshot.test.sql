@@ -560,8 +560,10 @@ select is(pg_temp.try($$update public.test_versions set snapshot_digest = repeat
 select pg_temp.op();
 create temp table exposure_digest as select pg_temp.live_digest('tm') as d;
 select pg_temp.session('sx', 'tl', 91);
+create temp table served_pick as select sp.item_version_id from public.section_pool_snapshot as sp where sp.section_id = pg_temp.id('sl') and exists (select 1 from public.pool_items as pi where pi.pool_id = 'd1000000-0000-4000-8000-00000000000c' and pi.item_version_id = sp.item_version_id) order by sp.item_version_id limit 1;
+grant select on served_pick to public;
 select pg_temp.w('trace_worker', pg_temp.id('A'));
-select is(pg_temp.try(format($$insert into public.session_items (org_id, session_id, section_id, item_version_id, position, served_at) select %L, %L, %L, sp.item_version_id, 1, now() from public.section_pool_snapshot as sp where sp.section_id = %L and exists (select 1 from public.pool_items as pi where pi.pool_id = 'd1000000-0000-4000-8000-00000000000c' and pi.item_version_id = sp.item_version_id) order by sp.item_version_id limit 1$$, pg_temp.id('A'), pg_temp.id('sx'), pg_temp.id('sl'), pg_temp.id('sl'))), 'OK 1', 'R5-60 a: an item of pool C is served in a live session of the published version');
+select is(pg_temp.try(format($$insert into public.session_items (org_id, session_id, section_id, item_version_id, position, served_at) values (%L, %L, %L, %L, 1, now())$$, pg_temp.id('A'), pg_temp.id('sx'), pg_temp.id('sl'), (select item_version_id from served_pick))), 'OK 1', 'R5-60 a: an item of pool C is served in a live session of the published version');
 select pg_temp.op();
 select is((select count(*)::int from public.item_exposure_events where session_item_id in (select id from public.session_items where session_id = pg_temp.id('sx'))), 1, 'R5-60 a: the serve counted one exposure');
 select is(pg_temp.try(format($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64), snapshot_digest = %L where id = %L$$, (select d from exposure_digest), pg_temp.id('tm'))), 'OK 1', 'R5-60 a (DB review Medium): a package built before an item was served still publishes (exposure is not in the digest)');

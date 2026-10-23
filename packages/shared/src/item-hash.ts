@@ -107,23 +107,18 @@ export function scrubDraftTopic(topic: string): string {
 export interface SnapshotRow {
   sectionId: string;
   itemVersionId: string;
-  exposureAtPublish: number;
 }
 
 /**
- * The digest of the publish snapshot a v2 package was built from (Wave 2 lead decision on the A1 database review's
- * publish race): rows sorted by section id, then item version id (byte order, as `collate "C"` in the guard), each
- * line `<sectionId>:<itemVersionId>:<exposureAtPublish>`, joined by a line feed; SHA-256 hex of the UTF-8 text. The
- * api sends it with the publish update and the guard recomputes it from the snapshot it writes, refusing a mismatch.
+ * The digest of the publish snapshot a v2 package was built from (R5-56 d): rows sorted by section id, then item
+ * version id (byte order, as `collate "C"` in the guard), each line `<sectionId>:<itemVersionId>`, joined by a line
+ * feed; SHA-256 hex of the UTF-8 text. Exposure counts are not in it (R5-60 a): they grow with every served item, so
+ * a live test could never be republished. The api sends it with the publish update and the guard recomputes it from
+ * the snapshot it writes, refusing a mismatch (40001).
  */
 export async function snapshotDigest(rows: readonly SnapshotRow[]): Promise<string> {
   const lines = rows
-    .map((r) => {
-      if (!Number.isSafeInteger(r.exposureAtPublish) || r.exposureAtPublish < 0) {
-        throw new TypeError('snapshotDigest: bad exposure');
-      }
-      return `${r.sectionId.toLowerCase()}:${r.itemVersionId.toLowerCase()}:${String(r.exposureAtPublish)}`;
-    })
+    .map((r) => `${r.sectionId.toLowerCase()}:${r.itemVersionId.toLowerCase()}`)
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return sha256Hex(lines.join('\n'));
 }
