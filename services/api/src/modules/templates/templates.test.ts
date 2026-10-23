@@ -15,7 +15,6 @@ import { describe, expect, it } from 'vitest';
 import { sha256Hex } from '../candidate/encoding.js';
 import { idMaker } from '../tests/rest.test-helpers.js';
 import {
-  LIBRARY_ORG,
   OPEN_BOOK,
   ORG,
   STANDARD,
