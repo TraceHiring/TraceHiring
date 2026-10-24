@@ -11,7 +11,8 @@
 --             frozen: the version's section_pool_snapshot rows (with exposure_at_publish), inline rows included
 --   items     each member item version once, with exactly the package columns (never a key or a rubric body)
 --   variants  the variants of parameterised members (no params, no key)
---   exposure  live only: served count per item, summed over v_item_exposure; frozen: empty
+--   exposure  live only: served count per item (item_exposure_events, as v_item_exposure counts them); frozen: empty
+-- A null p_frozen reads null.
 -- Nothing here reads or names quality.* or integrity.* (I-M1-10).
 
 create function public.publish_source_v2(p_org_id uuid, p_test_version_id uuid, p_frozen boolean)
@@ -24,7 +25,7 @@ as $$
   with v as (
     select tv.id, tv.org_id
     from public.test_versions as tv
-    where tv.org_id = p_org_id and tv.id = p_test_version_id
+    where tv.org_id = p_org_id and tv.id = p_test_version_id and p_frozen is not null
   ),
   members as (
     select s.id as section_id, iv.id as item_version_id, null::int as exposure_at_publish
@@ -58,9 +59,11 @@ as $$
     where va.org_id = p_org_id
       and va.item_version_id in (select i.id from items as i where i.is_parameterised)
   ),
+  -- Counted from the event table (index item_exposure_events_item_idx on (org_id, item_id)); the same rows the
+  -- exposure view groups, but bounded by the member items instead of aggregating the whole org first.
   exposure as (
-    select e.item_id, sum(e.served_count)::int as served_count
-    from public.v_item_exposure as e
+    select e.item_id, count(*)::int as served_count
+    from public.item_exposure_events as e
     where p_frozen is false and e.org_id = p_org_id and e.item_id in (select i.item_id from items as i)
     group by e.item_id
   )
