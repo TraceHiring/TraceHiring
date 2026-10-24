@@ -19,13 +19,12 @@ import {
 } from '@trace/shared/contracts/m1';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { inList, parseRows } from '../tests/authoring.js';
+import { parseRows } from '../tests/authoring.js';
 import { answer, parseBody, readJson, readQuery } from '../tests/http.js';
 import { requireRole } from '../tests/membership.js';
 import {
   eq,
   handleOrg,
-  MAX_LIST_ROWS,
   orgFail,
   PGRST_MAX_ROWS,
   pathId,
@@ -227,12 +226,11 @@ const setStatus = async (
   return row ?? missedUpdate(ctx, orgId, versionId);
 };
 
-/** The `GET …/bank/items` filters as PostgREST query parts (never a cursor or scope). */
-const filtersOf = async (
-  ctx: OrgContext,
-  orgId: string,
-  q: BankItemListQuery,
-): Promise<Query | null> => {
+/**
+ * The `GET …/bank/items` filters as PostgREST query parts (never a cursor or scope), and the extra columns of the
+ * select. A pool filter is an inner embed of `pool_items` (database D3): any pool size, one read, keyset-paged.
+ */
+const filtersOf = (q: BankItemListQuery): { filters: Query; embed: string } => {
   const out: Record<string, string> = {};
   if (q.format !== undefined) out.format = eq(q.format);
   if (q.skillKey !== undefined) out.skill_key = eq(q.skillKey);
@@ -245,22 +243,9 @@ const filtersOf = async (
   } else if (q.difficultyMax !== undefined) {
     out.difficulty = `lte.${String(q.difficultyMax)}`;
   }
-  if (q.poolId !== undefined) {
-    const rows = parseRows(
-      z.object({ item_version_id: z.uuid() }),
-      await ctx.rest.select('pool_items', {
-        select: 'item_version_id',
-        org_id: eq(orgId),
-        pool_id: eq(q.poolId),
-        limit: String(MAX_LIST_ROWS + 1),
-      }),
-    );
-    // A pool filter is one `in.(…)` list; past MAX_LIST_ROWS it fails closed rather than cut the list.
-    if (rows.length > MAX_LIST_ROWS) return orgFail('unavailable');
-    if (rows.length === 0) return null;
-    out.id = inList(rows.map((r) => r.item_version_id));
-  }
-  return out;
+  if (q.poolId === undefined) return { filters: out, embed: '' };
+  out['pool_items.pool_id'] = eq(q.poolId.toLowerCase());
+  return { filters: out, embed: ',pool_items!inner(pool_id)' };
 };
 
 export const createBankRoutes = (deps: BankDeps): Hono<{ Bindings: Env }> => {
@@ -272,12 +257,11 @@ export const createBankRoutes = (deps: BankDeps): Hono<{ Bindings: Env }> => {
       const ctx = await deps.org.context(c.req.raw, c.env);
       await requireRole(ctx.rest, ctx.caller, orgId, APPROVERS);
       const q = readQuery(c.req.url, BankItemListQuery);
-      const filters = await filtersOf(ctx, orgId, q);
-      if (filters === null) return answer(BankItemListResponse, { items: [], nextCursor: null });
+      const { filters, embed } = filtersOf(q);
       const rows = parseRows(
         VersionRow,
         await ctx.rest.select('item_versions', {
-          select: VERSION_COLS,
+          select: `${VERSION_COLS}${embed}`,
           org_id: eq(orgId),
           section_id: 'is.null',
           ...filters,
