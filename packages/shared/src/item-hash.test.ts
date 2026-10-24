@@ -1,0 +1,204 @@
+// The canonical content hash of an item version and a variant (spec m1 R5-49 a; Wave 2 lead scaffolding, so the api
+// and the jobs worker write the same item_versions.content_sha256), and the AI draft topic scrubber (§6.4).
+// Synthetic content only.
+import { describe, expect, it } from 'vitest';
+import { AuthoringQueueMessage } from './contracts-m1.js';
+import {
+  itemContentSha256,
+  scrubDraftTopic,
+  snapshotDigest,
+  variantContentSha256,
+} from './item-hash.js';
+
+const HEX = /^[0-9a-f]{64}$/;
+const ORG_A = '00000000-0000-4000-8000-0000000000a1';
+const ORG_LIB = '00000000-0000-4000-8000-0000000000b2';
+const IMG = 'c'.repeat(64);
+
+const mcq = {
+  format: 'mcq' as const,
+  stem: '[synthetic] Which is larger?',
+  options: [
+    { id: 'a', text: 'Two' },
+    { id: 'b', text: 'Three' },
+  ],
+  media: [{ key: `item-media/${ORG_A}/${IMG}.png`, alt: 'A chart' }],
+  paramSpec: null,
+};
+
+describe('itemContentSha256 (R5-49 a)', () => {
+  it('is lower-case hex SHA-256 and deterministic', async () => {
+    const a = await itemContentSha256(mcq);
+    expect(a).toMatch(HEX);
+    expect(await itemContentSha256({ ...mcq })).toBe(a);
+  });
+
+  it('changes with the stem, an option text, an option id, the format and an image alt', async () => {
+    const base = await itemContentSha256(mcq);
+    const variants = [
+      { ...mcq, stem: '[synthetic] Which is smaller?' },
+      {
+        ...mcq,
+        options: [
+          { id: 'a', text: 'Two' },
+          { id: 'b', text: 'Four' },
+        ],
+      },
+      {
+        ...mcq,
+        options: [
+          { id: 'a', text: 'Two' },
+          { id: 'c', text: 'Three' },
+        ],
+      },
+      { ...mcq, media: [{ key: mcq.media[0]!.key, alt: 'Another chart' }] },
+      { ...mcq, media: [] },
+    ];
+    for (const v of variants) expect(await itemContentSha256(v)).not.toBe(base);
+  });
+
+  it('ignores the org prefix of an image key, so a library copy keeps its source hash', async () => {
+    const copy = { ...mcq, media: [{ key: `item-media/${ORG_LIB}/${IMG}.png`, alt: 'A chart' }] };
+    expect(await itemContentSha256(copy)).toBe(await itemContentSha256(mcq));
+  });
+
+  it('excludes param_spec.correctOptionId (the library copy strips it, SEC-M1-1)', async () => {
+    const spec = { params: { a: { kind: 'int', min: 1, max: 9, step: 1 } }, stem: '{{a}}' };
+    const withKey = await itemContentSha256({
+      ...mcq,
+      paramSpec: { ...spec, correctOptionId: 'a' },
+    });
+    expect(await itemContentSha256({ ...mcq, paramSpec: spec })).toBe(withKey);
+    expect(await itemContentSha256({ ...mcq, paramSpec: { ...spec, stem: '{{a}}!' } })).not.toBe(
+      withKey,
+    );
+  });
+
+  it('a written item hashes with null options', async () => {
+    const written = {
+      format: 'written' as const,
+      stem: '[synthetic] Explain.',
+      options: null,
+      media: null,
+      paramSpec: null,
+    };
+    expect(await itemContentSha256(written)).toMatch(HEX);
+    expect(await itemContentSha256(written)).not.toBe(
+      await itemContentSha256({ ...written, format: 'mcq' }),
+    );
+  });
+
+  it('refuses an image key that is not item-media/<uuid>/<sha256>.<ext>', async () => {
+    await expect(
+      itemContentSha256({ ...mcq, media: [{ key: 'item-media/x.png', alt: 'x' }] }),
+    ).rejects.toThrow();
+  });
+});
+
+describe('variantContentSha256 (R5-49 a)', () => {
+  const v = {
+    stem: '[synthetic] 2 + 3?',
+    options: [
+      { id: 'a', text: '5' },
+      { id: 'b', text: '6' },
+    ],
+    params: { a: 2, b: 3 },
+  };
+  it('is deterministic, key-order free, and changes with the content', async () => {
+    const h = await variantContentSha256(v);
+    expect(h).toMatch(HEX);
+    expect(await variantContentSha256({ ...v, params: { b: 3, a: 2 } })).toBe(h);
+    expect(await variantContentSha256({ ...v, params: { a: 2, b: 4 } })).not.toBe(h);
+    expect(await variantContentSha256({ ...v, stem: '[synthetic] 2 + 4?' })).not.toBe(h);
+  });
+});
+
+describe('scrubDraftTopic (§6.4)', () => {
+  it('replaces emails, URLs and digit runs of 8 or more with [removed]', () => {
+    const at = String.fromCharCode(64);
+    const topic = `queues; ask a${at}example.test or see https://example.test/x or call 98765 43210 now`;
+    const out = scrubDraftTopic(topic);
+    expect(out).not.toContain(at);
+    expect(out).not.toContain('https');
+    expect(out).not.toMatch(/\d{5}\s?\d{5}/);
+    expect(out).toContain('[removed]');
+    expect(out.startsWith('queues;')).toBe(true);
+  });
+
+  it('keeps short numbers and caps the result at 500 characters', () => {
+    expect(scrubDraftTopic('top 10 sorting algorithms in 2026')).toBe(
+      'top 10 sorting algorithms in 2026',
+    );
+    expect(scrubDraftTopic('x'.repeat(700))).toHaveLength(500);
+  });
+
+  it('never returns an empty topic', () => {
+    expect(scrubDraftTopic('   ')).toBe('[removed]');
+  });
+
+  it('never cuts a surrogate pair, so a lengthened topic still fits the queue message (A2a security S2)', () => {
+    const at = String.fromCharCode(64);
+    // 499 UTF-16 units; the short email grows to [removed], pushing the cut into the middle of an emoji.
+    const topic = `a${at}b x` + '\u{1F600}'.repeat(247);
+    const out = scrubDraftTopic(topic);
+    expect(out.length).toBeLessThanOrEqual(500);
+    // No lone surrogate (a high one not followed by a low one, or a low one not preceded by a high one).
+    expect(out).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
+    expect(
+      AuthoringQueueMessage.safeParse({
+        v: 1,
+        kind: 'ai_draft',
+        jobId: 'a1000000-0000-4000-8000-000000000001',
+        orgId: 'a1000000-0000-4000-8000-000000000002',
+        workspaceId: 'a1000000-0000-4000-8000-000000000003',
+        format: 'mcq',
+        skillKey: 'quant',
+        difficulty: 0.5,
+        count: 1,
+        topic: out,
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe('snapshotDigest (publish race, R5-56 d; exposure left out, R5-60 a)', () => {
+  const rows = [
+    { sectionId: ORG_LIB, itemVersionId: ORG_A },
+    { sectionId: ORG_A, itemVersionId: ORG_LIB },
+  ];
+  it('is the SHA-256 of the sorted section:item lines, independent of row order', async () => {
+    const lines = [`${ORG_A}:${ORG_LIB}`, `${ORG_LIB}:${ORG_A}`].join('\n');
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(lines));
+    const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+    expect(await snapshotDigest(rows)).toBe(hex);
+    expect(await snapshotDigest([...rows].reverse())).toBe(hex);
+  });
+  it('changes with a missing row; an exposure count on a row does not change it (R5-60 a)', async () => {
+    const base = await snapshotDigest(rows);
+    expect(await snapshotDigest([rows[0]!])).not.toBe(base);
+    const withExposure = rows.map((r, k) => ({ ...r, exposureAtPublish: 5 + k }));
+    expect(await snapshotDigest(withExposure)).toBe(base);
+  });
+  it('matches the vector the publish guard is pinned to (rls_m1_snapshot, migration M1-f)', async () => {
+    // Same three rows as private.snapshot_digest_of in rls_m1_snapshot; upper-case ids are lowered first.
+    const vector = [
+      {
+        sectionId: 'D2000000-0000-4000-8000-00000000000B',
+        itemVersionId: 'd3000000-0000-4000-8000-000000000002',
+      },
+      {
+        sectionId: 'd2000000-0000-4000-8000-00000000000a',
+        itemVersionId: 'd3000000-0000-4000-8000-000000000001',
+      },
+      {
+        sectionId: 'd2000000-0000-4000-8000-00000000000a',
+        itemVersionId: 'd3000000-0000-4000-8000-000000000003',
+      },
+    ];
+    expect(await snapshotDigest(vector)).toBe(
+      '82eef2b94352364281abc6e08e377aa99232a34f8c82f19ed16efe139c35e475',
+    );
+  });
+});

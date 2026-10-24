@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@trace/item-delivery": "workspace:*",
     "@trace/shared": "workspace:*",
     "@trace/vendors": "workspace:*",
     "@trace/workers-http": "workspace:*",
@@ -22,6 +23,7 @@
     "@trace/config": "workspace:*",
     "@types/node": "catalog:",
     "eslint": "catalog:",
+    "fast-check": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "@cloudflare/vitest-pool-workers": "catalog:",

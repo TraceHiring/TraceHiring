@@ -9,6 +9,7 @@ import { AuthFlowContext } from './auth-context';
 import {
   AuthPanel,
   AuthView,
+  CODE_SENT_MESSAGE,
   ERROR_MESSAGES,
   UNCONFIGURED_MESSAGE,
   type AuthActions,
@@ -98,9 +99,10 @@ describe('AuthView per state (§4.6)', () => {
     expect(html).not.toContain('role="alert"');
   });
 
-  it('code_sent names the address and asks for the 6-digit one-time code', () => {
+  it('code_sent says the account-neutral sentence and asks for the 6-digit one-time code', () => {
     const html = render({ kind: 'code_sent', email: EMAIL });
-    expect(text(html)).toContain(EMAIL);
+    expect(text(html)).toContain(CODE_SENT_MESSAGE);
+    expect(text(html)).not.toContain(EMAIL);
     expect(html).toMatch(/<input[^>]*name="code"/);
     expect(html).toMatch(/inputMode="numeric"|inputmode="numeric"/);
     expect(html).toMatch(/autoComplete="one-time-code"|autocomplete="one-time-code"/);

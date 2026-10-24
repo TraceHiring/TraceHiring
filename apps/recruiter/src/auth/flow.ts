@@ -12,7 +12,12 @@ import {
   TotpCode,
   type OrgRole,
 } from '@trace/shared/contracts/tenancy';
-import type { ClientStorage, Outcome, RecruiterSupabase } from './supabase-client';
+import type {
+  AuthEventListener,
+  ClientStorage,
+  Outcome,
+  RecruiterSupabase,
+} from './supabase-client';
 
 /** Exactly the §4.5 `MembershipRow` columns (no `*`: finding B0-SP5). */
 export const MEMBERSHIP_COLUMNS =
@@ -66,6 +71,22 @@ type Current = () => boolean;
 const STALE: AuthState = { kind: 'signed_out' };
 type Stage = 'session_aal1' | 'session_aal2';
 
+/**
+ * States that hold (or are reading) a session: an ended session moves them to signed_out (M0b
+ * B2-SEC-4). signed_out, code_sent and unconfigured hold none, so a SIGNED_OUT there (for example
+ * from discarding a late session) changes nothing.
+ */
+const SESSION_STATES: ReadonlySet<AuthState['kind']> = new Set<AuthState['kind']>([
+  'starting',
+  'session_aal1',
+  'session_aal2',
+  'totp_enrol',
+  'totp_challenge',
+  'no_org',
+  'org_picker',
+  'signed_in',
+]);
+
 /** Runs one supabase-js call; the data when it worked, else null. Error text is never read. */
 async function attempt<T>(call: () => PromiseLike<Outcome<T>>): Promise<{ data: T } | null> {
   try {
@@ -111,6 +132,8 @@ export class AuthFlow {
   private snapshot: AuthSnapshot;
   /** Bumped by every step and by sign-out, so a step that finishes late changes nothing. */
   private epoch = 0;
+  /** The supabase-js auth-event subscription, held while any view is subscribed. */
+  private watch: { unsubscribe(): void } | null = null;
 
   constructor(client: RecruiterSupabase | null, storage: ClientStorage) {
     this.client = client;
@@ -121,11 +144,50 @@ export class AuthFlow {
     };
   }
 
+  /**
+   * useSyncExternalStore subscribes here when a view mounts and unsubscribes when it unmounts. The
+   * first view starts watching supabase-js auth events; the last one to unmount stops it.
+   */
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
+    this.startWatch();
     return () => {
       this.listeners.delete(listener);
+      if (this.listeners.size === 0) this.stopWatch();
     };
+  };
+
+  private startWatch(): void {
+    if (this.client === null || this.watch !== null) return;
+    try {
+      this.watch = this.client.auth.onAuthStateChange(this.onAuthEvent).data.subscription;
+    } catch {
+      // No events then; RLS still refuses data to an ended session.
+      this.watch = null;
+    }
+  }
+
+  private stopWatch(): void {
+    const watch = this.watch;
+    this.watch = null;
+    try {
+      watch?.unsubscribe();
+    } catch {
+      // Nothing more to stop.
+    }
+  }
+
+  /**
+   * An ended session (SIGNED_OUT, or TOKEN_REFRESHED that brought no session: a failed refresh)
+   * routes to sign-in: any running step is dropped, sessionStorage is cleared, the state becomes
+   * signed_out. Other events, and events in states that hold no session, change nothing.
+   */
+  private readonly onAuthEvent: AuthEventListener = (event, session) => {
+    const ended = event === 'SIGNED_OUT' || (event === 'TOKEN_REFRESHED' && session === null);
+    if (!ended || !SESSION_STATES.has(this.snapshot.state.kind)) return;
+    this.epoch += 1;
+    this.clearStorage();
+    this.set({ kind: 'signed_out' }, false);
   };
 
   readonly getSnapshot = (): AuthSnapshot => this.snapshot;
@@ -188,16 +250,21 @@ export class AuthFlow {
     });
   }
 
-  /** Email OTP, part 1 (§4.2): send a code to an existing user only. */
+  /**
+   * Email OTP, part 1 (§4.2): send a code to an existing user only. Whatever the send returns, the
+   * next state is code_sent: a failure for an address with no account must read exactly like a
+   * success (founder, 2026-10-15, "hide it"; M1 AT-M1-27). A wrong or missing code then fails at
+   * verification with the generic code message.
+   */
   submitEmail(rawEmail: string): Promise<void> {
     return this.step(['signed_out'], async (client) => {
       const input = SignInEmail.safeParse({ email: rawEmail.trim() });
       if (!input.success) return { kind: 'signed_out', error: 'invalid_email' };
       const { email } = input.data;
-      const sent = await attempt(() =>
+      await attempt(() =>
         client.auth.signInWithOtp({ email, options: { shouldCreateUser: false } }),
       );
-      return sent ? { kind: 'code_sent', email } : { kind: 'signed_out', error: 'generic' };
+      return { kind: 'code_sent', email };
     });
   }
 

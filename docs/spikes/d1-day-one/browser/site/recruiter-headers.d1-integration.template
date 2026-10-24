@@ -1,0 +1,7 @@
+# Verbatim copy of apps/recruiter/_headers.template on d1/integration (read with `git show`, 2026-10-16). Used by browser/support/env.ts only when the checked-out apps/recruiter/_headers.template predates the __API_ORIGIN__ token.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' __SUPABASE_ORIGIN__ __API_ORIGIN__ __SENTRY_ORIGIN__; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=()

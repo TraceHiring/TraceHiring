@@ -1,0 +1,25 @@
+{
+  "name": "@trace/item-delivery",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@trace/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@trace/config": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "fast-check": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

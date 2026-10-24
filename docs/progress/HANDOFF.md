@@ -1,55 +1,90 @@
-# HANDOFF — 2026-10-13 20:25 IST
-Reason for stopping: phase done. **M0b FIX is complete** and AUTOPILOT §2 allows one phase per session. Usage at stop: about 80% of the 5-hour window (Pro plan, resets about 23:20 IST); weekly about 66%.
-The next session may be a new Claude Code on another account. Start from `docs/progress/RESUME-PROMPT.md` on **`m0b/integration`** (its §4 paste prompt).
+# HANDOFF — 2026-10-24 10:00 IST (M1 BUILD 3 closed: A2a merged + mounted; BUILD 4 started: A7 built, reviews owed)
+Reason for stopping: usage guard (Max account; 5-hour window 88% when the A7 writer returned; one Opus review ≈ 15%,
+so no review was started). Start from `docs/progress/RESUME-PROMPT.md` §4 on **`m1/integration`** (worktree
+`.claude/worktrees/m1-integration`). The repo wins over this file.
 
-## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M8 = closed beta → M9 … M13)
-- Milestones closed: **0 of 17** (no `m*-reviewed` tag). Rough share of the whole build done: about 10%.
-- **M0a:** REVIEW and FIX are done; it stopped before CLOSE (founder gate). `milestone/m0a` @ `7dc8c0d` = `cp/m0a-06`.
-- **M0b:** BUILD, REVIEW and **FIX are done**. The code verdict is **PASS WITH CONDITIONS with no open Medium** (`docs/reviews/M0b.md`, sections "FIX" and "Re-review of the FIX"). The milestone stays INCOMPLETE until CLOSE, because the staging run (AT-B9, AT-B10) and `m0a-reviewed` are founder gates.
+## Paused: D1 (founder, 2026-10-22 night: paused, not closed)
+D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/worktrees/d1-integration`). Nothing is committed to `d1/integration` or `main` from M1. Copied from the `d1/integration` HANDOFF (`3c2e42a`, tip `1547fd0`):
+- **Next step 1.** Workers Paid answered (2026-10-22 21:20): "not yet"; OPEN-8a stays a founder gate and D1 can close without it. Remaining founder item: **AT-D2 capture**. For it: dispatch staging from `d1/integration` with `run_e2e=true` on the final tip (re-checks AT-D1/AT-D17 after `1d36151`), then the founder runs `pnpm e2e:record` (spec 4p §7.3) with an OS-level screen capture; record file name, SHA-256, `recordedMs`, run id.
+- **Next step 2.** Then `docs/milestones/D1-summary.md`, tag the next free `cp/d1-*` number (after `cp/d1-11`, `cp/d1-10`) on the verified tip, and **D1 CLOSE by PR to `main`** only with the founder's go-ahead (AUTOPILOT §2, §6). At the merge the founder adds `e2e-local` back to ruleset 25633431's required checks.
+- **Staging re-run already done on the final tip (reuse it):** dispatch **39820502191** on `1547fd0` (run_e2e=true, started before the pause, not touched by M1): all 7 jobs **success** (static, migrations, rls, security, e2e-local, deploy-staging, e2e-staging). Artifact `e2e-staging-results` manifest: spec `d1-slice`, project `staging`, sha `1547fd0…`, 55/55 steps ok, `durationMs` 304726, `recordedMs` 295068 (`record: false`), **AT-D17 `time_to_ready_ms`: A 46307, B 30833, C 69999, D 19441** (max 70.0 s: inside the 90 s gate; the 30 s target is still the M5-owned deviation). If `d1/integration` is still `1547fd0`, this is the "staging re-run on the final tip"; only the AT-D2 capture (record mode) remains.
+- **D1 founder items:** AT-D2 screen capture (`pnpm e2e:record`); Workers Paid (OPEN-8a) "not yet", decide before any load test (M3a); Dependabot PRs #7-#12 not merged blind; after D1 merges, `e2e-local` back on the required checks.
 
-## Where we are
-- **`m0b/integration`** (worktree `.claude/worktrees/m0b-integration`; enter it with `EnterWorktree` path). Its tip is this handoff commit, on top of `01b177c` docs(reviews): record the m0b fix re-review and gates.
-- **`milestone/m0b` @ `01b177c` = `cp/m0b-04`**: fast-forwarded this session from `4cb6775` (`cp/m0b-02`). **Stray tag:** `cp/m0b-03` also points at `4cb6775` (= `cp/m0b-02`). A failed fetch refspec in a chained command created it. It is local only: it is deliberately not pushed, and the wrap-up pushed tags by name. The tag rules forbid deleting it, so the founder may delete it locally (`git tag -d cp/m0b-03`), or leave it. The FIX checkpoint is `cp/m0b-04`.
-- Draft PR **TraceHiring/TraceHiring#3** (`m0b/integration` → `main`) is for CI only and is never merged.
-- Stream branches are all merged and kept: `m0b/b0-db` `dc4731a`, `m0b/b2-recruiter-auth` `91092ac`, `m0b/b2-fixes` `8f47fff`, `m0b/b4-smoke-auth` `04013ea`, plus the older `b0-rls-tests`, `b3-token-spike`, `b4-ops-scripts` and `b5-*`. This session created no stream branches.
-- Unchanged: `milestone/m0a` @ `7dc8c0d`, `m0a/integration` @ `c619525`, `main` @ `fe77a87`.
-- The local stack runs db, auth, kong, rest and mailpit (left up by `pnpm test:rls`).
+## Where we are (verified this chat)
+- Milestone **M1 · Test authoring**. BUILD 3 (Wave 2: A2a, A2b, A3a, A3b, A4) is **merged**; BUILD 4 (Wave 3) has
+  started: A7 built, not yet reviewed. Spec `specs/m1-test-authoring.md` rev 5, rows up to **R5-66**.
+- `m1/integration` tip = this handoff commit on top of **`c439617`** (all pushed). `trace/d1/integration` = `1547fd0`,
+  `trace/main` = `da5380d`: unchanged.
+- **Full serial verify green on `d973099`** (2026-10-24 09:35 IST: typecheck, lint, `pnpm -r --workspace-concurrency=1
+  test`, `vitest --root scripts`, test:rls 49 files / rls 3784 / catalog 150, build). Floor raised to 3784 (`4ea5de5`).
+  The first verify run was stopped by Claude Code for low system memory (not a code failure); the rerun passed.
+- **Linux CI on PR #14 green on `d973099`** (run 40057846238: static, security, migrations, rls) and on `1cef9de`
+  (run 40056456816). CI on `c439617` (spec + floor only) not checked.
 
-## Done this session (verified)
-- Resume check: the repo matched the handoff (`b3f8809` = remote; `milestone/m0b` = `cp/m0b-02` = `4cb6775`). `verify:fast` exit 0 (212 s).
-- FIX, one commit per finding, tests first:
-  - `1cc45e0` M0B-DB-2 (Medium): MT-11 now uses a caller-helper allow-list, plus the new branches `or_arm_without_caller` and `caller_only_null_tested`. 3 fixtures were seen failing; 2 negative controls added.
-  - `8c36e48` M0B-SP-1: the spike requires `42501`; re-run 27/0/0.
-  - `66c8459` B0-SP3: 2 audit cases and a spec §2.5 sentence.
-  - `c4db45c` B0-DB7: migration `20261013133323_m0b_staff_grant_checks.sql`; 3 staff cases seen failing.
-  - `545e1c2` B0-SP7: 6 cheap matrix cases.
-  - `ccb584a` M0B-DB-5: `scripts/test-concurrency-local.mjs` (two psql sessions, run by `test:rls`) **proved** that both owner demotions committed under REPEATABLE READ. Migration `20261013133832_m0b_owner_change_isolation.sql` adds `memberships_isolation_guard`.
-  - `0080700`: record and spec revision 8.
-- Re-review: one fresh Sonnet database-reviewer returned PASS WITH FINDINGS (3 Lows). FR-2 and FR-3 were fixed in `45bb351` (`is_operator` added to the allow-list; comment). FR-1 goes to **M1**. Recorded in `01b177c`.
-- Gates on `45bb351`, no agent running: full `pnpm verify` exit 0 (scripts 1559 + 1 skipped K4; catalog **138**, rls **697**; AT-B8 and the concurrency test OK). The first run failed the known redactor 50 ms timing at 50.2 ms; the re-run was green. Linux CI was green on `ccb584a` (38407442501) and on `01b177c` (38415375246).
-- Not fixed, with owners: **M0B-DB-1 → M7** (DR runbook) and **B0-SP7 rest → M1**. All other Lows keep the owners in `docs/reviews/M0b.md`.
+## Done this chat (commits on m1/integration, all pushed)
+- **CI security fixed:** zod 4.6.6 (GHSA-mrhx-c7xc-m3w5, one-day release-age exception, `b397a29`); dated osv ignores
+  for new dev-tooling advisories undici, fast-uri, happy-dom (`2d91744`); build-notes rows for both.
+- **A2a fix 9** (library key-review route) by an Opus writer: `m1/a2a-fix-1-r2` @ `55f7d2d` (api 633/633).
+- **Opus confirming re-review** (spec, security, database) of A2a `08b27ce..55f7d2d` + M1-m, M1-n, sweep, M1-o: all
+  **CONFIRMED WITH NOTES**, no rule 1-9 issue (recorded `c250f3d` in `docs/reviews/M1-wave2-first-reviews.md`).
+- **Merged** `m1/a2a-fix-1-r2` → `ae19cbf`; **lead mounts** in `services/api/src/app.ts` (red `17de28f` → `d973099`):
+  bank, pools, library, imports, ai-drafts; route inventory + log hygiene 57 org routes.
+- **R5-65 / migration M1-o** `20261024030000_m1_publish_source.sql`: `public.publish_source_v2` (INVOKER; one call per
+  package build). pgTAP `rls_m1_publish_source` 32 (red `0498fdc`, `a78da74`, `13f039f` → green `1cef9de`, `3bc1e11`,
+  `556402c`); api switched (`99916c7` red → `f616d5d`). Measured locally: 5,001 members 72 ms, exposure read indexed.
+- **R5-66** A7 lead decisions (`c439617`) from a Sonnet pre-flight.
+- **A7 writer (Opus)**: `m1/a7-candidate` @ **`b89e2ea`** (red `6aca734`), pushed. Writer checks: candidate 290/290 (last
+  full run 1 fail then fixed; only `candidate-guards.test.ts` re-run, 36/36), typecheck, lint, never-build 37/37, build;
+  bundle 83.1 kB gzip of 150 kB.
 
-## Next step (in order)
-1. **M0b cannot CLOSE until the founder gates are met:** `m0a-reviewed` (M0a CLOSE needs the GitHub plan, FOUNDER-QUEUE row 15) and the staging run of AT-B9 and AT-B10 (rows 20–21: H3–H5, H8–H11). Do not merge into `main` and do not tag `m*-reviewed` without the founder.
-2. **No unblocked autopilot phase is left without a founder answer.** D1 starts "right after `m0b-reviewed`, before M1" (`docs/build-order.md:36-38`, founder 2026-10-11), and Sentry (H6) must land before D1. The next session should ask the founder once (FOUNDER-QUEUE row added this session): may D1 SPEC start before `m0b-reviewed`, as M0b did before `m0a-reviewed`? If the answer is yes, run D1 SPEC in a fresh session on a new `d1/integration` cut from `milestone/m0b` (`cp/m0b-04`). If not, work the founder rows for CLOSE.
-3. Carry FR-1 (MT-11 caller calls that bind no row) into the M1 spec, before M1 adds tables.
+## In flight at handoff
+- **No agent is running.** `m1/a7-candidate` @ `b89e2ea` (base `c439617`), writer worktree
+  `.claude/worktrees/agent-ae41a300bf165cf7c` (leave it). **Reviews not started.**
+- A7 writer's lead ask: a 409 `out_of_order` gap path in `workers/edge/src/session-core.ts` that stored part of a batch
+  does not report that part's `refusedSeqs`; suggested: optional `refusedSeqs` on `OutOfOrderBody`
+  (`packages/shared/src/contracts-candidate.ts` ~:388) returned from the gap path (lead: contract + edge, test first).
+- A7 writer's question (not rules 1-9, lead decides): the rules step says "each section shows its own paste rule", but a
+  v1 (D1) session shows no section rules; proposal: v1 shows one line "pasting is turned off in this test" (D1 blocks
+  paste). Writer choices to confirm in review: "Finish this section" only with >1 section; forward-only nav allows only
+  the highest served and the next item; 409 retry ≤ 3 with `afterSeq` = acked seq after flush; attach backoff 1/2/4/8/10 s;
+  signals between streams held for the new stream; `Test.tsx` 554 lines.
 
-## Decisions made this session (HOW-level, AUTOPILOT §4)
-- `private.valid_roles` was left off the MT-11 allow-list, because it is immutable and caller-independent. `private.caller_roles` was added, and `private.is_operator` was added after the re-review.
-- M0B-DB-5 was fixed by refusing owner or status changes outside READ COMMITTED (`0A000`, a separate trigger, fix-forward migration). No current path uses another isolation level; the reviewer verified the role and database defaults.
-- M0B-DB-1 goes to M7 rather than M0b FIX (the review allows either); B0-SP7 rest goes to M1.
-- Fix-forward migrations, not edits to the reviewed ones.
+## Stream branches
+Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · `m1/a5c-fix-1` · `m1/a4-edge-delivery` · `m1/a4-fix-1` · `m1/a3a-jobs-v2` · `m1/a3a-fix-1` · `m1/a3a-fix-2` · `m1/a3b-jobs-authoring` · `m1/a3b-fix-1` · `m1/a2b-api-tests` · `m1/a2b-fix-1` · `m1/a2a-api-bank` `08b27ce` · `m1/a2a-fix-1` `c8c4f60` · `m1/a2a-fix-1-r2` `55f7d2d` (all on `trace`). Unmerged by founder answer (b): `m1/a5a-fix-2/-3/-4` (zip reader, M8). Open: **`m1/a7-candidate` `b89e2ea`** (reviews owed).
 
-## Open questions for the founder (`docs/progress/FOUNDER-QUEUE.md`)
-- **New:** may D1 SPEC start before `m0b-reviewed`? Options (a) start D1 SPEC now, (b) wait and work the CLOSE rows, (c) start M1 SPEC.
-- Unchanged: the GitHub plan (row 15, blocks M0a CLOSE); H8–H11 (row 20) and the H8 reminder (row 21); the URGENT Cloudflare token roll, `CLOUDFLARE_API_TOKEN`, `SUPABASE_STAGING_DB_URL`, H4, H5, H6 Sentry; B2-SEC-5 FYI (row 22); the session time-box FYI.
+## Next step (one precise action list)
+1. Verify first (below). Then **A7 Opus first reviews** per spec §11.3 (spec + security; one agent each, or one agent
+   with a verdict per area), diff `c439617..b89e2ea`, told the writer's choices and question above and R5-66.
+2. Lead, test first: the `OutOfOrderBody.refusedSeqs` contract + edge gap path (above); decide the v1 rules line.
+3. A7 fix round (Opus writer, fixes test first, branch `m1/a7-fix-1` from `b89e2ea`), one confirming re-review, merge
+   into `m1/integration` (`chore: merge …`), full serial verify, Linux CI on PR #14.
+4. Then BUILD 4 rest: `e2e/tests/m1-*.spec.ts` (AT-M1-01, 10, 30; lead + Sonnet, `local` project), the AT-M1-10
+   500-item measurement on Linux CI recorded in spec §8, AT-M1-28 D1 E2E.
+5. **Lead, owed before the M1 exit:** R5-63 f rest (atomic `create_test_from_template`, `save_bank_draft` RPC — also
+   re-review Low 4, paste rule in the database, template paging); R5-64 g (revoke `id` INSERT grants after a pgTAP
+   fixture rewrite); R5-61 h (indexed duplicate hash, jobs `SUPABASE_URL` staging half, drafting lease); R5-62 b (jobs
+   db-test, "more than one account" branch); A2b Low 2 staging R2 `onlyIf` check (needs a founder-approved dispatch).
+6. Dependency bumps owed (build-notes 2026-10-24): vitest 4.1.12 + undici 7.30.1 on/after 2026-10-29; fast-uri 3.1.9
+   on/after 2026-11-02; happy-dom 21.x before 2026-11-23; then delete the matching osv ignores.
 
-## Gotchas / do not touch
-- Only the lead runs `supabase start/stop`, `db reset`, `test db`, `gen types`, `pnpm verify` and `pnpm test:rls`. Run the full verify **with no agent running**. The redactor 50 ms timing test can fail at about 50.2 ms under load; re-run before suspecting code.
-- Running a single pgTAP file by hand: pgTAP is absent outside `supabase test db`. Insert `create extension if not exists pgtap with schema extensions;` after the file's `begin;` (it rolls back with the file).
-- In node `String.replace`, `$$` in a replacement string becomes `$`: use the Edit tool for SQL with `$$`.
-- Worktree guard: no `git -C`, no `$(…)`, no heredocs containing backticks with git in the same command, and no pipes around git. commitlint body lines must be at most 100 characters.
-- Push and fetch: `git -c credential.helper= -c "credential.helper=!gh auth git-credential" push trace <refs>`.
+## Notes for Wave 3 (carried; not defects now)
+- A5c N1 (`fromDraftView(view, integrity)` + `onSaved` → `setPasteWritten` → re-save, recruiter app, lead); A5a S7.
+- R2-5 gap: re-copying a retired library copy hands back the retired copy. DC-M1-4 — OPEN-8a founder gate.
+  `ratelimits` on staging (edge and api) confirmed only by a staging dispatch (ADR-032).
+- New jobs cron path: `authoring_sweep` needs `JOBS_AUTHORING_DB` (staging Hyperdrive) — listed under the M1 staging
+  founder item. Re-review notes kept open: D11 (reviewers see `exposureCount` 0), D12 (lost insert response leaves a
+  key-less draft), fakes not modelling `variant_key_missing`/`variants_numbering`/approver workspace.
+
+## Founder items
+- Unchanged: coverage when tab focus is off (default a); D1 integrity job re-delivered after M1 (default a); M1-15 "shared-device" copy (default: leave out); import cancel keeps rows (default a); M1 staging Hyperdrive configs + secrets (+ jobs `SUPABASE_URL`, + api `MEMBER_INVITE_PEPPER` ≥ 32 bytes); Q-M1-1…Q-M1-4; OPEN-8a Workers Paid; written AI drafts; zip reader answered (b).
+- New (information only): zod bumped one day before the two-week release-age rule for a High advisory (build-notes 2026-10-24).
+
+## Gotchas
+- Worktree guard: no `cd …&&`, `git -C`, `$(...)`, loops, compound or piped node-script commands, no heredocs appending to repo files; write scripts with the Write tool and run them plainly; commit messages via `git commit -F <unique file>`; merges `chore: merge …`. A refused compound command runs NOTHING.
+- `node scripts/db-types.mjs` and `pnpm test:rls` RESET the local database: never while a writer runs db-tests. `pnpm exec supabase migration up --local` applies a new migration without a reset; an edited, already-applied migration needs a drop + `psql -f` of the file locally.
+- A function body's comments are in `pg_get_functiondef` (a pgTAP text pin on the body sees them).
+- RAM: never run workspace tests while writers run; Claude Code may stop a long background verify when memory is short (rerun it; it is not a code failure).
+- Never hand-edit generated `rls_m1_*.test.sql`: edit `docs/progress/m1-wave0-drafts/pgtap/bodies/*.sql`/`preamble.sql`, run `node docs/progress/m1-wave0-drafts/pgtap/gen.mjs . <name>`, run named files with `node docs/progress/m1-wave0-drafts/pgtap/run.mjs <names>`.
 
 ## Verify first
-- `git fetch` (with the `-c` pair) · `git log --oneline -3 m0b/integration` · `git status` · `docker ps` · `pnpm -s verify:fast` · PR #3 checks
+`git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `git rev-parse --short trace/m1/a7-candidate` (`b89e2ea`) · `gh run list --repo TraceHiring/TraceHiring --branch m1/integration --limit 3` · `pnpm -s verify:fast` · `docker ps` (supabase_db_trace up)
