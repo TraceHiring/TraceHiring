@@ -21,9 +21,7 @@ import { difficultyBand } from '@trace/item-delivery';
 import { z } from 'zod';
 import { sha256Hex } from '../candidate/encoding.js';
 import {
-  ITEM_COLS,
   ItemRowSchema,
-  inList,
   itemsOf,
   parseRows,
   type Content,
@@ -33,7 +31,7 @@ import {
   type TestRow,
   type VersionRow,
 } from './authoring.js';
-import { chunks, orgFail, PGRST_MAX_ROWS, type Rest } from './org-context.js';
+import { orgFail, rpcOf, type Rest } from './org-context.js';
 
 /** The R2 object is at most 5 MB (§5, E22). */
 export const PACKAGE_MAX_BYTES = 5 * 1024 * 1024;
@@ -99,97 +97,74 @@ export const usesM1 = (
 
 const sortById = (rows: ItemRow[]) => rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
-/** Rows of one keyed table read past PostgREST's max_rows on `col` (ascending), so a large pool is never cut. */
-const readAll = async (
-  rest: Rest,
-  table: string,
-  query: Readonly<Record<string, string>>,
-  col: string,
-): Promise<Record<string, unknown>[]> => {
-  const out: Record<string, unknown>[] = [];
-  let after: string | null = null;
-  for (;;) {
-    const page: Record<string, unknown>[] = await rest.select(table, {
-      ...query,
-      ...(after === null ? {} : { [col]: `gt.${after}` }),
-      order: `${col}.asc`,
-      limit: String(PGRST_MAX_ROWS),
-    });
-    out.push(...page);
-    if (page.length < PGRST_MAX_ROWS) return out;
-    const last = page[page.length - 1]?.[col];
-    if (typeof last !== 'string') return orgFail('unavailable');
-    after = last;
-    if (out.length > PACKAGE_MAX_ITEMS * 2) return orgFail('unavailable');
-  }
-};
-
-const loadItems = async (
-  rest: Rest,
-  orgId: string,
-  ids: readonly string[],
-  filter: Readonly<Record<string, string>> = {},
-) => {
-  const rows: ItemRow[] = [];
-  for (const part of chunks(ids)) {
-    rows.push(
-      ...parseRows(
-        ItemRowSchema,
-        await rest.select('item_versions', {
-          select: ITEM_COLS,
-          org_id: `eq.${orgId}`,
-          id: inList(part),
-          ...filter,
-        }),
-      ),
-    );
-  }
-  return rows;
-};
-
-const loadVariants = async (rest: Rest, orgId: string, items: readonly ItemRow[]) => {
-  const variants = new Map<string, VariantRow[]>();
-  const ids = items.filter((i) => i.is_parameterised).map((i) => i.id);
-  for (const part of chunks(ids)) {
-    const rows = parseRows(
-      VariantRowSchema,
-      await rest.select('item_variants', {
-        select: 'id,item_version_id,variant_no,stem,options',
-        org_id: `eq.${orgId}`,
-        item_version_id: inList(part),
-        order: 'variant_no.asc',
-      }),
-    );
-    for (const r of rows) {
-      const list = variants.get(r.item_version_id) ?? [];
-      list.push(r);
-      variants.set(r.item_version_id, list);
-    }
-  }
-  for (const list of variants.values()) list.sort((a, b) => a.variant_no - b.variant_no);
-  return variants;
-};
+const MemberSchema = z.object({
+  section_id: z.uuid(),
+  item_version_id: z.uuid(),
+  exposure_at_publish: z.coerce.number().int().min(0).nullable(),
+});
+type Member = z.infer<typeof MemberSchema>;
 
 const ExposureRow = z.object({ item_id: z.uuid(), served_count: z.coerce.number().int().min(0) });
 
-/** item_version_id -> the served count of its item (v_item_exposure, summed over the caller's visible rows). */
-const loadExposure = async (rest: Rest, orgId: string, items: readonly ItemRow[]) => {
-  const byItem = new Map<string, number>();
-  for (const part of chunks(items.map((i) => i.item_id))) {
-    const rows = parseRows(
-      ExposureRow,
-      await rest.select('v_item_exposure', {
-        select: 'item_id,served_count',
-        org_id: `eq.${orgId}`,
-        item_id: inList(part),
-      }),
-    );
-    for (const r of rows) byItem.set(r.item_id, (byItem.get(r.item_id) ?? 0) + r.served_count);
+/** The answer of public.publish_source_v2 (M1-o); a null answer (version not visible) fails the parse. */
+const SourceSchema = z.object({
+  members: z.array(z.unknown()).max(PACKAGE_MAX_ITEMS * 2),
+  items: z.array(z.unknown()),
+  variants: z.array(z.unknown()),
+  exposure: z.array(z.unknown()),
+});
+
+interface DbSource {
+  members: Member[];
+  /** item_version_id -> row, for every member. */
+  byId: Map<string, ItemRow>;
+  variants: Map<string, VariantRow[]>;
+  /** item_id -> served count (live only). */
+  served: Map<string, number>;
+}
+
+/**
+ * The version's source in one call (R5-65, R5-63 f): members (live: pool members and inline items; frozen: the
+ * snapshot rows), their item rows, the variants of parameterised members and, live, the served counts. Anything
+ * missing or malformed fails closed (503), never a smaller package.
+ */
+const loadSource = async (
+  rest: Rest,
+  orgId: string,
+  versionId: string,
+  frozen: boolean,
+): Promise<DbSource> => {
+  const raw = await rpcOf(rest)('publish_source_v2', {
+    p_org_id: orgId,
+    p_test_version_id: versionId,
+    p_frozen: frozen,
+  });
+  const parsed = SourceSchema.safeParse(raw);
+  if (!parsed.success) return orgFail('unavailable');
+  const members = parseRows(MemberSchema, parsed.data.members);
+  const byId = new Map(parseRows(ItemRowSchema, parsed.data.items).map((i) => [i.id, i]));
+  if (members.some((m) => !byId.has(m.item_version_id))) return orgFail('unavailable');
+  const variants = new Map<string, VariantRow[]>();
+  for (const r of parseRows(VariantRowSchema, parsed.data.variants)) {
+    const list = variants.get(r.item_version_id) ?? [];
+    list.push(r);
+    variants.set(r.item_version_id, list);
   }
-  return new Map(items.map((i) => [i.id, byItem.get(i.item_id) ?? 0]));
+  for (const list of variants.values()) list.sort((a, b) => a.variant_no - b.variant_no);
+  const served = new Map<string, number>();
+  for (const r of parseRows(ExposureRow, parsed.data.exposure)) {
+    served.set(r.item_id, (served.get(r.item_id) ?? 0) + r.served_count);
+  }
+  return { members, byId, variants, served };
 };
 
-const PoolItemRow = z.object({ item_version_id: z.uuid() });
+/** The member rows of one pool section, ordered by id. */
+const poolItems = (src: DbSource, sectionId: string): ItemRow[] =>
+  sortById(
+    src.members
+      .filter((m) => m.section_id === sectionId)
+      .map((m) => src.byId.get(m.item_version_id) ?? orgFail('unavailable')),
+  );
 
 /**
  * The live source (before publish): inline items of inline sections, and for each pool section the approved bank
@@ -198,46 +173,22 @@ const PoolItemRow = z.object({ item_version_id: z.uuid() });
 export const loadLiveSource = async (
   rest: Rest,
   orgId: string,
+  versionId: string,
   content: Content,
 ): Promise<PackageV2Source> => {
+  const src = await loadSource(rest, orgId, versionId, false);
   const items = new Map<string, ItemRow[]>();
-  const all: ItemRow[] = [];
   for (const s of content.sections) {
-    if (s.pool_id === null) {
-      const inline = itemsOf(content, s.id);
-      items.set(s.id, inline);
-      all.push(...inline);
-      continue;
-    }
-    const ids = parseRows(
-      PoolItemRow,
-      await readAll(
-        rest,
-        'pool_items',
-        { select: 'item_version_id', org_id: `eq.${orgId}`, pool_id: `eq.${s.pool_id}` },
-        'item_version_id',
-      ),
-    ).map((r) => r.item_version_id);
-    // Approved bank versions only, as the guard's snapshot (an AI draft in review or a retired version never).
-    const eligible = sortById(
-      await loadItems(rest, orgId, ids, { status: 'eq.approved', section_id: 'is.null' }),
-    );
-    items.set(s.id, eligible);
-    all.push(...eligible);
+    items.set(s.id, s.pool_id === null ? itemsOf(content, s.id) : poolItems(src, s.id));
   }
+  const all = [...items.values()].flat();
   return {
     sections: content.sections,
     items,
-    variants: await loadVariants(rest, orgId, all),
-    exposure: await loadExposure(rest, orgId, all),
+    variants: src.variants,
+    exposure: new Map(all.map((i) => [i.id, src.served.get(i.item_id) ?? 0])),
   };
 };
-
-const SnapshotRowSchema = z.object({
-  section_id: z.uuid(),
-  item_version_id: z.uuid(),
-  exposure_at_publish: z.coerce.number().int().min(0),
-});
 
 /**
  * The frozen source (after publish): the item set of each section is section_pool_snapshot's; the content is the
@@ -251,40 +202,17 @@ export const loadFrozenSource = async (
   content: Content,
   exposure: ReadonlyMap<string, number>,
 ): Promise<PackageV2Source> => {
-  const snap = parseRows(
-    SnapshotRowSchema,
-    await readAll(
-      rest,
-      'section_pool_snapshot',
-      {
-        select: 'section_id,item_version_id,exposure_at_publish',
-        org_id: `eq.${orgId}`,
-        test_version_id: `eq.${versionId}`,
-      },
-      'item_version_id',
-    ),
-  );
-  const loaded = await loadItems(
-    rest,
-    orgId,
-    snap.map((r) => r.item_version_id),
-  );
-  const byId = new Map(loaded.map((i) => [i.id, i]));
+  const src = await loadSource(rest, orgId, versionId, true);
   const items = new Map<string, ItemRow[]>();
   for (const s of content.sections) {
-    if (s.pool_id === null) {
-      items.set(s.id, itemsOf(content, s.id));
-      continue;
-    }
-    const rows = snap
-      .filter((r) => r.section_id === s.id)
-      .map((r) => byId.get(r.item_version_id) ?? orgFail('unavailable'));
-    items.set(s.id, sortById(rows));
+    items.set(s.id, s.pool_id === null ? itemsOf(content, s.id) : poolItems(src, s.id));
   }
   const all = [...items.values()].flat();
   // The built count of each item, never above the count the publish statement froze (R5-60 a); anything else makes
   // the rebuild differ (-1 is refused by packageItem), so the version is retired (fail closed).
-  const frozenCount = new Map(snap.map((r) => [r.item_version_id, r.exposure_at_publish]));
+  const frozenCount = new Map(
+    src.members.map((r) => [r.item_version_id, r.exposure_at_publish ?? orgFail('unavailable')]),
+  );
   const counted = (id: string) => {
     const built = exposure.get(id);
     const limit = frozenCount.get(id);
@@ -294,7 +222,7 @@ export const loadFrozenSource = async (
   return {
     sections: content.sections,
     items,
-    variants: await loadVariants(rest, orgId, all),
+    variants: src.variants,
     exposure: new Map(all.map((i) => [i.id, counted(i.id)])),
   };
 };

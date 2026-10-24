@@ -449,8 +449,8 @@ const pick = (row: Row, cols: string): Row =>
 
 /**
  * public.publish_source_v2 (M1-o, R5-65), as the SQL body: null unless the caller sees the version in the named org;
- * live members = the approved bank versions of each pool section's pool, frozen members = every snapshot row of the
- * version; items once each with the package columns; variants of parameterised members; live served counts.
+ * live members = the approved bank versions of each pool section's pool and the inline items of each inline section,
+ * frozen members = every snapshot row of the version; items once each with the package columns; variants of parameterised members; live served counts.
  */
 export const publishSourceFake = (args: Readonly<Record<string, unknown>>, d: FakeDb): unknown => {
   const seen = (table: string) => (row: Row) => d.hooks[table]?.visible?.(row) ?? true;
@@ -467,19 +467,21 @@ export const publishSourceFake = (args: Readonly<Record<string, unknown>>, d: Fa
           .filter((r) => r.org_id === orgId && r.test_version_id === version.id)
           .map((r) => pick(r, 'section_id,item_version_id,exposure_at_publish'))
       : rows('sections')
-          .filter((s) => s.test_version_id === version.id && (s.pool_id ?? null) !== null)
+          .filter((s) => s.test_version_id === version.id)
           .flatMap((s) =>
-            rows('pool_items')
-              .filter((p) => p.org_id === orgId && p.pool_id === s.pool_id)
-              .flatMap((p) =>
-                versions.filter(
-                  (i) =>
-                    i.id === p.item_version_id &&
-                    i.status === 'approved' &&
-                    (i.section_id ?? null) === null,
-                ),
-              )
-              .map((i) => ({ section_id: s.id, item_version_id: i.id, exposure_at_publish: null })),
+            ((s.pool_id ?? null) === null
+              ? versions.filter((i) => i.section_id === s.id)
+              : rows('pool_items')
+                  .filter((p) => p.org_id === orgId && p.pool_id === s.pool_id)
+                  .flatMap((p) =>
+                    versions.filter(
+                      (i) =>
+                        i.id === p.item_version_id &&
+                        i.status === 'approved' &&
+                        (i.section_id ?? null) === null,
+                    ),
+                  )
+            ).map((i) => ({ section_id: s.id, item_version_id: i.id, exposure_at_publish: null })),
           );
   const memberIds = new Set(members.map((m) => m.item_version_id));
   const items = versions

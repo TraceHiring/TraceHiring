@@ -167,7 +167,7 @@ const publishV2 = async (
     const test = (await findTest(ctx.rest, orgId, testId)) ?? orgFail('not_found');
     const content = await loadContent(ctx.rest, orgId, draft.id);
     const ruleset = await findRuleset(ctx.rest, orgId, draft.ruleset_version_id);
-    const live = await loadLiveSource(ctx.rest, orgId, content);
+    const live = await loadLiveSource(ctx.rest, orgId, draft.id, content);
     const built = await buildPackageV2(test, draft, ruleset, live);
     if (!built.ok) return orgFail(problemCode(built.problem));
     let written: boolean;
