@@ -1,6 +1,6 @@
-# HANDOFF — 2026-10-24 01:00 IST (M1 BUILD 3 = Wave 2 part 6: A2a spec review, lead M1-m + M1-n + jobs sweep, A2a fix round 1)
-Reason for stopping: the founder asked to stop after this chat (and at 95% of the 5-hour window; Max account, ~83% at
-the last lead step). Start from `docs/progress/RESUME-PROMPT.md` §4 on **`m1/integration`** (worktree
+# HANDOFF — 2026-10-24 08:15 IST (M1 BUILD 3 = Wave 2 part 6: A2a spec review, lead M1-m + M1-n + jobs sweep, A2a fix round 1)
+Reason for stopping: the founder asked to wrap up now and continue on another Claude Code account (Max account here;
+5-hour window ~79% at the stop). Start from `docs/progress/RESUME-PROMPT.md` §4 on **`m1/integration`** (worktree
 `.claude/worktrees/m1-integration`). The repo wins over this file.
 
 ## Paused: D1 (founder, 2026-10-22 night: paused, not closed)
@@ -13,8 +13,9 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
 ## Where we are (verified this chat)
 - Milestone **M1 · Test authoring**, phase **BUILD 3 = Wave 2**. Spec `specs/m1-test-authoring.md` rev 5, rows up to
   **R5-64 (n)**. Reviews: `docs/reviews/M1-wave2-first-reviews.md` (A2a: all three first reviews now recorded).
-- `m1/integration` tip = this handoff on top of **`134ca37`** (pushed). `trace/d1/integration` = `1547fd0`,
-  `trace/main` = `da5380d`: unchanged. `pnpm -s verify:fast`: see LOG row of this chat (run at the end).
+- `m1/integration` tip = this handoff commit on top of **`dbf1d9f`** (last code commit `134ca37`; all pushed).
+  `trace/d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged. `pnpm -s verify:fast` **exit 0** on the
+  final tree (2026-10-24 08:05 IST, 236 s). Linux CI on PR #14: check `gh run list` for `134ca37`/`dbf1d9f`.
 - The last **full serial verify** is still the one on `4fca331` (rls 3716). Since then: lead code `0eb91ac`, `35925e0`
   and this chat's commits below; each was checked by its own package tests / named pgTAP files only (no full verify yet).
 
@@ -37,19 +38,36 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
   reset; a stray committed `import.cancel` audit row in the local DB had broken one imports assertion before it).
 
 ## In flight at handoff (check first, trust nothing)
-1. **A2a fix round 1 — writer (Opus) on `m1/a2a-fix-1`** (base `08b27ce` + merge of `4d8504d`; it pushes each green
-   commit to `trace`). State at writing: see the "A2a fix round 1" line appended below by the lead. Brief = the 12 fix
-   items of R5-64 / the review report (S1 pathId lower-case, S2 parse before insert, D1 api half, D4 409, D5 guard
-   texts, D6 no images_ok, D2 view + no MAX_MEMBERS, D3 inner embed, spec 1 key-review route, D8 clone rule, spec 5
-   real assertions, invite_settled). Not in it: D9 (deferred, R5-64 g), migrations, mounts, contracts.
+- **No agent is running.** A2a fix round 1 STOPPED on the lead's order, partly done, tree clean, pushed:
+  **`m1/a2a-fix-1` @ `c8c4f60`** on `trace` (base `08b27ce`, merge of `4d8504d` = `03e3a73`, no conflicts). Writer worktree
+  `.claude/worktrees/agent-a39cb2868e44c854a` (leave it). Only file outside the five A2a module dirs:
+  `services/api/src/modules/tests/org-context.ts` (sanctioned, R5-64 l).
+- **Done** (red → green): fix 1 S1 `pathId` lower-case + D5/Note 6 guard texts incl. the library review texts and
+  `invite_settled` (`43c9c06` → `d354d4d`); fix 2 S2 message parsed before the job insert, 400 `bad_request`
+  (`53aa94c` → `2102995`); spec Low 5 real assertions (`53aa94c`, `10c283e`); fixes 3/4/10 D1 api half, D4 409,
+  D8 no clone of a `not_approved` AI draft (`10c283e` → `dde49ad`); fix 6 D6 no `images_ok` (`9eb279e` → `d5624ff`);
+  fix 7 D2 `v_pool_item_counts`, no `MAX_MEMBERS` (`6d1dbd7` → `109b946`); fix 8 D3 inner embed (`774c981` → `c8c4f60`).
+  Writer checks: touched module suites green (bank 62, five modules 105, modules/tests 172, ai-drafts 7, guard-keys,
+  imports, members); api typecheck + lint clean.
+- **NOT done:** fix 9 = the library key-review route `POST /v1/orgs/:orgId/bank/item-versions/:versionId/key-review`
+  (R5-64 h; contract `KeyReviewItemRequest` exists; its guard texts are already mapped; add it to `A2A_NEW_ROUTES`);
+  the whole `@trace/api` vitest run once; a test that targets each new fixture fake (embed, view, images_ok,
+  open-version index) by itself.
+- Writer choices to confirm in the re-review: a stale key in a PUT is a 400 (contract); a failed key write after the
+  content write removes the key (best effort), so submit answers 422 until a PUT stores it; guard codes
+  `library_reviewers` / `key_review_own_update` / `library_expert_review` → 409, `key_reviewer_member` /
+  `key_reviewer_self` → 403, `pool_item_ineligible` → 409, `invite_settled` → 409. Lead ask: check the D3 embed
+  against real PostgREST in E2E.
 
 ## Stream branches
-Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · `m1/a5c-fix-1` · `m1/a4-edge-delivery` `7f2fb9c` · `m1/a4-fix-1` `a0c1d46` · `m1/a3a-jobs-v2` `74d9891` · `m1/a3a-fix-1` `402a3ac` · `m1/a3a-fix-2` `8af7845` · `m1/a3b-jobs-authoring` `2b706d0` · `m1/a3b-fix-1` `1866c92` · `m1/a2b-api-tests` `8f7b52c` · `m1/a2b-fix-1` `5c2a892` (all on `trace`). Unmerged by founder answer (b): `m1/a5a-fix-2/-3/-4` (zip reader, M8). Open: **`m1/a2a-api-bank` `08b27ce`** (reviews 3/3 done) and **`m1/a2a-fix-1`** (fix round 1, see In flight).
+Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · `m1/a5c-fix-1` · `m1/a4-edge-delivery` `7f2fb9c` · `m1/a4-fix-1` `a0c1d46` · `m1/a3a-jobs-v2` `74d9891` · `m1/a3a-fix-1` `402a3ac` · `m1/a3a-fix-2` `8af7845` · `m1/a3b-jobs-authoring` `2b706d0` · `m1/a3b-fix-1` `1866c92` · `m1/a2b-api-tests` `8f7b52c` · `m1/a2b-fix-1` `5c2a892` (all on `trace`). Unmerged by founder answer (b): `m1/a5a-fix-2/-3/-4` (zip reader, M8). Open: **`m1/a2a-api-bank` `08b27ce`** (reviews 3/3 done) and **`m1/a2a-fix-1` `c8c4f60`** (fix round 1, 8 of 9 items; see In flight).
 
 ## Next step (one precise action list)
-1. Verify first (below). Read the "A2a fix round 1" line at the end of this file. If the writer finished: check its
-   report claims against `git log`/diff of `m1/a2a-fix-1`. If it did not finish: continue it with a new Opus fix writer
-   on the same branch from its pushed tip (same brief: R5-64 + review report "A2a api"), only the items not done.
+1. Verify first (below). Then **finish A2a fix round 1** with one Opus fix writer (Agent isolation "worktree") on
+   `m1/a2a-fix-1` from `c8c4f60` (common brief `docs/progress/m1-writer-brief-common.md`, but NO reset: the writer runs
+   `git switch -c m1/a2a-fix-1 trace/m1/a2a-fix-1` and confirms the tip is `c8c4f60`): fix 9, the key-review route per
+   R5-64 h (tests first: a library member approves after another member's key review; a customer org → 409; the author
+   as key reviewer → the mapped 403/409); then the whole api vitest once, typecheck, lint; push each green commit.
 2. **One Opus confirming re-review** of `08b27ce..<m1/a2a-fix-1 tip>` (spec + security + database in one agent, a
    verdict per area; the M1-m/M1-n migrations and the jobs sweep `4d3cb7f..134ca37` in the same review, database area).
 3. **Merge** `m1/a2a-fix-1` into `m1/integration` (`chore: merge …`) with the lead mounts in `services/api/src/app.ts`:
@@ -89,6 +107,3 @@ Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · 
 
 ## Verify first
 `git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `git branch -a -v --list '*a2a*'` · `gh run list --repo TraceHiring/TraceHiring --branch m1/integration --limit 3` · `pnpm -s verify:fast` · `docker ps` (supabase_db_trace up)
-
-## A2a fix round 1 (lead, at the stop)
-- PENDING: filled in when the writer reports.
