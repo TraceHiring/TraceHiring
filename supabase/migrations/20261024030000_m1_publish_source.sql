@@ -6,8 +6,9 @@
 -- SECURITY INVOKER (M1-18): it runs as the caller (authenticated, with the caller's JWT), so RLS and column grants
 -- apply exactly as for the PostgREST reads it replaces; it references only public objects. It returns null unless the
 -- caller sees the version in the named org (another org reads null, never an error that names the version).
---   members   live:   the approved bank versions (section_id null) of each pool section's pool
---             frozen: the version's section_pool_snapshot rows (with exposure_at_publish)
+--   members   live:   the approved bank versions (section_id null) of each pool section's pool, and the inline items
+--                     of each inline section (the rows publish guard v2 freezes)
+--             frozen: the version's section_pool_snapshot rows (with exposure_at_publish), inline rows included
 --   items     each member item version once, with exactly the package columns (never a key or a rubric body)
 --   variants  the variants of parameterised members (no params, no key)
 --   exposure  live only: served count per item, summed over v_item_exposure; frozen: empty
@@ -32,6 +33,12 @@ as $$
     join public.pool_items as pi on pi.org_id = s.org_id and pi.pool_id = s.pool_id
     join public.item_versions as iv
       on iv.org_id = pi.org_id and iv.id = pi.item_version_id and iv.status = 'approved' and iv.section_id is null
+    where p_frozen is false
+    union all
+    select s.id, iv.id, null::int
+    from v
+    join public.sections as s on s.org_id = v.org_id and s.test_version_id = v.id and s.pool_id is null
+    join public.item_versions as iv on iv.org_id = s.org_id and iv.section_id = s.id
     where p_frozen is false
     union all
     select sp.section_id, sp.item_version_id, sp.exposure_at_publish
