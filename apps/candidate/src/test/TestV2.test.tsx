@@ -172,8 +172,10 @@ const itemCalls = (fake: Fake, position: number) =>
   fake.item.mock.calls.filter(([, p]) => p === position);
 
 /** A v2 view after the first section closed: a new stream, the second section open. */
-const afterFirstCloses = (sections = [mcqSection({ state: 'closed' }), writtenSection()]) =>
-  viewV2At(Date.now(), { streamId: STREAM_ID_2, sections, served: [1] });
+const afterFirstCloses = (
+  sections = [mcqSection({ state: 'closed' }), writtenSection()],
+  answers: SessionViewV2['answers'] = [],
+) => viewV2At(Date.now(), { streamId: STREAM_ID_2, sections, served: [1], answers });
 
 describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
   it('shows the section deadline from the server deadlineAt through the clock offset', async () => {
@@ -395,7 +397,8 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
     await waitFor(() => itemCalls(fake, 2).length === 2, 'retry');
     expect(afterSeqs[0]).toBe(0);
     const [first, second] = itemCalls(fake, 2);
-    expect(first?.[2]).toBe(1);
+    // The edit and the untrusted-input signal the synthetic typing raised: seq 2 was the highest enqueued.
+    expect(first?.[2]).toBe(2);
     expect(second?.[2]).toBeLessThanOrEqual(fake.state.hw);
     // The edit went out between the refused GET and the retry.
     const textOrder = fake.events.mock.invocationCallOrder[0] ?? Infinity;
@@ -468,7 +471,8 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
   it('finish: the confirm says finishing is final; confirming sends section.finish and attaches', async () => {
     const view = viewV2At(Date.now());
     const fake = fakeApi(view);
-    fake.state.next.push(afterFirstCloses());
+    // The edge kept the choice: the new view carries it.
+    fake.state.next.push(afterFirstCloses(undefined, [{ position: 1, choice: 'a' }]));
     const container = await render(view, fake);
     await click(await radio(container, 'a'));
     await click(await waitForButton(container, COPY.test.finishSection));

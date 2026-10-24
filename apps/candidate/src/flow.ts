@@ -6,8 +6,8 @@ import type {
   LobbyNext,
   Receipt,
   SessionStartReq,
-  SessionView,
 } from '@trace/shared/contracts/candidate';
+import type { AnyView } from './api';
 import type { Boot } from './boot';
 
 export type PhotoChoice = SessionStartReq['photo'];
@@ -26,7 +26,7 @@ export type Step =
   | { name: 'consent' }
   | { name: 'photo' }
   | { name: 'rules'; photo: PhotoChoice }
-  | { name: 'test'; sessionToken: string; view: SessionView; offsetMs: number }
+  | { name: 'test'; sessionToken: string; view: AnyView; offsetMs: number }
   | { name: 'submitted'; receipt: Receipt }
   /** `waitSeconds`: with `rate_limited`, how long "Try again" stays disabled (the edge's Retry-After). */
   | { name: 'error'; why: ErrorWhy; retry: boolean; waitSeconds?: number };
@@ -46,7 +46,7 @@ export type Action =
   | { type: 'blocked' }
   | { type: 'consented' }
   | { type: 'photo'; photo: PhotoChoice }
-  | { type: 'session'; sessionToken: string; view: SessionView; offsetMs: number }
+  | { type: 'session'; sessionToken: string; view: AnyView; offsetMs: number }
   | { type: 'receipt'; receipt: Receipt }
   | { type: 'unavailable'; why: UnavailableWhy }
   | { type: 'error'; why: ErrorWhy; retry?: boolean; waitSeconds?: number };

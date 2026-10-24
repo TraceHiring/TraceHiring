@@ -158,7 +158,8 @@ describe('candidate sources', () => {
 
   it('show item images only as data: URLs built in src/test/media.ts, never an object URL (R5-66 e)', () => {
     expect(where(/createObjectURL|revokeObjectURL/)).toEqual([]);
-    expect(where(/['"`]data:/)).toEqual(['./test/media.ts']);
+    // A data: URL built from a template or written as an image literal (prose in comments does not count).
+    expect(where(/data:\$\{|['"`]data:image\//)).toEqual(['./test/media.ts']);
     expect([...ITEM_IMAGE_TYPES].sort()).toEqual(['image/jpeg', 'image/png', 'image/webp']);
     expect(ITEM_IMAGE_MAX_BYTES).toBe(1_048_576);
   });

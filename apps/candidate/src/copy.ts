@@ -114,7 +114,8 @@ export const COPY = {
     title: 'Test rules',
     intro: 'Please read these rules before you start.',
     items: [
-      'Answer on your own. Pasting and dropping text are blocked, and attempts are recorded.',
+      // R5-24, R5-66 c: no paste rule before start; each section shows its own rule during the test.
+      'Answer on your own. Each section of the test shows its own rule for pasting text. Dropping text is turned off. Paste and drop attempts are recorded.',
       'We record your start photo, your answers and every edit, paste and drop attempts, when you leave this tab, when you leave full screen, and a regular signal that the page is still connected.',
       'We never record camera video, sound or your screen.',
       'The timer starts when you press Start test and keeps running even if you lose your connection or close the page. Your answers are saved as you type.',
@@ -160,6 +161,28 @@ export const COPY = {
     submitOffline:
       'We could not reach the test service, so your test is not submitted yet. Your answers are kept on this device. Check your connection and try again.',
     fullscreen: 'Return to full screen',
+
+    // M1 sections (R5-9, R5-20, R5-24, R5-59 e, R5-66). Neutral: a closed section is a matter of time or choice.
+    section: (n: number, of: number, title: string) => `Section ${n} of ${of}: ${title}`,
+    sectionTimeLeft: 'Time left in this section',
+    sectionClosed: 'This section is closed. Its answers are saved and can no longer be changed.',
+    sectionNotOpen: 'This section opens when the one before it ends.',
+    passedQuestion:
+      'You have moved on from this question. Questions in this section are answered in order.',
+    forwardOnly:
+      'Questions in this section are answered in order: you cannot go back to an earlier question.',
+    pasteBlocked: 'Pasting text is turned off in this section. Paste attempts are recorded.',
+    pasteAllowed:
+      'Pasting text is allowed in this section. Each paste is recorded and shown to the reviewers as context.',
+    dropBlocked: 'Dropping text is turned off.',
+    finishSection: 'Finish this section',
+    finishTitle: 'Finish this section?',
+    finishBody:
+      'Finishing is final: you cannot go back to this section or change its answers after you finish.',
+    finishConfirm: 'Yes, finish this section',
+    finishCancel: 'Stay in this section',
+    moving: 'Saving your answers and opening the next part of the test…',
+    imageUnavailable: (alt: string) => `Image unavailable. Description: ${alt}`,
   },
 
   submitted: {

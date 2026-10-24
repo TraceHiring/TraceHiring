@@ -513,7 +513,8 @@ describe('package v2 (AT-M1-32; R5-20, R5-45, R5-59 d, R5-66 f)', () => {
     o.choice(1, 'a');
     typeInto(o, ['kept!', 'kept!!']);
     const done = o.flush();
-    await vi.advanceTimersByTimeAsync(10);
+    // The last batch went out at the tick just now: the next one waits for the 250 ms gap.
+    await vi.advanceTimersByTimeAsync(300);
     await expect(done).resolves.toBe(true);
     expect(seen.reverts).toEqual(
       expect.arrayContaining([
