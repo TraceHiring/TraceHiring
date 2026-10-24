@@ -15,7 +15,8 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
   **R5-64 (n)**. Reviews: `docs/reviews/M1-wave2-first-reviews.md` (A2a: all three first reviews now recorded).
 - `m1/integration` tip = this handoff commit on top of **`dbf1d9f`** (last code commit `134ca37`; all pushed).
   `trace/d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged. `pnpm -s verify:fast` **exit 0** on the
-  final tree (2026-10-24 08:05 IST, 236 s). Linux CI on PR #14: check `gh run list` for `134ca37`/`dbf1d9f`.
+  final tree (2026-10-24 08:05 IST, 236 s). Linux CI on PR #14: **security job RED** on the last pushes (runs 40008956066, 40009211471; static, rls,
+  migrations green), see In flight 0.
 - The last **full serial verify** is still the one on `4fca331` (rls 3716). Since then: lead code `0eb91ac`, `35925e0`
   and this chat's commits below; each was checked by its own package tests / named pgTAP files only (no full verify yet).
 
@@ -38,6 +39,14 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
   reset; a stray committed `import.cancel` audit row in the local DB had broken one imports assertion before it).
 
 ## In flight at handoff (check first, trust nothing)
+0. **CI security job fails on a NEW advisory, not on M1 code:** `osv-scanner` reports GHSA-mrhx-c7xc-m3w5 (High, CVSS
+   8.2) on `zod` 4.4.3 and 4.6.5 in `pnpm-lock.yaml` (and 4.4.3 in `docs/spikes/d1-day-one/package-lock.json`); fixed in
+   **4.6.6**. Also: `osv-scanner.toml` has an unused ignore GHSA-vfj7-8cjw-p6xm. Fix first (AUTOPILOT §6: Linux CI before
+   other work): read the advisory and the repo's dependency release-age rule (see the vitest ignore reasons in
+   `osv-scanner.toml`); if 4.6.6 passes the rule, bump zod in the catalog / lockfile (lead-only: root package.json,
+   `pnpm-workspace.yaml` catalog, lockfile) and run the full verify; if not, add a dated, justified ignore exactly like the
+   vitest ones (with the bump date) only if the advisory does not reach Trace's use of zod — otherwise FOUNDER-QUEUE.
+   Remove the unused ignore. Never merge Dependabot PRs #7-#12 blind.
 - **No agent is running.** A2a fix round 1 STOPPED on the lead's order, partly done, tree clean, pushed:
   **`m1/a2a-fix-1` @ `c8c4f60`** on `trace` (base `08b27ce`, merge of `4d8504d` = `03e3a73`, no conflicts). Writer worktree
   `.claude/worktrees/agent-a39cb2868e44c854a` (leave it). Only file outside the five A2a module dirs:
@@ -63,7 +72,7 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
 Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · `m1/a5c-fix-1` · `m1/a4-edge-delivery` `7f2fb9c` · `m1/a4-fix-1` `a0c1d46` · `m1/a3a-jobs-v2` `74d9891` · `m1/a3a-fix-1` `402a3ac` · `m1/a3a-fix-2` `8af7845` · `m1/a3b-jobs-authoring` `2b706d0` · `m1/a3b-fix-1` `1866c92` · `m1/a2b-api-tests` `8f7b52c` · `m1/a2b-fix-1` `5c2a892` (all on `trace`). Unmerged by founder answer (b): `m1/a5a-fix-2/-3/-4` (zip reader, M8). Open: **`m1/a2a-api-bank` `08b27ce`** (reviews 3/3 done) and **`m1/a2a-fix-1` `c8c4f60`** (fix round 1, 8 of 9 items; see In flight).
 
 ## Next step (one precise action list)
-1. Verify first (below). Then **finish A2a fix round 1** with one Opus fix writer (Agent isolation "worktree") on
+1. Verify first (below). Fix the CI security job (In flight 0). Then **finish A2a fix round 1** with one Opus fix writer (Agent isolation "worktree") on
    `m1/a2a-fix-1` from `c8c4f60` (common brief `docs/progress/m1-writer-brief-common.md`, but NO reset: the writer runs
    `git switch -c m1/a2a-fix-1 trace/m1/a2a-fix-1` and confirms the tip is `c8c4f60`): fix 9, the key-review route per
    R5-64 h (tests first: a library member approves after another member's key review; a customer org → 409; the author
