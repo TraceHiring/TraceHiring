@@ -27,7 +27,10 @@ catalog:
   '@types/react-dom': 19.3.0
   react-router: 8.4.0
   hono: 4.13.13
-  zod: 4.6.5
+  # Security bump (2026-10-24): GHSA-mrhx-c7xc-m3w5 (high, memory exhaustion on large arrays, < 4.6.6). 4.6.6
+  # (published 2026-10-11) was 13 days old: a one-day exception to the two-week rule because the api parses
+  # untrusted request bodies with zod (docs/build-notes.md "Autopilot changes", 2026-10-24).
+  zod: 4.6.6
   '@supabase/supabase-js': 2.117.2
   supabase: 2.120.0
   lefthook: 2.2.1
@@ -78,6 +81,9 @@ overrides:
   # whose newest, 6.2.3, was 9 days old; 6.2.2 (2026-09-14) is past the two-week rule. Remove once
   # a newer release is two weeks old.
   web-vitals: 6.2.2
+  # GHSA-mrhx-c7xc-m3w5 (2026-10-24): @cloudflare/vitest-pool-workers 0.23.0 pins zod 4.4.3 exactly (dev tooling).
+  # Remove once it no longer pins a version below 4.6.6.
+  zod: 4.6.6
 
 # braces <= 3.0.3 (GHSA-vfj7-8cjw-p6xm, high: stack exhaustion on deeply nested brace patterns) has no
 # fixed release. It is reached only through eslint-plugin-boundaries > micromatch at lint time, with
