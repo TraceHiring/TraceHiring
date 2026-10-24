@@ -438,9 +438,77 @@ export const authoringDb = (): AuthoringDb => {
         });
         return { sections: p.sections.length, items };
       },
+      publish_source_v2: publishSourceFake,
     },
   );
   return Object.assign(db, { savePayloads });
+};
+
+const pick = (row: Row, cols: string): Row =>
+  Object.fromEntries(cols.split(',').map((c) => [c, row[c] ?? null]));
+
+/**
+ * public.publish_source_v2 (M1-o, R5-65), as the SQL body: null unless the caller sees the version in the named org;
+ * live members = the approved bank versions of each pool section's pool, frozen members = every snapshot row of the
+ * version; items once each with the package columns; variants of parameterised members; live served counts.
+ */
+export const publishSourceFake = (args: Readonly<Record<string, unknown>>, d: FakeDb): unknown => {
+  const seen = (table: string) => (row: Row) => d.hooks[table]?.visible?.(row) ?? true;
+  const rows = (table: string) => (d.tables[table] ?? []).filter(seen(table));
+  const orgId = args.p_org_id;
+  const version = rows('test_versions').find(
+    (v) => v.id === args.p_test_version_id && v.org_id === orgId,
+  );
+  if (version === undefined) return null;
+  const versions = rows('item_versions').filter((i) => i.org_id === orgId);
+  const members =
+    args.p_frozen === true
+      ? rows('section_pool_snapshot')
+          .filter((r) => r.org_id === orgId && r.test_version_id === version.id)
+          .map((r) => pick(r, 'section_id,item_version_id,exposure_at_publish'))
+      : rows('sections')
+          .filter((s) => s.test_version_id === version.id && (s.pool_id ?? null) !== null)
+          .flatMap((s) =>
+            rows('pool_items')
+              .filter((p) => p.org_id === orgId && p.pool_id === s.pool_id)
+              .flatMap((p) =>
+                versions.filter(
+                  (i) =>
+                    i.id === p.item_version_id &&
+                    i.status === 'approved' &&
+                    (i.section_id ?? null) === null,
+                ),
+              )
+              .map((i) => ({ section_id: s.id, item_version_id: i.id, exposure_at_publish: null })),
+          );
+  const memberIds = new Set(members.map((m) => m.item_version_id));
+  const items = versions
+    .filter((i) => memberIds.has(i.id))
+    .map((i) =>
+      pick(
+        i,
+        'id,item_id,test_version_id,section_id,format,position,stem,options,rubric_version_id,media,skill_key,' +
+          'difficulty,is_parameterised',
+      ),
+    );
+  const parameterised = new Set(items.filter((i) => i.is_parameterised === true).map((i) => i.id));
+  const variants = rows('item_variants')
+    .filter((v) => v.org_id === orgId && parameterised.has(v.item_version_id))
+    .map((v) => pick(v, 'id,item_version_id,variant_no,stem,options'));
+  const itemIds = new Set(items.map((i) => i.item_id));
+  const served = new Map<unknown, number>();
+  if (args.p_frozen !== true) {
+    for (const e of rows('v_item_exposure')) {
+      if (e.org_id !== orgId || !itemIds.has(e.item_id)) continue;
+      served.set(e.item_id, (served.get(e.item_id) ?? 0) + Number(e.served_count));
+    }
+  }
+  return {
+    members,
+    items,
+    variants,
+    exposure: [...served].map(([item_id, served_count]) => ({ item_id, served_count })),
+  };
 };
 
 /**

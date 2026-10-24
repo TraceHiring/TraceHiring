@@ -297,8 +297,10 @@ describe('publish v2 failures', () => {
     const calls = s.db.calls.slice(before);
     const updates = calls.filter((c) => c.method === 'update' && c.table === 'test_versions');
     expect(updates).toHaveLength(4);
-    // Each attempt rebuilt from the live pool first.
-    expect(calls.filter((c) => c.method === 'select' && c.table === 'pool_items')).toHaveLength(4);
+    // Each attempt rebuilt from the live pool first (one source call each, R5-65).
+    expect(calls.filter((c) => c.method === 'rpc' && c.table === 'publish_source_v2')).toHaveLength(
+      4,
+    );
     expect(rowsOf(s.db, 'test_versions').find((v) => v.id === s.versionId)?.status).toBe('draft');
   });
 
@@ -584,5 +586,95 @@ describe('a locked org: a draft with settings never keeps a null navigation (fix
       status: 'published',
       package_version: 2,
     });
+  });
+});
+
+describe('one-call package source (R5-65, R5-63 f): publish_source_v2', () => {
+  const sourceCalls = (s: Awaited<ReturnType<typeof setup>>, before: number) =>
+    s.db.calls.slice(before).filter((c) => c.method === 'rpc' && c.table === 'publish_source_v2');
+
+  it('a v2 publish reads its source with one call per build (live, then frozen), never per row', async () => {
+    const s = await setup({ seed: mcqPool(120) });
+    const args: unknown[] = [];
+    const original = s.db.functions.publish_source_v2!;
+    s.db.functions.publish_source_v2 = (a, d) => {
+      args.push(a);
+      return original(a, d);
+    };
+    const before = s.db.calls.length;
+    const res = await s.publish();
+    expect(res.status).toBe(200);
+    expect(sourceCalls(s, before)).toHaveLength(2);
+    expect(args).toEqual([
+      { p_org_id: ORG, p_test_version_id: s.versionId, p_frozen: false },
+      { p_org_id: ORG, p_test_version_id: s.versionId, p_frozen: true },
+    ]);
+    const perRow = s.db.calls
+      .slice(before)
+      .filter(
+        (c) =>
+          c.method === 'select' &&
+          ['pool_items', 'item_variants', 'v_item_exposure', 'section_pool_snapshot'].includes(
+            c.table,
+          ),
+      );
+    expect(perRow).toEqual([]);
+    const pkg = TestPackageV2.parse(JSON.parse(s.pkgText()));
+    expect(pkg.items.filter((i) => i.sectionId === pkg.sections[2]?.id)).toHaveLength(120);
+  });
+
+  it('a null source (version not visible) is 503 unavailable before any R2 write', async () => {
+    const s = await setup({ seed: mcqPool(3) });
+    s.db.functions.publish_source_v2 = () => null;
+    const res = await s.publish();
+    expect(res.status).toBe(503);
+    expect(await codeOf(res)).toBe('unavailable');
+    expect(s.bucket.puts).toEqual([]);
+  });
+
+  it('a malformed source is 503 unavailable before any R2 write', async () => {
+    const s = await setup({ seed: mcqPool(3) });
+    s.db.functions.publish_source_v2 = () => ({
+      members: 'x',
+      items: [],
+      variants: [],
+      exposure: [],
+    });
+    const res = await s.publish();
+    expect(res.status).toBe(503);
+    expect(s.bucket.puts).toEqual([]);
+  });
+
+  it('a member without its item row is 503 unavailable (fail closed, never a smaller package)', async () => {
+    const s = await setup({ seed: mcqPool(3) });
+    const original = s.db.functions.publish_source_v2!;
+    s.db.functions.publish_source_v2 = (a, d) => {
+      const src = original(a, d) as { items: unknown[] };
+      return { ...src, items: src.items.slice(1) };
+    };
+    const res = await s.publish();
+    expect(res.status).toBe(503);
+    expect(s.bucket.puts).toEqual([]);
+  });
+
+  it('more than 10,000 members is 503 unavailable', async () => {
+    const s = await setup({ seed: mcqPool(3) });
+    const original = s.db.functions.publish_source_v2!;
+    s.db.functions.publish_source_v2 = (a, d) => {
+      const src = original(a, d) as { members: unknown[] };
+      const first = src.members[0];
+      return { ...src, members: Array.from({ length: 10_001 }, () => first) };
+    };
+    const res = await s.publish();
+    expect(res.status).toBe(503);
+    expect(s.bucket.puts).toEqual([]);
+  });
+
+  it('a failed source call is 503 unavailable', async () => {
+    const s = await setup({ seed: mcqPool(3) });
+    s.db.failNext('rpc', 'publish_source_v2', new RestError(503, 'PGRST000'));
+    const res = await s.publish();
+    expect(res.status).toBe(503);
+    expect(s.bucket.puts).toEqual([]);
   });
 });
