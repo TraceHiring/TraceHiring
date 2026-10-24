@@ -26,6 +26,8 @@ import {
 
 export { callerOf, LIBRARY_ORG, MEMBERSHIP, ORG, ORG_B, USER, WS };
 
+/** The library org's default workspace. */
+export const LIBRARY_WS = 'b1000000-0000-4000-8000-00000000000f';
 /** A second workspace of ORG (not the default one). */
 export const WS2 = 'b1000000-0000-4000-8000-000000000002';
 export const RUBRIC = '7b900000-0000-4000-8000-000000000001';
@@ -76,11 +78,51 @@ const ready = (v: Row, db: FakeDb): void => {
   }
 };
 
+const APPROVAL = ['approved_by', 'approved_at', 'reviewed_by', 'key_reviewed_by'] as const;
+const APPROVER_ROLES = ['org_owner', 'admin', 'recruiter', 'reviewer'];
+
+/** An active library membership holding an approver role (the guard's key-reviewer check). */
+const libraryApprover = (db: FakeDb, userId: unknown): boolean =>
+  tableOf(db, 'memberships').some(
+    (m) =>
+      m.org_id === LIBRARY_ORG &&
+      m.user_id === userId &&
+      m.status === 'active' &&
+      (m.roles as string[]).some((r) => APPROVER_ROLES.includes(r)),
+  );
+
+const changed = (old: Row, next: Row, col: string): boolean =>
+  JSON.stringify(old[col] ?? null) !== JSON.stringify(next[col] ?? null);
+
+/**
+ * The library expert review of M1-a (SEC-M1-4, ABH-6, R5-64 h): the key review is its own update of an in-review
+ * library version, setting key_reviewed_by from null to the acting user, who is an active library approver other than
+ * the author; the approval then requires it, records the approver as reviewer, and never sets it.
+ */
+const keyReview = (old: Row, next: Row, db: FakeDb, actor: string): Row => {
+  if (next.key_reviewed_by !== actor) throw guard('key_reviewer_self');
+  if (!libraryApprover(db, actor)) throw guard('approver_required');
+  if (next.key_reviewed_by === old.created_by) throw guard('library_reviewers');
+  if (!libraryApprover(db, next.key_reviewed_by)) throw guard('key_reviewer_member');
+  return next;
+};
+
 /** The item_versions guard of §4.1 for bank rows (M1-a), reduced to what the routes observe. */
-const versionUpdate = (old: Row, next: Row, db: FakeDb): Row => {
+const versionUpdate = (old: Row, next: Row, db: FakeDb, actor: string): Row => {
   const content = CONTENT.some((c) => JSON.stringify(old[c]) !== JSON.stringify(next[c]));
+  const approval = APPROVAL.some((c) => changed(old, next, c));
   if (old.status === next.status) {
-    if (old.status !== 'draft' && content) throw guard('item_frozen');
+    if (
+      old.status === 'in_review' &&
+      next.org_id === LIBRARY_ORG &&
+      !content &&
+      (old.key_reviewed_by ?? null) === null &&
+      (next.key_reviewed_by ?? null) !== null &&
+      !APPROVAL.some((c) => c !== 'key_reviewed_by' && changed(old, next, c))
+    ) {
+      return keyReview(old, next, db, actor);
+    }
+    if (old.status !== 'draft' && (content || approval)) throw guard('item_frozen');
     return next;
   }
   if (content) throw guard('other');
@@ -93,7 +135,16 @@ const versionUpdate = (old: Row, next: Row, db: FakeDb): Row => {
   if (from === 'in_review' && (to === 'approved' || to === 'not_approved')) {
     if (to === 'not_approved') return next;
     ready(next, db);
-    return { ...next, approved_by: USER, approved_at: stamp() };
+    if (changed(old, next, 'key_reviewed_by')) throw guard('key_review_own_update');
+    if (next.org_id !== LIBRARY_ORG) {
+      return { ...next, approved_by: actor, approved_at: stamp(), reviewed_by: null };
+    }
+    const keyReviewer = old.key_reviewed_by ?? null;
+    if (keyReviewer === null || keyReviewer === old.created_by || actor === old.created_by) {
+      throw guard('library_reviewers');
+    }
+    if (!libraryApprover(db, keyReviewer)) throw guard('key_reviewer_member');
+    return { ...next, approved_by: actor, approved_at: stamp(), reviewed_by: actor };
   }
   if (from === 'approved' && to === 'retired') return next;
   throw guard('item_status_change');
@@ -132,6 +183,8 @@ export interface A2aDbOptions {
 /** The fake database of the A2a modules: one org, its default workspace WS and a second workspace WS2. */
 export const a2aDb = (opts: A2aDbOptions = {}) => {
   const ids = idMaker('f1');
+  // The acting user (auth.uid() of the guards); the harness sets it from its caller.
+  let actor = USER;
   const functions: Record<string, RpcFake> = {};
   const db = fakeDb(
     {
@@ -147,6 +200,11 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
       workspaces: [
         { id: WS, org_id: ORG, is_default: true },
         { id: WS2, org_id: ORG, is_default: false },
+        { id: LIBRARY_WS, org_id: LIBRARY_ORG, is_default: true },
+      ],
+      orgs: [
+        { id: ORG, org_id: ORG, kind: 'customer' },
+        { id: LIBRARY_ORG, org_id: LIBRARY_ORG, kind: 'trace_library' },
       ],
       items: [],
       item_versions: [],
@@ -223,7 +281,7 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
             created_at: stamp(),
           };
         },
-        update: (old, next, d) => versionUpdate(old, next, d),
+        update: (old, next, d) => versionUpdate(old, next, d, actor),
         remove: (row) => {
           if (row.status !== 'draft') throw guard();
         },
@@ -408,7 +466,10 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
     if (rest.or !== undefined) throw new Error('fake rest: and with or');
     return select<T>(table, { ...rest, or: `(and${and})` });
   };
-  return Object.assign(db, { sentInserts, sentUpdates, sentSelects });
+  const actAs = (userId: string): void => {
+    actor = userId;
+  };
+  return Object.assign(db, { sentInserts, sentUpdates, sentSelects, actAs });
 };
 
 export type A2aDb = ReturnType<typeof a2aDb>;
@@ -485,14 +546,26 @@ export const seedVersion = (db: FakeDb, patch: Row = {}): Row => {
   return row;
 };
 
-/** Mounts one router with a fixed caller acting through the fake database. */
+/**
+ * Mounts one router with a fixed caller acting through the fake database (the guards' acting user is that caller),
+ * on the paths of `orgId` (default ORG).
+ */
 export const harness = (
   mount: (org: OrgDeps) => Hono<{ Bindings: Env }>,
-  db: { rest: Rest },
+  db: { rest: Rest; actAs?: (userId: string) => void },
   caller: OrgCaller = callerOf(),
+  orgId: string = ORG,
 ) => {
   const app = new Hono<{ Bindings: Env }>();
-  app.route('/', mount({ context: async () => ({ caller, rest: db.rest }) }));
+  app.route(
+    '/',
+    mount({
+      context: async () => {
+        db.actAs?.(caller.userId);
+        return { caller, rest: db.rest };
+      },
+    }),
+  );
   const call = (
     method: string,
     path: string,
@@ -500,7 +573,7 @@ export const harness = (
     headers: Record<string, string> = { 'content-type': 'application/json' },
   ) =>
     app.request(
-      `https://api.test/v1/orgs/${ORG}${path}`,
+      `https://api.test/v1/orgs/${orgId}${path}`,
       {
         method,
         headers,

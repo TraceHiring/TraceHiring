@@ -44,6 +44,7 @@ export const A2A_NEW_ROUTES = [
   'POST /v1/orgs/:orgId/bank/item-versions/:versionId/submit',
   'POST /v1/orgs/:orgId/bank/item-versions/:versionId/review',
   'POST /v1/orgs/:orgId/bank/item-versions/:versionId/retire',
+  'POST /v1/orgs/:orgId/bank/item-versions/:versionId/key-review',
   'GET /v1/orgs/:orgId/bank/stats',
   'GET /v1/orgs/:orgId/pools',
   'POST /v1/orgs/:orgId/pools',
