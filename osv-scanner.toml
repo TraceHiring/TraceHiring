@@ -15,3 +15,56 @@ reason = "@vitest/mocker 4.1.11 dev only, no browser mode or UI server; fix vite
 id = "GHSA-xp26-3454-mjgp"
 ignoreUntil = 2026-11-05T00:00:00Z
 reason = "@vitest/mocker 4.1.11 dev only, no browser mode or UI server; fix vitest 4.1.12 passes the release-age rule on 2026-10-29, bump then."
+
+# Three dev-tooling advisories published 2026-10-23 (CI security job on b397a29, run 40055731896). Each fix is newer
+# than the two-week release-age rule (or a major version); none reaches shipped code or untrusted input.
+# - undici 7.29.1 (DoS via content-encodings, EventSource memory, SRI token case): only miniflare/wrangler use it,
+#   for local and CI test runtimes; deployed Workers use the platform fetch, never undici. Fix 7.30.1 (2026-10-15)
+#   passes the rule on 2026-10-29: bump the `undici` override then and delete these three entries.
+[[IgnoredVulns]]
+id = "GHSA-xjj6-f33q-929c"
+ignoreUntil = 2026-11-05T00:00:00Z
+reason = "undici 7.29.1 via miniflare/wrangler, local and CI test runtimes only, never in a deployed Worker; fix 7.30.1 passes the release-age rule on 2026-10-29, bump then."
+
+[[IgnoredVulns]]
+id = "GHSA-4qv8-2p9j-2685"
+ignoreUntil = 2026-11-05T00:00:00Z
+reason = "undici 7.29.1 via miniflare/wrangler, local and CI test runtimes only, never in a deployed Worker; fix 7.30.1 passes the release-age rule on 2026-10-29, bump then."
+
+[[IgnoredVulns]]
+id = "GHSA-f72v-6w45-q472"
+ignoreUntil = 2026-11-05T00:00:00Z
+reason = "undici 7.29.1 via miniflare/wrangler, local and CI test runtimes only, never in a deployed Worker; fix 7.30.1 passes the release-age rule on 2026-10-29, bump then."
+
+# - fast-uri 3.1.8 (four advisories, URI parsing): only ajv inside @commitlint/config-validator uses it, validating this
+#   repository's own commitlint config at commit time. Fix 3.1.9 (2026-10-19) passes the rule on 2026-11-02: add a
+#   `fast-uri` override then and delete these four entries.
+[[IgnoredVulns]]
+id = "GHSA-333x-w4r6-6crp"
+ignoreUntil = 2026-11-09T00:00:00Z
+reason = "fast-uri 3.1.8 via commitlint's ajv, validates this repository's own config at commit time only; fix 3.1.9 passes the release-age rule on 2026-11-02, override then."
+
+[[IgnoredVulns]]
+id = "GHSA-w74x-v6f9-j3xg"
+ignoreUntil = 2026-11-09T00:00:00Z
+reason = "fast-uri 3.1.8 via commitlint's ajv, validates this repository's own config at commit time only; fix 3.1.9 passes the release-age rule on 2026-11-02, override then."
+
+[[IgnoredVulns]]
+id = "GHSA-wjr9-j795-jxcr"
+ignoreUntil = 2026-11-09T00:00:00Z
+reason = "fast-uri 3.1.8 via commitlint's ajv, validates this repository's own config at commit time only; fix 3.1.9 passes the release-age rule on 2026-11-02, override then."
+
+[[IgnoredVulns]]
+id = "GHSA-xhq7-xmqj-769h"
+ignoreUntil = 2026-11-09T00:00:00Z
+reason = "fast-uri 3.1.8 via commitlint's ajv, validates this repository's own config at commit time only; fix 3.1.9 passes the release-age rule on 2026-11-02, override then."
+
+# - happy-dom 20.14.5 (high, host code execution through a crafted ESM import alias): needs
+#   `enableJavaScriptEvaluation: true` and attacker-supplied module source. happy-dom is only the vitest DOM environment
+#   for apps/candidate and apps/recruiter unit tests, which mount this repository's own components with JavaScript
+#   evaluation off (no `enableJavaScriptEvaluation` anywhere) and never load external HTML. The fix is the major 21.0.4:
+#   re-check by the expiry and move the catalog to a 21.x release past the two-week rule.
+[[IgnoredVulns]]
+id = "GHSA-834v-8h66-3h79"
+ignoreUntil = 2026-11-23T00:00:00Z
+reason = "happy-dom 20.14.5 is the unit-test DOM only, JavaScript evaluation off, own components only, never shipped; fix is major 21.0.4, move to a 21.x release past the release-age rule by the expiry."
