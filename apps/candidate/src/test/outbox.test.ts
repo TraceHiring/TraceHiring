@@ -39,6 +39,8 @@ const fakeEdge = () => {
     acceptOnly: undefined as number | undefined,
     /** Store the batch, then fail as if the answer was lost (a network failure). */
     loseAnswer: false,
+    /** Items whose answers are acknowledged as refused (their section closed, R5-20). */
+    refuseItems: new Set<number>(),
   };
   const events = vi.fn(
     async (_token: string, batch: BatchReq): Promise<ApiResult<EventBatchAck>> => {
@@ -66,12 +68,23 @@ const fakeEdge = () => {
       const texts = new Map(state.texts);
       const choices = new Map(state.choices);
       const accepted: ClientEvent[] = [];
+      const refusedSeqs: number[] = [];
       let gap = false;
       for (const ev of batch.events) {
         if (ev.seq <= hw) continue;
         if (ev.seq !== hw + 1 || (state.acceptOnly !== undefined && ev.seq > state.acceptOnly)) {
           gap = true;
           break;
+        }
+        // R5-20: an answer for a closed section is acknowledged and recorded as refused, never applied.
+        if (
+          (ev.kind === 'answer.text' || ev.kind === 'answer.choice') &&
+          state.refuseItems.has(ev.item)
+        ) {
+          refusedSeqs.push(ev.seq);
+          accepted.push(ev);
+          hw = ev.seq;
+          continue;
         }
         if (ev.kind === 'answer.text') {
           if (ev.item !== 2) return { ok: false, code: 'bad_request', status: 400 };
@@ -102,6 +115,7 @@ const fakeEdge = () => {
           serverNow: new Date(Date.now() + state.skewMs).toISOString(),
           deadlineAt: new Date(DEADLINE).toISOString(),
           state: 'in_progress',
+          ...(refusedSeqs.length === 0 ? {} : { refusedSeqs }),
         },
       };
     },
@@ -465,5 +479,113 @@ describe('failures', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(o.pending()).toBeLessThanOrEqual(1); // at most a heartbeat queued since the last tick
     expect(edge.state.texts.get(2)).toBe(value);
+  });
+});
+
+describe('package v2 (AT-M1-32; R5-20, R5-45, R5-59 d, R5-66 f)', () => {
+  const SECTION = '44444444-4444-4444-8444-444444444444';
+
+  it('refusedSeqs are acknowledged (they leave the queue and flush resolves)', async () => {
+    const o = make();
+    edge.state.refuseItems.add(1);
+    o.choice(1, 'a');
+    typeInto(o, ['x']);
+    const done = o.flush();
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(done).resolves.toBe(true);
+    expect(o.ackedSeq()).toBe(2);
+    expect(o.pending()).toBe(0);
+    expect(edge.state.choices.get(1)).toBeUndefined();
+    expect(edge.state.texts.get(2)).toBe('x');
+    // It never loops: nothing is sent again.
+    await vi.advanceTimersByTimeAsync(5_000);
+    const resent = edge.state.requests.flatMap((r) => r.events).filter((e) => e.seq === 1);
+    expect(resent).toHaveLength(1);
+  });
+
+  it('a refused answer is reverted to what the edge kept, so the screen never shows a lost answer', async () => {
+    const o = make([[2, 'kept']]);
+    edge.state.texts.set(2, 'kept');
+    o.choice(1, 'b');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(edge.state.choices.get(1)).toBe('b');
+    edge.state.refuseItems.add(1).add(2);
+    o.choice(1, 'a');
+    typeInto(o, ['kept!', 'kept!!']);
+    const done = o.flush();
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(done).resolves.toBe(true);
+    expect(seen.reverts).toEqual(
+      expect.arrayContaining([
+        { item: 1, choice: 'b' },
+        { item: 2, text: 'kept' },
+      ]),
+    );
+    expect(seen.reverts).toHaveLength(2);
+    // Later edits start from the reverted values.
+    edge.state.refuseItems.clear();
+    typeInto(o, ['kept?']);
+    const again = o.flush();
+    await vi.advanceTimersByTimeAsync(300);
+    await expect(again).resolves.toBe(true);
+    expect(edge.state.texts.get(2)).toBe('kept?');
+  });
+
+  it('a refusal drops the unsent edits of that item queued behind it', async () => {
+    const o = make();
+    edge.state.refuseItems.add(2);
+    typeInto(o, ['a']);
+    // The batch with seq 1 is in flight when more is typed.
+    const first = o.flush();
+    typeInto(o, ['ab', 'abc']);
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(first).resolves.toBe(true);
+    expect(seen.reverts).toEqual([{ item: 2, text: '' }]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const texts = edge.state.requests
+      .flatMap((r) => r.events)
+      .filter((e) => e.kind === 'answer.text');
+    expect(texts).toHaveLength(1);
+  });
+
+  it('enqueuedSeq is the highest seq the outbox has enqueued (acked + queued)', async () => {
+    const o = make();
+    expect(o.enqueuedSeq()).toBe(0);
+    typeInto(o, ['a', 'ab']);
+    o.signal({ sig: 'tab_hidden', item: 2, ms: 3_000 });
+    expect(o.enqueuedSeq()).toBe(3);
+    const done = o.flush();
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(done).resolves.toBe(true);
+    expect(o.enqueuedSeq()).toBe(3);
+    expect(o.ackedSeq()).toBe(3);
+    typeInto(o, ['abc']);
+    expect(o.enqueuedSeq()).toBe(4);
+  });
+
+  it('section.finish is queued as an event with the section id', async () => {
+    const o = make();
+    o.finish(SECTION);
+    const done = o.flush();
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(done).resolves.toBe(true);
+    expect(edge.state.stored).toEqual([
+      expect.objectContaining({ seq: 1, kind: 'section.finish', sectionId: SECTION }),
+    ]);
+  });
+
+  it('the 10-minute compaction keeps a queued section.finish', async () => {
+    const o = make();
+    edge.state.mode = { kind: 'network' };
+    o.choice(1, 'a');
+    // The first batch (the choice) may have arrived and is retried alone; the finish stays unsent behind it.
+    await vi.advanceTimersByTimeAsync(2_000);
+    o.finish(SECTION);
+    typeInto(o, ['a']);
+    await vi.advanceTimersByTimeAsync(11 * 60_000);
+    edge.state.mode = { kind: 'ok' };
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(edge.state.stored.filter((e) => e.kind === 'section.finish')).toHaveLength(1);
+    expect(edge.state.texts.get(2)).toBe('a');
   });
 });
