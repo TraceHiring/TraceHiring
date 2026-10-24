@@ -355,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(28);
+select plan(32);
 -- Fixtures (operator path): pool PS1 = approved MCQ items ps1..ps3 plus the parameterised item psq; pool PS2 = ps3 (in
 -- two sections) and ps4; ps5 is approved but in no pool; ps6 joins PS1 and is retired. Version ts1 has an inline
 -- section and two pool sections (PS1 draw 2, PS2 draw 1); ts1 is published and served once, then ts2 (a draft of the
@@ -425,6 +425,14 @@ select is(public.publish_source_v2(pg_temp.id('A'), pg_temp.id('ts1'), false), n
 select is(public.publish_source_v2(pg_temp.id('B'), pg_temp.id('ts1'), false), null, 'live: naming their own org with org A''s version reads null');
 select pg_temp.u('recruiter');
 select is(public.publish_source_v2(pg_temp.id('B'), pg_temp.id('ts1'), false), null, 'live: a version outside the named org reads null');
+-- Re-review Low 2: the workspace fence (M0b D16b) and a reviewer not assigned to the test.
+select pg_temp.u('ws_recruiter');
+select is(public.publish_source_v2(pg_temp.id('A'), pg_temp.id('ts1'), false), null, 'live: a recruiter fenced to another workspace reads null');
+select pg_temp.u('reviewer');
+select is(public.publish_source_v2(pg_temp.id('A'), pg_temp.id('ts1'), false), null, 'live: a reviewer not assigned to the test reads null (publishing is staff work)');
+-- Re-review Low 3: a null mode reads null, never an empty source.
+select pg_temp.u('recruiter');
+select is(public.publish_source_v2(pg_temp.id('A'), pg_temp.id('ts1'), null), null, 'source: a null p_frozen reads null');
 
 -- ===== Frozen source (after publish) and the served count =====
 -- Publish refuses an item in two sections, so ps3 leaves PS2 first: the frozen source has six members.
@@ -476,5 +484,7 @@ select matches(pg_temp.try($$select public.publish_source_v2(null, null, false)$
 select is(public.publish_source_v2(pg_temp.id('A'), null, false), null, 'source: a null version reads null');
 select pg_temp.op();
 select is((select count(*)::int from pg_proc as p where p.proname = 'publish_source_v2' and pg_get_functiondef(p.oid) ~* '(quality|integrity)\.'), 0, 'source: the function reads no quality.* or integrity.* object (I-M1-10)');
+-- Re-review Medium 1: served counts come from the indexed event table, never from the org-wide grouped view.
+select is((select count(*)::int from pg_proc as p where p.proname = 'publish_source_v2' and pg_get_functiondef(p.oid) ~ 'v_item_exposure'), 0, 'source: served counts are not read through the grouped v_item_exposure view');
 select * from finish();
 rollback;
