@@ -94,9 +94,10 @@ describe('@trace/db-types', () => {
       // M1-m (R5-64 d): per-pool counts.
       'v_item_exposure' | 'v_item_bank_quant_share' | 'v_pool_item_counts'
     >();
-    // M1-c: three INVOKER functions the api calls with the caller's JWT (§3.4, DC-M1-1).
+    // M1-c: three INVOKER functions the api calls with the caller's JWT (§3.4, DC-M1-1); M1-o adds the one-call
+    // publish source read (R5-65).
     expectTypeOf<keyof Database['public']['Functions']>().toEqualTypeOf<
-      'import_item_batch' | 'save_test_draft' | 'save_item_variants'
+      'import_item_batch' | 'save_test_draft' | 'save_item_variants' | 'publish_source_v2'
     >();
   });
 

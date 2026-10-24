@@ -426,21 +426,39 @@ select pg_temp.u('recruiter');
 select is(public.publish_source_v2(pg_temp.id('B'), pg_temp.id('ts1'), false), null, 'live: a version outside the named org reads null');
 
 -- ===== Frozen source (after publish) and the served count =====
+-- Publish refuses an item in two sections, so ps3 leaves PS2 first: the frozen source has five members.
 select pg_temp.op();
+delete from public.pool_items where pool_id = 'd5000000-0000-4000-8000-0000000000a2' and item_version_id = pg_temp.id('ps3');
+drop table expect_live;
+create temp table expect_live as
+  select string_agg(l, ',' order by l collate "C") as v from (
+    select pg_temp.id('ts1_p1')::text || ':' || pg_temp.id(k)::text as l from unnest(array['ps1', 'ps2', 'ps3', 'psq']) as k
+    union all select pg_temp.id('ts1_p2')::text || ':' || pg_temp.id('ps4')::text
+  ) as x;
+grant select on expect_live to public;
+-- The snapshot also holds the inline section's rows (the api reads inline items from the draft content instead).
+create temp table expect_frozen as
+  select string_agg(l, ',' order by l collate "C") as v from (
+    select pg_temp.id('ts1_p1')::text || ':' || pg_temp.id(k)::text as l from unnest(array['ps1', 'ps2', 'ps3', 'psq']) as k
+    union all select pg_temp.id('ts1_p2')::text || ':' || pg_temp.id('ps4')::text
+    union all select pg_temp.id('ts1_in')::text || ':' || pg_temp.id('ts1_i1')::text
+  ) as x;
+grant select on expect_frozen to public;
 select pg_temp.publish('ts1');
 select pg_temp.u('recruiter');
 update got set j = public.publish_source_v2(pg_temp.id('A'), pg_temp.id('ts1'), true);
-select is((select string_agg((m ->> 'section_id') || ':' || (m ->> 'item_version_id'), ',' order by (m ->> 'section_id') || ':' || (m ->> 'item_version_id') collate "C") from got, jsonb_array_elements(j -> 'members') as m), (select v from expect_live), 'frozen: members are the section_pool_snapshot rows of the version');
+select is((select string_agg((m ->> 'section_id') || ':' || (m ->> 'item_version_id'), ',' order by (m ->> 'section_id') || ':' || (m ->> 'item_version_id') collate "C") from got, jsonb_array_elements(j -> 'members') as m), (select v from expect_frozen), 'frozen: members are the section_pool_snapshot rows of the version');
 select is((select bool_and((m ->> 'exposure_at_publish')::int = 0) from got, jsonb_array_elements(j -> 'members') as m), true, 'frozen: members carry the exposure frozen at publish');
 select is((select jsonb_array_length(j -> 'exposure') from got), 0, 'frozen: no live served counts are read');
-select is((select count(*)::int from got, jsonb_array_elements(j -> 'items') as i), 5, 'frozen: the five snapshot items');
+select is((select count(*)::int from got, jsonb_array_elements(j -> 'items') as i), 6, 'frozen: the six snapshot items (five pool members, one inline)');
 -- A bank item retired after publish stays in the frozen source (the snapshot wins).
 select pg_temp.op();
 update public.item_versions set status = 'retired' where id = pg_temp.id('ps4');
 select pg_temp.u('recruiter');
 select is((select jsonb_array_length(public.publish_source_v2(pg_temp.id('A'), pg_temp.id('ts1'), true) -> 'members')), 6, 'frozen: an item retired after publish stays in the frozen source');
-select is((select jsonb_array_length(public.publish_source_v2(pg_temp.id('A'), pg_temp.id('ts1'), false) -> 'members')), 5, 'live: the retired item leaves the live source');
+select is((select jsonb_array_length(public.publish_source_v2(pg_temp.id('A'), pg_temp.id('ts1'), false) -> 'members')), 4, 'live: the retired item leaves the live source');
 -- One serve of ps1 in a session of the published version: the live source counts it.
+select pg_temp.op();
 select pg_temp.session('sps', 'ts1', 92);
 select pg_temp.w('trace_worker', pg_temp.id('A'));
 select is(pg_temp.try(format($$insert into public.session_items (org_id, session_id, section_id, item_version_id, position, served_at) values (%L, %L, %L, %L, 1, now())$$, pg_temp.id('A'), pg_temp.id('sps'), pg_temp.id('ts1_p1'), pg_temp.id('ps1'))), 'OK 1', 'exposure: ps1 is served once in a session of the published version');
