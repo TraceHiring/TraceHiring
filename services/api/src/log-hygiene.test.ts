@@ -146,6 +146,33 @@ const ORG_ROUTES: [string, string][] = [
   ['POST', `/v1/orgs/${ORG}/members/invites`],
   ['GET', `/v1/orgs/${ORG}/members/invites`],
   ['DELETE', `/v1/orgs/${ORG}/members/invites/${MEMBER}`],
+  // M1 A2a (spec m1 R2-18, R5-64 h; modules/bank/m1-a2a-routes-mount.test.ts A2A_NEW_ROUTES).
+  ['GET', `/v1/orgs/${ORG}/bank/items`],
+  ['POST', `/v1/orgs/${ORG}/bank/items`],
+  ['GET', `/v1/orgs/${ORG}/bank/items/${TEST}`],
+  ['PUT', `/v1/orgs/${ORG}/bank/items/${TEST}`],
+  ['POST', `/v1/orgs/${ORG}/bank/items/${TEST}/versions`],
+  ['POST', `/v1/orgs/${ORG}/bank/item-versions/${TEST}/submit`],
+  ['POST', `/v1/orgs/${ORG}/bank/item-versions/${TEST}/review`],
+  ['POST', `/v1/orgs/${ORG}/bank/item-versions/${TEST}/retire`],
+  ['POST', `/v1/orgs/${ORG}/bank/item-versions/${TEST}/key-review`],
+  ['GET', `/v1/orgs/${ORG}/bank/stats`],
+  ['GET', `/v1/orgs/${ORG}/pools`],
+  ['POST', `/v1/orgs/${ORG}/pools`],
+  ['GET', `/v1/orgs/${ORG}/pools/${TEST}`],
+  ['PUT', `/v1/orgs/${ORG}/pools/${TEST}`],
+  ['POST', `/v1/orgs/${ORG}/pools/${TEST}/items`],
+  ['DELETE', `/v1/orgs/${ORG}/pools/${TEST}/items`],
+  ['GET', `/v1/orgs/${ORG}/library/items`],
+  ['POST', `/v1/orgs/${ORG}/library/copy`],
+  ['POST', `/v1/orgs/${ORG}/imports`],
+  ['GET', `/v1/orgs/${ORG}/imports/${TEST}`],
+  ['PUT', `/v1/orgs/${ORG}/imports/${TEST}/images/${'ab'.repeat(32)}`],
+  ['POST', `/v1/orgs/${ORG}/imports/${TEST}/rows`],
+  ['POST', `/v1/orgs/${ORG}/imports/${TEST}/complete`],
+  ['POST', `/v1/orgs/${ORG}/imports/${TEST}/cancel`],
+  ['POST', `/v1/orgs/${ORG}/bank/ai-drafts`],
+  ['GET', `/v1/orgs/${ORG}/bank/ai-drafts/${TEST}`],
 ];
 
 /** A bare api app (the shared error handler and logger) around one sub-router, for the deeper failure paths. */
@@ -213,8 +240,9 @@ describe('api log hygiene, static (AT-D32)', () => {
 
 describe('api log hygiene, org routes (AT-D32)', () => {
   it('covers every org route of the inventory', () => {
-    // 18 D1 org routes + 13 M1 A2b routes (route-inventory.test.ts ALLOWED minus /health and /media/:jti).
-    expect(ORG_ROUTES).toHaveLength(31);
+    // 18 D1 org routes + 13 M1 A2b routes + 26 M1 A2a routes (route-inventory.test.ts ALLOWED minus /health and
+    // /media/:jti).
+    expect(ORG_ROUTES).toHaveLength(57);
   });
 
   it('a bug inside an org route logs and reports none of the request or error contents', async () => {
