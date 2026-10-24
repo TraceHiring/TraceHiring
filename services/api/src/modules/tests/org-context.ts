@@ -309,6 +309,19 @@ const GUARD_TEXTS = {
   'the import job is not open': 'import_not_open',
   'only an owner invites an owner': 'owner_invite',
   'a settled invite is final': 'invite_settled',
+  // A2a database review D5 (R5-64 b): `private.item_version_ready`, the readiness check of submit and approve.
+  'a multiple-choice item needs its answer key': 'mcq_key_missing',
+  'a written item needs its rubric': 'rubric_missing',
+  'a parameterised item needs its variants': 'variants_missing',
+  'every variant needs its answer key': 'variant_key_missing',
+  'variants are numbered 1 to n': 'variants_numbering',
+  'a pool holds approved bank items of its format': 'pool_item_ineligible',
+  // R5-64 h: the library expert review (ABH-6, SEC-M1-4).
+  'a library item needs a reviewer and a key reviewer other than its author': 'library_reviewers',
+  'the key review is recorded in its own update': 'key_review_own_update',
+  'a library item is approved by an expert review': 'library_expert_review',
+  'the key reviewer is an active library member': 'key_reviewer_member',
+  'the key reviewer records their own review': 'key_reviewer_self',
 } as const;
 export type GuardKey = (typeof GUARD_TEXTS)[keyof typeof GUARD_TEXTS] | 'other';
 
@@ -447,6 +460,35 @@ export const restErrorCode = (err: unknown): OrgErrorCode => {
         return 'package_too_large';
       case 'library_cap':
         return 'library_cap';
+      // A2a (A2b re-review Note 4): bank, pool, import and library state refusals are 409; the approver check is a
+      // permission refusal of a request the caller may see (403).
+      case 'item_frozen':
+      case 'item_status_change':
+      case 'pool_archived':
+      case 'import_not_open':
+      case 'library_not_approved':
+        return 'conflict';
+      case 'approver_required':
+        return 'forbidden';
+      // A2a fix round 1 (database D5, R5-64 b): a version that is not ready to leave draft or be approved.
+      case 'mcq_key_missing':
+      case 'rubric_missing':
+      case 'variants_missing':
+      case 'variant_key_missing':
+      case 'variants_numbering':
+        return 'draft_incomplete';
+      // A pool takes approved items of its format; the expert review of a library item is incomplete or out of order
+      // (R5-64 h); a settled invite is final (spec review Note 6). State refusals, never a 404.
+      case 'pool_item_ineligible':
+      case 'library_reviewers':
+      case 'key_review_own_update':
+      case 'library_expert_review':
+      case 'invite_settled':
+        return 'conflict';
+      // The key reviewer must be an active library member recording their own review (a permission refusal).
+      case 'key_reviewer_member':
+      case 'key_reviewer_self':
+        return 'forbidden';
       default:
         break;
     }
@@ -530,10 +572,13 @@ export const createOrgDeps = (
 
 export const UuidParam = z.uuid();
 
-/** Parses a path id; a malformed id is a 404 like any id the caller cannot see. */
+/**
+ * Parses a path id, lower-cased (A2a security S1, R5-64 n: an image key always lies under the lower-case org prefix,
+ * and ids compare as the database prints them); a malformed id is a 404 like any id the caller cannot see.
+ */
 export const pathId = (value: string | undefined): string => {
   const r = UuidParam.safeParse(value);
-  return r.success ? r.data : orgFail('not_found');
+  return r.success ? r.data.toLowerCase() : orgFail('not_found');
 };
 
 /** `eq.<value>` for a PostgREST filter; values are ids or enum labels checked by the caller. */
