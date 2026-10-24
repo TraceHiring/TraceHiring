@@ -15,6 +15,7 @@ import {
   BankItemListQuery,
   BankItemListResponse,
   BankStatsResponse,
+  KeyReviewItemRequest,
   type ParamSpec,
 } from '@trace/shared/contracts/m1';
 import { Hono } from 'hono';
@@ -65,6 +66,7 @@ export const BANK_ITEM_VERSIONS_PATH = '/v1/orgs/:orgId/bank/items/:itemId/versi
 export const BANK_SUBMIT_PATH = '/v1/orgs/:orgId/bank/item-versions/:versionId/submit';
 export const BANK_REVIEW_PATH = '/v1/orgs/:orgId/bank/item-versions/:versionId/review';
 export const BANK_RETIRE_PATH = '/v1/orgs/:orgId/bank/item-versions/:versionId/retire';
+export const BANK_KEY_REVIEW_PATH = '/v1/orgs/:orgId/bank/item-versions/:versionId/key-review';
 export const BANK_STATS_PATH = '/v1/orgs/:orgId/bank/stats';
 
 /** The DB shape of a draft's content (item_versions columns; option `text` as stored, D1). */
@@ -480,6 +482,45 @@ export const createBankRoutes = (deps: BankDeps): Hono<{ Bindings: Env }> => {
         'in_review',
         req.decision === 'approve' ? 'approved' : 'not_approved',
       );
+      return answer(BankItemDetail, await detail(ctx, orgId, updated));
+    }),
+  );
+
+  // R5-64 h (ABH-6, SEC-M1-4, M1-3): the library expert review. The caller records themselves as the answer-key
+  // reviewer of an in-review `trace_library` version in an update of its own; the guard checks author ≠ key reviewer
+  // and an active library approver, and audits `item.key_review` (R5-49 e). The reviewer is never read from the body.
+  app.post(BANK_KEY_REVIEW_PATH, (c) =>
+    handleOrg(async () => {
+      const orgId = pathId(c.req.param('orgId'));
+      const versionId = pathId(c.req.param('versionId'));
+      const ctx = await deps.org.context(c.req.raw, c.env);
+      await requireRole(ctx.rest, ctx.caller, orgId, APPROVERS);
+      const req = parseBody(KeyReviewItemRequest, await readJson(c.req.raw));
+      // R5-54 a: the body names the same version as the path.
+      if (req.itemVersionId !== versionId) return orgFail('bad_request');
+      // Only the library org has a key review; the path org is the caller's own (read as the caller).
+      const [org] = parseRows(
+        z.object({ kind: z.string() }),
+        await ctx.rest.select('orgs', { select: 'kind', id: eq(orgId) }),
+      );
+      if (org === undefined) return orgFail('not_found');
+      if (org.kind !== 'trace_library') return orgFail('conflict');
+      const [row] = parseRows(
+        VersionRow,
+        await ctx.rest.update(
+          'item_versions',
+          {
+            id: eq(versionId),
+            org_id: eq(orgId),
+            section_id: 'is.null',
+            status: 'eq.in_review',
+            key_reviewed_by: 'is.null',
+            select: VERSION_COLS,
+          },
+          { key_reviewed_by: ctx.caller.userId },
+        ),
+      );
+      const updated = row ?? (await missedUpdate(ctx, orgId, versionId));
       return answer(BankItemDetail, await detail(ctx, orgId, updated));
     }),
   );

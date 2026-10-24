@@ -64,6 +64,9 @@ const keyReview = (call: ReturnType<typeof as>, versionId: unknown, body?: unkno
     body ?? { itemVersionId: versionId },
   );
 
+/** The stored row of a version (an update stores a new row object). */
+const stored = (db: A2aDb, id: unknown) => (db.tables.item_versions ?? []).find((r) => r.id === id);
+
 const keyPatches = (db: A2aDb) =>
   db.sentUpdates.filter((u) => u.table === 'item_versions' && 'key_reviewed_by' in u.patch);
 
@@ -78,13 +81,13 @@ describe('POST …/bank/item-versions/:id/key-review', () => {
     });
     expect(early.status).toBe(409);
     expect(await codeOf(early)).toBe('conflict');
-    expect(v.status).toBe('in_review');
+    expect(stored(db, v.id)?.status).toBe('in_review');
 
     const res = await keyReview(as(db, KEY_REVIEWER), v.id);
     expect(res.status).toBe(200);
     const body = BankItemDetail.parse(await res.json());
     expect(body).toMatchObject({ itemVersionId: v.id, status: 'in_review', approvedBy: null });
-    expect(v.key_reviewed_by).toBe(KEY_REVIEWER);
+    expect(stored(db, v.id)?.key_reviewed_by).toBe(KEY_REVIEWER);
     // The update carries the caller as key reviewer and nothing else (its own update, SEC-M1-4).
     expect(keyPatches(db).map((u) => u.patch)).toEqual([{ key_reviewed_by: KEY_REVIEWER }]);
 
@@ -97,7 +100,10 @@ describe('POST …/bank/item-versions/:id/key-review', () => {
       status: 'approved',
       approvedBy: APPROVER,
     });
-    expect(v).toMatchObject({ reviewed_by: APPROVER, key_reviewed_by: KEY_REVIEWER });
+    expect(stored(db, v.id)).toMatchObject({
+      reviewed_by: APPROVER,
+      key_reviewed_by: KEY_REVIEWER,
+    });
   });
 
   it('never takes the reviewer from the body (a strict body: an extra field is 400)', async () => {
@@ -125,7 +131,7 @@ describe('POST …/bank/item-versions/:id/key-review', () => {
     expect(res.status).toBe(409);
     expect(await codeOf(res)).toBe('conflict');
     expect(keyPatches(db)).toEqual([]);
-    expect(v.key_reviewed_by).toBeUndefined();
+    expect(stored(db, v.id)?.key_reviewed_by).toBeUndefined();
   });
 
   it('the author as key reviewer is the guard refusal library_reviewers, answered 409 conflict', async () => {
@@ -137,7 +143,7 @@ describe('POST …/bank/item-versions/:id/key-review', () => {
     expect(text).toBe('{"error":{"code":"conflict"}}');
     // The refusal came from the guard (the update was sent), and the version is unchanged.
     expect(keyPatches(db).map((u) => u.patch)).toEqual([{ key_reviewed_by: AUTHOR }]);
-    expect(v.key_reviewed_by).toBeUndefined();
+    expect(stored(db, v.id)?.key_reviewed_by).toBeUndefined();
   });
 
   it('refuses a body id that differs from the path id (400) and takes an upper-case path id', async () => {
@@ -166,7 +172,7 @@ describe('POST …/bank/item-versions/:id/key-review', () => {
       expect(res.status, key).toBe(403);
       expect(await codeOf(res)).toBe('forbidden');
     }
-    expect(v.key_reviewed_by).toBeUndefined();
+    expect(stored(db, v.id)?.key_reviewed_by).toBeUndefined();
     // A caller with no library membership cannot see the org (as every bank route).
     const stranger = '00000000-0000-4000-8000-0000000000a9';
     const res = await keyReview(as(db, stranger), v.id);
@@ -181,7 +187,7 @@ describe('POST …/bank/item-versions/:id/key-review', () => {
     const again = await keyReview(as(db, APPROVER), v.id);
     expect(again.status).toBe(409);
     expect(await codeOf(again)).toBe('conflict');
-    expect(v.key_reviewed_by).toBe(KEY_REVIEWER);
+    expect(stored(db, v.id)?.key_reviewed_by).toBe(KEY_REVIEWER);
     const draft = libraryVersion(db, { status: 'draft' });
     expect((await keyReview(as(db, KEY_REVIEWER), draft.id)).status).toBe(409);
     const unknown = 'c4000000-0000-4000-8000-0000000000ee';
