@@ -8,7 +8,7 @@ packages:
 # Shared versions (spec §4). Dependabot groups updates by catalog entry.
 catalog:
   typescript: 6.0.3
-  typescript-eslint: 8.71.1
+  typescript-eslint: 8.71.2
   eslint: 9.39.5
   '@eslint/js': 9.39.5
   eslint-plugin-jsx-a11y: 6.10.2
