@@ -1,9 +1,9 @@
 // Step 6 (specs/d1-demo-slice.md §4.1): the rules, then "Start test", which asks for fullscreen (inside the click,
 // tolerated silently if refused, RT-14) and calls `session/start` with the photo choice. The DO stamps the start time;
 // the session token, stream id and a view snapshot go to sessionStorage for a reload.
-import type { Receipt, SessionView } from '@trace/shared/contracts/candidate';
+import type { Receipt } from '@trace/shared/contracts/candidate';
 import { useId, useState } from 'react';
-import { isOffline, type CandidateApi } from '../api';
+import { isOffline, type AnyView, type CandidateApi } from '../api';
 import { COPY } from '../copy';
 import { offsetOf, type PhotoChoice, type UnavailableWhy } from '../flow';
 import { saveSession } from '../session-store';
@@ -13,7 +13,7 @@ interface Props {
   api: CandidateApi;
   lobbyToken: string;
   photo: PhotoChoice;
-  onSession(sessionToken: string, view: SessionView, offsetMs: number): void;
+  onSession(sessionToken: string, view: AnyView, offsetMs: number): void;
   onReceipt(receipt: Receipt): void;
   onBlocked(): void;
   onUnavailable(why: UnavailableWhy): void;

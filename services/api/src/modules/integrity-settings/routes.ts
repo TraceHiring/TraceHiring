@@ -106,6 +106,7 @@ const viewOf = async (ctx: OrgContext, orgId: string, testId: string) => {
     values: applied.values,
     locked,
     candidateSummary: renderCandidateSummary(applied.values, INTEGRITY_CATALOG_VERSION).lines,
+    stored: stored !== null,
   };
 };
 

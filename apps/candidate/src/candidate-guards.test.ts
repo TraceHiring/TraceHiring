@@ -16,6 +16,7 @@ import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import indexHtml from '../index.html?raw';
 import pkg from '../package.json';
+import { ITEM_IMAGE_MAX_BYTES, ITEM_IMAGE_TYPES } from './api';
 import { App } from './App';
 import type { Boot } from './boot';
 import { COPY } from './copy';
@@ -153,6 +154,24 @@ describe('candidate sources', () => {
 
   it('call fetch only in src/api.ts', () => {
     expect(where(FETCH)).toEqual(['./api.ts']);
+  });
+
+  it('show item images only as data: URLs built in src/test/media.ts, never an object URL (R5-66 e)', () => {
+    expect(where(/createObjectURL|revokeObjectURL/)).toEqual([]);
+    // A data: URL built from a template or written as an image literal (prose in comments does not count).
+    expect(where(/data:\$\{|['"`]data:image\//)).toEqual(['./test/media.ts']);
+    expect([...ITEM_IMAGE_TYPES].sort()).toEqual(['image/jpeg', 'image/png', 'image/webp']);
+    expect(ITEM_IMAGE_MAX_BYTES).toBe(1_048_576);
+  });
+
+  it('never write an image or an answer to local storage, IndexedDB or the cache API', () => {
+    expect(where(/localStorage|indexedDB|caches\s*\./)).toEqual([]);
+    expect(all['./test/media.ts']).toBeDefined();
+    expect(all['./test/media.ts']).not.toMatch(/sessionStorage/);
+  });
+
+  it('carry no "Pasting and dropping text are blocked" line: each section shows its rule (R5-24)', () => {
+    expect(where(/Pasting and dropping text are blocked/)).toEqual([]);
   });
 
   it('keep index.html free of media capture, camera access, reporters and analytics', () => {

@@ -11,6 +11,15 @@
 // so the answer is never lost, and every signal is kept (SR-4). A 400 or 413 refuses the whole batch (nothing of it was stored): its answer edits are dropped, the items go
 // back to the last acknowledged text (RT-13) and the batch's signals are sent once more; it never loops.
 // 410 ends the stream as `closed` (the caller attaches for the receipt), 401 `superseded` as `superseded`.
+// M1 (R5-20, R5-45, R5-66 f): an ack's `refusedSeqs` are acknowledged like the rest (they leave the queue), but a
+// refused answer never counts as kept: its item goes back to what the edge holds through `revert`, and the unsent
+// edits of that item queued behind it are dropped (they were built on the refused text). `section.finish` is an
+// event like a signal: compaction and a refused batch keep it. `enqueuedSeq` is the `afterSeq` of a v2 item GET.
+// R5-67, R5-68 e: a 409 `out_of_order` body's `refusedSeqs` and an ack after a resend are undone the same way.
+// R5-68 b (SR-4): at a section transition `handOver` lets the batch in flight settle, stops the stream and returns its
+// unacknowledged signals and `section.finish` with the monotonic time each was raised (a batch whose answer was lost
+// is first resent on the old stream with the same seqs, so the edge does not store it twice); the next stream's
+// `hold` sends them first. Streams of one screen share an origin (`originMono`), so a held event keeps the `t` it was raised at.
 // Events carry metadata only; nothing here logs.
 import type { ClientEvent, ClientSignal, SessionState } from '@trace/shared/contracts/candidate';
 import { isOffline, type ApiFailure, type CandidateApi } from '../api';
@@ -27,6 +36,8 @@ export const OUTBOX = {
   maxBodyBytes: 60_000,
   backoffMs: [1_000, 2_000, 4_000, 8_000, 10_000],
   keepUnsentMs: 10 * 60_000,
+  /** At a hand-over, resends of a batch whose answer never came, on the old stream (1, 2, 4 s apart). */
+  handOverTries: 3,
   lenEvery: 25,
   offlineMessage: OFFLINE_MESSAGE,
 } as const;
@@ -38,7 +49,11 @@ export type SignalBody = DistributiveOmit<ClientSignal, 'seq' | 't' | 'kind'>;
 
 interface Entry {
   body: Body;
-  /** Client offset (ms since the stream opened) stamped when queued. */
+  /** The signal as the signals module reported it (signal entries only), for a hand-over. */
+  signal?: SignalBody;
+  /** Monotonic time the event was raised (for a held event, earlier than the time it was queued). */
+  raised: number;
+  /** Client offset (ms since the origin, by default the stream's opening) at `raised`. */
   t: number;
   /** Monotonic time it was queued. */
   at: number;
@@ -57,6 +72,11 @@ export interface AckInfo {
 
 export type EndReason = 'closed' | 'superseded' | 'invalid';
 
+/** An event a stopped stream hands to the next one (R5-68 b), with the monotonic time it was raised. */
+export type Held =
+  | { kind: 'signal'; signal: SignalBody; raisedAt: number }
+  | { kind: 'section.finish'; sectionId: string; raisedAt: number };
+
 export interface OutboxEvents {
   status(status: 'online' | 'offline'): void;
   /** The edge refused an edit: show this last acknowledged value again. */
@@ -74,6 +94,11 @@ export interface OutboxDeps {
   /** The answers the edge holds at the stream's start (the view). */
   texts: ReadonlyMap<number, string>;
   choices: ReadonlyMap<number, string | null>;
+  /**
+   * Monotonic ms every `t` counts from (default: when this outbox is created). The test screen passes one origin for
+   * all its streams, so an event held across a transition keeps its `t` (R5-68 b).
+   */
+  originMono?: number;
   /** Monotonic ms (performance.now): event `t` values and the outbox's own timing. */
   monoNow?: () => number;
   /** Wall-clock ms (Date.now): only for the server-clock midpoint. */
@@ -86,13 +111,28 @@ export interface Outbox {
   text(item: number, next: string, maxChars: number): boolean;
   choice(item: number, option: string | null): void;
   signal(signal: SignalBody): void;
+  /** Queues `section.finish` (v2 sessions): the candidate leaves the section for good (R5-59 e). */
+  finish(sectionId: string): void;
+  /** Queues events handed over by the previous stream, each with the `t` of the moment it was raised (R5-68 b). */
+  hold(events: readonly Held[]): void;
+  /**
+   * Ends this stream for a transition (R5-68 b): sends nothing new, lets the batch in flight settle, stops, and returns
+   * every signal and `section.finish` not acknowledged, in order (a batch that failed in flight is handed over too:
+   * it may be lost, and a signal is never dropped).
+   */
+  handOver(): Promise<Held[]>;
   /** Sends now; true once everything queued before the call is acknowledged, false if offline or ended. */
   flush(): Promise<boolean>;
   ackedSeq(): number;
+  /** The highest seq the outbox has enqueued: the acknowledged seq plus every queued event (R5-45, R5-66 f). */
+  enqueuedSeq(): number;
   pending(): number;
   oldestUnsentAgeMs(): number;
   stop(): void;
 }
+
+/** Events never compacted away nor dropped with a refused batch's edits: signals (SR-4) and `section.finish`. */
+const keptAlways = (b: Body): boolean => b.kind === 'signal' || b.kind === 'section.finish';
 
 const encoder = new TextEncoder();
 const bytesOf = (value: unknown): number => encoder.encode(JSON.stringify(value)).length;
@@ -114,7 +154,7 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   const mono = deps.monoNow ?? (() => performance.now());
   const wall = deps.wallNow ?? (() => Date.now());
   const { on } = deps;
-  const opened = mono();
+  const opened = deps.originMono ?? mono();
   const envelope = bytesOf({ streamId: deps.streamId, events: [] });
 
   const confirmed = new Map(deps.texts);
@@ -127,6 +167,12 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   let textCount = 0;
   let inFlight = false;
   let stopped = false;
+  /** Set by `handOver`: no new batch starts. */
+  let closing = false;
+  /** The last batch got no clear answer (network, 503, an unknown answer): the edge may have stored it. */
+  let unclear = false;
+  /** Called once the batch in flight has settled. */
+  const idle: (() => void)[] = [];
   let offline = false;
   let failures = 0;
   let notBefore = -Infinity;
@@ -134,9 +180,16 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   let retry: ReturnType<typeof setTimeout> | undefined;
   let waiters: { until: number; resolve: (ok: boolean) => void }[] = [];
 
-  const elapsed = () => Math.max(0, Math.round(mono() - opened));
-  const enqueue = (body: Body) => {
-    if (!stopped) queue.push({ body, t: elapsed(), at: mono() });
+  const tAt = (raised: number) => Math.max(0, Math.round(raised - opened));
+  const enqueue = (body: Body, raised = mono(), signal?: SignalBody) => {
+    if (stopped) return;
+    queue.push({
+      body,
+      raised,
+      t: tAt(raised),
+      at: mono(),
+      ...(signal === undefined ? {} : { signal }),
+    });
   };
   const wire = (e: Entry, seq: number): ClientEvent => ({ seq, t: e.t, ...e.body }) as ClientEvent;
 
@@ -201,14 +254,47 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
     );
   };
 
-  const ackTo = (seq: number) => {
+  const ackTo = (seq: number, refused: ReadonlySet<number> = new Set()) => {
+    const refusedTexts = new Set<number>();
+    const refusedChoices = new Set<number>();
     while (queue.length > 0) {
       const head = queue[0];
       if (head?.seq === undefined || head.seq > seq) break;
       queue.shift();
-      applyTo(confirmed, confirmedChoice, head.body);
+      if (!refused.has(head.seq)) applyTo(confirmed, confirmedChoice, head.body);
+      else if (head.body.kind === 'answer.text') refusedTexts.add(head.body.item);
+      else if (head.body.kind === 'answer.choice') refusedChoices.add(head.body.item);
     }
     if (seq > acked) acked = seq;
+    if (refusedTexts.size + refusedChoices.size > 0) undoRefused(refusedTexts, refusedChoices);
+  };
+
+  /**
+   * R5-20, R5-66 f: the edge kept none of these items' refused edits. Their unsent edits (built on the refused text)
+   * are dropped; edits already numbered stay (a seq never changes) and are replayed on what the edge holds.
+   */
+  const undoRefused = (texts: ReadonlySet<number>, choices: ReadonlySet<number>) => {
+    queue = queue.filter(
+      (e) =>
+        e.seq !== undefined ||
+        !(
+          (e.body.kind === 'answer.text' && texts.has(e.body.item)) ||
+          (e.body.kind === 'answer.choice' && choices.has(e.body.item))
+        ),
+    );
+    const replayText = new Map(confirmed);
+    const replayChoice = new Map(confirmedChoice);
+    for (const e of queue) applyTo(replayText, replayChoice, e.body);
+    for (const item of texts) {
+      const text = replayText.get(item) ?? '';
+      current.set(item, text);
+      on.revert(item, { text });
+    }
+    for (const item of choices) {
+      const choice = replayChoice.get(item) ?? null;
+      currentChoice.set(item, choice);
+      on.revert(item, { choice });
+    }
   };
 
   const buildBatch = (): Entry[] => {
@@ -240,7 +326,7 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
       if (e.body.kind === 'answer.choice') choices.add(e.body.item);
     }
     const hadAnswer = texts.size + choices.size > 0;
-    const again = hadAnswer ? batch.filter((e) => e.body.kind === 'signal') : [];
+    const again = hadAnswer ? batch.filter((e) => keptAlways(e.body)) : [];
     queue = [
       ...again,
       ...queue.filter(
@@ -272,7 +358,7 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
     const kept = queue.slice(0, first);
     // SR-4: every unsent signal stays (evidence is never compacted away); heartbeats and the answer edits go, the
     // edits replaced below by one edit per item.
-    const signals = queue.slice(first).filter((e) => e.body.kind === 'signal');
+    const signals = queue.slice(first).filter((e) => keptAlways(e.body));
     const baseText = new Map(confirmed);
     const baseChoice = new Map(confirmedChoice);
     for (const e of kept) applyTo(baseText, baseChoice, e.body);
@@ -288,6 +374,7 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   };
 
   const goOffline = () => {
+    unclear = true;
     failures += 1;
     const wait = OUTBOX.backoffMs[Math.min(failures, OUTBOX.backoffMs.length) - 1] ?? 10_000;
     notBefore = mono() + wait;
@@ -300,7 +387,7 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   };
 
   const pump = async (): Promise<void> => {
-    if (stopped || inFlight || queue.length === 0) return;
+    if (stopped || closing || inFlight || queue.length === 0) return;
     const now = mono();
     if (now < notBefore) return later(notBefore - now);
     if (now - lastSentAt < OUTBOX.minGapMs) return later(OUTBOX.minGapMs - (now - lastSentAt));
@@ -314,7 +401,20 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
       events: batch.map((e) => wire(e, e.seq ?? 0)),
     });
     inFlight = false;
-    if (stopped) return;
+    try {
+      if (!stopped) settle(res, batch, sentAt);
+    } finally {
+      for (const wake of idle.splice(0)) wake();
+    }
+  };
+
+  /** One answer to a batch: acknowledge, resend, back off, refuse or end. */
+  const settle = (
+    res: Awaited<ReturnType<OutboxDeps['api']['events']>>,
+    batch: Entry[],
+    sentAt: number,
+  ): void => {
+    unclear = false;
     if (res.ok) {
       const receivedAt = wall();
       failures = 0;
@@ -323,7 +423,7 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
         offline = false;
         on.status('online');
       }
-      ackTo(res.value.ackSeq);
+      ackTo(res.value.ackSeq, new Set(res.value.refusedSeqs ?? []));
       const serverNowMs = Date.parse(res.value.serverNow);
       on.ack({
         ackSeq: res.value.ackSeq,
@@ -343,8 +443,9 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
     const ended = ENDS[failure.code];
     if (ended !== undefined) return end(ended);
     if (failure.code === 'out_of_order') {
-      // The edge holds everything up to ackSeq; the rest is resent with the same numbers.
-      ackTo(failure.ackSeq ?? acked);
+      // The edge holds everything up to ackSeq; the rest is resent with the same numbers. The part it kept may list
+      // refused seqs (R5-67): they are undone exactly as on an ack (R5-68 e).
+      ackTo(failure.ackSeq ?? acked, new Set(failure.refusedSeqs ?? []));
       settleWaiters(null);
       return later(OUTBOX.minGapMs);
     }
@@ -388,10 +489,51 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
       currentChoice.set(item, option);
     },
     signal(signal) {
-      enqueue({ kind: 'signal', ...signal } as Body);
+      enqueue({ kind: 'signal', ...signal } as Body, mono(), signal);
+    },
+    finish(sectionId) {
+      enqueue({ kind: 'section.finish', sectionId });
+    },
+    hold(events) {
+      for (const e of events) {
+        if (e.kind === 'signal')
+          enqueue({ kind: 'signal', ...e.signal } as Body, e.raisedAt, e.signal);
+        else enqueue({ kind: 'section.finish', sectionId: e.sectionId }, e.raisedAt);
+      }
+    },
+    async handOver() {
+      closing = true;
+      if (retry !== undefined) clearTimeout(retry);
+      if (inFlight) await new Promise<void>((resolve) => idle.push(resolve));
+      // A batch whose answer never came may be stored: resend it on this (still valid) stream with the same seqs, so
+      // the edge skips what it holds (seq <= hw), before anything is handed over. If every try fails it is handed over
+      // anyway: a duplicate is better than a lost signal (SR-4).
+      for (let k = 0; k < OUTBOX.handOverTries; k += 1) {
+        const unsure = queue.filter((e) => e.seq !== undefined).slice(0, OUTBOX.maxEvents);
+        if (stopped || !unclear || unsure.length === 0) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, OUTBOX.backoffMs[k] ?? 10_000));
+        if (stopped) break;
+        inFlight = true;
+        const sentAt = wall();
+        const res = await deps.api.events(deps.sessionToken, {
+          streamId: deps.streamId,
+          events: unsure.map((e) => wire(e, e.seq ?? 0)),
+        });
+        inFlight = false;
+        if (!stopped) settle(res, unsure, sentAt);
+      }
+      const held: Held[] = [];
+      for (const e of queue) {
+        if (e.signal !== undefined)
+          held.push({ kind: 'signal', signal: e.signal, raisedAt: e.raised });
+        else if (e.body.kind === 'section.finish')
+          held.push({ kind: 'section.finish', sectionId: e.body.sectionId, raisedAt: e.raised });
+      }
+      stop();
+      return held;
     },
     flush() {
-      if (stopped) return Promise.resolve(false);
+      if (stopped || closing) return Promise.resolve(false);
       if (queue.length === 0) return Promise.resolve(true);
       const promise = new Promise<boolean>((resolve) => {
         waiters.push({ until: mono(), resolve });
@@ -405,6 +547,8 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
       return promise;
     },
     ackedSeq: () => acked,
+    // Queued events are numbered (or will be) acked + 1, acked + 2, … in order, so the last one gets this seq.
+    enqueuedSeq: () => acked + queue.length,
     pending: () => queue.length,
     oldestUnsentAgeMs() {
       const first = queue.find((e) => e.seq === undefined);

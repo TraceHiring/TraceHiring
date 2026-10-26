@@ -662,7 +662,14 @@ describe('IntegritySettingsRequest and IntegritySettingsView', () => {
       id_verification: 'always',
     },
     candidateSummary: ['Pasting into written answers is recorded.'],
+    stored: true,
   };
+  it('the view says whether the version has stored settings (R5-70 d)', () => {
+    expect(ok(IntegritySettingsView, { ...view, presetKey: null, stored: false })).toBe(true);
+    const { stored: _omit, ...without } = view;
+    expect(ok(IntegritySettingsView, without)).toBe(false);
+    expect(ok(IntegritySettingsView, { ...view, stored: 'yes' })).toBe(false);
+  });
   it('the view marks every always-locked setting as always and the rest as admin at most', () => {
     expect(IntegritySettingsView.parse(view)).toEqual(view);
     expect(ok(IntegritySettingsView, { ...view, presetKey: null })).toBe(true);

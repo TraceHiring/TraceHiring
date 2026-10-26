@@ -13,6 +13,9 @@ import {
   ServedItem,
   SessionAttachRes,
   SessionStartRes,
+  ServedItemV2,
+  SessionAttachResV2,
+  SessionStartResV2,
 } from '@trace/shared/contracts/candidate';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -28,6 +31,9 @@ import {
   isServedItem,
   isSessionAttachRes,
   isSessionStartRes,
+  isServedItemV2,
+  isSessionViewV2,
+  ITEM_IMAGE_MAX_BYTES,
   resolveEdgeOrigin,
 } from './api';
 import {
@@ -44,6 +50,12 @@ import {
   STREAM_ID,
   viewAt,
   WRITTEN_ITEM,
+  mcqItemV2,
+  mcqSection,
+  PNG_BYTES,
+  viewV2At,
+  writtenItemV2,
+  writtenSection,
 } from './fixtures.test-helpers';
 
 const ORIGIN = 'https://trace-edge-staging.example-sub.workers.dev';
@@ -271,6 +283,32 @@ describe('failures', () => {
     });
   });
 
+  it('R5-67, R5-68 e: a 409 out_of_order carries the refusedSeqs of the part the edge kept', async () => {
+    answer = () => json(409, { error: 'out_of_order', ackSeq: 7, refusedSeqs: [2, 7] });
+    expect(await api.events(SESSION_TOKEN, { streamId: STREAM_ID, events: [] })).toEqual({
+      ok: false,
+      code: 'out_of_order',
+      status: 409,
+      ackSeq: 7,
+      refusedSeqs: [2, 7],
+    });
+    // Checked as an ack's: distinct, each acknowledged (<= ackSeq), at most 100; else the answer fits no contract.
+    const tooMany = Array.from({ length: 101 }, (_, k) => k + 1);
+    for (const refusedSeqs of [[8], [2, 2], [0], ['2'], 'x', null, tooMany]) {
+      answer = () => json(409, { error: 'out_of_order', ackSeq: 7, refusedSeqs });
+      expect(
+        await api.events(SESSION_TOKEN, { streamId: STREAM_ID, events: [] }),
+        JSON.stringify(refusedSeqs).slice(0, 20),
+      ).toEqual({ ok: false, code: 'unexpected', status: 409 });
+    }
+    const hundred = Array.from({ length: 100 }, (_, k) => k + 1);
+    answer = () => json(409, { error: 'out_of_order', ackSeq: 100, refusedSeqs: hundred });
+    expect(await api.events(SESSION_TOKEN, { streamId: STREAM_ID, events: [] })).toMatchObject({
+      code: 'out_of_order',
+      refusedSeqs: hundred,
+    });
+  });
+
   it('parses odd bodies defensively', async () => {
     const cases: [Response, string][] = [
       [new Response('not json', { status: 503 }), 'unavailable'],
@@ -303,6 +341,105 @@ describe('failures', () => {
   });
 });
 
+describe('package v2 (AT-M1-32; R5-10, R5-20, R5-45, R5-59 d, R5-66 e)', () => {
+  const api = createApi(ORIGIN);
+  const HASH = 'b'.repeat(64);
+  const bytes = (n: number, type: string, headers: Record<string, string> = {}) =>
+    new Response(new Uint8Array(n), {
+      status: 200,
+      headers: { 'content-type': type, 'cache-control': 'no-store', ...headers },
+    });
+
+  it('start and attach accept a v2 view', async () => {
+    const view = viewV2At(NOW);
+    answer = ({ url }) =>
+      url.endsWith('/start')
+        ? json(200, { sessionToken: SESSION_TOKEN, expiresAt: '2026-10-19T12:00:00.000Z', view })
+        : json(200, { view });
+    const started = await api.start(LOBBY_TOKEN, {
+      rulesAcknowledged: true,
+      photo: { skippedReason: 'declined' },
+    });
+    expect(started.ok && 'view' in started.value && started.value.view).toEqual(view);
+    expect(await api.attach(SESSION_TOKEN)).toEqual({ ok: true, value: { view } });
+  });
+
+  it('a v2 item GET carries afterSeq; a call without it sends no query (v1 as D1)', async () => {
+    answer = () => json(200, mcqItemV2(1));
+    expect(await api.item(SESSION_TOKEN, 1, 7)).toEqual({ ok: true, value: mcqItemV2(1) });
+    await api.item(SESSION_TOKEN, 2);
+    expect(calls.map((c) => c.url)).toEqual([
+      `${ORIGIN}/v1/session/items/1?afterSeq=7`,
+      `${ORIGIN}/v1/session/items/2`,
+    ]);
+    expect(await api.item(SESSION_TOKEN, 1, -1)).toMatchObject({ ok: false, code: 'bad_request' });
+    expect(calls).toHaveLength(2);
+  });
+
+  it('an item GET maps 410 section_closed and 409 out_of_order with ackSeq', async () => {
+    answer = () => json(410, { error: 'section_closed' });
+    expect(await api.item(SESSION_TOKEN, 3, 0)).toEqual({
+      ok: false,
+      code: 'section_closed',
+      status: 410,
+    });
+    answer = () => json(409, { error: 'out_of_order', ackSeq: 4 });
+    expect(await api.item(SESSION_TOKEN, 3, 6)).toEqual({
+      ok: false,
+      code: 'out_of_order',
+      status: 409,
+      ackSeq: 4,
+    });
+  });
+
+  it('media: GETs the bytes with the session Bearer token and no credentials', async () => {
+    answer = () =>
+      new Response(PNG_BYTES, { status: 200, headers: { 'content-type': 'image/png' } });
+    const res = await api.media(SESSION_TOKEN, HASH);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.type).toBe('image/png');
+      expect([...res.value.bytes]).toEqual([...PNG_BYTES]);
+    }
+    expect(calls[0]?.url).toBe(`${ORIGIN}/v1/session/media/${HASH}`);
+    expect(calls[0]?.init.method).toBe('GET');
+    expect(calls[0]?.init.credentials).toBe('omit');
+    expect(headersOf(calls[0])['authorization']).toBe(`Bearer ${SESSION_TOKEN}`);
+  });
+
+  it('media: only png, jpeg and webp (never svg) and at most 1 MiB', async () => {
+    for (const type of ['image/jpeg', 'image/webp', 'image/png; charset=binary']) {
+      answer = () => bytes(10, type);
+      expect((await api.media(SESSION_TOKEN, HASH)).ok, type).toBe(true);
+    }
+    for (const type of ['image/svg+xml', 'text/html', 'image/gif', 'application/octet-stream']) {
+      answer = () => bytes(10, type);
+      expect(await api.media(SESSION_TOKEN, HASH), type).toMatchObject({ ok: false });
+    }
+    answer = () => bytes(ITEM_IMAGE_MAX_BYTES, 'image/png');
+    expect((await api.media(SESSION_TOKEN, HASH)).ok).toBe(true);
+    answer = () => bytes(ITEM_IMAGE_MAX_BYTES + 1, 'image/png');
+    expect(await api.media(SESSION_TOKEN, HASH)).toMatchObject({ ok: false });
+    // A declared length over the cap is refused before the body is read.
+    answer = () => bytes(10, 'image/png', { 'content-length': String(ITEM_IMAGE_MAX_BYTES + 1) });
+    expect(await api.media(SESSION_TOKEN, HASH)).toMatchObject({ ok: false });
+  });
+
+  it('media: a 404 is invalid_link, a malformed hash sends nothing', async () => {
+    answer = () => json(404, { error: 'invalid_link' });
+    expect(await api.media(SESSION_TOKEN, HASH)).toEqual({
+      ok: false,
+      code: 'invalid_link',
+      status: 404,
+    });
+    const before = calls.length;
+    for (const bad of ['B'.repeat(64), 'b'.repeat(63), '../x', `${HASH}?x=1`]) {
+      expect(await api.media(SESSION_TOKEN, bad)).toMatchObject({ ok: false, code: 'bad_request' });
+    }
+    expect(calls).toHaveLength(before);
+  });
+});
+
 describe('hand checks agree with the zod contracts', () => {
   const view = viewAt(NOW, {
     answers: [
@@ -310,6 +447,7 @@ describe('hand checks agree with the zod contracts', () => {
       { position: 2, text: 'draft' },
     ],
   });
+  const viewV2 = viewV2At(NOW);
   const cases: [
     string,
     (v: unknown) => boolean,
@@ -413,10 +551,107 @@ describe('hand checks agree with the zod contracts', () => {
       'EventBatchAck',
       isEventBatchAck,
       EventBatchAck,
-      [ackOf(0, NOW, NOW + 1000)],
+      [ackOf(0, NOW, NOW + 1000), { ...ackOf(3, NOW, NOW), refusedSeqs: [1, 3] }],
       [
         { ...ackOf(0, NOW, NOW), ackSeq: -1 },
         { ...ackOf(0, NOW, NOW), state: 'paused' },
+        { ...ackOf(2, NOW, NOW), refusedSeqs: [3] },
+        { ...ackOf(2, NOW, NOW), refusedSeqs: [1, 1] },
+        { ...ackOf(2, NOW, NOW), refusedSeqs: [0] },
+        { ...ackOf(2, NOW, NOW), refusedSeqs: 'x' },
+      ],
+    ],
+    [
+      'SessionStartResV2',
+      isSessionStartRes,
+      SessionStartResV2,
+      [
+        { sessionToken: SESSION_TOKEN, expiresAt: '2026-10-19T12:00:00.000Z', view: viewV2 },
+        { state: 'submitted', receipt: RECEIPT },
+      ],
+      [
+        { sessionToken: SESSION_TOKEN, expiresAt: '2026-10-19T12:00:00.000Z' },
+        {
+          sessionToken: SESSION_TOKEN,
+          expiresAt: '2026-10-19T12:00:00.000Z',
+          view: { ...viewV2, v: 3 },
+        },
+      ],
+    ],
+    [
+      'SessionAttachResV2',
+      (v: unknown) =>
+        typeof v === 'object' && v !== null && isSessionViewV2((v as { view?: unknown }).view),
+      SessionAttachResV2,
+      [
+        { view: viewV2 },
+        { view: viewV2At(NOW, { receipt: RECEIPT, served: [1] }) },
+        {
+          view: viewV2At(NOW, {
+            sections: [
+              mcqSection({ state: 'closed' }),
+              writtenSection({
+                pasteRule: 'allowed_logged',
+                deadlineAt: '2026-10-19T10:20:00.000Z',
+              }),
+            ],
+          }),
+        },
+        {
+          view: viewV2At(NOW, {
+            answers: [
+              { position: 1, choice: 'a' },
+              { position: 3, text: 'draft' },
+            ],
+          }),
+        },
+      ],
+      [
+        { view },
+        { view: { ...viewV2, v: 1 } },
+        { view: { ...viewV2, heartbeatSeconds: 5 } },
+        { view: { ...viewV2, items: [] } },
+        { view: { ...viewV2, pasteBlocked: true } },
+        { view: viewV2At(NOW, { sections: [mcqSection({ state: 'paused' as 'open' })] }) },
+        { view: viewV2At(NOW, { sections: [mcqSection({ navigation: 'back' as 'free' })] }) },
+        // R5-24: a written section is forward-only with a paste rule; no other has one.
+        { view: viewV2At(NOW, { sections: [writtenSection({ navigation: 'free' })] }) },
+        { view: viewV2At(NOW, { sections: [writtenSection({ pasteRule: undefined })] }) },
+        { view: viewV2At(NOW, { sections: [mcqSection({ pasteRule: 'blocked' })] }) },
+        { view: viewV2At(NOW, { sections: [mcqSection({ deadlineAt: 'soon' })] }) },
+        { view: { ...viewV2, items: [{ ...viewV2.items[0], sectionId: SHA.slice(0, 36) }] } },
+        {
+          view: {
+            ...viewV2,
+            items: [{ ...viewV2.items[0], sectionId: '12345678-1234-4123-8123-123456789012' }],
+          },
+        },
+        {},
+      ],
+    ],
+    [
+      'ServedItemV2',
+      isServedItemV2,
+      ServedItemV2,
+      [
+        mcqItemV2(1),
+        writtenItemV2(3),
+        { ...mcqItemV2(1), variantId: undefined },
+        { ...writtenItemV2(3), media: [{ hash: SHA, alt: 'A synthetic chart' }] },
+        {
+          ...mcqItemV2(1),
+          media: Array.from({ length: 4 }, () => ({ hash: SHA, alt: 'x' })),
+        },
+      ],
+      [
+        { ...mcqItemV2(1), options: undefined },
+        { ...writtenItemV2(3), variantId: '99999999-9999-4999-8999-999999999999' },
+        { ...writtenItemV2(3), media: [] },
+        { ...writtenItemV2(3), media: [{ hash: 'x', alt: 'a' }] },
+        { ...writtenItemV2(3), media: [{ hash: SHA, alt: '' }] },
+        { ...writtenItemV2(3), media: [{ hash: SHA, alt: 'a'.repeat(301) }] },
+        { ...mcqItemV2(1), media: Array.from({ length: 5 }, () => ({ hash: SHA, alt: 'x' })) },
+        { ...mcqItemV2(1), variantId: 'nope' },
       ],
     ],
     [
