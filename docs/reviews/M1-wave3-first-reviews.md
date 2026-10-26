@@ -32,3 +32,15 @@ session store checked clean.
 Image types (allow-list from Content-Type, 1 MiB by length and streaming cap, SHA-256 re-checked, `data:` only, never
 stored), fetch scope (edge origin only, `credentials: 'omit'`, `redirect: 'error'`), session token (Bearer only,
 sessionStorage as D1), XSS (React text only), outbox validation and error copy checked clean.
+
+## A7 fix round 1 (`209805f..177003a`, branch `m1/a7-fix-1`) — Opus confirming re-review (spec + security)
+**Spec: NOT CONFIRMED. Security: CONFIRMED WITH NOTES.** R5-68 a, b, c, e, f, g, i fixed and tested; no rule 1-9 breach.
+1. Medium (regression from R5-68 d) — positions whose GET was only sent count as served, so forward-only navigation
+   reaches N+2 while N+1 is loading or failed; the DO then serves N+2 and the candidate skips an item they never saw
+   (`Test.tsx:129-132`, `:304`; `sections.ts:79-84`). → fix round 2: sent GETs only make N read-only.
+2. Low — a batch that failed in flight is handed over although the edge may have stored it: its signals can be
+   stored twice (bounded, same `t`). → fix round 2: retry the unclear batch on the old stream first.
+3. Info — no test for the image `Retry-After` 60 s cap; the attach loop's `Retry-After` is uncapped (D1 caps 60 s).
+   → fix round 2.
+Writer choices accepted: one time origin per screen (`t` is evidence context only), images 4 requests total, attach
+codes mapped to D1's screens.
