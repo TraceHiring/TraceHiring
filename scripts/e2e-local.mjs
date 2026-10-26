@@ -644,14 +644,24 @@ export async function main(options) {
       if (!local.ok) return local.problems;
 
       const ts = now();
-      for (const spec of specs) {
-        log(`${TOOL}: starting ${spec.name}`);
-        handles.push(start(spec, root));
+      // The api first and alone: two wrangler sessions opening the one --persist-to folder at the
+      // same moment can fail with SQLITE_BUSY (dispatch run 40328678565, attempt 1).
+      const [first, ...rest] = specs;
+      log(`${TOOL}: starting ${first.name}`);
+      handles.push(start(first, root));
+      const waits = [await waitReady(handles[0], first.ready, { fetch, now, sleep })];
+      if (waits[0] === '') {
+        for (const spec of rest) {
+          log(`${TOOL}: starting ${spec.name}`);
+          handles.push(start(spec, root));
+        }
+        waits.push(
+          ...(await Promise.all(
+            rest.map((spec, i) => waitReady(handles[i + 1], spec.ready, { fetch, now, sleep })),
+          )),
+        );
       }
-      const waits = await Promise.all(
-        specs.map((spec, i) => waitReady(handles[i], spec.ready, { fetch, now, sleep })),
-      );
-      specs.forEach((spec, i) => {
+      specs.slice(0, handles.length).forEach((spec, i) => {
         const out = handles[i].output();
         const missing = spec.names.filter((n) => !out.includes(n));
         if (waits[i] !== '') problems.push(waits[i], ...tail(out));
