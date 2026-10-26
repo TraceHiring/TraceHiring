@@ -85,6 +85,11 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
   const [texts, setTexts] = useState(() => textsOf(initialView));
   const [choices, setChoices] = useState(() => choicesOf(initialView));
   const [items, setItems] = useState<Record<number, AnyItem>>({});
+  /**
+   * v2 positions whose item GET was sent (R5-68 d): from that moment they count as served, so in a forward-only
+   * section the item before is passed (read-only) at once, not only when the item arrives.
+   */
+  const [asked, setAsked] = useState<ReadonlySet<number>>(() => new Set());
   const [itemFailed, setItemFailed] = useState<number | null>(null);
   const [itemAttempt, setItemAttempt] = useState(0);
   const [clock, setClock] = useState({
@@ -121,7 +126,10 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
 
   const v2 = isV2(view);
   const layout = useMemo(() => layoutOf(view, closedHere), [view, closedHere]);
-  const served = useMemo(() => servedOf(view, Object.keys(items).map(Number)), [view, items]);
+  const served = useMemo(
+    () => servedOf(view, [...Object.keys(items).map(Number), ...asked]),
+    [view, items, asked],
+  );
   const section = layout.sectionOf.get(current);
 
   const finish = (receipt: Receipt) => {
@@ -166,7 +174,11 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
     setItemFailed(null);
     setView(next);
     setCurrent((c) =>
-      positionAfter(layoutOf(next), c, servedOf(next, Object.keys(items).map(Number))),
+      positionAfter(
+        layoutOf(next),
+        c,
+        servedOf(next, [...Object.keys(items).map(Number), ...asked]),
+      ),
     );
   };
 
@@ -289,6 +301,7 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
     const outbox = outboxRef.current;
     if (!v2) return api.item(sessionToken, position);
     if (outbox === null) return null;
+    setAsked((a) => (a.has(position) ? a : new Set(a).add(position)));
     let afterSeq = outbox.enqueuedSeq();
     for (let attempt = 1; ; attempt += 1) {
       const res = await api.item(sessionToken, position, afterSeq);
