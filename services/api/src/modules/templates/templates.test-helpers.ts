@@ -36,7 +36,8 @@ interface TemplatePayload {
 const badInput = () => new RestError(400, '22023');
 
 /**
- * Registers the create_test_from_template stand-in. `payloads` records every call's arguments; `apiWrites()` lists
+ * Registers the create_test_from_template stand-in (0 to 10 sections, at most 2,000 library ids in all, ids de-duplicated per section, like the SQL: a blueprint of only skipped
+ * sections writes the job, test, draft version and settings with no pool). `payloads` records every call's arguments; `apiWrites()` lists
  * the non-select calls the api made itself (the calls the function makes inside its transaction are left out).
  */
 export const withTemplateRpc = (db: AuthoringDb) => {
@@ -55,7 +56,6 @@ export const withTemplateRpc = (db: AuthoringDb) => {
         p === null ||
         typeof p !== 'object' ||
         !Array.isArray(p.sections) ||
-        p.sections.length < 1 ||
         p.sections.length > 10 ||
         typeof p.settings !== 'object' ||
         p.settings === null ||
@@ -70,7 +70,8 @@ export const withTemplateRpc = (db: AuthoringDb) => {
             typeof s !== 'object' ||
             !Array.isArray(s.libraryItemVersionIds) ||
             s.libraryItemVersionIds.length > 1000,
-        )
+        ) ||
+        sections.reduce((n, s) => n + (s.libraryItemVersionIds as unknown[]).length, 0) > 2000
       ) {
         throw badInput();
       }
@@ -104,7 +105,7 @@ export const withTemplateRpc = (db: AuthoringDb) => {
           format: s.format,
           skill_key: s.skillKey,
         });
-        const ids = s.libraryItemVersionIds as string[];
+        const ids = [...new Set(s.libraryItemVersionIds as string[])];
         const copied: string[] = [];
         for (let i = 0; i < ids.length; i += 500) {
           const [req] = await insert('library_copy_requests', {

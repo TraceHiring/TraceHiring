@@ -80,6 +80,8 @@ const BROWSE_PAGE = 100;
 const DEFAULT_CUTOFF = 40;
 /** create_test_from_template refuses a section naming more library items (it copies them 500 a request). */
 export const MAX_SECTION_LIBRARY_IDS = 1000;
+/** create_test_from_template refuses more library ids in one call, all sections together (statement timeout, daily copy cap). */
+export const MAX_CALL_LIBRARY_IDS = 2000;
 /** The most templates (own and library, merged) any reader scans; past it every reader answers 503. */
 export const TEMPLATE_LIST_CAP = 2000;
 
@@ -265,7 +267,7 @@ export interface TemplateDraftSection {
 /**
  * The create_test_from_template payload (DB shape, the keys the function reads): MCQ sections shuffle items and
  * options and navigate freely, written ones neither shuffle nor go back. More than MAX_SECTION_LIBRARY_IDS library ids
- * for one section is 503 `unavailable` (the function refuses it too).
+ * for one section, or MAX_CALL_LIBRARY_IDS in all, is 503 `unavailable` (the function refuses it too).
  */
 export const templateDraftPayload = (args: {
   workspaceId: string;
@@ -276,7 +278,10 @@ export const templateDraftPayload = (args: {
   settings: SettingsWrite;
   sections: readonly TemplateDraftSection[];
 }) => {
-  if (args.sections.some((s) => s.libraryItemVersionIds.length > MAX_SECTION_LIBRARY_IDS)) {
+  if (
+    args.sections.some((s) => s.libraryItemVersionIds.length > MAX_SECTION_LIBRARY_IDS) ||
+    args.sections.reduce((n, s) => n + s.libraryItemVersionIds.length, 0) > MAX_CALL_LIBRARY_IDS
+  ) {
     return orgFail('unavailable');
   }
   return {
