@@ -87,6 +87,41 @@ export const ITEM_DEFAULTS = {
   options: null,
 };
 
+/** The settings of a version's ruleset, or null (a D1 draft). */
+const settingsOf = (db: FakeDb, versionId: unknown): Record<string, unknown> | null => {
+  const v = versionOf(db, versionId);
+  const r = (db.tables.ruleset_versions ?? []).find((x) => x.id === v?.ruleset_version_id);
+  return (r?.settings as Record<string, unknown> | null | undefined) ?? null;
+};
+
+/**
+ * M1-p `private.sections_settings_derive` (R5-71 b): with settings, no null navigation (the format's default) and a
+ * written section takes the settings' paste_written; without settings the row is unchanged (D1).
+ */
+const derived = (row: Row, settings: Record<string, unknown> | null): Row => {
+  if (settings === null) return row;
+  return {
+    ...row,
+    navigation: row.navigation ?? (row.format === 'mcq' ? 'free' : 'forward_only'),
+    ...(row.format === 'written' ? { paste_rule: settings.paste_written } : {}),
+  };
+};
+
+/** M1-p's D1 shape re-check inside save_test_draft (R5-71 a), over the stored sections of the version. */
+const d1ShapedStored = (db: FakeDb, versionId: unknown): boolean => {
+  const rows = (db.tables.sections ?? []).filter((s) => s.test_version_id === versionId);
+  return rows.every(
+    (s) =>
+      s.pool_id === null &&
+      s.shuffle_items !== true &&
+      s.shuffle_options !== true &&
+      s.time_limit_seconds === null &&
+      s.blueprint === null &&
+      (s.navigation === null || s.navigation === (s.format === 'mcq' ? 'free' : 'forward_only')) &&
+      rows.filter((o) => o.format === s.format).length === 1,
+  );
+};
+
 const lockedValueBreaks = (db: FakeDb, orgId: unknown, settings: Record<string, unknown>) =>
   (db.tables.org_integrity_locks ?? []).some(
     (l) => l.org_id === orgId && settings[String(l.setting_key)] !== l.locked_value,
@@ -185,8 +220,15 @@ const publishGuard = async (old: Row, next: Row, d: FakeDb): Promise<Row> => {
   return out;
 };
 
-/** Records every save_test_draft payload the api sent (for assertions). */
-export type AuthoringDb = FakeDb & { rest: OrgContext['rest']; savePayloads: unknown[] };
+/**
+ * Records every save_test_draft payload the api sent (for assertions); `beforeSave` runs at the start of each
+ * save_test_draft call (a concurrent write landing between the api's reads and the database's row lock).
+ */
+export type AuthoringDb = FakeDb & {
+  rest: OrgContext['rest'];
+  savePayloads: unknown[];
+  beforeSave?: () => void;
+};
 
 export const authoringDb = (): AuthoringDb => {
   const ids = {
@@ -272,6 +314,17 @@ export const authoringDb = (): AuthoringDb => {
           if (old.published_at !== null) throw guardError();
           const settings = next.settings as Record<string, unknown> | null;
           if (settings !== null && lockedValueBreaks(d, old.org_id, settings)) throw locked();
+          // M1-p `private.ruleset_settings_to_sections`: changed settings re-derive the draft sections.
+          if (settings !== null && JSON.stringify(settings) !== JSON.stringify(old.settings)) {
+            const drafts = new Set(
+              (d.tables.test_versions ?? [])
+                .filter((v) => v.ruleset_version_id === old.id && v.status === 'draft')
+                .map((v) => v.id),
+            );
+            d.tables.sections = (d.tables.sections ?? []).map((s) =>
+              drafts.has(s.test_version_id) ? derived(s, settings) : s,
+            );
+          }
           return {
             ...next,
             catalog_version: settings === null ? null : 'm1-settings-v1',
@@ -281,11 +334,14 @@ export const authoringDb = (): AuthoringDb => {
       sections: {
         insert: (row, d) => {
           draftOnly(d, row.test_version_id);
-          return { id: ids.section(), ...SECTION_DEFAULTS, ...row };
+          return derived(
+            { id: ids.section(), ...SECTION_DEFAULTS, ...row },
+            settingsOf(d, row.test_version_id),
+          );
         },
         update: (old, next, d) => {
           draftOnly(d, old.test_version_id);
-          return next;
+          return derived(next, settingsOf(d, old.test_version_id));
         },
         remove: (row, d) => draftOnly(d, row.test_version_id),
       },
@@ -346,9 +402,17 @@ export const authoringDb = (): AuthoringDb => {
             }[];
           }[];
         };
+        (d as Partial<AuthoringDb>).beforeSave?.();
         const v = versionOf(d, args.p_test_version);
         if (v === undefined) throw new RestError(409, '23503', 'other');
         if (v.status !== 'draft') throw frozen();
+        // M1-p (R5-71 a): after the version row lock, D1's save re-checks the stored shape.
+        if (
+          (args.p_payload as { requireD1Shape?: unknown }).requireD1Shape === true &&
+          !d1ShapedStored(d, v.id)
+        ) {
+          throw new RestError(400, '55000', 'd1_shape');
+        }
         v.total_time_seconds = p.totalTimeSeconds;
         v.quality_cutoff = p.qualityCutoff;
         const test = (d.tables.tests ?? []).find((t) => t.id === v.test_id);
@@ -395,7 +459,7 @@ export const authoringDb = (): AuthoringDb => {
             paste_rule: s.pasteRule ?? null,
             blueprint: s.blueprint ?? null,
           };
-          d.tables.sections?.push(section);
+          d.tables.sections?.push(derived(section, settingsOf(d, v.id)));
           s.items.forEach((it, ii) => {
             let rubric: string | null = null;
             if (it.format === 'written') {

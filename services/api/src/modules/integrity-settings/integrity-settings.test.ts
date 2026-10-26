@@ -182,6 +182,14 @@ describe('PUT …/tests/:testId/integrity', () => {
     expect(mcq?.paste_rule).toBeNull();
   });
 
+  it('is one write: the database derives navigation and paste rules (R5-71 b, R5-63 f)', async () => {
+    const s = await setup();
+    const before = s.db.calls.length;
+    expect((await s.call('PUT', s.path, { presetKey: 'strict', values: STRICT })).status).toBe(200);
+    const writes = s.db.calls.slice(before).filter((c) => c.method !== 'select');
+    expect(writes.map((c) => `${c.method} ${c.table}`)).toEqual(['update ruleset_versions']);
+  });
+
   it('custom values store preset null; a preset whose values differ from its own is 400', async () => {
     const s = await setup();
     const custom = { ...STANDARD, question_copy: 'off' };

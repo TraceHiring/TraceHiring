@@ -145,6 +145,46 @@ describe("D1's PUT keeps D1's shape (R5-70 b)", () => {
   });
 });
 
+describe("D1's shape re-checked by the database under its row lock (R5-71 a, R5-70 re-review Low 1)", () => {
+  it("D1's PUT asks save_test_draft to re-check the shape; the v2 PUT does not", async () => {
+    const s = await setup();
+    expect((await s.call('PUT', s.d1Path, draftBody())).status).toBe(200);
+    expect(s.db.savePayloads.at(-1)).toMatchObject({ requireD1Shape: true });
+    expect((await s.call('PUT', s.v2Path, saveBody())).status).toBe(200);
+    expect(s.db.savePayloads.at(-1)).not.toHaveProperty('requireD1Shape');
+  });
+
+  it('a v2 save that lands between the api check and the write is never overwritten (409)', async () => {
+    const s = await setup();
+    seedPool(s.db, { poolId: POOL, format: 'mcq', count: 3, prefix: 'b9' });
+    // The api's own check reads a D1-shaped draft; a concurrent v2 save then stores a pool section before
+    // save_test_draft takes the row lock, so the database's re-check refuses the D1 save.
+    s.db.beforeSave = () => {
+      rowsOf(s.db, 'sections').push({
+        id: '5c000000-0000-4000-8000-0000000000ff',
+        org_id: ORG,
+        test_version_id: s.versionId,
+        position: 9,
+        name: 'Drawn',
+        format: 'mcq',
+        weight: 10,
+        pool_id: POOL,
+        draw_count: 2,
+        shuffle_items: false,
+        shuffle_options: false,
+        navigation: 'free',
+        paste_rule: null,
+        blueprint: null,
+        time_limit_seconds: null,
+      });
+    };
+    const res = await s.call('PUT', s.d1Path, draftBody());
+    expect(res.status).toBe(409);
+    expect(await codeOf(res)).toBe('conflict');
+    expect(rowsOf(s.db, 'sections').some((x) => x.pool_id === POOL)).toBe(true);
+  });
+});
+
 describe('admin locks placed after settings were stored (R5-70 c, E16)', () => {
   const lock = (setting_key: string, locked_value: string) => ({
     id: '0c000000-0000-4000-8000-000000000001',
