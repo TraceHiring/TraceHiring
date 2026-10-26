@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { RestError } from '../tests/org-context.js';
 import {
   a2aDb,
+  type A2aDb,
   callerOf,
   codeOf,
   fakeVariants,
@@ -55,6 +56,29 @@ const paramSpec = (patch: Record<string, unknown> = {}) => ({
   ...patch,
 });
 
+/** The stored columns of a draft's content (`DbContent`, the save_bank_draft payload's `content`). */
+const DB_CONTENT = [
+  'format',
+  'stem',
+  'options',
+  'rubric_version_id',
+  'skill_key',
+  'difficulty',
+  'is_parameterised',
+  'param_spec',
+  'media',
+  'content_sha256',
+];
+
+/** Direct PostgREST writes to the bank tables (a draft write is one save_bank_draft call, R5-71 e). */
+const directBankWrites = (db: A2aDb) =>
+  db.calls.filter(
+    (c) =>
+      c.method !== 'select' &&
+      c.method !== 'rpc' &&
+      ['items', 'item_versions', 'item_answer_keys'].includes(c.table),
+  );
+
 const setup = (roles?: string[], aal: 'aal1' | 'aal2' = 'aal1') => {
   const db = a2aDb(roles === undefined ? {} : { roles });
   const caller = callerOf({ aal, amr: aal === 'aal2' ? ['totp'] : ['otp'] });
@@ -90,10 +114,21 @@ describe('POST …/bank/items', () => {
       }),
     );
     // The origin is never sent: the guard sets it from the write path (carried n-3); nor are the id, the status or
-    // the approval columns.
-    const inserts = db.sentInserts.filter((c) => c.table === 'item_versions');
-    expect(inserts).toHaveLength(1);
-    for (const sent of inserts[0]?.body ?? []) {
+    // the approval columns. The item, its version and its key are one write (save_bank_draft, R5-71 e).
+    expect(directBankWrites(db)).toEqual([]);
+    const saves = db.sentRpcs.filter((r) => r.fn === 'save_bank_draft');
+    expect(saves).toHaveLength(1);
+    expect(saves[0]?.args.p_org).toBe(ORG);
+    const payload = saves[0]?.args.p_payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      mode: 'create',
+      workspaceId: WS,
+      keyOptionId: 'a',
+      content: expect.any(Object) as unknown,
+    });
+    const content = payload.content as Record<string, unknown>;
+    expect(Object.keys(content).sort()).toEqual([...DB_CONTENT].sort());
+    for (const sent of [payload, content]) {
       for (const col of ['origin', 'id', 'status', 'approved_by', 'approved_at', 'created_by']) {
         expect(Object.keys(sent)).not.toContain(col);
       }
@@ -178,14 +213,54 @@ describe('POST …/bank/items', () => {
     expect((await call('POST', '/bank/items', mcq())).status).toBe(201);
   });
 
-  it('undoes the item when its version is refused, and never echoes the stem', async () => {
+  it('leaves no item when its version is refused (one transaction), and never echoes the stem', async () => {
     const { db, call } = setup();
-    db.failNext('insert', 'item_versions', new RestError(400, '23514'));
+    db.failInside('insert', 'item_versions', new RestError(400, '23514'));
     const res = await call('POST', '/bank/items', mcq());
     expect(res.status).toBe(400);
     const text = await res.text();
     expect(text).not.toContain('noun');
     expect(db.tables.items).toEqual([]);
+    expect(db.tables.item_versions).toEqual([]);
+  });
+
+  it('leaves no item and no version when the key write fails (one transaction, R5-71 e)', async () => {
+    const { db, call } = setup();
+    db.failInside('insert', 'item_answer_keys', new RestError(503, null));
+    const res = await call('POST', '/bank/items', mcq());
+    expect(res.status).toBe(503);
+    expect(await codeOf(res)).toBe('unavailable');
+    expect(db.tables.items).toEqual([]);
+    expect(db.tables.item_versions).toEqual([]);
+    expect(db.tables.item_answer_keys).toEqual([]);
+  });
+
+  it('sends a written item and a parameterised item with no key (keyOptionId null)', async () => {
+    const { db, call } = setup();
+    const written = await call('POST', '/bank/items', {
+      format: 'written',
+      stem: '[synthetic] Describe a calm reply to a customer.',
+      rubricVersionId: RUBRIC,
+      skillKey: 'written_communication',
+      difficulty: 0.5,
+    });
+    expect(written.status).toBe(201);
+    const param = await call('POST', '/bank/items', mcq({ paramSpec: paramSpec() as never }));
+    expect(param.status).toBe(201);
+    const keys = db.sentRpcs
+      .filter((r) => r.fn === 'save_bank_draft')
+      .map((r) => (r.args.p_payload as { keyOptionId: unknown }).keyOptionId);
+    expect(keys).toEqual([null, null]);
+  });
+
+  it('answers 503 when the function answers anything but a version id', async () => {
+    for (const odd of [null, 'not-a-uuid', 7, { id: 'x' }]) {
+      const { db, call } = setup();
+      db.functions.save_bank_draft = () => odd;
+      const res = await call('POST', '/bank/items', mcq());
+      expect(res.status).toBe(503);
+      expect(await codeOf(res)).toBe('unavailable');
+    }
   });
 
   it('is for owners, admins and recruiters only', async () => {
@@ -286,12 +361,16 @@ describe('PUT …/bank/items/:itemId', () => {
     expect(submitted.status).toBe(200);
   });
 
-  it('never leaves the key on a deleted option when the key write fails; submit then answers draft_incomplete (D1)', async () => {
+  it('never leaves the key on a deleted option when the key write fails: content and key stay as they were (D1, R5-71 e)', async () => {
     const { db, call } = setup();
     const created = await jsonOf<{ itemId: string; itemVersionId: string }>(
       await call('POST', '/bank/items', mcq()),
     );
-    db.failNext('update', 'item_answer_keys', new RestError(503, null));
+    const before = structuredClone({
+      version: db.tables.item_versions,
+      keys: db.tables.item_answer_keys,
+    });
+    db.failInside('insert', 'item_answer_keys', new RestError(503, null));
     const res = await call(
       'PUT',
       `/bank/items/${created.itemId}`,
@@ -308,13 +387,157 @@ describe('PUT …/bank/items/:itemId', () => {
     for (const k of db.tables.item_answer_keys ?? []) {
       expect(options).toContain((k.key as { option_id: string }).option_id);
     }
-    // The draft still reads (no key shown on a deleted option) and cannot leave draft until a PUT stores the key.
+    // One transaction: the failed edit changed neither the content nor the key (A2a re-review Low 4), so the draft
+    // reads and submits with its earlier, consistent content and key.
+    expect({ version: db.tables.item_versions, keys: db.tables.item_answer_keys }).toEqual(before);
     const read = await call('GET', `/bank/items/${created.itemId}`);
     expect(read.status).toBe(200);
-    expect(BankItemDetail.parse(await read.json()).content).not.toHaveProperty('key');
+    expect(BankItemDetail.parse(await read.json()).content).toMatchObject({
+      options: [
+        { id: 'a', text: 'Table' },
+        { id: 'b', text: 'Quickly' },
+      ],
+      key: { optionId: 'a' },
+    });
     const submit = await call('POST', `/bank/item-versions/${created.itemVersionId}/submit`);
-    expect(submit.status).toBe(422);
-    expect(await codeOf(submit)).toBe('draft_incomplete');
+    expect(submit.status).toBe(200);
+  });
+
+  it('a key the database refuses (23514, no current option) is 400 and fails the whole edit (R5-71 e)', async () => {
+    const { db, call } = setup();
+    const created = await jsonOf<{ itemId: string }>(await call('POST', '/bank/items', mcq()));
+    const before = structuredClone({
+      version: db.tables.item_versions,
+      keys: db.tables.item_answer_keys,
+    });
+    db.failInside('insert', 'item_answer_keys', new RestError(400, '23514'));
+    const res = await call(
+      'PUT',
+      `/bank/items/${created.itemId}`,
+      mcq({ stem: '[synthetic] Which word is a verb?', key: { optionId: 'b' } }),
+    );
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({ error: { code: 'bad_request' } });
+    expect(text).not.toContain('verb');
+    expect({ version: db.tables.item_versions, keys: db.tables.item_answer_keys }).toEqual(before);
+  });
+
+  it('sends content and key in one save_bank_draft call naming the draft version (R5-71 e)', async () => {
+    const { db, call } = setup();
+    const created = await jsonOf<{ itemId: string; itemVersionId: string }>(
+      await call('POST', '/bank/items', mcq()),
+    );
+    db.sentRpcs.length = 0;
+    db.calls.length = 0;
+    const res = await call('PUT', `/bank/items/${created.itemId}`, mcq({ key: { optionId: 'b' } }));
+    expect(res.status).toBe(200);
+    expect(directBankWrites(db)).toEqual([]);
+    expect(db.sentRpcs).toEqual([
+      {
+        fn: 'save_bank_draft',
+        args: {
+          p_org: ORG,
+          p_payload: {
+            mode: 'update',
+            itemId: created.itemId,
+            versionId: created.itemVersionId,
+            keyOptionId: 'b',
+            content: expect.objectContaining({ format: 'mcq', stem: mcq().stem }) as unknown,
+          },
+        },
+      },
+    ]);
+    expect(db.tables.item_answer_keys).toEqual([
+      expect.objectContaining({ item_version_id: created.itemVersionId, key: { option_id: 'b' } }),
+    ]);
+  });
+
+  it('a submit can never observe the new content with the old key: the edit is one write (Low 4)', async () => {
+    const { db, call } = setup();
+    const created = await jsonOf<{ itemId: string; itemVersionId: string }>(
+      await call('POST', '/bank/items', mcq()),
+    );
+    const stateOf = () => {
+      const v = (db.tables.item_versions ?? []).find((x) => x.id === created.itemVersionId);
+      const k = (db.tables.item_answer_keys ?? []).find(
+        (x) => x.item_version_id === created.itemVersionId,
+      );
+      return JSON.stringify([v?.options ?? null, k?.key ?? null]);
+    };
+    const oldState = stateOf();
+    // Every state between two database calls of the PUT is one a concurrent submit could read.
+    const seen = new Set<string>();
+    const rest = db.rest as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    for (const m of ['select', 'insert', 'update', 'remove', 'rpc']) {
+      const orig = rest[m];
+      if (orig === undefined) continue;
+      rest[m] = async (...a: unknown[]) => {
+        seen.add(stateOf());
+        const out = await orig.apply(db.rest, a);
+        seen.add(stateOf());
+        return out;
+      };
+    }
+    const res = await call(
+      'PUT',
+      `/bank/items/${created.itemId}`,
+      mcq({
+        options: [
+          { id: 'c', text: 'Chair' },
+          { id: 'd', text: 'Slowly' },
+        ],
+        key: { optionId: 'c' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const newState = stateOf();
+    expect(newState).not.toBe(oldState);
+    expect([...seen].sort()).toEqual([oldState, newState].sort());
+    const submit = await call('POST', `/bank/item-versions/${created.itemVersionId}/submit`);
+    expect(submit.status).toBe(200);
+  });
+
+  it('a null answer (the draft left draft or vanished meanwhile) is 409, or 404 when the caller cannot see it', async () => {
+    const { db, call } = setup();
+    const created = await jsonOf<{ itemId: string; itemVersionId: string }>(
+      await call('POST', '/bank/items', mcq()),
+    );
+    const real = db.functions.save_bank_draft;
+    if (real === undefined) throw new Error('save_bank_draft is modelled');
+    // A submit lands between the PUT's checks and its write.
+    db.functions.save_bank_draft = (args, d) => {
+      const v = (d.tables.item_versions ?? []).find((x) => x.id === created.itemVersionId);
+      if (v !== undefined) v.status = 'in_review';
+      return real(args, d);
+    };
+    const res = await call('PUT', `/bank/items/${created.itemId}`, mcq({ stem: '[synthetic] x' }));
+    expect(res.status).toBe(409);
+    expect(await codeOf(res)).toBe('conflict');
+    expect(db.tables.item_versions?.[0]?.stem).toBe(mcq().stem);
+    // The draft is deleted before the write: 404.
+    db.functions.save_bank_draft = real;
+    const other = await jsonOf<{ itemId: string; itemVersionId: string }>(
+      await call('POST', '/bank/items', mcq()),
+    );
+    db.functions.save_bank_draft = (args, d) => {
+      d.tables.item_versions = (d.tables.item_versions ?? []).filter(
+        (x) => x.id !== other.itemVersionId,
+      );
+      return real(args, d);
+    };
+    const gone = await call('PUT', `/bank/items/${other.itemId}`, mcq({ stem: '[synthetic] y' }));
+    expect(gone.status).toBe(404);
+    expect(await codeOf(gone)).toBe('not_found');
+  });
+
+  it('answers 503 when the edit answers anything but a version id or null', async () => {
+    const { db, call } = setup();
+    const created = await jsonOf<{ itemId: string }>(await call('POST', '/bank/items', mcq()));
+    db.functions.save_bank_draft = () => 'not-a-uuid';
+    const res = await call('PUT', `/bank/items/${created.itemId}`, mcq());
+    expect(res.status).toBe(503);
+    expect(await codeOf(res)).toBe('unavailable');
   });
 
   it('a submit or an approval the readiness guard refuses answers 422 draft_incomplete, never 404 (D5)', async () => {
@@ -377,7 +600,7 @@ describe('POST …/bank/items/:itemId/versions', () => {
   it('answers 409 conflict when the one-open-version index refuses the insert (23505, D4, R5-64 a)', async () => {
     const { db, call } = setup();
     const v1 = seedVersion(db);
-    db.failNext('insert', 'item_versions', new RestError(409, '23505'));
+    db.failInside('insert', 'item_versions', new RestError(409, '23505'));
     const res = await call('POST', `/bank/items/${String(v1.item_id)}/versions`);
     expect(res.status).toBe(409);
     expect(await codeOf(res)).toBe('conflict');
@@ -406,9 +629,54 @@ describe('POST …/bank/items/:itemId/versions', () => {
       expect(body).toMatchObject({ origin: 'human', status: 'draft', approvedBy: null });
       expect(ai.origin).toBe('ai_draft');
     }
-    for (const sent of db.sentInserts.filter((c) => c.table === 'item_versions')) {
-      for (const row of sent.body) expect(Object.keys(row)).not.toContain('origin');
+    expect(directBankWrites(db)).toEqual([]);
+    const saves = db.sentRpcs.filter((r) => r.fn === 'save_bank_draft');
+    expect(saves).toHaveLength(2);
+    for (const sent of saves) {
+      const payload = sent.args.p_payload as Record<string, unknown>;
+      expect(Object.keys(payload)).not.toContain('origin');
+      expect(Object.keys(payload.content as object)).not.toContain('origin');
     }
+  });
+
+  it('sends the copy and its key in one save_bank_draft call; a failed key leaves no version (R5-71 e)', async () => {
+    const { db, call } = setup();
+    const v1 = seedVersion(db);
+    db.failInside('insert', 'item_answer_keys', new RestError(503, null));
+    const failed = await call('POST', `/bank/items/${String(v1.item_id)}/versions`);
+    expect(failed.status).toBe(503);
+    expect(db.tables.item_versions).toHaveLength(1);
+    expect(db.tables.item_answer_keys).toHaveLength(1);
+    db.sentRpcs.length = 0;
+    db.calls.length = 0;
+    const res = await call('POST', `/bank/items/${String(v1.item_id)}/versions`);
+    expect(res.status).toBe(201);
+    expect(directBankWrites(db)).toEqual([]);
+    expect(db.sentRpcs).toEqual([
+      {
+        fn: 'save_bank_draft',
+        args: {
+          p_org: ORG,
+          p_payload: {
+            mode: 'clone',
+            itemId: v1.item_id,
+            keyOptionId: 'a',
+            content: expect.objectContaining({
+              format: 'mcq',
+              stem: v1.stem,
+              options: v1.options,
+              skill_key: 'verbal',
+              difficulty: 0.45,
+              is_parameterised: false,
+            }) as unknown,
+          },
+        },
+      },
+    ]);
+    const body = BankItemCreateResponse.parse(await res.json());
+    expect(db.tables.item_answer_keys).toContainEqual(
+      expect.objectContaining({ item_version_id: body.itemVersionId, key: { option_id: 'a' } }),
+    );
   });
 
   it('answers 409 while a version is still open, and for a library copy', async () => {

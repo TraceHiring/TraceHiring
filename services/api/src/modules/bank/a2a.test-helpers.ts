@@ -175,6 +175,131 @@ const poolCounts = (db: FakeDb): Row[] => {
   return [...out.values()];
 };
 
+/** A write inside a modelled function that a test makes fail (the function then rolls back as one transaction). */
+export type InsideOp = 'insert' | 'update' | 'remove';
+type InsideFailures = { op: InsideOp; table: string; err: RestError }[];
+
+const takeInside = (failures: InsideFailures, op: InsideOp, table: string): void => {
+  const i = failures.findIndex((f) => f.op === op && f.table === table);
+  if (i < 0) return;
+  const [f] = failures.splice(i, 1);
+  if (f !== undefined) throw f.err;
+};
+
+/** One BEFORE INSERT hook and the row it stores (an INSERT ... RETURNING inside a function). */
+const insertRow = (db: FakeDb, table: string, raw: Row): Row => {
+  const row = db.hooks[table]?.insert?.({ ...raw }, db) ?? { ...raw };
+  if (!(db.hooks[table]?.visible?.(row) ?? true)) throw new RestError(403, '42501');
+  tableOf(db, table).push(row);
+  return row;
+};
+
+const VERSION_CONTENT = [
+  'stem',
+  'options',
+  'rubric_version_id',
+  'skill_key',
+  'difficulty',
+  'is_parameterised',
+  'param_spec',
+  'media',
+  'content_sha256',
+] as const;
+
+/**
+ * `public.save_bank_draft(p_org, p_payload)` of M1-q (R5-71 e, R5-64 b, A2a re-review Low 4), as its SQL body: SECURITY
+ * INVOKER, so RLS and the guard hooks apply to each write; `update` edits the named draft (null when no draft the caller
+ * can edit matches) and replaces its key, `create` inserts the item and version 1, `clone` a new version; then the key
+ * (the item_answer_keys guard refuses a key on no current option with 23514). The fake's `rpc` restores every table
+ * when this throws, so a failed key leaves the content and the key as they were.
+ */
+const saveBankDraft =
+  (failures: InsideFailures): RpcFake =>
+  async (args, db) => {
+    const org = args.p_org;
+    const p = args.p_payload as Row | null;
+    const c = (p?.content ?? null) as Row | null;
+    const mode = p?.mode;
+    if (
+      typeof org !== 'string' ||
+      p === null ||
+      typeof p !== 'object' ||
+      c === null ||
+      typeof c !== 'object' ||
+      Array.isArray(c) ||
+      (mode !== 'create' && mode !== 'update' && mode !== 'clone')
+    ) {
+      throw new RestError(400, '22023');
+    }
+    const key = (p.keyOptionId ?? null) as string | null;
+    const nul = (v: unknown) => v ?? null;
+    let version: Row;
+    if (mode === 'update') {
+      const versions = tableOf(db, 'item_versions');
+      const hooks = db.hooks.item_versions;
+      const old = versions.find(
+        (v) =>
+          v.org_id === org &&
+          v.id === p.versionId &&
+          v.item_id === p.itemId &&
+          (v.section_id ?? null) === null &&
+          v.status === 'draft' &&
+          (hooks?.visible?.(v) ?? true) &&
+          (hooks?.updatable?.(v) ?? true),
+      );
+      if (old === undefined) return null;
+      takeInside(failures, 'update', 'item_versions');
+      const merged: Row = { ...old };
+      for (const col of VERSION_CONTENT) merged[col] = nul(c[col]);
+      version = (await hooks?.update?.(old, merged, db)) ?? merged;
+      versions[versions.indexOf(old)] = version;
+      takeInside(failures, 'remove', 'item_answer_keys');
+      const keys = tableOf(db, 'item_answer_keys');
+      const gone = keys.filter((k) => k.org_id === org && k.item_version_id === version.id);
+      for (const k of gone) db.hooks.item_answer_keys?.remove?.(k, db);
+      db.tables.item_answer_keys = keys.filter((k) => !gone.includes(k));
+    } else {
+      let itemId = p.itemId;
+      if (mode === 'create') {
+        takeInside(failures, 'insert', 'items');
+        itemId = insertRow(db, 'items', {
+          org_id: org,
+          workspace_id: p.workspaceId,
+          format: c.format,
+          skill_key: c.skill_key,
+        }).id;
+      }
+      takeInside(failures, 'insert', 'item_versions');
+      version = insertRow(db, 'item_versions', {
+        org_id: org,
+        item_id: itemId,
+        format: c.format,
+        stem: c.stem,
+        options: nul(c.options),
+        rubric_version_id: nul(c.rubric_version_id),
+        skill_key: c.skill_key,
+        difficulty: c.difficulty,
+        is_parameterised: c.is_parameterised ?? false,
+        param_spec: nul(c.param_spec),
+        media: nul(c.media),
+        content_sha256: c.content_sha256,
+      });
+    }
+    if (key !== null) {
+      takeInside(failures, 'insert', 'item_answer_keys');
+      const options = (version.options as { id: string }[] | null) ?? [];
+      // The item_answer_keys guard (M1-a): the key names one of the version's current options.
+      if (!options.some((o) => o.id === key)) throw new RestError(400, '23514');
+      insertRow(db, 'item_answer_keys', {
+        org_id: org,
+        item_version_id: version.id,
+        format: 'mcq',
+        key: { option_id: key },
+      });
+    }
+    return version.id;
+  };
+
 export interface A2aDbOptions {
   /** The caller's roles in ORG (default recruiter). */
   roles?: string[];
@@ -185,7 +310,8 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
   const ids = idMaker('f1');
   // The acting user (auth.uid() of the guards); the harness sets it from its caller.
   let actor = USER;
-  const functions: Record<string, RpcFake> = {};
+  const inside: InsideFailures = [];
+  const functions: Record<string, RpcFake> = { save_bank_draft: saveBankDraft(inside) };
   const db = fakeDb(
     {
       memberships: [
@@ -466,10 +592,22 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
     if (rest.or !== undefined) throw new Error('fake rest: and with or');
     return select<T>(table, { ...rest, or: `(and${and})` });
   };
+  // Every function call as sent (a test checks the payload of `save_bank_draft`: what the api never sends).
+  const sentRpcs: { fn: string; args: Row }[] = [];
+  const rpc = db.rest.rpc?.bind(db.rest);
+  db.rest.rpc = <T>(fn: string, args: Readonly<Record<string, unknown>>): Promise<T> => {
+    sentRpcs.push({ fn, args: structuredClone(args as Row) });
+    if (rpc === undefined) throw new Error('fake rest: no rpc');
+    return rpc<T>(fn, args);
+  };
+  /** Makes the next write of `op` on `table` inside a modelled function fail (the whole function rolls back). */
+  const failInside = (op: InsideOp, table: string, err: RestError): void => {
+    inside.push({ op, table, err });
+  };
   const actAs = (userId: string): void => {
     actor = userId;
   };
-  return Object.assign(db, { sentInserts, sentUpdates, sentSelects, actAs });
+  return Object.assign(db, { sentInserts, sentUpdates, sentSelects, sentRpcs, failInside, actAs });
 };
 
 export type A2aDb = ReturnType<typeof a2aDb>;
