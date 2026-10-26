@@ -311,7 +311,12 @@ const answerItemOf = (content: SlotContent): AnswerItem => ({
 interface StreamRow {
   hw: number;
   openedAt: number;
+  /** Refused seqs within `REFUSED_WINDOW` of `hw`, listed again when a lost ack makes the client resend (R5-67). */
+  refused?: number[];
 }
+
+/** One batch (`EventBatchReq` holds ≤ 100 events): a resend's seqs lie within this many of the mark (R5-67). */
+const REFUSED_WINDOW = 100;
 
 interface RateWindow {
   start: number;
@@ -1018,7 +1023,10 @@ export class SessionCore implements SessionApi {
     const nav = meta.pkgV === 2 ? this.#navigator(meta, now) : null;
     const items = nav === null ? this.#items(this.#pkg()) : null;
     const served = this.#served();
-    const refusedSeqs: number[] = [];
+    // Every refused seq of this batch once, newly stored or resent after a lost ack (R5-67).
+    const refusedSet = new Set<number>();
+    const earlier = new Set(stream.refused ?? []);
+    const newlyRefused: number[] = [];
     const answers = new Map<number, AnswerState | undefined>();
     const answerOf = (position: number): AnswerState | undefined => {
       if (!answers.has(position)) answers.set(position, this.#kv.get(K.answer(position)));
@@ -1036,7 +1044,10 @@ export class SessionCore implements SessionApi {
     );
     let addedBytes = 0;
     for (const event of batch.events) {
-      if (event.seq <= hw) continue;
+      if (event.seq <= hw) {
+        if (earlier.has(event.seq)) refusedSet.add(event.seq);
+        continue;
+      }
       if (event.seq !== hw + 1) {
         gap = true;
         break;
@@ -1072,7 +1083,9 @@ export class SessionCore implements SessionApi {
         if (item === 'refused') {
           // Acknowledged and recorded, never applied (R5-20, R5-59 b).
           refused = true;
-          refusedSeqs.push(seq);
+          refusedSet.add(seq);
+          newlyRefused.push(seq);
+          earlier.add(seq);
         } else {
           const state = applyAnswer(answerOf(body.item), body, item, next);
           if (state === null) throw new BatchRejected();
@@ -1115,7 +1128,14 @@ export class SessionCore implements SessionApi {
       if (state !== undefined) this.#kv.put(K.answer(position), state);
     }
     if (hw !== stream.hw) {
-      this.#kv.put<StreamRow>(K.stream(batch.streamId), { ...stream, hw });
+      const refused = [...(stream.refused ?? []), ...newlyRefused].filter(
+        (seq) => seq > hw - REFUSED_WINDOW,
+      );
+      this.#kv.put<StreamRow>(K.stream(batch.streamId), {
+        openedAt: stream.openedAt,
+        hw,
+        ...(refused.length === 0 ? {} : { refused }),
+      });
       const next: Meta = {
         ...meta,
         gseqHw: gseq,
@@ -1128,6 +1148,7 @@ export class SessionCore implements SessionApi {
       // A finish in this batch may have opened the next section: drawn now, before its first serve.
       if (nav !== null) this.#sync(next, now);
     }
+    const refusedSeqs = [...refusedSet];
     if (gap) {
       // The part before the gap is kept: its refusals are reported as an ack would (R5-67).
       return refuse('out_of_order', {
