@@ -54,6 +54,7 @@ const viewOf = (
       id_verification: 'always',
     },
     candidateSummary: renderCandidateSummary(values, INTEGRITY_CATALOG_VERSION).lines,
+    stored: true,
   });
 
 describe('presets (AT-M1-15)', () => {

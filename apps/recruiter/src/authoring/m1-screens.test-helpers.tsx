@@ -134,6 +134,7 @@ const integrityView = (admin: 'typing_provenance' | null) =>
     },
     candidateSummary: renderCandidateSummary(INTEGRITY_PRESETS.standard, INTEGRITY_CATALOG_VERSION)
       .lines,
+    stored: true,
   });
 
 const templateProps = {

@@ -766,6 +766,8 @@ export const IntegritySettingsView = z
       },
     ),
     candidateSummary: z.array(z.string().min(1).max(300)).max(20),
+    /** True iff the version has stored settings (else `values` are D1's equivalents); R5-70 d. */
+    stored: z.boolean(),
   })
   .superRefine((view, ctx) => {
     for (const key of SETTING_KEYS) {
