@@ -3,9 +3,9 @@
 // consent call succeeded), no third-party telemetry and no error reporting (rule 8, build-notes Q17). A stored
 // session token is attached once on load (a reload restores answers and the timer, AT-D36); the guard keeps a React
 // StrictMode double effect from attaching twice (two attaches would supersede each other).
-import type { Receipt, SessionView } from '@trace/shared/contracts/candidate';
+import type { Receipt } from '@trace/shared/contracts/candidate';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
-import { createApi, isOffline } from './api';
+import { createApi, isOffline, type AnyView } from './api';
 import styles from './App.module.css';
 import { EMPTY_BOOT, type Boot } from './boot';
 import { COPY } from './copy';
@@ -104,7 +104,7 @@ export function App({ boot = EMPTY_BOOT }: { boot?: Boot }) {
   const toStepError = useCallback(() => dispatch({ type: 'error', why: 'step' }), []);
   const toReceipt = useCallback((receipt: Receipt) => dispatch({ type: 'receipt', receipt }), []);
   const toSession = useCallback(
-    (sessionToken: string, view: SessionView, offsetMs: number) =>
+    (sessionToken: string, view: AnyView, offsetMs: number) =>
       dispatch({ type: 'session', sessionToken, view, offsetMs }),
     [],
   );

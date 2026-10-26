@@ -1,15 +1,15 @@
 // The session token, the stream id and a view snapshot live in sessionStorage (specs/d1-demo-slice.md §4.7), so a
 // reload in the same tab can `attach` (RT-4, AT-D36). The link token and the lobby token never go here (memory
 // only). Every access is wrapped: a browser that refuses storage simply loses the reload path.
-import type { SessionView } from '@trace/shared/contracts/candidate';
-import { isSessionView } from './api';
+// M1: a v1 or a v2 view (R5-9); both are stored without their answers.
+import { isAnyView, type AnyView } from './api';
 
 export const SESSION_KEY = 'trace.candidate.session';
 
 export interface StoredSession {
   sessionToken: string;
   streamId: string;
-  view: SessionView;
+  view: AnyView;
 }
 
 const JWS = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -28,7 +28,7 @@ const storage = (): Storage | null => {
  */
 export const saveSession = (session: StoredSession): void => {
   try {
-    const view: SessionView = { ...session.view, answers: [] };
+    const view: AnyView = { ...session.view, answers: [] };
     storage()?.setItem(SESSION_KEY, JSON.stringify({ ...session, view }));
   } catch {
     // storage full or refused: the reload path is lost, nothing else
@@ -44,7 +44,7 @@ export const loadSession = (): StoredSession | null => {
     const { sessionToken, streamId, view } = value as Record<string, unknown>;
     if (typeof sessionToken !== 'string' || sessionToken.length > 2048 || !JWS.test(sessionToken))
       return null;
-    if (typeof streamId !== 'string' || !isSessionView(view)) return null;
+    if (typeof streamId !== 'string' || !isAnyView(view)) return null;
     return { sessionToken, streamId, view };
   } catch {
     return null;
