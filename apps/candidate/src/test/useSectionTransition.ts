@@ -4,7 +4,10 @@
 // states and deadlines) and continues on the new stream. The edge pushes no transition, so this is the only way the
 // screen learns that the next section opened.
 //   - The flush is retried while offline (the closing section is already read-only); the old stream is stopped only
-//     once everything queued is acknowledged, because `attach` supersedes it (its next POST would be 401).
+//     once everything queued before is acknowledged, because `attach` supersedes it (its next POST would be 401).
+//     After three rounds the flush stops waiting for what is still being raised (heartbeats, signals), but never drops
+//     a signal (R5-68 b, SR-4): the outbox hands its unsent signals and `section.finish` over, each with the moment it
+//     was raised, and the screen sends them first on the new stream.
 //   - An attach that fails for the network, a 503 or a 429 is retried (1, 2, 4, 8, then every 10 s; Retry-After
 //     wins); `superseded` and an unusable token end the screen; a finished session shows its receipt.
 //   - It never runs twice at once, and never after the test began submitting (a submit on the old stream would
@@ -14,7 +17,7 @@ import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { AnyView, CandidateApi } from '../api';
 import { offsetOf } from '../flow';
 import { saveSession } from '../session-store';
-import type { Outbox } from './outbox';
+import type { Held, Outbox } from './outbox';
 
 export const TRANSITION = {
   flushRetryMs: 2_000,
@@ -31,6 +34,8 @@ export interface TransitionDeps {
   mayRun: () => boolean;
   /** A new view on a new stream, with the server-clock offset measured on this attach. */
   apply(view: AnyView, offsetMs: number): void;
+  /** Events the stopped stream handed over, to send first on the next one (R5-68 b). */
+  hold(events: Held[]): void;
   receipt(receipt: Receipt): void;
   end(why: 'superseded' | 'invalid'): void;
 }
@@ -90,8 +95,10 @@ export const useSectionTransition = (deps: TransitionDeps) => {
     try {
       if (!(await flushAll())) return;
       const d = depsRef.current;
-      d.outboxRef.current?.stop();
+      const outbox = d.outboxRef.current;
+      // From now on a raised signal waits for the next stream; the old one hands over what it did not deliver.
       d.outboxRef.current = null;
+      if (outbox !== null) depsRef.current.hold(await outbox.handOver());
       await attachLoop();
     } finally {
       running.current = false;

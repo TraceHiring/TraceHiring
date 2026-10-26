@@ -16,6 +16,9 @@
 // edits of that item queued behind it are dropped (they were built on the refused text). `section.finish` is an
 // event like a signal: compaction and a refused batch keep it. `enqueuedSeq` is the `afterSeq` of a v2 item GET.
 // R5-67, R5-68 e: a 409 `out_of_order` body's `refusedSeqs` and an ack after a resend are undone the same way.
+// R5-68 b (SR-4): at a section transition `handOver` lets the batch in flight settle, stops the stream and returns its
+// unacknowledged signals and `section.finish` with the monotonic time each was raised; the next stream's `hold` sends
+// them first. Streams of one screen share an origin (`originMono`), so a held event keeps the `t` it was raised at.
 // Events carry metadata only; nothing here logs.
 import type { ClientEvent, ClientSignal, SessionState } from '@trace/shared/contracts/candidate';
 import { isOffline, type ApiFailure, type CandidateApi } from '../api';
@@ -43,7 +46,11 @@ export type SignalBody = DistributiveOmit<ClientSignal, 'seq' | 't' | 'kind'>;
 
 interface Entry {
   body: Body;
-  /** Client offset (ms since the stream opened) stamped when queued. */
+  /** The signal as the signals module reported it (signal entries only), for a hand-over. */
+  signal?: SignalBody;
+  /** Monotonic time the event was raised (for a held event, earlier than the time it was queued). */
+  raised: number;
+  /** Client offset (ms since the origin, by default the stream's opening) at `raised`. */
   t: number;
   /** Monotonic time it was queued. */
   at: number;
@@ -62,6 +69,11 @@ export interface AckInfo {
 
 export type EndReason = 'closed' | 'superseded' | 'invalid';
 
+/** An event a stopped stream hands to the next one (R5-68 b), with the monotonic time it was raised. */
+export type Held =
+  | { kind: 'signal'; signal: SignalBody; raisedAt: number }
+  | { kind: 'section.finish'; sectionId: string; raisedAt: number };
+
 export interface OutboxEvents {
   status(status: 'online' | 'offline'): void;
   /** The edge refused an edit: show this last acknowledged value again. */
@@ -79,6 +91,11 @@ export interface OutboxDeps {
   /** The answers the edge holds at the stream's start (the view). */
   texts: ReadonlyMap<number, string>;
   choices: ReadonlyMap<number, string | null>;
+  /**
+   * Monotonic ms every `t` counts from (default: when this outbox is created). The test screen passes one origin for
+   * all its streams, so an event held across a transition keeps its `t` (R5-68 b).
+   */
+  originMono?: number;
   /** Monotonic ms (performance.now): event `t` values and the outbox's own timing. */
   monoNow?: () => number;
   /** Wall-clock ms (Date.now): only for the server-clock midpoint. */
@@ -93,6 +110,14 @@ export interface Outbox {
   signal(signal: SignalBody): void;
   /** Queues `section.finish` (v2 sessions): the candidate leaves the section for good (R5-59 e). */
   finish(sectionId: string): void;
+  /** Queues events handed over by the previous stream, each with the `t` of the moment it was raised (R5-68 b). */
+  hold(events: readonly Held[]): void;
+  /**
+   * Ends this stream for a transition (R5-68 b): sends nothing new, lets the batch in flight settle, stops, and returns
+   * every signal and `section.finish` not acknowledged, in order (a batch that failed in flight is handed over too:
+   * it may be lost, and a signal is never dropped).
+   */
+  handOver(): Promise<Held[]>;
   /** Sends now; true once everything queued before the call is acknowledged, false if offline or ended. */
   flush(): Promise<boolean>;
   ackedSeq(): number;
@@ -126,7 +151,7 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   const mono = deps.monoNow ?? (() => performance.now());
   const wall = deps.wallNow ?? (() => Date.now());
   const { on } = deps;
-  const opened = mono();
+  const opened = deps.originMono ?? mono();
   const envelope = bytesOf({ streamId: deps.streamId, events: [] });
 
   const confirmed = new Map(deps.texts);
@@ -139,6 +164,10 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   let textCount = 0;
   let inFlight = false;
   let stopped = false;
+  /** Set by `handOver`: no new batch starts. */
+  let closing = false;
+  /** Called once the batch in flight has settled. */
+  let idle: (() => void)[] = [];
   let offline = false;
   let failures = 0;
   let notBefore = -Infinity;
@@ -146,9 +175,16 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   let retry: ReturnType<typeof setTimeout> | undefined;
   let waiters: { until: number; resolve: (ok: boolean) => void }[] = [];
 
-  const elapsed = () => Math.max(0, Math.round(mono() - opened));
-  const enqueue = (body: Body) => {
-    if (!stopped) queue.push({ body, t: elapsed(), at: mono() });
+  const tAt = (raised: number) => Math.max(0, Math.round(raised - opened));
+  const enqueue = (body: Body, raised = mono(), signal?: SignalBody) => {
+    if (stopped) return;
+    queue.push({
+      body,
+      raised,
+      t: tAt(raised),
+      at: mono(),
+      ...(signal === undefined ? {} : { signal }),
+    });
   };
   const wire = (e: Entry, seq: number): ClientEvent => ({ seq, t: e.t, ...e.body }) as ClientEvent;
 
@@ -345,7 +381,7 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   };
 
   const pump = async (): Promise<void> => {
-    if (stopped || inFlight || queue.length === 0) return;
+    if (stopped || closing || inFlight || queue.length === 0) return;
     const now = mono();
     if (now < notBefore) return later(notBefore - now);
     if (now - lastSentAt < OUTBOX.minGapMs) return later(OUTBOX.minGapMs - (now - lastSentAt));
@@ -359,7 +395,19 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
       events: batch.map((e) => wire(e, e.seq ?? 0)),
     });
     inFlight = false;
-    if (stopped) return;
+    try {
+      if (!stopped) settle(res, batch, sentAt);
+    } finally {
+      for (const wake of idle.splice(0)) wake();
+    }
+  };
+
+  /** One answer to a batch: acknowledge, resend, back off, refuse or end. */
+  const settle = (
+    res: Awaited<ReturnType<OutboxDeps['api']['events']>>,
+    batch: Entry[],
+    sentAt: number,
+  ): void => {
     if (res.ok) {
       const receivedAt = wall();
       failures = 0;
@@ -434,13 +482,34 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
       currentChoice.set(item, option);
     },
     signal(signal) {
-      enqueue({ kind: 'signal', ...signal } as Body);
+      enqueue({ kind: 'signal', ...signal } as Body, mono(), signal);
     },
     finish(sectionId) {
       enqueue({ kind: 'section.finish', sectionId });
     },
+    hold(events) {
+      for (const e of events) {
+        if (e.kind === 'signal')
+          enqueue({ kind: 'signal', ...e.signal } as Body, e.raisedAt, e.signal);
+        else enqueue({ kind: 'section.finish', sectionId: e.sectionId }, e.raisedAt);
+      }
+    },
+    async handOver() {
+      closing = true;
+      if (retry !== undefined) clearTimeout(retry);
+      if (inFlight) await new Promise<void>((resolve) => idle.push(resolve));
+      const held: Held[] = [];
+      for (const e of queue) {
+        if (e.signal !== undefined)
+          held.push({ kind: 'signal', signal: e.signal, raisedAt: e.raised });
+        else if (e.body.kind === 'section.finish')
+          held.push({ kind: 'section.finish', sectionId: e.body.sectionId, raisedAt: e.raised });
+      }
+      stop();
+      return held;
+    },
     flush() {
-      if (stopped) return Promise.resolve(false);
+      if (stopped || closing) return Promise.resolve(false);
       if (queue.length === 0) return Promise.resolve(true);
       const promise = new Promise<boolean>((resolve) => {
         waiters.push({ until: mono(), resolve });

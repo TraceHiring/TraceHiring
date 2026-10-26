@@ -16,7 +16,7 @@ import { saveSession } from '../session-store';
 import { ErrorSummary, Status, StepHeading, ui } from '../ui';
 import { remainingMs } from './clock';
 import { DEFAULT_MAX_CHARS, ItemPane, type Missing } from './ItemPane';
-import { createOutbox, type EndReason, type Outbox, type SignalBody } from './outbox';
+import { createOutbox, type EndReason, type Held, type Outbox } from './outbox';
 import { SectionBar } from './SectionBar';
 import {
   canOpen,
@@ -103,8 +103,13 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
 
   const outboxRef = useRef<Outbox | null>(null);
   const signalsRef = useRef<Signals | null>(null);
-  /** Signals raised while no stream is open (between two streams); sent on the next one. */
-  const waitingSignals = useRef<SignalBody[]>([]);
+  /**
+   * Signals raised while no stream is open (between two streams), and what a stopped stream handed over (R5-68 b):
+   * sent first on the next one, each with the `t` of the moment it was raised.
+   */
+  const waitingSignals = useRef<Held[]>([]);
+  /** The monotonic origin of every stream's `t` on this screen, so a held event keeps its `t` (R5-68 b). */
+  const originMono = useRef<number | null>(null);
   const currentRef = useRef<number | null>(current);
   const pasteAllowedRef = useRef(false);
   const requested = useRef(new Set<number>());
@@ -171,6 +176,9 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
     mayRun: () => alive.current && !done.current && !finishing.current && !streamOver.current,
     apply: applyView,
     receipt: finish,
+    hold: (held) => {
+      waitingSignals.current = [...held, ...waitingSignals.current];
+    },
     end: (why) => onEnd(why),
   });
 
@@ -189,8 +197,9 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
       pasteAllowed: () => pasteAllowedRef.current,
       emit: (signal) => {
         const outbox = outboxRef.current;
-        if (outbox === null) waitingSignals.current.push(signal);
-        else outbox.signal(signal);
+        if (outbox === null) {
+          waitingSignals.current.push({ kind: 'signal', signal, raisedAt: performance.now() });
+        } else outbox.signal(signal);
       },
     });
     signalsRef.current = signals;
@@ -207,11 +216,13 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
   useEffect(() => {
     alive.current = true;
     streamOver.current = false;
+    originMono.current ??= performance.now();
     const outbox = createOutbox({
       api,
       sessionToken,
       streamId: view.streamId,
       heartbeatSeconds: view.heartbeatSeconds,
+      originMono: originMono.current,
       texts: toMap(textsOf(view)),
       choices: toMap(choicesOf(view)),
       on: {
@@ -228,7 +239,7 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
         end: (reason) => streamEnded(reason),
       },
     });
-    for (const signal of waitingSignals.current.splice(0)) outbox.signal(signal);
+    outbox.hold(waitingSignals.current.splice(0));
     outboxRef.current = outbox;
     return () => {
       alive.current = false;
