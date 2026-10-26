@@ -468,7 +468,7 @@ describe('CandidateError codes (§4.2)', () => {
       expect(ok(CandidateErrorBody, { error: code }), code).toBe(true);
     }
   });
-  it('out_of_order carries ackSeq = hw (§4.4) and nothing else', () => {
+  it('out_of_order carries ackSeq = hw (§4.4) and nothing else but refusedSeqs (R5-67)', () => {
     expect(OutOfOrderBody.parse({ error: 'out_of_order', ackSeq: 4 })).toEqual({
       error: 'out_of_order',
       ackSeq: 4,
@@ -479,7 +479,28 @@ describe('CandidateError codes (§4.2)', () => {
     expect(ok(OutOfOrderBody, { error: 'out_of_order', ackSeq: 1.5 })).toBe(false);
     expect(ok(OutOfOrderBody, { error: 'closed', ackSeq: 4 })).toBe(false);
     expect(ok(OutOfOrderBody, { error: 'out_of_order', ackSeq: 4, hw: 4 })).toBe(false);
-    expectTypeOf<OutOfOrderBody>().toEqualTypeOf<{ error: 'out_of_order'; ackSeq: number }>();
+    expectTypeOf<OutOfOrderBody>().toEqualTypeOf<{
+      error: 'out_of_order';
+      ackSeq: number;
+      refusedSeqs?: number[] | undefined;
+    }>();
+  });
+  it('out_of_order lists the refusedSeqs of the part of the batch it kept, as the ack does (R5-67)', () => {
+    const body = { error: 'out_of_order', ackSeq: 12 };
+    const refused = { ...body, refusedSeqs: [11, 12] };
+    expect(OutOfOrderBody.parse(refused)).toEqual(refused);
+    expect(ok(OutOfOrderBody, { ...body, refusedSeqs: [13] })).toBe(false); // beyond the acknowledged mark
+    expect(ok(OutOfOrderBody, { ...body, refusedSeqs: [0] })).toBe(false);
+    expect(ok(OutOfOrderBody, { ...body, refusedSeqs: [11, 11] })).toBe(false);
+    expect(ok(OutOfOrderBody, { ...body, refusedSeqs: [1.5] })).toBe(false);
+    const many = {
+      ...body,
+      ackSeq: 500,
+      refusedSeqs: Array.from({ length: 101 }, (_v, i) => i + 1),
+    };
+    expect(ok(OutOfOrderBody, many)).toBe(false);
+    // Every other code stays a strict {error} body.
+    expect(ok(CandidateErrorBody, { error: 'closed', refusedSeqs: [1] })).toBe(false);
   });
 });
 
