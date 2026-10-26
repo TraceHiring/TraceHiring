@@ -1,0 +1,200 @@
+// The draft save guards of spec m1 R5-70 a-c, on both draft PUTs (D1's `PUT …/tests/:testId` and `PUT …/draft`):
+// (a) an optional expected version `?version=<testVersionId>`: present and not the open draft's id → 409 conflict and
+// nothing written (a stale tab never overwrites a newer draft; D1's E2E support omits it and keeps working); (b) D1's
+// PUT keeps D1's shape: 409 when the stored draft has a section D1's editor cannot express; (c) admin locks placed
+// after settings were stored (E16): the save compares the paste rule with the locked settings and stores them, so a
+// later lock never makes the draft unsavable. Runs on the fake PostgREST of tests.test-helpers.ts.
+import { TestDraftView } from '@trace/shared/contracts/m1';
+import { describe, expect, it } from 'vitest';
+import {
+  ORG,
+  STANDARD,
+  authoringDb,
+  draftBody,
+  rowsOf,
+  saveBody,
+  seedPool,
+  setSettings,
+  testsApp,
+} from './tests.test-helpers.js';
+
+const POOL = '90000000-0000-4000-8000-000000000001';
+const OTHER = 'e1000000-0000-4000-8000-0000000000aa';
+
+const setup = async () => {
+  const db = authoringDb();
+  const { call } = testsApp(db);
+  const created = TestDraftView.parse(
+    await (await call('POST', `/v1/orgs/${ORG}/tests`, { name: 'Synthetic Test' })).json(),
+  );
+  const d1Path = `/v1/orgs/${ORG}/tests/${created.test.id}`;
+  return { db, call, d1Path, v2Path: `${d1Path}/draft`, versionId: created.version.id };
+};
+const codeOf = async (res: Response) =>
+  ((await res.json()) as { error: { code: string } }).error.code;
+
+describe('the expected version (R5-70 a)', () => {
+  it('both PUTs save when ?version names the open draft, and when it is absent (D1 E2E support)', async () => {
+    const s = await setup();
+    expect((await s.call('PUT', `${s.d1Path}?version=${s.versionId}`, draftBody())).status).toBe(
+      200,
+    );
+    expect((await s.call('PUT', s.d1Path, draftBody())).status).toBe(200);
+    expect((await s.call('PUT', `${s.v2Path}?version=${s.versionId}`, saveBody())).status).toBe(
+      200,
+    );
+    expect(
+      (await s.call('PUT', `${s.v2Path}?version=${s.versionId.toUpperCase()}`, saveBody())).status,
+    ).toBe(200);
+    expect((await s.call('PUT', s.v2Path, saveBody())).status).toBe(200);
+  });
+
+  it.each([
+    ['d1', draftBody],
+    ['v2', saveBody],
+  ] as const)(
+    '%s: another version id is 409 conflict and nothing is written',
+    async (which, body) => {
+      const s = await setup();
+      const path = which === 'd1' ? s.d1Path : s.v2Path;
+      const saves = s.db.savePayloads.length;
+      for (const version of [OTHER, '', 'not-a-uuid']) {
+        const res = await s.call('PUT', `${path}?version=${version}`, body({ name: 'Stale tab' }));
+        expect(res.status, version).toBe(409);
+        expect(await codeOf(res)).toBe('conflict');
+      }
+      expect(s.db.savePayloads).toHaveLength(saves);
+      expect(rowsOf(s.db, 'tests')[0]?.name).toBe('Synthetic Test');
+    },
+  );
+});
+
+describe("D1's PUT keeps D1's shape (R5-70 b)", () => {
+  it('refuses with 409 a stored draft holding a section D1 cannot express, and writes nothing', async () => {
+    const shapes = [
+      {
+        mode: 'pool' as const,
+        format: 'mcq' as const,
+        name: 'Drawn',
+        weight: 10,
+        items: [],
+        poolId: POOL,
+        drawCount: 2,
+        shuffleItems: false,
+        shuffleOptions: false,
+        navigation: 'free' as const,
+      },
+      { ...saveBody().sections[0]!, shuffleItems: true },
+      { ...saveBody().sections[0]!, shuffleOptions: true },
+      { ...saveBody().sections[0]!, timeLimitSeconds: 600 },
+      { ...saveBody().sections[0]!, navigation: 'forward_only' as const },
+    ].map((x) => [x]);
+    // Two multiple-choice sections.
+    shapes.push([saveBody().sections[0]!, { ...saveBody().sections[0]!, name: 'More choice' }]);
+    for (const extra of shapes) {
+      const s = await setup();
+      seedPool(s.db, { poolId: POOL, format: 'mcq', count: 3, prefix: 'b7' });
+      const body = saveBody({ sections: [saveBody().sections[1]!, ...extra] });
+      expect((await s.call('PUT', s.v2Path, body)).status).toBe(200);
+      const saves = s.db.savePayloads.length;
+      const res = await s.call('PUT', s.d1Path, draftBody());
+      expect(res.status, JSON.stringify(extra)).toBe(409);
+      expect(await codeOf(res)).toBe('conflict');
+      expect(s.db.savePayloads).toHaveLength(saves);
+    }
+  });
+
+  it('a pool section with a blueprint is refused too', async () => {
+    const s = await setup();
+    seedPool(s.db, { poolId: POOL, format: 'mcq', count: 3, prefix: 'b8' });
+    const body = saveBody({
+      sections: [
+        {
+          mode: 'pool',
+          format: 'mcq',
+          name: 'Drawn',
+          weight: 10,
+          items: [],
+          poolId: POOL,
+          drawCount: 2,
+          shuffleItems: false,
+          shuffleOptions: false,
+          navigation: 'free',
+          blueprint: { strata: [{ skillKey: 'verbal', difficultyBand: 2, count: 2 }] },
+        },
+      ],
+    });
+    expect((await s.call('PUT', s.v2Path, body)).status).toBe(200);
+    expect((await s.call('PUT', s.d1Path, draftBody())).status).toBe(409);
+  });
+
+  it('accepts a D1-shaped draft, with or without stored settings', async () => {
+    const s = await setup();
+    expect((await s.call('PUT', s.d1Path, draftBody())).status).toBe(200);
+    expect((await s.call('PUT', s.d1Path, draftBody())).status).toBe(200);
+    setSettings(s.db, s.versionId, { ...STANDARD }, 'standard');
+    // The settings give each section its default navigation and the written one the paste rule (R5-63 b).
+    expect((await s.call('PUT', s.v2Path, saveBody())).status).toBe(200);
+    const res = await s.call('PUT', s.d1Path, draftBody());
+    expect(res.status).toBe(200);
+    const view = TestDraftView.parse(await res.json());
+    expect(view.version.sections.map((x) => [x.navigation, x.pasteRule])).toEqual([
+      ['free', undefined],
+      ['forward_only', 'allowed_logged'],
+    ]);
+  });
+});
+
+describe('admin locks placed after settings were stored (R5-70 c, E16)', () => {
+  const lock = (setting_key: string, locked_value: string) => ({
+    id: '0c000000-0000-4000-8000-000000000001',
+    org_id: ORG,
+    setting_key,
+    locked_value,
+    locked_by: null,
+    locked_at: '2026-10-17T09:00:00.000+00:00',
+  });
+
+  it('a save with the locked paste rule succeeds and stores the locked settings (custom)', async () => {
+    const s = await setup();
+    setSettings(s.db, s.versionId, { ...STANDARD }, 'standard');
+    rowsOf(s.db, 'org_integrity_locks').push(lock('paste_written', 'blocked'));
+    const body = saveBody();
+    body.sections[1] = { ...body.sections[1]!, pasteRule: 'blocked' };
+    const res = await s.call('PUT', `${s.v2Path}?version=${s.versionId}`, body);
+    expect(res.status).toBe(200);
+    const view = TestDraftView.parse(await res.json());
+    expect(view.version.sections[1]?.pasteRule).toBe('blocked');
+    const ruleset = rowsOf(s.db, 'ruleset_versions')[0];
+    expect(ruleset?.settings).toEqual({ ...STANDARD, paste_written: 'blocked' });
+    expect(ruleset?.preset_key).toBeNull();
+  });
+
+  it("D1's PUT on a locked draft stores the locked settings too", async () => {
+    const s = await setup();
+    setSettings(s.db, s.versionId, { ...STANDARD }, 'standard');
+    rowsOf(s.db, 'org_integrity_locks').push(lock('paste_written', 'blocked'));
+    const res = await s.call('PUT', s.d1Path, draftBody());
+    expect(res.status).toBe(200);
+    expect(TestDraftView.parse(await res.json()).version.sections[1]?.pasteRule).toBe('blocked');
+    expect(rowsOf(s.db, 'ruleset_versions')[0]?.settings).toMatchObject({
+      paste_written: 'blocked',
+    });
+  });
+
+  it('the old paste rule after the lock is 400; a lock that moves nothing writes no settings', async () => {
+    const s = await setup();
+    setSettings(s.db, s.versionId, { ...STANDARD }, 'standard');
+    rowsOf(s.db, 'org_integrity_locks').push(lock('paste_written', 'blocked'));
+    const stale = saveBody();
+    stale.sections[1] = { ...stale.sections[1]!, pasteRule: 'allowed_logged' };
+    expect((await s.call('PUT', s.v2Path, stale)).status).toBe(400);
+
+    const t = await setup();
+    setSettings(t.db, t.versionId, { ...STANDARD }, 'standard');
+    rowsOf(t.db, 'org_integrity_locks').push(lock('paste_written', 'allowed_logged'));
+    expect((await t.call('PUT', t.v2Path, saveBody())).status).toBe(200);
+    expect(t.db.savePayloads.at(-1)).not.toHaveProperty('settings');
+    expect(rowsOf(t.db, 'ruleset_versions')[0]?.preset_key).toBe('standard');
+  });
+});

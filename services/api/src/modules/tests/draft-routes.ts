@@ -20,6 +20,7 @@ import {
   loadContent,
   parseRows,
 } from './authoring.js';
+import { d1Shaped } from './d1-shape.js';
 import { buildSavePayload, toDraftView } from './draft.js';
 import { answer, BODY_CAPS, parseBody, readJson } from './http.js';
 import { requireRole, type Role } from './membership.js';
@@ -59,25 +60,57 @@ const saveFailure = (err: unknown): never => {
   throw err;
 };
 
+export interface SaveDraftOptions {
+  /**
+   * R5-70 a: the `?version=` query, the version the editor loaded, or null when absent (D1's E2E support sends none).
+   * Present and not the open draft's id → 409 conflict before anything is written, so a stale tab never overwrites a
+   * newer draft.
+   */
+  expectedVersion: string | null;
+  /** R5-70 b: D1's PUT refuses (409) a stored draft holding a section D1's request cannot express. */
+  requireD1Shape: boolean;
+}
+
+/** The `?version=` query of a draft PUT: null when absent, else its text (lower-cased, as path ids are). */
+export const expectedVersionOf = (query: string | undefined): string | null =>
+  query === undefined ? null : query.toLowerCase();
+
 /**
  * Saves `req` into the test's open draft (one save_test_draft call, atomic) and answers its TestDraftView. The stored
- * settings stay as they are unless `write` names new ones (the clone path).
+ * settings stay as they are unless an admin lock placed after they were stored moved a value (E16, R5-70 c): then the
+ * locked settings are stored with the draft (custom, preset null, as the integrity PUT stores a moved preset), and the
+ * request's paste rule is compared with them, so a later lock never makes the draft unsavable. Publish's checks are
+ * unchanged (the database refuses a locked value there too).
  */
 export const saveDraft = async (
   ctx: OrgContext,
   orgId: string,
   testId: string,
   req: SaveTestDraftRequest,
-  status = 200,
+  opts: SaveDraftOptions = { expectedVersion: null, requireD1Shape: false },
 ): Promise<Response> => {
-  if ((await findTest(ctx.rest, orgId, testId)) === null) return orgFail('not_found');
+  const test = (await findTest(ctx.rest, orgId, testId)) ?? orgFail('not_found');
   const version = (await latestVersion(ctx.rest, orgId, testId)) ?? orgFail('not_found');
   if (version.status !== 'draft') return orgFail('conflict');
+  if (opts.expectedVersion !== null && opts.expectedVersion !== version.id.toLowerCase()) {
+    return orgFail('conflict');
+  }
   const ruleset = await findRuleset(ctx.rest, orgId, version.ruleset_version_id);
   const current = await loadContent(ctx.rest, orgId, version.id);
+  if (opts.requireD1Shape) {
+    if (!d1Shaped(toDraftView(test, version, current).version.sections)) {
+      return orgFail('conflict');
+    }
+  }
+  let write: { presetKey: null; settings: SettingValues } | undefined;
+  if (ruleset?.settings !== null && ruleset?.settings !== undefined) {
+    const locked = applyLocks(ruleset.settings as SettingValues, await loadLocks(ctx.rest, orgId));
+    if (locked.changed) write = { presetKey: null, settings: locked.values };
+  }
   const payload = await buildSavePayload(req, {
     settings: ruleset?.settings ?? null,
     rubrics: current.rubrics,
+    ...(write === undefined ? {} : { write }),
   });
   try {
     await rpcOf(ctx.rest)('save_test_draft', {
@@ -87,7 +120,7 @@ export const saveDraft = async (
   } catch (err) {
     return saveFailure(err);
   }
-  return answer(TestDraftView, await draftViewOf(ctx, orgId, testId), status);
+  return answer(TestDraftView, await draftViewOf(ctx, orgId, testId));
 };
 
 /** A copy of `row` without `keys` (the view's ids and positions, which a save request does not carry). */
@@ -121,7 +154,10 @@ export const createTestDraftRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env
       // L-15: the cutoff is required; null, missing or out of range is its own 400 (as D1's PUT).
       if (!cutoffValid((body as { qualityCutoff?: unknown }).qualityCutoff))
         return orgFail('cutoff_required', 400);
-      return await saveDraft(ctx, orgId, testId, parseBody(SaveTestDraftRequest, body));
+      return await saveDraft(ctx, orgId, testId, parseBody(SaveTestDraftRequest, body), {
+        expectedVersion: expectedVersionOf(c.req.query('version')),
+        requireD1Shape: false,
+      });
     }),
   );
 
