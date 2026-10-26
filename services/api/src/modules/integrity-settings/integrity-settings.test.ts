@@ -226,6 +226,47 @@ describe('PUT …/tests/:testId/integrity', () => {
   });
 });
 
+describe('PUT …/tests/:testId/integrity: the expected version (R5-70 a, A5d re-review #2)', () => {
+  const OTHER = 'e1000000-0000-4000-8000-0000000000aa';
+  const snapshot = (s: Awaited<ReturnType<typeof setup>>) =>
+    JSON.stringify([rowsOf(s.db, 'ruleset_versions'), rowsOf(s.db, 'sections')]);
+
+  it('saves when ?version names the open draft (any letter case), and when it is absent', async () => {
+    const s = await setup();
+    const strict = await s.call('PUT', `${s.path}?version=${s.versionId}`, {
+      presetKey: 'strict',
+      values: STRICT,
+    });
+    expect(strict.status).toBe(200);
+    expect(rowsOf(s.db, 'ruleset_versions')[0]).toMatchObject({ preset_key: 'strict' });
+    const upper = await s.call('PUT', `${s.path}?version=${s.versionId.toUpperCase()}`, {
+      presetKey: 'open_book',
+      values: OPEN_BOOK,
+    });
+    expect(upper.status).toBe(200);
+    const absent = await s.call('PUT', s.path, { presetKey: 'standard', values: STANDARD });
+    expect(absent.status).toBe(200);
+    expect(rowsOf(s.db, 'ruleset_versions')[0]).toMatchObject({
+      preset_key: 'standard',
+      settings: STANDARD,
+    });
+  });
+
+  it('another version id is 409 conflict and nothing is written (a stale tab)', async () => {
+    const s = await setup();
+    const before = snapshot(s);
+    for (const version of [OTHER, '', 'not-a-uuid']) {
+      const res = await s.call('PUT', `${s.path}?version=${version}`, {
+        presetKey: 'strict',
+        values: STRICT,
+      });
+      expect(res.status, version).toBe(409);
+      expect(await codeOf(res)).toBe('conflict');
+    }
+    expect(snapshot(s)).toBe(before);
+  });
+});
+
 describe('admin locks (…/settings/integrity-locks)', () => {
   it('an admin at aal2 lists, adds and removes locks; DELETE is 204 with no body', async () => {
     const s = await setup({ roles: ['admin'] });

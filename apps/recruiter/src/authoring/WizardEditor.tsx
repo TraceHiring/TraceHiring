@@ -440,6 +440,7 @@ export function V2EditorBody({
     <IntegrityStep
       api={api}
       testId={testId}
+      versionId={detail.version.id}
       readOnly={!draft}
       initial={integrity}
       onPendingChange={setStepPending}

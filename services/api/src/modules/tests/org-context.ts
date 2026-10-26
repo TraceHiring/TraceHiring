@@ -358,7 +358,8 @@ export class RestError extends Error {
 export const isSnapshotConflict = (err: unknown): boolean =>
   err instanceof RestError && err.sqlstate === '40001' && err.guard === 'snapshot_changed';
 
-const TABLE = /^[a-z_]{1,64}$/;
+/** A table, view or function name: a letter, then letters, digits or `_` (e.g. `publish_source_v2`, M1-o). */
+const TABLE = /^[a-z][a-z0-9_]{0,63}$/;
 
 export interface RestOptions {
   supabaseUrl: string;

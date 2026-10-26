@@ -2,36 +2,15 @@
 // §6.1; the api also refuses it with 422 `cutoff_required`). A D1-shaped draft saves with D1's `PUT /tests/:testId`; a
 // v2 draft with `PUT …/tests/:testId/draft` (specs/m1-test-authoring.md R5-69 b). Every save names the version the
 // editor loaded (`?version=`, R5-70 a): the api answers 409 `conflict` and writes nothing when that is no longer the
-// open draft, so a stale tab never overwrites a newer one. The two versioned PUTs are built here until the shared api
-// client (src/api/endpoints.ts, lead-owned) carries the query (lead ask); their bodies are parsed with the same
-// contracts first.
+// open draft, so a stale tab never overwrites a newer one. The versioned PUTs live in the shared api client
+// (src/api/endpoints.ts: `updateDraft` and `saveTestDraft` with their optional `version`), which refuses a test or
+// version id that is not a uuid before any request (A5d re-review #4).
 import type { PublishTestResponse } from '@trace/shared/contracts/d1';
-import { TestDraftView } from '@trace/shared/contracts/m1';
+import type { TestDraftView } from '@trace/shared/contracts/m1';
 import type { ApiClient, ApiResult } from '../api/client';
-import { createTestVersion, publishTest } from '../api/endpoints';
+import { createTestVersion, publishTest, saveTestDraft, updateDraft } from '../api/endpoints';
 import { isCutoffValid, toRequest, type DraftForm } from './editor-model';
 import { toSaveTestDraftRequest, type EditorV2Form } from './editor-v2-model';
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** `PUT {path}?version=<versionId>` with an already-validated body; ids that are not uuids are refused unsent. */
-function putVersioned(
-  api: ApiClient,
-  testId: string,
-  versionId: string,
-  suffix: '' | '/draft',
-  body: unknown,
-): Promise<ApiResult<TestDraftView>> {
-  if (!UUID.test(testId) || !UUID.test(versionId)) {
-    return Promise.resolve({ ok: false, code: 'bad_request' });
-  }
-  return api.call({
-    method: 'PUT',
-    path: `/tests/${testId.toLowerCase()}${suffix}?version=${versionId.toLowerCase()}`,
-    schema: TestDraftView,
-    body,
-  });
-}
 
 export async function saveDraft(
   api: ApiClient,
@@ -43,7 +22,7 @@ export async function saveDraft(
   if (!built.ok) {
     return { ok: false, code: built.reason === 'cutoff' ? 'cutoff_required' : 'bad_request' };
   }
-  return putVersioned(api, testId, versionId, '', built.request);
+  return updateDraft(api, testId, built.request, versionId);
 }
 
 export async function publishDraft(
@@ -69,7 +48,7 @@ export async function saveDraftV2(
   if (!built.ok) {
     return { ok: false, code: built.reason === 'cutoff' ? 'cutoff_required' : 'bad_request' };
   }
-  return putVersioned(api, form.testId, form.versionId, '/draft', built.request);
+  return saveTestDraft(api, form.testId, built.request, form.versionId);
 }
 
 /**

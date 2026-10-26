@@ -124,6 +124,7 @@ function D1EditorBody({
         <IntegrityStep
           api={api}
           testId={testId}
+          versionId={detail.version.id}
           initial={integrity}
           onPendingChange={setStepPending}
           onSaved={() => {

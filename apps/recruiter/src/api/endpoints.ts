@@ -64,6 +64,26 @@ import type { ApiClient, ApiResult, CallOptions, ImportImageType } from './clien
 
 const id = (value: string): string => encodeURIComponent(value);
 
+const refused = <T>(): Promise<ApiResult<T>> => Promise.resolve({ ok: false, code: 'bad_request' });
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The path of a test's draft or settings PUT. With `version` it names the version the editor loaded,
+ * `?version=<testVersionId>` (specs/m1-test-authoring.md R5-70 a): the api answers 409 `conflict` and writes nothing
+ * when that is no longer the open draft, so a stale tab never overwrites a newer one. Both ids must then be uuids and
+ * are sent lower-cased; null (refused unsent) otherwise. Without `version` the path is as before (D1's E2E support).
+ */
+function testPutPath(
+  testId: string,
+  suffix: '' | '/draft' | '/integrity',
+  version: string | undefined,
+): string | null {
+  if (version === undefined) return `/tests/${id(testId)}${suffix}`;
+  if (!UUID.test(testId) || !UUID.test(version)) return null;
+  return `/tests/${testId.toLowerCase()}${suffix}?version=${version.toLowerCase()}`;
+}
+
 export const listTests = (api: ApiClient): Promise<ApiResult<TestListResponse>> =>
   api.call({ method: 'GET', path: '/tests', schema: TestListResponse });
 
@@ -77,12 +97,17 @@ export const createTest = (
 export const getTest = (api: ApiClient, testId: string): Promise<ApiResult<TestDraftView>> =>
   api.call({ method: 'GET', path: `/tests/${id(testId)}`, schema: TestDraftView });
 
+/** D1's draft save; `version` is the expected version (R5-70 a, see `testPutPath`). */
 export const updateDraft = (
   api: ApiClient,
   testId: string,
   body: UpdateTestDraftRequest,
-): Promise<ApiResult<TestDraftView>> =>
-  api.call({ method: 'PUT', path: `/tests/${id(testId)}`, schema: TestDraftView, body });
+  version?: string,
+): Promise<ApiResult<TestDraftView>> => {
+  const path = testPutPath(testId, '', version);
+  if (path === null) return refused<TestDraftView>();
+  return api.call({ method: 'PUT', path, schema: TestDraftView, body });
+};
 
 export const publishTest = (
   api: ApiClient,
@@ -172,8 +197,6 @@ interface Validator {
 /** The wire form of a contract: for a query string that is text (a difficulty is decimal text). */
 type WireInput<S extends { _zod: { input: unknown } }> = S['_zod']['input'];
 type Query = Record<string, string | undefined>;
-
-const refused = <T>(): Promise<ApiResult<T>> => Promise.resolve({ ok: false, code: 'bad_request' });
 
 /** A body-carrying call: the body is validated first and sent as given. */
 function send<T>(
@@ -419,19 +442,17 @@ export const getIntegritySettings = (
     schema: IntegritySettingsView,
   });
 
+/** A draft's settings save; `version` is the expected version (R5-70 a, see `testPutPath`). */
 export const putIntegritySettings = (
   api: ApiClient,
   testId: string,
   body: IntegritySettingsRequest,
-): Promise<ApiResult<IntegritySettingsView>> =>
-  send(
-    api,
-    'PUT',
-    `/tests/${id(testId)}/integrity`,
-    IntegritySettingsRequest,
-    body,
-    IntegritySettingsView,
-  );
+  version?: string,
+): Promise<ApiResult<IntegritySettingsView>> => {
+  const path = testPutPath(testId, '/integrity', version);
+  if (path === null) return refused<IntegritySettingsView>();
+  return send(api, 'PUT', path, IntegritySettingsRequest, body, IntegritySettingsView);
+};
 
 export const listIntegrityLocks = (api: ApiClient): Promise<ApiResult<IntegrityLockListResponse>> =>
   api.call({
@@ -529,9 +550,14 @@ export const createTestVersion = (
 ): Promise<ApiResult<TestDraftView>> =>
   api.call({ method: 'POST', path: `/tests/${id(testId)}/versions`, schema: TestDraftView });
 
+/** A v2 draft save; `version` is the expected version (R5-70 a, see `testPutPath`). */
 export const saveTestDraft = (
   api: ApiClient,
   testId: string,
   body: SaveTestDraftRequest,
-): Promise<ApiResult<TestDraftView>> =>
-  send(api, 'PUT', `/tests/${id(testId)}/draft`, SaveTestDraftRequest, body, TestDraftView);
+  version?: string,
+): Promise<ApiResult<TestDraftView>> => {
+  const path = testPutPath(testId, '/draft', version);
+  if (path === null) return refused<TestDraftView>();
+  return send(api, 'PUT', path, SaveTestDraftRequest, body, TestDraftView);
+};

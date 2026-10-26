@@ -57,7 +57,25 @@ describe('createRest().rpc', () => {
     });
   });
 
-  it('refuses a function name outside [a-z_] before any fetch', async () => {
+  it('calls a function whose name has a digit after the first letter (publish_source_v2, M1-o)', async () => {
+    const seen: string[] = [];
+    const rest = createRest(
+      {
+        supabaseUrl: SUPA,
+        publishableKey: 'k',
+        fetch: (async (url: string) => {
+          seen.push(url);
+          return Response.json({ members: [] });
+        }) as unknown as typeof fetch,
+      },
+      caller,
+    );
+    const out = await rpcOf(rest)('publish_source_v2', { p_frozen: false });
+    expect(out).toEqual({ members: [] });
+    expect(seen).toEqual([`${SUPA}/rest/v1/rpc/publish_source_v2`]);
+  });
+
+  it('refuses a function name outside [a-z][a-z0-9_] before any fetch', async () => {
     let fetched = 0;
     const rest = createRest(
       {
@@ -70,7 +88,7 @@ describe('createRest().rpc', () => {
       },
       caller,
     );
-    for (const name of ['../tests', 'Save', 'save-draft', '', 'a'.repeat(65)]) {
+    for (const name of ['../tests', 'Save', 'save-draft', '', 'a'.repeat(65), '2fa', '_x']) {
       expect(await failOf(rpcOf(rest)(name, {}))).toBeInstanceOf(RestError);
     }
     expect(fetched).toBe(0);
