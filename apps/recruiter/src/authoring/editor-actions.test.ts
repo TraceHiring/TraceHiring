@@ -37,12 +37,13 @@ const PUBLISHED = {
 };
 
 function setup() {
-  const calls: { method: string; path: string; body: unknown }[] = [];
+  const calls: { method: string; path: string; query: string; body: unknown }[] = [];
   const fetchImpl: FetchLike = (url, init) => {
     const path = new URL(url).pathname;
     calls.push({
       method: String(init.method),
       path,
+      query: new URL(url).search,
       body: typeof init.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined,
     });
     const body = path.endsWith('/publish') ? PUBLISHED : DETAIL;
@@ -76,16 +77,18 @@ describe('saveDraft', () => {
       correctOptionId: 'o1',
     };
     f.qualityCutoff = '55';
-    const res = await saveDraft(api, TEST, f);
+    const res = await saveDraft(api, TEST, VERSION, f);
     expect(res.ok).toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe('PUT');
+    // R5-70 a: the save names the version the editor loaded.
+    expect(calls[0]?.query).toBe(`?version=${VERSION}`);
     expect((calls[0]?.body as { qualityCutoff: number }).qualityCutoff).toBe(55);
   });
 
   it('sends nothing for an invalid draft', async () => {
     const { api, calls } = setup();
-    const res = await saveDraft(api, TEST, form()); // empty prompt
+    const res = await saveDraft(api, TEST, VERSION, form()); // empty prompt
     expect(res).toEqual({ ok: false, code: 'bad_request' });
     expect(calls).toHaveLength(0);
   });
@@ -117,6 +120,7 @@ describe('publishDraft', () => {
       `PUT ${TEST}`,
       'POST publish',
     ]);
+    expect(calls[0]?.query).toBe(`?version=${VERSION}`);
     expect(calls[1]?.body).toEqual({ testVersionId: VERSION });
   });
 

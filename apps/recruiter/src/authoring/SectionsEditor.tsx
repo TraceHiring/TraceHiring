@@ -135,13 +135,15 @@ function PoolBlock({
   disabled: boolean;
   onChange(next: SectionForm): void;
 }) {
-  const options = [
-    { value: '', text: 'Choose a pool' },
-    ...pools
-      .filter((p) => p.format === section.format)
-      .map((p) => ({ value: p.id, text: `${p.name} (${p.approvedCount} approved)` })),
-  ];
   const pool = pools.find((p) => p.id === section.poolId);
+  const listed = pools
+    .filter((p) => p.format === section.format)
+    .map((p) => ({ value: p.id, text: `${p.name} (${p.approvedCount} approved)` }));
+  // R5-70 e: a stored pool not in the pages loaded so far is still the section's pool, never "Choose a pool".
+  const options =
+    section.poolId !== '' && pool === undefined
+      ? [{ value: section.poolId, text: 'Current pool' }, ...listed]
+      : [{ value: '', text: 'Choose a pool' }, ...listed];
   const draw = Number(section.drawCount);
   const gap = pool !== undefined && draw >= 1 ? poolGap(pool.approvedCount, draw) : null;
   return (

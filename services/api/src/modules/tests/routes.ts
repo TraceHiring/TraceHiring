@@ -30,7 +30,7 @@ import {
   VersionRowSchema,
   parseRows,
 } from './authoring.js';
-import { PUBLISHERS, draftViewOf, saveDraft } from './draft-routes.js';
+import { PUBLISHERS, draftViewOf, expectedVersionOf, saveDraft } from './draft-routes.js';
 import { fromD1Request } from './draft.js';
 import { answer, parseBody, readJson } from './http.js';
 import { requireRole } from './membership.js';
@@ -292,7 +292,11 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
       if (!cutoffValid((body as { qualityCutoff?: unknown }).qualityCutoff))
         return orgFail('cutoff_required', 400);
       const req = parseBody(UpdateTestDraftRequest, body);
-      return await saveDraft(ctx, orgId, testId, fromD1Request(req));
+      // R5-70 a, b: the expected version, and D1's request never overwrites a section it cannot express.
+      return await saveDraft(ctx, orgId, testId, fromD1Request(req), {
+        expectedVersion: expectedVersionOf(c.req.query('version')),
+        requireD1Shape: true,
+      });
     }),
   );
 

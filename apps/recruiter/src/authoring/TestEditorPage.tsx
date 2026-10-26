@@ -27,6 +27,7 @@ import {
   EditAsNewVersion,
   EditorFooter,
   MessageLine,
+  PendingNote,
   Step,
   StepList,
   V2EditorBody,
@@ -61,6 +62,8 @@ function D1EditorBody({
   const [message, setMessage] = useState<EditorMessage | null>(null);
   // Once step 3 stored settings the draft is a v2 draft (R5-69 b): the next successful save reloads into that editor.
   const [settingsStored, setSettingsStored] = useState(false);
+  // R5-70 e: step 3 has unsaved changes or a save in flight; publish waits for it.
+  const [stepPending, setStepPending] = useState(false);
   const draft = detail.version.status === 'draft';
   const testId = detail.test.id;
   const cutoffOk = isCutoffValid(form.qualityCutoff);
@@ -68,7 +71,7 @@ function D1EditorBody({
 
   const saveForm = async (reloadAfter: boolean) => {
     setBusy(true);
-    const result = await saveDraft(api, testId, latest.current);
+    const result = await saveDraft(api, testId, detail.version.id, latest.current);
     setBusy(false);
     if (result.ok && reloadAfter) {
       onReload();
@@ -122,6 +125,7 @@ function D1EditorBody({
           api={api}
           testId={testId}
           initial={integrity}
+          onPendingChange={setStepPending}
           onSaved={() => {
             // The settings are stored: save the questions as they are on screen (the api completes the sections,
             // R5-63 b), then reload into the v2 editor. A refused save keeps the screen; the next save reloads.
@@ -131,6 +135,7 @@ function D1EditorBody({
         />
       </Step>
       <Step n={4}>
+        {stepPending && <PendingNote />}
         {!cutoffOk && (
           <p role="alert" className={ui.alert}>
             Set an Answer Quality cutoff between 0 and 100 to publish.
@@ -140,7 +145,7 @@ function D1EditorBody({
           <button
             type="button"
             className={`${ui.button} ${ui.primary}`}
-            disabled={busy || !cutoffOk || !built.ok}
+            disabled={busy || stepPending || !cutoffOk || !built.ok}
             onClick={() => {
               setDialog(true);
             }}

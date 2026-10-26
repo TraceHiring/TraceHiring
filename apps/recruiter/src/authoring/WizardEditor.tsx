@@ -74,6 +74,13 @@ export function MessageLine({ message }: { message: EditorMessage | null }) {
   );
 }
 
+/** Step 4's note while step 3 has unsaved changes or its save is in flight (publish waits, R5-70 e). */
+export function PendingNote() {
+  return (
+    <p className={ui.note}>Step 3 has unsaved changes. Save the settings before you publish.</p>
+  );
+}
+
 /** The line above a published version (R5-69 g: no "later release"; a change is a new version). */
 export const publishedLine = (versionNo: number): string =>
   `Published, version ${versionNo}. Settings are frozen; to change the test, edit it as a new version.`;
@@ -351,6 +358,7 @@ export function V2EditorBody({
   const [dialog, setDialog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<EditorMessage | null>(null);
+  const [stepPending, setStepPending] = useState(false);
   const draft = detail.version.status === 'draft';
   const testId = detail.test.id;
   const cutoffOk = isCutoffValid(form.qualityCutoff);
@@ -434,6 +442,7 @@ export function V2EditorBody({
       testId={testId}
       readOnly={!draft}
       initial={integrity}
+      onPendingChange={setStepPending}
       onSaved={(saved) => void settingsSaved(saved)}
     />
   );
@@ -457,6 +466,7 @@ export function V2EditorBody({
       <Step n={3}>{settings}</Step>
       <Step n={4}>
         <ReviewSummary form={form} issueCount={issues.length} />
+        {stepPending && <PendingNote />}
         {!cutoffOk && (
           <p role="alert" className={ui.alert}>
             Set an Answer Quality cutoff between 0 and 100 to publish.
@@ -466,7 +476,7 @@ export function V2EditorBody({
           <button
             type="button"
             className={`${ui.button} ${ui.primary}`}
-            disabled={busy || !cutoffOk || !built.ok}
+            disabled={busy || stepPending || !cutoffOk || !built.ok}
             onClick={() => {
               setDialog(true);
             }}

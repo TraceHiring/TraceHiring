@@ -10,7 +10,7 @@ import {
   type PresetKey,
   type SettingKey,
 } from '@trace/shared/contracts/m1';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ApiClient } from '../api/client';
 import { getIntegritySettings, putIntegritySettings } from '../api/endpoints';
 import { errorText } from '../common/messages';
@@ -207,22 +207,34 @@ export function IntegrityStepView({
   );
 }
 
+/** The same preset and values (the locks come from the server and are not edited here). */
+const sameState = (a: IntegrityState, b: IntegrityState): boolean =>
+  a.presetKey === b.presetKey && SETTING_ORDER.every((key) => a.values[key] === b.values[key]);
+
 function Loaded({
   api,
   testId,
   view,
   readOnly,
   onSaved,
+  onPendingChange,
 }: {
   api: ApiClient;
   testId: string;
   view: IntegritySettingsView;
   readOnly: boolean;
   onSaved: ((saved: IntegritySettingsView) => void) | undefined;
+  onPendingChange: ((pending: boolean) => void) | undefined;
 }) {
   const [state, setState] = useState<IntegrityState>(() => fromIntegrityView(view));
+  const [saved, setSaved] = useState<IntegrityState>(() => fromIntegrityView(view));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<StepMessage | null>(null);
+  // R5-70 e: changes not yet saved, or a save in flight, hold the editor's publish.
+  const pending = busy || !sameState(state, saved);
+  useEffect(() => {
+    onPendingChange?.(pending);
+  }, [pending, onPendingChange]);
   const save = async () => {
     const built = toIntegrityRequest(state);
     if (!built.ok) {
@@ -234,6 +246,7 @@ function Loaded({
     setBusy(false);
     if (result.ok) {
       setState(fromIntegrityView(result.data));
+      setSaved(fromIntegrityView(result.data));
       setMessage({ kind: 'ok', text: 'Settings saved.' });
       onSaved?.(result.data);
     } else {
@@ -268,6 +281,7 @@ export function IntegrityStep({
   readOnly = false,
   initial,
   onSaved,
+  onPendingChange,
 }: {
   api: ApiClient;
   testId: string;
@@ -275,12 +289,21 @@ export function IntegrityStep({
   /** The view already loaded by the page, or null/absent to load it here. */
   initial?: IntegritySettingsView | null;
   onSaved?: (saved: IntegritySettingsView) => void;
+  /** True while the step has unsaved changes or a save in flight (the editor holds publish, R5-70 e). */
+  onPendingChange?: (pending: boolean) => void;
 }) {
   const fetchView = useCallback(() => getIntegritySettings(api, testId), [api, testId]);
   const [state] = useResource(initial === undefined || initial === null ? fetchView : null);
   if (initial !== undefined && initial !== null) {
     return (
-      <Loaded api={api} testId={testId} view={initial} readOnly={readOnly} onSaved={onSaved} />
+      <Loaded
+        api={api}
+        testId={testId}
+        view={initial}
+        readOnly={readOnly}
+        onSaved={onSaved}
+        onPendingChange={onPendingChange}
+      />
     );
   }
   if (state.kind === 'loading') return <p role="status">Loading...</p>;
@@ -292,6 +315,13 @@ export function IntegrityStep({
     );
   }
   return (
-    <Loaded api={api} testId={testId} view={state.data} readOnly={readOnly} onSaved={onSaved} />
+    <Loaded
+      api={api}
+      testId={testId}
+      view={state.data}
+      readOnly={readOnly}
+      onSaved={onSaved}
+      onPendingChange={onPendingChange}
+    />
   );
 }

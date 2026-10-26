@@ -1,29 +1,24 @@
 // Which editor a test draft gets on `/tests/:testId` (specs/m1-test-authoring.md R5-69 b) and the conversion of inline
 // items between the save request and D1's item form (R5-69 d). Pure functions.
 //
-// "Stored" integrity settings. `GET …/tests/:testId/integrity` answers D1's equivalent values with `presetKey: null`
-// while a draft has none stored (services/api integrity-settings/routes.ts `viewOf`), but `presetKey` is also null for
-// stored custom values and for a stored preset an admin lock moved, so the view alone cannot tell them apart. What can:
-// whenever settings are stored, the api gives every section a navigation and every written section the paste rule
-// (`applySettingsToSections` on PUT …/integrity and on a new draft with locks; every save path stores a null navigation
-// as the default, R5-63 b). So the settings count as stored iff the view names a preset, or any section carries a
-// navigation or a paste rule. The one case left over (custom settings stored on a draft with no section yet) is shown
-// with D1's editor, whose save the api completes the same way (R5-63 b); the next load then shows the v2 editor.
+// "Stored" integrity settings: `GET …/tests/:testId/integrity` answers `stored` (R5-70 d), true iff the version has
+// stored settings (`presetKey` alone cannot tell: it is null for custom values and for a preset an admin lock moved).
+// Fallback, only when that read failed: whenever settings are stored, the api gives every section a navigation and
+// every written section the paste rule (`applySettingsToSections`; every save path stores a null navigation as the
+// default, R5-63 b), so the settings then count as stored iff any section carries a navigation or a paste rule.
 import type { IntegritySettingsView, TestDraftView } from '@trace/shared/contracts/m1';
 import { d1Editable, type McqItemForm, type WrittenItemForm } from './editor-model';
 import { fromDraftView, type DraftItem, type EditorV2Form } from './editor-v2-model';
 
 export type ItemForm = McqItemForm | WrittenItemForm;
 
-/** Whether the draft's integrity settings are stored (see the header for the rule). */
+/** Whether the draft's integrity settings are stored: the view's `stored`, else the sections (the fallback above). */
 export function integrityStored(
   detail: TestDraftView,
   integrity: IntegritySettingsView | null,
 ): boolean {
-  return (
-    (integrity !== null && integrity.presetKey !== null) ||
-    detail.version.sections.some((s) => s.navigation !== null || s.pasteRule !== undefined)
-  );
+  if (integrity !== null) return integrity.stored;
+  return detail.version.sections.some((s) => s.navigation !== null || s.pasteRule !== undefined);
 }
 
 /** D1's editor, save and publish keep a draft only while D1 can save it unchanged and no settings are stored. */
