@@ -1,7 +1,7 @@
-# HANDOFF — 2026-10-24 10:00 IST (M1 BUILD 3 closed: A2a merged + mounted; BUILD 4 started: A7 built, reviews owed)
-Reason for stopping: usage guard (Max account; 5-hour window 88% when the A7 writer returned; one Opus review ≈ 15%,
-so no review was started). Start from `docs/progress/RESUME-PROMPT.md` §4 on **`m1/integration`** (worktree
-`.claude/worktrees/m1-integration`). The repo wins over this file.
+# HANDOFF — 2026-10-26 23:45 IST (M1 BUILD 4 = Wave 3 merged: A7, A5d wizard, E2E AT-M1-01/10/30 green on Linux CI)
+Reason for stopping: this chat's BUILD 4 work is done and context is at ~75% (wrap-up before compaction). Max account;
+5-hour window ~5% after its 22:30 IST reset, weekly ~54%. Start from `docs/progress/RESUME-PROMPT.md` §4 on
+**`m1/integration`** (worktree `.claude/worktrees/m1-integration`). The repo wins over this file.
 
 ## Paused: D1 (founder, 2026-10-22 night: paused, not closed)
 D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/worktrees/d1-integration`). Nothing is committed to `d1/integration` or `main` from M1. Copied from the `d1/integration` HANDOFF (`3c2e42a`, tip `1547fd0`):
@@ -11,80 +11,77 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
 - **D1 founder items:** AT-D2 screen capture (`pnpm e2e:record`); Workers Paid (OPEN-8a) "not yet", decide before any load test (M3a); Dependabot PRs #7-#12 not merged blind; after D1 merges, `e2e-local` back on the required checks.
 
 ## Where we are (verified this chat)
-- Milestone **M1 · Test authoring**. BUILD 3 (Wave 2: A2a, A2b, A3a, A3b, A4) is **merged**; BUILD 4 (Wave 3) has
-  started: A7 built, not yet reviewed. Spec `specs/m1-test-authoring.md` rev 5, rows up to **R5-66**.
-- `m1/integration` tip = this handoff commit on top of **`c439617`** (all pushed). `trace/d1/integration` = `1547fd0`,
-  `trace/main` = `da5380d`: unchanged.
-- **Full serial verify green on `d973099`** (2026-10-24 09:35 IST: typecheck, lint, `pnpm -r --workspace-concurrency=1
-  test`, `vitest --root scripts`, test:rls 49 files / rls 3784 / catalog 150, build). Floor raised to 3784 (`4ea5de5`).
-  The first verify run was stopped by Claude Code for low system memory (not a code failure); the rerun passed.
-- **Linux CI on PR #14 green on `d973099`** (run 40057846238: static, security, migrations, rls) and on `1cef9de`
-  (run 40056456816). CI on `c439617` (spec + floor only) not checked.
+- Milestone **M1 · Test authoring**, phase **BUILD** (BUILD 4 = Wave 3 done: A7, A5d, E2E). Spec rev 5, rows up to
+  **R5-70**. `m1/integration` tip = this handoff commit on `3fcafcc` (`chore: merge m1/e2e-specs-fix-1`), all pushed.
+  `trace/d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged.
+- **Full serial verify green** on `0a7199f` (2026-10-26, 842 s: typecheck, eslint, prettier, boundaries, workflows,
+  catalog, migrations, gitleaks, every package's tests with `--maxWorkers=1`, scripts, test:rls 49 files / rls 3784 /
+  catalog 150, build) and on `985febc`, `eaba02a` and the final merge **`3fcafcc`** (893 s; recruiter 1044, api 657).
+- **Linux CI:** PR #14 green on `eaba02a` and `9c1bdb0`; **e2e-local dispatch green** on `m1/e2e-specs-fix-1`
+  `57973f1` (run 40372592727: every local spec incl. D1 slice, candidate, AT-M1-01/10/30) and on `62215c1`
+  (run 40368988267, the recorded measurements). **AT-M1-28 E2E half** green (D1 slice local on M1).
+- **Measured (spec §8):** AT-M1-10 500 items + 500 images `elapsed_ms` 10,002 / 14,899; AT-M1-01 170,943; AT-M1-30
+  133,409 (all ≤ 300,000; known proxy limits recorded in §8).
 
-## Done this chat (commits on m1/integration, all pushed)
-- **CI security fixed:** zod 4.6.6 (GHSA-mrhx-c7xc-m3w5, one-day release-age exception, `b397a29`); dated osv ignores
-  for new dev-tooling advisories undici, fast-uri, happy-dom (`2d91744`); build-notes rows for both.
-- **A2a fix 9** (library key-review route) by an Opus writer: `m1/a2a-fix-1-r2` @ `55f7d2d` (api 633/633).
-- **Opus confirming re-review** (spec, security, database) of A2a `08b27ce..55f7d2d` + M1-m, M1-n, sweep, M1-o: all
-  **CONFIRMED WITH NOTES**, no rule 1-9 issue (recorded `c250f3d` in `docs/reviews/M1-wave2-first-reviews.md`).
-- **Merged** `m1/a2a-fix-1-r2` → `ae19cbf`; **lead mounts** in `services/api/src/app.ts` (red `17de28f` → `d973099`):
-  bank, pools, library, imports, ai-drafts; route inventory + log hygiene 57 org routes.
-- **R5-65 / migration M1-o** `20261024030000_m1_publish_source.sql`: `public.publish_source_v2` (INVOKER; one call per
-  package build). pgTAP `rls_m1_publish_source` 32 (red `0498fdc`, `a78da74`, `13f039f` → green `1cef9de`, `3bc1e11`,
-  `556402c`); api switched (`99916c7` red → `f616d5d`). Measured locally: 5,001 members 72 ms, exposure read indexed.
-- **R5-66** A7 lead decisions (`c439617`) from a Sonnet pre-flight.
-- **A7 writer (Opus)**: `m1/a7-candidate` @ **`b89e2ea`** (red `6aca734`), pushed. Writer checks: candidate 290/290 (last
-  full run 1 fail then fixed; only `candidate-guards.test.ts` re-run, 36/36), typecheck, lint, never-build 37/37, build;
-  bundle 83.1 kB gzip of 150 kB.
+## Done this chat (all on m1/integration, pushed)
+- R5-67 (red `51a1077`, `a3cb473` → `0db5907`, `6a07a60`): `OutOfOrderBody.refusedSeqs`; refused seqs re-listed on a
+  resend after a lost ack (stream keeps them within 100 seqs).
+- never-build scans `src/test` dirs (`b7695ee` → `ecb53c0`); jobs db-test "two Auth accounts" (`826d864`, R5-62 owed).
+- e2e-local: api starts alone (SQLITE_BUSY race, `373d04a` → `b2b1b8a`); M1 recruiters (`3e5af5c` → `addfb6c`).
+- R5-68 / R5-69 / R5-70 lead decisions; `IntegritySettingsView.stored` (`c9e8cab` → `d3c50d4`, fixups `4cc4173`,
+  `9c1bdb0`).
+- **A7 merged** (`m1/a7-fix-1` `91d91be`, merge commit before `eaba02a`): Opus first reviews PASS WITH FIXES, two fix
+  rounds, re-review spec CONFIRMED WITH NOTES / security CONFIRMED. **A5d merged** (`985febc`, then `m1/a5d-fix-2`
+  `abe6064`): wizard steps 2-4 on `/tests/:id`, v2 save/publish, Edit as new version, expected version on all draft
+  and integrity PUTs. **E2E specs merged** (`3fcafcc`).
+- **Two real bugs the E2E runs found (also on staging):** `062e0b8` jsonb double-encoding of `amr` (every library
+  reference read 503); `0a7199f` REST name check refused `publish_source_v2` (every v2 publish 400). Guards:
+  `services/api/src/sql-params.test.ts`, `foundation.test.ts`.
+- Review record: `docs/reviews/M1-wave3-first-reviews.md`.
 
 ## In flight at handoff
-- **No agent is running.** `m1/a7-candidate` @ `b89e2ea` (base `c439617`), writer worktree
-  `.claude/worktrees/agent-ae41a300bf165cf7c` (leave it). **Reviews not started.**
-- A7 writer's lead ask: a 409 `out_of_order` gap path in `workers/edge/src/session-core.ts` that stored part of a batch
-  does not report that part's `refusedSeqs`; suggested: optional `refusedSeqs` on `OutOfOrderBody`
-  (`packages/shared/src/contracts-candidate.ts` ~:388) returned from the gap path (lead: contract + edge, test first).
-- A7 writer's question (not rules 1-9, lead decides): the rules step says "each section shows its own paste rule", but a
-  v1 (D1) session shows no section rules; proposal: v1 shows one line "pasting is turned off in this test" (D1 blocks
-  paste). Writer choices to confirm in review: "Finish this section" only with >1 section; forward-only nav allows only
-  the highest served and the next item; 409 retry ≤ 3 with `afterSeq` = acked seq after flush; attach backoff 1/2/4/8/10 s;
-  signals between streams held for the new stream; `Test.tsx` 554 lines.
+- **No agent is running.** No uncommitted work. Unmerged CI-only branches (do not merge): `m1/e2e-specs-2` `b54091e`,
+  `-3` `1dc427e`, `-4` `62215c1` (each = the E2E specs + an integration tip, used for dispatch runs).
 
 ## Stream branches
-Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · `m1/a5c-fix-1` · `m1/a4-edge-delivery` · `m1/a4-fix-1` · `m1/a3a-jobs-v2` · `m1/a3a-fix-1` · `m1/a3a-fix-2` · `m1/a3b-jobs-authoring` · `m1/a3b-fix-1` · `m1/a2b-api-tests` · `m1/a2b-fix-1` · `m1/a2a-api-bank` `08b27ce` · `m1/a2a-fix-1` `c8c4f60` · `m1/a2a-fix-1-r2` `55f7d2d` (all on `trace`). Unmerged by founder answer (b): `m1/a5a-fix-2/-3/-4` (zip reader, M8). Open: **`m1/a7-candidate` `b89e2ea`** (reviews owed).
+Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · `m1/a5c-fix-1` · `m1/a4-edge-delivery` · `m1/a4-fix-1` · `m1/a3a-jobs-v2` · `m1/a3a-fix-1` · `m1/a3a-fix-2` · `m1/a3b-jobs-authoring` · `m1/a3b-fix-1` · `m1/a2b-api-tests` · `m1/a2b-fix-1` · `m1/a2a-api-bank` · `m1/a2a-fix-1` · `m1/a2a-fix-1-r2` · `m1/a7-candidate` `b89e2ea` · `m1/a7-fix-1` `91d91be` · `m1/a5d-wizard` `2489db3` · `m1/a5d-fix-1` `07a21d9` · `m1/a5d-fix-2` `abe6064` · `m1/e2e-specs` `cf90491` · `m1/e2e-specs-fix-1` `57973f1` (all on `trace`). Unmerged by founder answer (b): `m1/a5a-fix-2/-3/-4` (zip reader, M8).
 
 ## Next step (one precise action list)
-1. Verify first (below). Then **A7 Opus first reviews** per spec §11.3 (spec + security; one agent each, or one agent
-   with a verdict per area), diff `c439617..b89e2ea`, told the writer's choices and question above and R5-66.
-2. Lead, test first: the `OutOfOrderBody.refusedSeqs` contract + edge gap path (above); decide the v1 rules line.
-3. A7 fix round (Opus writer, fixes test first, branch `m1/a7-fix-1` from `b89e2ea`), one confirming re-review, merge
-   into `m1/integration` (`chore: merge …`), full serial verify, Linux CI on PR #14.
-4. Then BUILD 4 rest: `e2e/tests/m1-*.spec.ts` (AT-M1-01, 10, 30; lead + Sonnet, `local` project), the AT-M1-10
-   500-item measurement on Linux CI recorded in spec §8, AT-M1-28 D1 E2E.
-5. **Lead, owed before the M1 exit:** R5-63 f rest (atomic `create_test_from_template`, `save_bank_draft` RPC — also
-   re-review Low 4, paste rule in the database, template paging); R5-64 g (revoke `id` INSERT grants after a pgTAP
-   fixture rewrite); R5-61 h (indexed duplicate hash, jobs `SUPABASE_URL` staging half, drafting lease); R5-62 b (jobs
-   db-test, "more than one account" branch); A2b Low 2 staging R2 `onlyIf` check (needs a founder-approved dispatch).
-6. Dependency bumps owed (build-notes 2026-10-24): vitest 4.1.12 + undici 7.30.1 on/after 2026-10-29; fast-uri 3.1.9
-   on/after 2026-11-02; happy-dom 21.x before 2026-11-23; then delete the matching osv ignores.
-
-## Notes for Wave 3 (carried; not defects now)
-- A5c N1 (`fromDraftView(view, integrity)` + `onSaved` → `setPasteWritten` → re-save, recruiter app, lead); A5a S7.
-- R2-5 gap: re-copying a retired library copy hands back the retired copy. DC-M1-4 — OPEN-8a founder gate.
-  `ratelimits` on staging (edge and api) confirmed only by a staging dispatch (ADR-032).
-- New jobs cron path: `authoring_sweep` needs `JOBS_AUTHORING_DB` (staging Hyperdrive) — listed under the M1 staging
-  founder item. Re-review notes kept open: D11 (reviewers see `exposureCount` 0), D12 (lost insert response leaves a
-  key-less draft), fakes not modelling `variant_key_missing`/`variants_numbering`/approver workspace.
+1. Verify first (below).
+2. **Lead, owed before the M1 exit** (no writer needed for most; migrations and pgTAP are lead-only):
+   a. R5-70 re-review Low 1: D1-shape re-check inside `save_test_draft` under its row lock (migration + pgTAP).
+   b. R5-63 f rest: atomic `create_test_from_template` RPC; atomic `save_bank_draft` RPC (also re-review Low 4);
+      the written paste rule derived in the database; template list paging.
+   c. R5-64 g: revoke the `id` INSERT grants (import_jobs, ai_draft_jobs, …) after rewriting ~35 pgTAP fixture
+      inserts in `docs/progress/m1-wave0-drafts/pgtap/bodies/{rls_m1_ai_drafts,rls_m1_imports}.sql` (+ preamble).
+   d. E2E library seeding (spec §8 known limit): a local-only route/script that seeds library content so AT-M1-01
+      exercises the from-template library copy — or record it as a deferred gate in the M1 summary.
+   e. Carried Info (decide or defer to REVIEW): A7 hand-over total time budget (~127 s worst case); uncapped
+      `Retry-After` on the outbox 429 and item-GET 429 paths; integrity PUT "invalid body + stale version" test.
+3. Then BUILD is complete: run the M1 AT list (spec §12) against the code, draft `docs/milestones/M1-summary.md`
+   (deferred gates §13 + the items above), and hand M1 **REVIEW** to a fresh session (AUTOPILOT §2:
+   `trace-milestone-review`, `docs/reviews/M1.md`).
+4. Dependency bumps owed (build-notes 2026-10-24): vitest 4.1.12 + undici 7.30.1 on/after 2026-10-29; fast-uri
+   3.1.9 on/after 2026-11-02; happy-dom 21.x before 2026-11-23; then delete the matching osv ignores.
+5. A2b Low 2 staging R2 `onlyIf` check and DC-M1-1/6 staging halves need a founder-approved staging dispatch.
 
 ## Founder items
 - Unchanged: coverage when tab focus is off (default a); D1 integrity job re-delivered after M1 (default a); M1-15 "shared-device" copy (default: leave out); import cancel keeps rows (default a); M1 staging Hyperdrive configs + secrets (+ jobs `SUPABASE_URL`, + api `MEMBER_INVITE_PEPPER` ≥ 32 bytes); Q-M1-1…Q-M1-4; OPEN-8a Workers Paid; written AI drafts; zip reader answered (b).
-- New (information only): zod bumped one day before the two-week release-age rule for a High advisory (build-notes 2026-10-24).
+- New (information only): the two api bugs above would have broken templates, presets, library browse and every v2
+  publish on staging too; both are fixed on `m1/integration` (no staging deploy happened).
+- New (information only): this machine runs out of RAM on parallel lint/tests (see Gotchas); CI is unaffected.
 
 ## Gotchas
 - Worktree guard: no `cd …&&`, `git -C`, `$(...)`, loops, compound or piped node-script commands, no heredocs appending to repo files; write scripts with the Write tool and run them plainly; commit messages via `git commit -F <unique file>`; merges `chore: merge …`. A refused compound command runs NOTHING.
-- `node scripts/db-types.mjs` and `pnpm test:rls` RESET the local database: never while a writer runs db-tests. `pnpm exec supabase migration up --local` applies a new migration without a reset; an edited, already-applied migration needs a drop + `psql -f` of the file locally.
+- `node scripts/db-types.mjs` and `pnpm test:rls` RESET the local database: never while a writer or diagnosis agent runs db-tests or psql probes. `pnpm exec supabase migration up --local` applies a new migration without a reset.
 - A function body's comments are in `pg_get_functiondef` (a pgTAP text pin on the body sees them).
-- RAM: never run workspace tests while writers run; Claude Code may stop a long background verify when memory is short (rerun it; it is not a code failure).
+- **RAM (worse this chat):** `pnpm -s verify:fast` and `pnpm lint` crash with OOM here (all workspaces at once). Run the
+  gate serially instead: `pnpm -r --workspace-concurrency=1 typecheck`, `pnpm -r --workspace-concurrency=1 lint`,
+  prettier/check scripts/gitleaks, then per package `pnpm --filter ./<pkg> exec vitest run --maxWorkers=1`,
+  `pnpm exec vitest run --root scripts --maxWorkers=1`, `pnpm test:rls`, serial build (~14 min, all green).
+- A branch checked out in a writer's worktree must not be moved; create a new branch (`git commit-tree` merge + `git branch`).
+- e2e-local dispatch from an `m1/**` branch runs no staging job (deploy-staging needs `main`, `d1/**` or `milestone/**`).
 - Never hand-edit generated `rls_m1_*.test.sql`: edit `docs/progress/m1-wave0-drafts/pgtap/bodies/*.sql`/`preamble.sql`, run `node docs/progress/m1-wave0-drafts/pgtap/gen.mjs . <name>`, run named files with `node docs/progress/m1-wave0-drafts/pgtap/run.mjs <names>`.
 
 ## Verify first
-`git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `git rev-parse --short trace/m1/a7-candidate` (`b89e2ea`) · `gh run list --repo TraceHiring/TraceHiring --branch m1/integration --limit 3` · `pnpm -s verify:fast` · `docker ps` (supabase_db_trace up)
+`git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `gh run list --repo TraceHiring/TraceHiring --branch m1/integration --limit 3` · the serial gate from Gotchas (or `pnpm -s verify:fast` on a machine with RAM) · `docker ps` (supabase_db_trace up)
