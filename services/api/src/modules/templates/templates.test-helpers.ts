@@ -3,7 +3,7 @@
 // `library_copy_requests` 500 ids a request, the pool items, the sections and settings through save_test_draft, the
 // preset version pinned; one transaction: the fake's rpc restores every table on a throw), and the org's own
 // published role templates as rows. Synthetic data only.
-import { RestError } from '../tests/org-context.js';
+import { RestError, rpcOf } from '../tests/org-context.js';
 import type { Row } from '../tests/rest.test-helpers.js';
 import { ORG, type AuthoringDb } from '../tests/tests.test-helpers.js';
 
@@ -133,7 +133,7 @@ export const withTemplateRpc = (db: AuthoringDb) => {
           items: [],
         });
       }
-      await db.rest.rpc('save_test_draft', {
+      await rpcOf(db.rest)('save_test_draft', {
         p_test_version: version.id,
         p_payload: {
           name: p.jobTitle,
