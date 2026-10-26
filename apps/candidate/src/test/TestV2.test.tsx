@@ -19,6 +19,7 @@ import { COPY } from '../copy';
 import {
   buttonByText,
   click,
+  deferred,
   mount,
   settle,
   sha256HexOf,
@@ -33,6 +34,7 @@ import {
   PNG_BYTES,
   RECEIPT,
   SECTION_ID,
+  SECTION_ID_2,
   SESSION_TOKEN,
   STREAM_ID,
   STREAM_ID_2,
@@ -418,6 +420,8 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
       expect(container.textContent).toContain(line);
       expect(container.textContent).not.toContain(other);
       expect(container.textContent).toContain(COPY.test.dropBlocked);
+      // The v1 (D1) test-wide line never shows on a v2 screen (R5-68 a).
+      expect(container.textContent).not.toContain(COPY.test.pasteOffInTest);
       const e = new Event('paste', { bubbles: true, cancelable: true });
       Object.defineProperty(e, 'clipboardData', { value: { getData: () => 'synthetic' } });
       box.dispatchEvent(e);
@@ -431,10 +435,96 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
       await app?.unmount();
       app = undefined;
     }
-    // The rules step before start names no paste rule (each section shows its own, R5-66 c).
+    // The rules step before start names no paste rule and makes no per-section promise (R5-66 c, R5-68 a).
     const rules = COPY.rules.items.join(' ');
     expect(rules).not.toMatch(/Pasting and dropping text are blocked/);
-    expect(rules).toMatch(/each section/i);
+    expect(rules).not.toMatch(/each section/i);
+    expect(COPY.rules.items[0]).toBe(
+      'Answer on your own. Where you type an answer, the screen shows whether pasting text is allowed. Dropping text is turned off. Paste and drop attempts are recorded.',
+    );
+  });
+
+  it('R5-68 a: an MCQ-only test shows no paste or drop line', async () => {
+    const view = viewV2At(Date.now(), { sections: [mcqSection()] });
+    const fake = fakeApi(view);
+    const container = await render(view, fake);
+    await radio(container, 'a');
+    for (const line of [
+      COPY.test.pasteBlocked,
+      COPY.test.pasteAllowed,
+      COPY.test.pasteOffInTest,
+      COPY.test.dropBlocked,
+    ])
+      expect(container.textContent).not.toContain(line);
+  });
+
+  it('R5-68 i: a closed written section shows its cached answer read-only (the textarea is disabled)', async () => {
+    const view = viewV2At(Date.now(), {
+      sections: [writtenSection({ position: 1 }), mcqSection({ position: 2 })],
+    });
+    const fake = fakeApi(view);
+    fake.item.mockImplementation(async (_t, position) => ({
+      ok: true,
+      value: position <= 2 ? writtenItemV2(position, SECTION_ID_2) : mcqItemV2(position),
+    }));
+    fake.state.next.push(
+      viewV2At(Date.now(), {
+        streamId: STREAM_ID_2,
+        sections: [writtenSection({ position: 1, state: 'closed' }), mcqSection({ position: 2 })],
+        served: [1],
+        answers: [{ position: 1, text: 'kept' }],
+      }),
+    );
+    const container = await render(view, fake);
+    await typeInto(await textarea(container), 'kept');
+    await click(await waitForButton(container, COPY.test.finishSection));
+    await click(await waitForButton(container, COPY.test.finishConfirm));
+    await waitFor(() => fake.attach.mock.calls.length === 1, 'attach', 6_000);
+    await radio(container, 'a');
+    await click(navButton(container, 1, 4) as HTMLButtonElement);
+    const box = await textarea(container);
+    expect(box.value).toBe('kept');
+    expect(box.disabled).toBe(true);
+    expect(container.textContent).toContain(COPY.test.sectionClosed);
+    expect(itemCalls(fake, 1)).toHaveLength(1);
+  });
+
+  it('R5-68 d: once the GET for N+1 is sent, item N is read-only (it cannot be reopened)', async () => {
+    const view = viewV2At(Date.now(), {
+      sections: [writtenSection({ position: 1 })],
+      served: [1],
+    });
+    const fake = fakeApi(view);
+    const held = deferred<ApiResult<ServedItemV2>>();
+    fake.item.mockImplementation(async (_t, position) =>
+      position === 2 ? held.promise : { ok: true, value: writtenItemV2(position) },
+    );
+    const container = await render(view, fake);
+    await typeInto(await textarea(container), 'answer one');
+    await click(await waitForButton(container, COPY.test.next));
+    await waitFor(() => itemCalls(fake, 2).length === 1, 'GET 2');
+    // While item 2 is on its way, question 1 counts as passed.
+    expect(navButton(container, 1, 2)?.disabled).toBe(true);
+    expect(buttonByText(container, COPY.test.previous)).toBeUndefined();
+    held.resolve({ ok: true, value: writtenItemV2(2) });
+    await waitFor(() => heading(container).includes(COPY.test.question(2, 2)), 'item 2');
+    expect(navButton(container, 1, 2)?.disabled).toBe(true);
+  });
+
+  it('R5-68 d: a failed GET for N+1 leaves item N passed', async () => {
+    const view = viewV2At(Date.now(), {
+      sections: [writtenSection({ position: 1 })],
+      served: [1],
+    });
+    const fake = fakeApi(view);
+    fake.item.mockImplementation(async (_t, position) =>
+      position === 2 ? fail('network', 0) : { ok: true, value: writtenItemV2(position) },
+    );
+    const container = await render(view, fake);
+    await textarea(container);
+    await click(await waitForButton(container, COPY.test.next));
+    await waitForButton(container, COPY.test.retry);
+    expect(navButton(container, 1, 2)?.disabled).toBe(true);
   });
 
   it('forward-only: the GET carries afterSeq; on 409 it flushes and retries, so the last edits are kept', async () => {
@@ -444,8 +534,11 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
     });
     const fake = fakeApi(view);
     const afterSeqs: (number | undefined)[] = [];
+    /** The edge's acknowledged seq when each GET arrived. */
+    const ackedAt: number[] = [];
     fake.item.mockImplementation(async (_t, position, afterSeq) => {
       afterSeqs.push(afterSeq);
+      ackedAt.push(fake.state.hw);
       if (position === 2 && (afterSeq ?? 0) > fake.state.hw)
         return fail('out_of_order', 409, { ackSeq: fake.state.hw });
       return { ok: true, value: writtenItemV2(position) };
@@ -459,7 +552,9 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
     const [first, second] = itemCalls(fake, 2);
     // The edit and the untrusted-input signal the synthetic typing raised: seq 2 was the highest enqueued.
     expect(first?.[2]).toBe(2);
-    expect(second?.[2]).toBeLessThanOrEqual(fake.state.hw);
+    // R5-68 f: the retry after the flush sends the acknowledged seq (>= the first afterSeq), not new heartbeats.
+    expect(second?.[2]).toBe(ackedAt.at(-1));
+    expect(second?.[2]).toBeGreaterThanOrEqual(2);
     // The edit went out between the refused GET and the retry.
     const textOrder = fake.events.mock.invocationCallOrder[0] ?? Infinity;
     const getOrders = fake.item.mock.invocationCallOrder.slice(-2);
@@ -526,6 +621,40 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
     await render(again.state.view, again);
     await waitFor(() => ends.length === 1, 'end');
     expect(ends).toEqual(['superseded']);
+  });
+
+  it('R5-68 g: an attach answered with any other code stops retrying and shows the D1 screen for it', async () => {
+    for (const [failure, end] of [
+      [fail('not_eligible', 403), 'invalid'],
+      [fail('bad_request', 400), 'invalid'],
+      [fail('closed', 410), 'invalid'],
+      [fail('unexpected', 500), 'network'],
+    ] as const) {
+      ends = [];
+      const fake = fakeApi(viewV2At(Date.now()));
+      fake.item.mockImplementationOnce(async () => fail('section_closed', 410));
+      fake.attach.mockImplementation(async () => failure);
+      await render(fake.state.view, fake);
+      await waitFor(() => ends.length === 1, 'the end');
+      await settle(1_500);
+      expect(ends).toEqual([end]);
+      expect(fake.attach).toHaveBeenCalledTimes(1);
+      await app?.unmount();
+      app = undefined;
+    }
+  });
+
+  it('R5-68 g: an attach 429 waits for its Retry-After, a 503 backs off, then the screen continues', async () => {
+    const fake = fakeApi(viewV2At(Date.now()));
+    fake.item.mockImplementationOnce(async () => fail('section_closed', 410));
+    fake.attach
+      .mockImplementationOnce(async () => fail('rate_limited', 429, { retryAfterSeconds: 0 }))
+      .mockImplementationOnce(async () => fail('unavailable', 503));
+    fake.state.next.push(afterFirstCloses());
+    const container = await render(fake.state.view, fake);
+    await textarea(container);
+    expect(fake.attach).toHaveBeenCalledTimes(3);
+    expect(ends).toEqual([]);
   });
 
   it('finish: the confirm says finishing is final; confirming sends section.finish and attaches', async () => {
@@ -623,5 +752,15 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
     expect(container.textContent).not.toContain(COPY.test.forwardOnly);
     for (const call of fake.item.mock.calls) expect(call[2]).toBeUndefined();
     expect(fake.media).not.toHaveBeenCalled();
+    // R5-68 a, i: one test-wide paste line from `pasteBlocked`, and a paste is prevented on the screen.
+    expect(view.pasteBlocked).toBe(true);
+    expect(container.textContent).toContain(COPY.test.pasteOffInTest);
+    expect(COPY.test.pasteOffInTest).toBe(
+      'Pasting text is turned off in this test. Paste attempts are recorded.',
+    );
+    const e = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(e, 'clipboardData', { value: { getData: () => 'synthetic' } });
+    (await textarea(container)).dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(true);
   });
 });
