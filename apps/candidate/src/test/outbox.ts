@@ -17,8 +17,9 @@
 // event like a signal: compaction and a refused batch keep it. `enqueuedSeq` is the `afterSeq` of a v2 item GET.
 // R5-67, R5-68 e: a 409 `out_of_order` body's `refusedSeqs` and an ack after a resend are undone the same way.
 // R5-68 b (SR-4): at a section transition `handOver` lets the batch in flight settle, stops the stream and returns its
-// unacknowledged signals and `section.finish` with the monotonic time each was raised; the next stream's `hold` sends
-// them first. Streams of one screen share an origin (`originMono`), so a held event keeps the `t` it was raised at.
+// unacknowledged signals and `section.finish` with the monotonic time each was raised (a batch whose answer was lost
+// is first resent on the old stream with the same seqs, so the edge does not store it twice); the next stream's
+// `hold` sends them first. Streams of one screen share an origin (`originMono`), so a held event keeps the `t` it was raised at.
 // Events carry metadata only; nothing here logs.
 import type { ClientEvent, ClientSignal, SessionState } from '@trace/shared/contracts/candidate';
 import { isOffline, type ApiFailure, type CandidateApi } from '../api';
@@ -35,6 +36,8 @@ export const OUTBOX = {
   maxBodyBytes: 60_000,
   backoffMs: [1_000, 2_000, 4_000, 8_000, 10_000],
   keepUnsentMs: 10 * 60_000,
+  /** At a hand-over, resends of a batch whose answer never came, on the old stream (1, 2, 4 s apart). */
+  handOverTries: 3,
   lenEvery: 25,
   offlineMessage: OFFLINE_MESSAGE,
 } as const;
@@ -166,6 +169,8 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   let stopped = false;
   /** Set by `handOver`: no new batch starts. */
   let closing = false;
+  /** The last batch got no clear answer (network, 503, an unknown answer): the edge may have stored it. */
+  let unclear = false;
   /** Called once the batch in flight has settled. */
   const idle: (() => void)[] = [];
   let offline = false;
@@ -369,6 +374,7 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   };
 
   const goOffline = () => {
+    unclear = true;
     failures += 1;
     const wait = OUTBOX.backoffMs[Math.min(failures, OUTBOX.backoffMs.length) - 1] ?? 10_000;
     notBefore = mono() + wait;
@@ -408,6 +414,7 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
     batch: Entry[],
     sentAt: number,
   ): void => {
+    unclear = false;
     if (res.ok) {
       const receivedAt = wall();
       failures = 0;
@@ -498,6 +505,23 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
       closing = true;
       if (retry !== undefined) clearTimeout(retry);
       if (inFlight) await new Promise<void>((resolve) => idle.push(resolve));
+      // A batch whose answer never came may be stored: resend it on this (still valid) stream with the same seqs, so
+      // the edge skips what it holds (seq <= hw), before anything is handed over. If every try fails it is handed over
+      // anyway: a duplicate is better than a lost signal (SR-4).
+      for (let k = 0; k < OUTBOX.handOverTries; k += 1) {
+        const unsure = queue.filter((e) => e.seq !== undefined).slice(0, OUTBOX.maxEvents);
+        if (stopped || !unclear || unsure.length === 0) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, OUTBOX.backoffMs[k] ?? 10_000));
+        if (stopped) break;
+        inFlight = true;
+        const sentAt = wall();
+        const res = await deps.api.events(deps.sessionToken, {
+          streamId: deps.streamId,
+          events: unsure.map((e) => wire(e, e.seq ?? 0)),
+        });
+        inFlight = false;
+        if (!stopped) settle(res, unsure, sentAt);
+      }
       const held: Held[] = [];
       for (const e of queue) {
         if (e.signal !== undefined)
