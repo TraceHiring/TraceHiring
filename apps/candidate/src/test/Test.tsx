@@ -86,8 +86,8 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
   const [choices, setChoices] = useState(() => choicesOf(initialView));
   const [items, setItems] = useState<Record<number, AnyItem>>({});
   /**
-   * v2 positions whose item GET was sent (R5-68 d): from that moment they count as served, so in a forward-only
-   * section the item before is passed (read-only) at once, not only when the item arrives.
+   * v2 positions whose item GET was sent (R5-68 d). They count only towards "item N is passed" (read-only at once, not
+   * when N+1 arrives), never towards where the screen may go: a pending or failed GET keeps every later position shut.
    */
   const [asked, setAsked] = useState<ReadonlySet<number>>(() => new Set());
   const [itemFailed, setItemFailed] = useState<number | null>(null);
@@ -126,10 +126,10 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
 
   const v2 = isV2(view);
   const layout = useMemo(() => layoutOf(view, closedHere), [view, closedHere]);
-  const served = useMemo(
-    () => servedOf(view, [...Object.keys(items).map(Number), ...asked]),
-    [view, items, asked],
-  );
+  /** What the DO has served: the view's `servedAt` and the items loaded here (requests and navigation use this). */
+  const served = useMemo(() => servedOf(view, Object.keys(items).map(Number)), [view, items]);
+  /** `served` plus the positions whose GET was sent: whether an item is passed (read-only), R5-68 d. */
+  const passed = useMemo(() => new Set([...served, ...asked]), [served, asked]);
   const section = layout.sectionOf.get(current);
 
   const finish = (receipt: Receipt) => {
@@ -174,11 +174,7 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
     setItemFailed(null);
     setView(next);
     setCurrent((c) =>
-      positionAfter(
-        layoutOf(next),
-        c,
-        servedOf(next, [...Object.keys(items).map(Number), ...asked]),
-      ),
+      positionAfter(layoutOf(next), c, servedOf(next, Object.keys(items).map(Number))),
     );
   };
 
@@ -392,10 +388,17 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
   const index = positions.indexOf(current);
   const item = items[current];
   const locked = phase === 'submitting' || phase === 'timeup' || moving;
-  const editable = !locked && (!v2 || isEditable(layout, current, served));
+  const editable = !locked && (!v2 || isEditable(layout, current, passed));
   const answered = (p: number) => (texts[p] ?? '') !== '' || (choices[p] ?? null) !== null;
+  /** A forward-only position after one whose GET is pending or failed: never opened (R5-68 d). */
+  const pastPending = (p: number): boolean => {
+    const s = layout.sectionOf.get(p);
+    if (s?.state !== 'open' || s.navigation !== 'forward_only') return false;
+    const h = highestServed(s, passed);
+    return h !== null && !served.has(h) && p > h;
+  };
   const reachable = (p: number | undefined): p is number =>
-    p !== undefined && (!v2 || canOpen(layout, p, served));
+    p !== undefined && (!v2 || (canOpen(layout, p, passed) && !pastPending(p)));
   const prev = positions[index - 1];
   const next = positions[index + 1];
 
@@ -403,7 +406,7 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
     if (itemFailed === current) return 'failed';
     if (!v2 || section === undefined) return 'loading';
     if (section.state !== 'open') return 'unavailable';
-    const h = highestServed(section, served);
+    const h = highestServed(section, passed);
     if (section.navigation === 'forward_only' && h !== null && current < h) return 'passed';
     return 'loading';
   })();
