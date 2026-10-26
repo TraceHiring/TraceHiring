@@ -426,6 +426,15 @@ DC-M1-1 PostgREST calls an INVOKER `public` function with the caller's JWT and R
 
 **Results (BUILD Wave 0 tail, 2026-10-23).** DC-M1-1 local: **PASS**. `scripts/test-auth-local.mjs` step 5, run by `pnpm test:rls` after every reset: the owner's real GoTrue tokens call `rpc/import_item_batch` through kong and PostgREST; the aal1 token gets HTTP 409 (23503 'import job not found': RLS hid the org's job inside the INVOKER function), the aal2 token is accepted, and the guards move the job to `validating` with one stored error row. DC-M1-1 `trace-dev` half: not run (no dev-project connection in a BUILD chat); it runs with DC-M1-6 at the founder's next staging go-ahead. DC-M1-2…DC-M1-5: not yet run (they need the A5 worker, Package v2 and the jobs paths of later waves).
 
+**AT-M1-10 measurement (BUILD 4, 2026-10-26).** Linux CI, GitHub Actions `ubuntu-24.04`, local stack (Supabase, the
+three Workers under `wrangler dev`, both apps under `vite preview`), `e2e/tests/m1-import-500.spec.ts` on branch
+`m1/e2e-specs-2` @ `b54091e` (= `m1/integration` `985febc` + the M1 E2E specs), dispatch run 40344843041 attempt 1:
+**PASS, `elapsed_ms` 14,899** (file chosen → "Import finished.": check 430 ms, send 14,350 ms, finish 105 ms) against
+the 300,000 ms gate, for 500 rows and 500 distinct PNG images of 59,867 bytes each (xlsx 25,841 bytes, images zip
+29,983,522 bytes); 500 `item_versions`, all approved, 0 row errors (read back by the spec). Source:
+`test-results/m1-at10.json` of the run's `e2e-local-report` artifact. The staging half (Hyperdrive, Workers limits)
+stays with the M1 staging founder item.
+
 ## 9. Security notes for reviewers
 Library keys (I-M1-5) and the copy definer function; the import path (browser-parsed data is untrusted: every row re-validated, images re-checked; no file stored); AI drafting (prompt-injection in topic, output schema, no candidate data); the member-provisioning secret lives only in `workers/jobs`; the image route at the edge; `public` INVOKER functions (EXECUTE only to `authenticated`, `search_path = ''`, every statement subject to RLS).
 

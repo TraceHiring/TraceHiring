@@ -75,3 +75,16 @@ publish guards are enforced by the api and Postgres. Rule 3 touched (paste_writt
 3. Low — unsaved or in-flight step-3 changes are dropped at publish. → R5-70 e.
 4. Info — the pool picker lists other workspaces' pools; the FK refuses them as 404. → R5-70 f.
 Locks, paste rule, N1 ordering, Edit as new version (no fork), error text, XSS, fixtures, origins checked clean.
+
+## A5d fix round 1 (`b8eb447..07a21d9`, branch `m1/a5d-fix-1`; R5-70) — Opus confirming re-review
+**Spec: CONFIRMED WITH NOTES. Security: CONFIRMED WITH NOTES.** R5-70 a-f fixed, each with a failing-first test; rule 3
+holds (a save never writes client-chosen settings; locks only move values toward the lock). Owed before the M1 exit
+(lead, carried to HANDOFF):
+1. Low — D1's PUT shape check runs before `save_test_draft`, which does not re-check it under its row lock (a few
+   round-trips of race; same-org draft content). Fix: pass the expected D1 shape into `save_test_draft`.
+2. Low — `PUT …/tests/:id/integrity` carries no expected version: a stale tab can write step-3 settings into a newer
+   draft (locks still apply). Fix: the same `?version=` on the integrity PUT, sent by `IntegrityStep`.
+3. Info — the expected version is a version id, not a revision: two tabs on the same open draft are last-writer-wins
+   (as R5-70 a says).
+4. Info — lead ask: move `putVersioned` (`authoring/editor-actions.ts`) into `api/endpoints.ts`; add a non-uuid test.
+**Merged** into `m1/integration` (`chore: merge m1/a5d-fix-1`).
