@@ -12,6 +12,8 @@
 // - A named preset is stored with the catalog version whose values were checked; custom stores none (fix round 1 #9).
 // - The view of a draft shows an admin lock's value in place of the stored one (E16: the stored value can be neither
 //   saved nor published; A5c review M2); a published version shows its frozen values (E17).
+// - The PUT takes the draft PUTs' optional `?version=<testVersionId>` (R5-70 a): naming any version but the open draft
+//   answers 409 `conflict` and writes nothing, so a stale tab never writes step-3 settings into a newer draft.
 // - Admin locks: admin role only (counts at aal2, ADR-029); DELETE answers 204 with no body (R5-53 c).
 import { renderCandidateSummary } from '@trace/shared';
 import {
@@ -32,7 +34,7 @@ import {
   parseRows,
   type RulesetRow,
 } from '../tests/authoring.js';
-import { PUBLISHERS } from '../tests/draft-routes.js';
+import { PUBLISHERS, expectedVersionOf } from '../tests/draft-routes.js';
 import { answer, noContent, parseBody, readJson } from '../tests/http.js';
 import { requireRole } from '../tests/membership.js';
 import {
@@ -142,6 +144,10 @@ export const createIntegritySettingsRoutes = (
       if (version.status !== 'draft' || version.ruleset_version_id === null) {
         return orgFail('conflict');
       }
+      // R5-70 a (A5d re-review #2): the same optional expected version as the draft PUTs; a stale tab naming
+      // another version is refused before anything is written.
+      const expected = expectedVersionOf(c.req.query('version'));
+      if (expected !== null && expected !== version.id.toLowerCase()) return orgFail('conflict');
       let presetVersion: number | null = null;
       if (req.presetKey !== null) {
         const reference = deps.reference(c.env) ?? orgFail('unavailable');

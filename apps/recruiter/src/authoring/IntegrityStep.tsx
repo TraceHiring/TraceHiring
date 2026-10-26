@@ -214,6 +214,7 @@ const sameState = (a: IntegrityState, b: IntegrityState): boolean =>
 function Loaded({
   api,
   testId,
+  versionId,
   view,
   readOnly,
   onSaved,
@@ -221,6 +222,7 @@ function Loaded({
 }: {
   api: ApiClient;
   testId: string;
+  versionId: string;
   view: IntegritySettingsView;
   readOnly: boolean;
   onSaved: ((saved: IntegritySettingsView) => void) | undefined;
@@ -242,7 +244,8 @@ function Loaded({
       return;
     }
     setBusy(true);
-    const result = await putIntegritySettings(api, testId, built.request);
+    // R5-70 a: the save names the draft version the editor loaded; a stale tab is refused (409) and writes nothing.
+    const result = await putIntegritySettings(api, testId, built.request, versionId);
     setBusy(false);
     if (result.ok) {
       setState(fromIntegrityView(result.data));
@@ -274,10 +277,12 @@ function Loaded({
  * Loads `GET …/tests/:testId/integrity` (unless `initial` is the view already loaded) and saves with `PUT` (draft only;
  * `readOnly` for a published version). `onSaved` receives the stored settings after a save, so the editor can make
  * every written section follow `paste_written` (`setPasteWritten`, rule 3) and save the draft again before publish.
+ * Every save names `versionId` (`?version=`, R5-70 a), the version of the draft view the editor loaded.
  */
 export function IntegrityStep({
   api,
   testId,
+  versionId,
   readOnly = false,
   initial,
   onSaved,
@@ -285,6 +290,8 @@ export function IntegrityStep({
 }: {
   api: ApiClient;
   testId: string;
+  /** The test version the editor loaded (the expected version of every save). */
+  versionId: string;
   readOnly?: boolean;
   /** The view already loaded by the page, or null/absent to load it here. */
   initial?: IntegritySettingsView | null;
@@ -299,6 +306,7 @@ export function IntegrityStep({
       <Loaded
         api={api}
         testId={testId}
+        versionId={versionId}
         view={initial}
         readOnly={readOnly}
         onSaved={onSaved}
@@ -318,6 +326,7 @@ export function IntegrityStep({
     <Loaded
       api={api}
       testId={testId}
+      versionId={versionId}
       view={state.data}
       readOnly={readOnly}
       onSaved={onSaved}
