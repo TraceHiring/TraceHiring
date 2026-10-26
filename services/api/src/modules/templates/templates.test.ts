@@ -15,7 +15,7 @@ import {
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
 import { sha256Hex } from '../candidate/encoding.js';
-import { OrgError, PGRST_MAX_ROWS, RestError } from '../tests/org-context.js';
+import { OrgError, PGRST_MAX_ROWS, RestError, rpcOf } from '../tests/org-context.js';
 import { idMaker, type Row } from '../tests/rest.test-helpers.js';
 import {
   OPEN_BOOK,
@@ -454,19 +454,6 @@ describe('POST …/tests/from-template', () => {
       ],
       [{ title: 'Spoken English', format: 'voice' }],
     ],
-    [
-      'only an unavailable mcq section',
-      [
-        {
-          title: 'Verbal ability',
-          format: 'mcq',
-          skillKey: 'verbal',
-          drawCount: 1,
-          available: false,
-        },
-      ],
-      [{ title: 'Verbal ability', format: 'mcq' }],
-    ],
   ])(
     'an own template with %s answers 201 with an empty draft and every section skipped (M1-16, E18)',
     async (_name, sections, skipped) => {
@@ -646,6 +633,121 @@ describe('POST …/tests/from-template: limiter, atomic write, preset version (R
     expect(sent.sections[0]?.libraryItemVersionIds).toHaveLength(1000);
     expect(rowsOf(s.db, 'library_copy_requests')).toHaveLength(2);
     expect(rowsOf(s.db, 'pool_items')).toHaveLength(1000);
+  });
+
+  it('more than 2,000 library ids in one call (all sections together) is 503 before any write', async () => {
+    const verbal = (n: number) => ({
+      title: `Verbal ${n}`,
+      format: 'mcq' as const,
+      skillKey: 'verbal',
+      drawCount: 100,
+      available: true,
+    });
+    const three: TemplateRef = {
+      ...CUSTOMER_SUPPORT,
+      id: '7e000000-0000-4000-8000-000000000004',
+      templateKey: 'three_verbal',
+      blueprint: { sections: [verbal(1), verbal(2), verbal(3)], totalTimeSeconds: 3600 },
+    };
+    const s = setup({ templates: [three], library: libraryRefs('verbal', 'mcq', 1005) });
+    const res = await s.call('POST', '/tests/from-template', {
+      ...body,
+      templateKey: 'three_verbal',
+    });
+    expect(res.status).toBe(503);
+    expect(s.rpc.payloads).toEqual([]);
+    expect(s.rpc.apiWrites()).toEqual([]);
+    expect(rowsOf(s.db, 'jobs')).toEqual([]);
+    const two: TemplateRef = {
+      ...three,
+      id: '7e000000-0000-4000-8000-000000000005',
+      templateKey: 'two_verbal',
+      blueprint: { sections: [verbal(1), verbal(2)], totalTimeSeconds: 3600 },
+    };
+    const ok = setup({ templates: [two], library: libraryRefs('verbal', 'mcq', 1005) });
+    expect(
+      (await ok.call('POST', '/tests/from-template', { ...body, templateKey: 'two_verbal' }))
+        .status,
+    ).toBe(201);
+  });
+
+  it('the payload counts library ids across sections: 2,000 pass, 2,001 are 503 unavailable', () => {
+    const section = (name: string, count: number) => ({
+      title: name,
+      format: 'mcq' as const,
+      skillKey: 'verbal',
+      drawCount: 100,
+      weight: 50,
+      libraryItemVersionIds: libraryRefs('verbal', 'mcq', count).map((r) => r.libraryItemVersionId),
+    });
+    const payloadOf = (sections: ReturnType<typeof section>[]) =>
+      templateDraftPayload({
+        workspaceId: WS,
+        jobTitle: 'Synthetic Support Associate',
+        template: CUSTOMER_SUPPORT,
+        jdSha256: null,
+        templateMatchPermille: null,
+        settings: { presetKey: 'standard', presetVersion: 5, settings: STANDARD },
+        sections,
+      });
+    expect(payloadOf([section('A', 1000), section('B', 1000)]).sections).toHaveLength(2);
+    let thrown: unknown = null;
+    try {
+      payloadOf([section('A', 1000), section('B', 1000), section('C', 1)]);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(OrgError);
+    expect((thrown as OrgError).code).toBe('unavailable');
+  });
+
+  it('the function de-duplicates ids within a section (order kept) and refuses > 2,000 in total', async () => {
+    const dup = libraryRefs('verbal', 'mcq', 3);
+    const first = dup[0];
+    if (first === undefined) throw new Error('fixture');
+    const s = setup({ library: [...dup, first] });
+    const res = await s.call('POST', '/tests/from-template', body);
+    expect(res.status).toBe(201);
+    const sent = s.rpc.payloads[0]?.p_payload as {
+      sections: { libraryItemVersionIds: string[] }[];
+    };
+    expect(sent.sections[0]?.libraryItemVersionIds).toHaveLength(4);
+    const requested = rowsOf(s.db, 'library_copy_requests').flatMap(
+      (r) => r.library_item_version_ids as string[],
+    );
+    expect(requested).toEqual(dup.map((r) => r.libraryItemVersionId));
+    expect(rowsOf(s.db, 'pool_items')).toHaveLength(3);
+    // Past 2,000 in total the function itself refuses with 22023 (the api never sends it).
+    const big = setup();
+    const ids = libraryRefs('verbal', 'mcq', 1000).map((r) => r.libraryItemVersionId);
+    const section = (name: string) => ({
+      name,
+      format: 'mcq',
+      weight: 25,
+      drawCount: 1,
+      skillKey: 'verbal',
+      shuffleItems: true,
+      shuffleOptions: true,
+      navigation: 'free',
+      libraryItemVersionIds: ids,
+    });
+    const call = (sections: unknown[]) =>
+      rpcOf(big.db.rest)('create_test_from_template', {
+        p_org: ORG,
+        p_payload: {
+          workspaceId: WS,
+          jobTitle: 'Synthetic',
+          roleTemplateVersionId: CUSTOMER_SUPPORT.id,
+          totalTimeSeconds: 1200,
+          qualityCutoff: 40,
+          settings: { ...STANDARD },
+          sections,
+        },
+      });
+    await expect(call([section('A'), section('B'), section('C')])).rejects.toMatchObject({
+      sqlstate: '22023',
+    });
+    expect(rowsOf(big.db, 'jobs')).toEqual([]);
   });
 
   it('more than 1,000 library ids for one section is 503 unavailable before the call', () => {
