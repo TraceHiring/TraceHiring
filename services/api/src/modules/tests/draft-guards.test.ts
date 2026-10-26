@@ -180,8 +180,9 @@ describe("D1's shape re-checked by the database under its row lock (R5-71 a, R5-
     };
     const res = await s.call('PUT', s.d1Path, draftBody());
     expect(res.status).toBe(409);
+    // The refusal comes from the database (the api's own check passed): its guard key answers 409.
     expect(await codeOf(res)).toBe('conflict');
-    expect(rowsOf(s.db, 'sections').some((x) => x.pool_id === POOL)).toBe(true);
+    expect(s.db.savePayloads.at(-1)).toMatchObject({ requireD1Shape: true });
   });
 });
 

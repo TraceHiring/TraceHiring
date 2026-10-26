@@ -1,9 +1,9 @@
 // Writes shared by every path that gives a draft integrity settings (spec m1 §6.6, R5-34, DB-M1-1; A2b fix round 1
 // #4, #5, #9): the Standard preset with the org's admin locks for a locked org, the preset's catalog version next to
-// its key (versioning rule: a named preset is stored with the version whose values were checked; custom stores none),
-// and the default navigation for a section that has none once the draft has settings (lead decision R5-63 b: mcq
-// free, written forward only; a written section also takes the settings' paste_written). Nothing here touches a
-// rule's tier, threshold or `validated` flag (rule 3) or reads an integrity result (rule 2).
+// its key (versioning rule: a named preset is stored with the version whose values were checked; custom stores none).
+// The default navigation and the written paste rule of a draft with settings (R5-63 b, DB-M1-1) are derived by the
+// database in the same write (M1-p, R5-71 b). Nothing here touches a rule's tier, threshold or `validated` flag
+// (rule 3) or reads an integrity result (rule 2).
 import { PresetKey } from '@trace/shared/contracts/m1';
 import { eq, type OrgContext } from '../tests/org-context.js';
 import type { ReferenceSource } from '../templates/reference.js';
@@ -70,29 +70,4 @@ export const pinPresetVersion = async (
     },
     { preset_version: write.presetVersion },
   );
-};
-
-/**
- * R5-63 b and DB-M1-1 for a draft that now has settings: every section without a navigation takes the default (a
- * written one also the paste rule), and every written section with a navigation takes the settings' paste_written.
- */
-export const applySettingsToSections = async (
-  ctx: OrgContext,
-  orgId: string,
-  versionId: string,
-  pasteWritten: SettingValues['paste_written'],
-): Promise<void> => {
-  const where = (format: 'mcq' | 'written', navigation: string) => ({
-    org_id: eq(orgId),
-    test_version_id: eq(versionId),
-    format: eq(format),
-    navigation,
-    select: 'id',
-  });
-  await ctx.rest.update('sections', where('mcq', 'is.null'), { navigation: 'free' });
-  await ctx.rest.update('sections', where('written', 'is.null'), {
-    navigation: 'forward_only',
-    paste_rule: pasteWritten,
-  });
-  await ctx.rest.update('sections', where('written', 'not.is.null'), { paste_rule: pasteWritten });
 };

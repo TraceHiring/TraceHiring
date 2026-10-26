@@ -115,7 +115,8 @@ export const saveDraft = async (
   try {
     await rpcOf(ctx.rest)('save_test_draft', {
       p_test_version: version.id,
-      p_payload: payload,
+      // R5-71 a: the database re-checks D1's shape under the version row lock (the check above can race a v2 save).
+      p_payload: opts.requireD1Shape ? { ...payload, requireD1Shape: true } : payload,
     });
   } catch (err) {
     return saveFailure(err);

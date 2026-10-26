@@ -47,7 +47,6 @@ import {
 } from '../tests/org-context.js';
 import type { ReferenceSource } from '../templates/reference.js';
 import { LOCK_COLS, LockRowSchema, applyLocks, loadLocks, type SettingValues } from './locks.js';
-import { applySettingsToSections } from './settings-write.js';
 
 export interface IntegritySettingsDeps {
   org: OrgDeps;
@@ -169,9 +168,8 @@ export const createIntegritySettingsRoutes = (
         { preset_key: req.presetKey, preset_version: presetVersion, settings: req.values },
       );
       if (updated.length !== 1) return orgFail('conflict');
-      // R5-63 b and DB-M1-1: with settings the draft is package v2, so a section without a navigation takes the
-      // default, and every written section takes the paste rule of the settings.
-      await applySettingsToSections(ctx, orgId, version.id, req.values.paste_written);
+      // R5-63 b and DB-M1-1: the database derives each section's default navigation and the written paste rule from
+      // these settings in the same write (M1-p, R5-71 b).
       return answer(IntegritySettingsView, await viewOf(ctx, orgId, testId));
     }),
   );

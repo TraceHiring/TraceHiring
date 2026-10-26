@@ -21,7 +21,7 @@ import { TestDraftView } from '@trace/shared/contracts/m1';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { loadLocks } from '../integrity-settings/locks.js';
-import { applySettingsToSections, lockedStandard } from '../integrity-settings/settings-write.js';
+import { lockedStandard } from '../integrity-settings/settings-write.js';
 import type { ReferenceSource } from '../templates/reference.js';
 import {
   TEST_COLS,
@@ -113,7 +113,6 @@ const seedLockedSettings = async (
   env: Env,
   ctx: OrgContext,
   orgId: string,
-  versionId: string,
   rulesetId: string | null,
 ): Promise<void> => {
   if (rulesetId === null) return;
@@ -134,8 +133,6 @@ const seedLockedSettings = async (
         settings: write.settings,
       },
     );
-    // R5-63 b: the draft now has settings (a new draft has no section yet; kept for every save path).
-    await applySettingsToSections(ctx, orgId, versionId, write.settings.paste_written);
   } catch {
     // The draft stands without settings; publish stays refused until they are saved (fail closed).
   }
@@ -260,8 +257,7 @@ export const createTestsRoutes = (deps: TestRouteDeps): Hono<{ Bindings: Env }> 
         }
         throw err;
       }
-      if (versionId !== null)
-        await seedLockedSettings(deps, c.env, ctx, orgId, versionId, rulesetId);
+      if (versionId !== null) await seedLockedSettings(deps, c.env, ctx, orgId, rulesetId);
       return answer(TestDraftView, await draftViewOf(ctx, orgId, test.id), 201);
     }),
   );

@@ -322,6 +322,8 @@ const GUARD_TEXTS = {
   'a library item is approved by an expert review': 'library_expert_review',
   'the key reviewer is an active library member': 'key_reviewer_member',
   'the key reviewer records their own review': 'key_reviewer_self',
+  // R5-71 (R5-70 re-review Low 1): D1's PUT re-checks the stored draft's shape inside save_test_draft.
+  'the draft has sections the D1 editor cannot save': 'd1_shape',
 } as const;
 export type GuardKey = (typeof GUARD_TEXTS)[keyof typeof GUARD_TEXTS] | 'other';
 
@@ -485,6 +487,7 @@ export const restErrorCode = (err: unknown): OrgErrorCode => {
       case 'key_review_own_update':
       case 'library_expert_review':
       case 'invite_settled':
+      case 'd1_shape':
         return 'conflict';
       // The key reviewer must be an active library member recording their own review (a permission refusal).
       case 'key_reviewer_member':
