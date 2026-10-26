@@ -2,15 +2,15 @@
 // presets, one control per catalog setting (a radio group or a select, never a checkbox), "Locked by admin" and the
 // always-locked settings, "What candidates will see" from the shared renderer, and the static "Data and review" panel
 // that follows the plan, not the design's numbers. Nothing here can turn a detector into a flag (rule 3): every value is
-// one of the catalog's own, and the focus signals are described as context only. The A2+A5 switch mounts the step in the
-// editor; until then it is rendered by tests and the guard registry.
+// one of the catalog's own, and the focus signals are described as context only. The wizard on /tests/:testId mounts
+// the step as step 3 (R5-69), passing the settings it already loaded.
 import {
   INTEGRITY_SETTING_VALUES,
   type IntegritySettingsView,
   type PresetKey,
   type SettingKey,
 } from '@trace/shared/contracts/m1';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ApiClient } from '../api/client';
 import { getIntegritySettings, putIntegritySettings } from '../api/endpoints';
 import { errorText } from '../common/messages';
@@ -207,22 +207,34 @@ export function IntegrityStepView({
   );
 }
 
+/** The same preset and values (the locks come from the server and are not edited here). */
+const sameState = (a: IntegrityState, b: IntegrityState): boolean =>
+  a.presetKey === b.presetKey && SETTING_ORDER.every((key) => a.values[key] === b.values[key]);
+
 function Loaded({
   api,
   testId,
   view,
   readOnly,
   onSaved,
+  onPendingChange,
 }: {
   api: ApiClient;
   testId: string;
   view: IntegritySettingsView;
   readOnly: boolean;
   onSaved: ((saved: IntegritySettingsView) => void) | undefined;
+  onPendingChange: ((pending: boolean) => void) | undefined;
 }) {
   const [state, setState] = useState<IntegrityState>(() => fromIntegrityView(view));
+  const [saved, setSaved] = useState<IntegrityState>(() => fromIntegrityView(view));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<StepMessage | null>(null);
+  // R5-70 e: changes not yet saved, or a save in flight, hold the editor's publish.
+  const pending = busy || !sameState(state, saved);
+  useEffect(() => {
+    onPendingChange?.(pending);
+  }, [pending, onPendingChange]);
   const save = async () => {
     const built = toIntegrityRequest(state);
     if (!built.ok) {
@@ -234,6 +246,7 @@ function Loaded({
     setBusy(false);
     if (result.ok) {
       setState(fromIntegrityView(result.data));
+      setSaved(fromIntegrityView(result.data));
       setMessage({ kind: 'ok', text: 'Settings saved.' });
       onSaved?.(result.data);
     } else {
@@ -258,23 +271,41 @@ function Loaded({
 }
 
 /**
- * Loads `GET …/tests/:testId/integrity` and saves with `PUT` (draft only; `readOnly` for a published version).
- * `onSaved` receives the stored settings after a save, so the editor can make every written section follow
- * `paste_written` (`setPasteWritten`, rule 3) and save the draft again before publish.
+ * Loads `GET …/tests/:testId/integrity` (unless `initial` is the view already loaded) and saves with `PUT` (draft only;
+ * `readOnly` for a published version). `onSaved` receives the stored settings after a save, so the editor can make
+ * every written section follow `paste_written` (`setPasteWritten`, rule 3) and save the draft again before publish.
  */
 export function IntegrityStep({
   api,
   testId,
   readOnly = false,
+  initial,
   onSaved,
+  onPendingChange,
 }: {
   api: ApiClient;
   testId: string;
   readOnly?: boolean;
+  /** The view already loaded by the page, or null/absent to load it here. */
+  initial?: IntegritySettingsView | null;
   onSaved?: (saved: IntegritySettingsView) => void;
+  /** True while the step has unsaved changes or a save in flight (the editor holds publish, R5-70 e). */
+  onPendingChange?: (pending: boolean) => void;
 }) {
-  const load = useCallback(() => getIntegritySettings(api, testId), [api, testId]);
-  const [state] = useResource(load);
+  const fetchView = useCallback(() => getIntegritySettings(api, testId), [api, testId]);
+  const [state] = useResource(initial === undefined || initial === null ? fetchView : null);
+  if (initial !== undefined && initial !== null) {
+    return (
+      <Loaded
+        api={api}
+        testId={testId}
+        view={initial}
+        readOnly={readOnly}
+        onSaved={onSaved}
+        onPendingChange={onPendingChange}
+      />
+    );
+  }
   if (state.kind === 'loading') return <p role="status">Loading...</p>;
   if (state.kind === 'error') {
     return (
@@ -284,6 +315,13 @@ export function IntegrityStep({
     );
   }
   return (
-    <Loaded api={api} testId={testId} view={state.data} readOnly={readOnly} onSaved={onSaved} />
+    <Loaded
+      api={api}
+      testId={testId}
+      view={state.data}
+      readOnly={readOnly}
+      onSaved={onSaved}
+      onPendingChange={onPendingChange}
+    />
   );
 }

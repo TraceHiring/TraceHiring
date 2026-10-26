@@ -379,6 +379,7 @@ describe('never under-states what is recorded', () => {
           values: settings,
           locked,
           candidateSummary: s.lines,
+          stored: true,
         }),
       ).not.toThrow();
     }

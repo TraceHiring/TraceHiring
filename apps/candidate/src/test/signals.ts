@@ -1,5 +1,6 @@
 // Client signals on the test screen only (specs/d1-demo-slice.md §4.6, rules 7 and 8). Exactly the §4.6 table and
-// nothing else: paste and drop (capture phase on the document, prevented), untrusted keyboard or input events,
+// nothing else: paste and drop (capture phase on the document, prevented; in M1 a paste in an `allowed_logged`
+// section goes through and is still recorded, R5-66 d), untrusted keyboard or input events,
 // a hidden tab of 3 s or more, and a fullscreen exit after the test entered fullscreen. Every payload is metadata
 // (item position, length, count, duration). The text of a paste or drop, clipboard content, typed text and file
 // names never leave this module; the last in-test copy/cut selection is kept in memory only, to compare a paste
@@ -17,6 +18,12 @@ export interface SignalDeps {
   /** The item position shown, or null. */
   currentItem: () => number | null;
   emit: (signal: SignalBody) => void;
+  /**
+   * M1 (R5-24, R5-66 d): true while the item shown is in a section whose paste rule is `allowed_logged`; the paste
+   * then enters the answer and is still recorded (length only). Absent or false: prevented, as in D1. Dropping text
+   * is prevented in every section.
+   */
+  pasteAllowed?: () => boolean;
   /** Monotonic ms (performance.now). */
   monoNow?: () => number;
 }
@@ -65,7 +72,7 @@ export const installSignals = (deps: SignalDeps): Signals => {
   };
 
   const onPaste = (event: Event) => {
-    event.preventDefault();
+    if (deps.pasteAllowed?.() !== true) event.preventDefault();
     const data = (event as ClipboardEvent).clipboardData;
     const text = data?.getData('text/plain') ?? '';
     if (lastCopy !== null && lastCopy !== '' && text === lastCopy) return;

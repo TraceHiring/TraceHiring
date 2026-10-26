@@ -32,3 +32,46 @@ session store checked clean.
 Image types (allow-list from Content-Type, 1 MiB by length and streaming cap, SHA-256 re-checked, `data:` only, never
 stored), fetch scope (edge origin only, `credentials: 'omit'`, `redirect: 'error'`), session token (Bearer only,
 sessionStorage as D1), XSS (React text only), outbox validation and error copy checked clean.
+
+## A7 fix round 1 (`209805f..177003a`, branch `m1/a7-fix-1`) — Opus confirming re-review (spec + security)
+**Spec: NOT CONFIRMED. Security: CONFIRMED WITH NOTES.** R5-68 a, b, c, e, f, g, i fixed and tested; no rule 1-9 breach.
+1. Medium (regression from R5-68 d) — positions whose GET was only sent count as served, so forward-only navigation
+   reaches N+2 while N+1 is loading or failed; the DO then serves N+2 and the candidate skips an item they never saw
+   (`Test.tsx:129-132`, `:304`; `sections.ts:79-84`). → fix round 2: sent GETs only make N read-only.
+2. Low — a batch that failed in flight is handed over although the edge may have stored it: its signals can be
+   stored twice (bounded, same `t`). → fix round 2: retry the unclear batch on the old stream first.
+3. Info — no test for the image `Retry-After` 60 s cap; the attach loop's `Retry-After` is uncapped (D1 caps 60 s).
+   → fix round 2.
+Writer choices accepted: one time origin per screen (`t` is evidence context only), images 4 requests total, attach
+codes mapped to D1's screens.
+
+## A7 fix round 2 (`177003a..91d91be`) — Opus confirming re-review
+**Spec: CONFIRMED WITH NOTES. Security: CONFIRMED.** All three round-1 re-review items fixed with failing-first tests;
+no way found to get stuck (forward-only, free, after a transition, a 410 or a reload); no duplicate answer edits or
+`section.finish` from the resend; no new egress or storage. Writer choice accepted: item N cannot be reopened while
+N+1 is pending (stricter than R5-68 d). Notes (Info, carried to REVIEW): hand-over can take ~127 s on a hung network
+before attach (R5-66 b order holds; signals are not section-gated at the edge; optional total time budget); the
+`attachWaitMs` call site has no test; the outbox 429 and item-GET 429 `Retry-After` paths stay uncapped (outside this
+round). **Merged** into `m1/integration` (`chore: merge m1/a7-fix-1`).
+
+## A5d recruiter wizard wiring (`de5b9b4..2489db3`, branch `m1/a5d-wizard`; R5-69)
+**Spec review: PASS WITH FIXES.** No rule 1-9 breach (rules 1, 2, 3 checked: no blended number, no reject control,
+paste rule only ever the test's `paste_written`).
+1. Medium — D1's `PUT /tests/:id` can wipe the pool sections of a draft that became v2 in another tab (api
+   `tests/routes.ts:281-296` has no shape check). → R5-70 b.
+2. Low — test gaps: test-wide 10-question limit wiring, the integrity-read fallback, `FREEZE_COPY` in the v2 dialog,
+   "Reviewers" on the D1 published view. → R5-70 e.
+3. Low — a stored pool not in the loaded pages shows "Choose a pool". → R5-70 e.
+4. Info — the "stored" rule is stricter than R5-69 b's text (sections with navigation/paste rule count). → R5-70 d.
+5. Info — Publish enabled with section issues (server decides, as D1): accepted.
+D1 preservation (d1-slice labels and flow, `e2e/support/recruiter.ts`), R5-69 a-h checked clean.
+
+**Security review: PASS WITH FIXES.** Client gating is UX only; locks, paste rule, pool workspace, one open draft and
+publish guards are enforced by the api and Postgres. Rule 3 touched (paste_written) and holds.
+1. Medium — a stale tab overwrites a newer draft made with "Edit as new version" (`saveDraftV2` sends no version; the
+   api writes into the latest version). → R5-70 a.
+2. Medium — a lock placed after settings were stored makes every step-2 save 400 with a misleading message (fails
+   closed). → R5-70 c.
+3. Low — unsaved or in-flight step-3 changes are dropped at publish. → R5-70 e.
+4. Info — the pool picker lists other workspaces' pools; the FK refuses them as 404. → R5-70 f.
+Locks, paste rule, N1 ordering, Edit as new version (no fork), error text, XSS, fixtures, origins checked clean.

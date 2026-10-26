@@ -113,6 +113,18 @@ describe('GET …/tests/:testId/integrity', () => {
     expect(view.candidateSummary).toEqual(
       renderCandidateSummary(D1_EQUIVALENT_VALUES, 'm1-settings-v1').lines,
     );
+    expect(view.stored).toBe(false);
+  });
+
+  it('stored is true once settings are stored, also for custom values without a preset (R5-70 d)', async () => {
+    const s = await setup();
+    const custom = { ...STANDARD, question_copy: 'off' };
+    const put = IntegritySettingsView.parse(
+      await (await s.call('PUT', s.path, { presetKey: null, values: custom })).json(),
+    );
+    expect(put).toMatchObject({ presetKey: null, stored: true });
+    const view = IntegritySettingsView.parse(await (await s.call('GET', s.path)).json());
+    expect(view).toMatchObject({ presetKey: null, stored: true });
   });
 
   it('carries an admin lock value in place of the stored one on a draft; the preset becomes custom (E16, A5c M2)', async () => {

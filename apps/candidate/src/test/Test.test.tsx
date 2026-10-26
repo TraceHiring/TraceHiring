@@ -84,6 +84,7 @@ const fakeApi = (view: SessionView): FakeApi => {
     item,
     events,
     submit,
+    media: unused,
   };
   return { api, item, events, submit, attach, submitTimes };
 };

@@ -17,12 +17,34 @@ import type {
   PhotoRes,
   Receipt,
   ServedItem,
+  ServedItemV2,
   SessionAttachRes,
+  SessionAttachResV2,
   SessionStartReq,
   SessionStartRes,
+  SessionStartResV2,
   SessionView,
+  SessionViewV2,
   SubmitReq,
 } from '@trace/shared/contracts/candidate';
+
+/** A v1 (D1) or v2 (M1, R5-9) session view: `v: 2` tells them apart. */
+export type AnyView = SessionView | SessionViewV2;
+/** A v1 or v2 served item. */
+export type AnyItem = ServedItem | ServedItemV2;
+
+export const isV2 = (view: AnyView): view is SessionViewV2 => 'v' in view && view.v === 2;
+
+/** Item images (R5-66 e): only these types, at most 1 MiB (the edge's own cap, item-media.ts). */
+export const ITEM_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
+export type ItemImageType = (typeof ITEM_IMAGE_TYPES)[number];
+export const ITEM_IMAGE_MAX_BYTES = 1_048_576;
+
+/** The bytes of one item image, as the edge served them. Never stored; the screen shows them as a `data:` URL. */
+export interface ItemImage {
+  type: ItemImageType;
+  bytes: Uint8Array;
+}
 
 /** The edge's status for each constant code; api.test.ts checks it equals the contract's table. */
 export const ERROR_STATUS: Record<CandidateErrorCode, number> = {
@@ -58,6 +80,11 @@ export interface ApiFailure {
   retryAfterSeconds?: number;
   /** 409 `out_of_order`: the stream's high-water mark; resend from `ackSeq + 1`. */
   ackSeq?: number;
+  /**
+   * 409 `out_of_order` on events (R5-67): the seqs of the part the edge kept that it recorded as refused, checked as
+   * an ack's (distinct, each <= `ackSeq`, at most 100). Absent when none.
+   */
+  refusedSeqs?: number[];
 }
 
 export type ApiResult<T> = { ok: true; value: T } | ApiFailure;
@@ -201,17 +228,79 @@ export const isSessionView = (v: unknown): v is SessionView =>
   isArrayOf(v['answers'], isAnswer, 0, 100) &&
   (v['receipt'] === undefined || isReceipt(v['receipt']));
 
-export const isSessionStartRes = (v: unknown): v is SessionStartRes =>
-  isObj(v) &&
-  ((isJws(v['sessionToken']) && isTime(v['expiresAt']) && isSessionView(v['view'])) ||
-    (v['state'] === 'submitted' && isReceipt(v['receipt'])));
+const isNavigation = oneOf('free', 'forward_only');
+const isPasteRule = oneOf('blocked', 'allowed_logged');
+const isSectionState = oneOf('not_entered', 'open', 'closed');
 
-export const isSessionAttachRes = (v: unknown): v is SessionAttachRes =>
-  isObj(v) && isSessionView(v['view']);
+/** R5-24 (the contract's section rule): a written section is forward-only with a paste rule; no other has one. */
+const sectionRulesOk = (s: Obj): boolean =>
+  s['format'] === 'written'
+    ? s['navigation'] === 'forward_only' && s['pasteRule'] !== undefined
+    : s['pasteRule'] === undefined;
 
-export const isServedItem = (v: unknown): v is ServedItem => {
+const isSectionV2 = (s: unknown): boolean =>
+  isObj(s) &&
+  isUuid(s['id']) &&
+  isText(s['title'], 120) &&
+  isPosition(s['position']) &&
+  isItemKind(s['format']) &&
+  isNavigation(s['navigation']) &&
+  (s['pasteRule'] === undefined || isPasteRule(s['pasteRule'])) &&
+  isSectionState(s['state']) &&
+  (s['deadlineAt'] === undefined || isTime(s['deadlineAt'])) &&
+  sectionRulesOk(s);
+
+/** The v2 view (M1, R5-9): sections carry format, navigation, paste rule, state and deadline; no `pasteBlocked`. */
+export const isSessionViewV2 = (v: unknown): v is SessionViewV2 => {
   if (
     !isObj(v) ||
+    v['v'] !== 2 ||
+    !isUuid(v['sessionId']) ||
+    !isSessionState(v['state']) ||
+    !isTime(v['serverNow']) ||
+    !isTime(v['startedAt']) ||
+    !isTime(v['deadlineAt']) ||
+    !isUuid(v['streamId']) ||
+    v['heartbeatSeconds'] !== 10 ||
+    v['pasteBlocked'] !== undefined ||
+    !isText(v['title'], 200) ||
+    !isArrayOf(v['sections'], isSectionV2, 1, 10)
+  )
+    return false;
+  const sectionIds = new Set((v['sections'] as Obj[]).map((s) => s['id']));
+  return (
+    isArrayOf(
+      v['items'],
+      (i) =>
+        isObj(i) &&
+        isPosition(i['position']) &&
+        isUuid(i['sectionId']) &&
+        sectionIds.has(i['sectionId']) &&
+        isItemKind(i['kind']) &&
+        (i['servedAt'] === null || isTime(i['servedAt'])),
+      1,
+      100,
+    ) &&
+    isArrayOf(v['answers'], isAnswer, 0, 100) &&
+    (v['receipt'] === undefined || isReceipt(v['receipt']))
+  );
+};
+
+/** A v1 or a v2 view. A v1 view has no `v` key (D1). */
+export const isAnyView = (v: unknown): v is AnyView =>
+  isObj(v) && (v['v'] === undefined ? isSessionView(v) : isSessionViewV2(v));
+
+export const isSessionStartRes = (v: unknown): v is SessionStartRes | SessionStartResV2 =>
+  isObj(v) &&
+  ((isJws(v['sessionToken']) && isTime(v['expiresAt']) && isAnyView(v['view'])) ||
+    (v['state'] === 'submitted' && isReceipt(v['receipt'])));
+
+export const isSessionAttachRes = (v: unknown): v is SessionAttachRes | SessionAttachResV2 =>
+  isObj(v) && isAnyView(v['view']);
+
+/** The fields a v1 and a v2 item share, and the mcq/written shape rule. */
+const isItemBase = (v: Obj): boolean => {
+  if (
     !isPosition(v['position']) ||
     !isItemKind(v['kind']) ||
     !isUuid(v['sectionId']) ||
@@ -234,12 +323,28 @@ export const isServedItem = (v: unknown): v is ServedItem => {
   return v['options'] === undefined;
 };
 
+export const isServedItem = (v: unknown): v is ServedItem => isObj(v) && isItemBase(v);
+
+/** A v2 item: options already in served order, images by hash (1-4), a variant id on mcq items only. */
+export const isServedItemV2 = (v: unknown): v is ServedItemV2 =>
+  isObj(v) &&
+  isItemBase(v) &&
+  (v['media'] === undefined ||
+    isArrayOf(v['media'], (m) => isObj(m) && isSha(m['hash']) && isText(m['alt'], 300), 1, 4)) &&
+  (v['variantId'] === undefined || (v['kind'] === 'mcq' && isUuid(v['variantId'])));
+
+/** `refusedSeqs` (R5-20): distinct, each acknowledged (≤ ackSeq). */
+const isRefusedSeqs = (v: unknown, ackSeq: number): boolean =>
+  isArrayOf(v, (s) => isPosition(s) && s <= ackSeq, 0, 100) &&
+  new Set(v as number[]).size === (v as number[]).length;
+
 export const isEventBatchAck = (v: unknown): v is EventBatchAck =>
   isObj(v) &&
   isInt(v['ackSeq'], 0) &&
   isTime(v['serverNow']) &&
   isTime(v['deadlineAt']) &&
-  isSessionState(v['state']);
+  isSessionState(v['state']) &&
+  (v['refusedSeqs'] === undefined || isRefusedSeqs(v['refusedSeqs'], v['ackSeq']));
 
 // ---- Failures --------------------------------------------------------------------------------------------------
 
@@ -269,7 +374,10 @@ const failureOf = (res: Response, body: unknown): ApiFailure => {
     if (named === 'out_of_order') {
       const ackSeq = isObj(body) ? body['ackSeq'] : undefined;
       if (!isInt(ackSeq, 0)) return { ok: false, code: 'unexpected', status };
-      return { ok: false, code: named, status, ackSeq };
+      const refused = isObj(body) ? body['refusedSeqs'] : undefined;
+      if (refused === undefined) return { ok: false, code: named, status, ackSeq };
+      if (!isRefusedSeqs(refused, ackSeq)) return { ok: false, code: 'unexpected', status };
+      return { ok: false, code: named, status, ackSeq, refusedSeqs: refused as number[] };
     }
     return { ok: false, code: named, status, ...extra };
   }
@@ -304,16 +412,65 @@ export interface CandidateApi {
   notice(lobbyToken: string): Promise<ApiResult<NoticeRes>>;
   consent(lobbyToken: string, body: ConsentReq): Promise<ApiResult<OkRes>>;
   photo(lobbyToken: string, jpeg: Uint8Array, sha256: string): Promise<ApiResult<PhotoRes>>;
-  start(lobbyToken: string, body: SessionStartReq): Promise<ApiResult<SessionStartRes>>;
-  attach(sessionToken: string): Promise<ApiResult<SessionAttachRes>>;
-  item(sessionToken: string, position: number): Promise<ApiResult<ServedItem>>;
+  start(
+    lobbyToken: string,
+    body: SessionStartReq,
+  ): Promise<ApiResult<SessionStartRes | SessionStartResV2>>;
+  attach(sessionToken: string): Promise<ApiResult<SessionAttachRes | SessionAttachResV2>>;
+  /**
+   * One served item. `afterSeq` (v2 sessions only, R5-45, R5-59 d): the highest seq the outbox has enqueued; a v1
+   * session sends none, as in D1.
+   */
+  item(sessionToken: string, position: number, afterSeq?: number): Promise<ApiResult<AnyItem>>;
   events(sessionToken: string, batch: EventBatchReq): Promise<ApiResult<EventBatchAck>>;
   submit(sessionToken: string, body: SubmitReq): Promise<ApiResult<Receipt>>;
+  /** An item image's bytes (R5-10): png, jpeg or webp up to 1 MiB, else a failure. */
+  media(sessionToken: string, hash: string): Promise<ApiResult<ItemImage>>;
 }
+
+/** The media type of a response, without parameters, if it is an allowed item image type. */
+const imageTypeOf = (res: Response): ItemImageType | null => {
+  const raw = (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+  return (ITEM_IMAGE_TYPES as readonly string[]).includes(raw) ? (raw as ItemImageType) : null;
+};
+
+/** Reads at most `max` bytes of a body; null when it is longer (the rest is cancelled, never buffered). */
+const readCapped = async (res: Response, max: number): Promise<Uint8Array | null> => {
+  const declared = res.headers.get('content-length');
+  if (declared !== null && (!/^\d{1,10}$/.test(declared.trim()) || Number(declared) > max))
+    return null;
+  const reader = res.body?.getReader();
+  if (reader === undefined) {
+    const whole = new Uint8Array(await res.arrayBuffer());
+    return whole.byteLength > max ? null : whole;
+  }
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    parts.push(value);
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.byteLength;
+  }
+  return out;
+};
+
+const HASH = /^[0-9a-f]{64}$/;
 
 /** The client for one edge origin (from `resolveEdgeOrigin`). */
 export const createApi = (origin: string): CandidateApi => {
-  const send = async <T>(req: Send, check: (v: unknown) => v is T): Promise<ApiResult<T>> => {
+  /** The one network call: a Response, or null when nothing reached us. */
+  const request = async (req: Send): Promise<Response | null> => {
     const headers: Record<string, string> = {};
     if (req.bearer !== undefined) headers['authorization'] = `Bearer ${req.bearer}`;
     let body: BodyInit | undefined;
@@ -324,10 +481,9 @@ export const createApi = (origin: string): CandidateApi => {
       Object.assign(headers, req.raw.headers);
       body = req.raw.body as BodyInit;
     }
-    let res: Response;
     try {
       const signal = timeoutSignal();
-      res = await globalThis.fetch(`${origin}${req.path}`, {
+      return await globalThis.fetch(`${origin}${req.path}`, {
         method: req.method,
         headers,
         ...(body === undefined ? {} : { body }),
@@ -339,8 +495,25 @@ export const createApi = (origin: string): CandidateApi => {
         ...(signal === undefined ? {} : { signal }),
       });
     } catch {
-      return { ok: false, code: 'network', status: 0 };
+      return null;
     }
+  };
+
+  /** A failure answer's body, read defensively. */
+  const failureFrom = async (res: Response): Promise<ApiFailure> => {
+    let parsed: unknown = undefined;
+    try {
+      const text = await res.text();
+      parsed = text === '' ? undefined : (JSON.parse(text) as unknown);
+    } catch {
+      parsed = undefined;
+    }
+    return failureOf(res, parsed);
+  };
+
+  const send = async <T>(req: Send, check: (v: unknown) => v is T): Promise<ApiResult<T>> => {
+    const res = await request(req);
+    if (res === null) return { ok: false, code: 'network', status: 0 };
     let parsed: unknown = undefined;
     try {
       const text = await res.text();
@@ -382,13 +555,37 @@ export const createApi = (origin: string): CandidateApi => {
       send({ method: 'POST', path: '/v1/session/start', bearer, json: body }, isSessionStartRes),
     attach: (bearer) =>
       send({ method: 'POST', path: '/v1/session/attach', bearer, json: {} }, isSessionAttachRes),
-    item: async (bearer, position) => {
+    item: async (bearer, position, afterSeq) => {
       if (!isInt(position, 1, 999)) return { ok: false, code: 'bad_request', status: 0 };
-      return send({ method: 'GET', path: `/v1/session/items/${position}`, bearer }, isServedItem);
+      if (afterSeq === undefined) {
+        return send({ method: 'GET', path: `/v1/session/items/${position}`, bearer }, isServedItem);
+      }
+      if (!isInt(afterSeq, 0, 999_999_999_999_999)) {
+        return { ok: false, code: 'bad_request', status: 0 };
+      }
+      return send(
+        { method: 'GET', path: `/v1/session/items/${position}?afterSeq=${afterSeq}`, bearer },
+        isServedItemV2,
+      );
     },
     events: (bearer, batch) =>
       send({ method: 'POST', path: '/v1/session/events', bearer, json: batch }, isEventBatchAck),
     submit: (bearer, body) =>
       send({ method: 'POST', path: '/v1/session/submit', bearer, json: body }, isReceipt),
+    media: async (bearer, hash) => {
+      if (!HASH.test(hash)) return { ok: false, code: 'bad_request', status: 0 };
+      const res = await request({ method: 'GET', path: `/v1/session/media/${hash}`, bearer });
+      if (res === null) return { ok: false, code: 'network', status: 0 };
+      if (res.status !== 200) return failureFrom(res);
+      const type = imageTypeOf(res);
+      let bytes: Uint8Array | null = null;
+      try {
+        bytes = type === null ? null : await readCapped(res, ITEM_IMAGE_MAX_BYTES);
+      } catch {
+        return { ok: false, code: 'network', status: 0 };
+      }
+      if (type === null || bytes === null) return { ok: false, code: 'bad_media', status: 200 };
+      return { ok: true, value: { type, bytes } };
+    },
   };
 };

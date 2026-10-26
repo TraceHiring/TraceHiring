@@ -67,17 +67,18 @@ export const info = (roles: string[]): OrgInfo => ({
   roles,
 });
 
-/** Mounts `element` in a router with the api and the org info of the given roles. */
+/** Mounts `element` in a router (at `at`) with the api and the org info of the given roles. */
 export async function mountScreen(
   element: ReactElement,
   api: ApiClient | null,
   roles: string[] = ['admin'],
+  at = '/',
 ): Promise<Mounted> {
   const container = document.createElement('div');
   document.body.append(container);
   const root = createRoot(container);
   const tree: ReactNode = (
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[at]}>
       <OrgInfoContext value={info(roles)}>
         <ApiContext value={api}>{element}</ApiContext>
       </OrgInfoContext>

@@ -118,6 +118,43 @@ describe('paste (capture phase, prevented)', () => {
   });
 });
 
+describe('paste rule per section (R5-24, R5-66 d)', () => {
+  let allowed: boolean;
+  beforeEach(() => {
+    signals.dispose();
+    allowed = true;
+    signals = installSignals({
+      doc: document,
+      currentItem: () => item,
+      emit: (s) => emitted.push(s),
+      monoNow: () => Date.now(),
+      pasteAllowed: () => allowed,
+    });
+  });
+
+  it('allowed_logged: the paste goes through and is recorded (length only, never the text)', () => {
+    const el = textarea();
+    const e = paste(el, SECRET);
+    expect(e.defaultPrevented).toBe(false);
+    expect(emitted).toEqual([{ sig: 'paste', item: 2, len: SECRET.length }]);
+    expect(JSON.stringify(emitted)).not.toContain('pasted');
+    allValid();
+  });
+
+  it('blocked: the paste is prevented and recorded, as in D1', () => {
+    allowed = false;
+    const e = paste(textarea(), SECRET);
+    expect(e.defaultPrevented).toBe(true);
+    expect(emitted).toEqual([{ sig: 'paste', item: 2, len: SECRET.length }]);
+  });
+
+  it('dropping text stays blocked even where pasting is allowed', () => {
+    const e = drop(textarea(), ['text/plain'], SECRET);
+    expect(e.defaultPrevented).toBe(true);
+    expect(emitted).toEqual([{ sig: 'drop', item: 2, len: SECRET.length, dt: 'text' }]);
+  });
+});
+
 describe('drop (capture phase, prevented)', () => {
   it('SR-11: prevents dragover in capture phase, so a dropped file cannot navigate away (no signal)', () => {
     const el = document.createElement('div');

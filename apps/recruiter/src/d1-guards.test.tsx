@@ -263,10 +263,15 @@ async function screens(): Promise<Record<string, string>> {
       />,
     ),
     'editor-body-draft': wrap(
-      <EditorBody api={editorApi()} detail={DETAIL('draft')} onPublished={noop} />,
+      <EditorBody api={editorApi()} detail={DETAIL('draft')} integrity={null} onReload={noop} />,
     ),
     'editor-body-published': wrap(
-      <EditorBody api={editorApi()} detail={DETAIL('published')} onPublished={noop} />,
+      <EditorBody
+        api={editorApi()}
+        detail={DETAIL('published')}
+        integrity={null}
+        onReload={noop}
+      />,
     ),
     'new-test': wrap(<NewTestRoute />),
     invitations: wrap(

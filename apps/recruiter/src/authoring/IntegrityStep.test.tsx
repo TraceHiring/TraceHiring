@@ -36,6 +36,7 @@ const viewOf = (
       id_verification: 'always',
     },
     candidateSummary: renderCandidateSummary(values, INTEGRITY_CATALOG_VERSION).lines,
+    stored: presetKey !== null,
   });
 const noop = () => undefined;
 
