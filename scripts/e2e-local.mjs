@@ -122,6 +122,19 @@ export const USERS = Object.freeze(
       roles: 'recruiter',
       name: 'E2E UI recruiter',
     },
+    // The M1 specs' own recruiters (each enrols its TOTP): AT-M1-01/30 and AT-M1-10.
+    {
+      key: 'M1_TEMPLATE',
+      email: 'e2e-template-recruiter@example.test',
+      roles: 'recruiter',
+      name: 'E2E template recruiter',
+    },
+    {
+      key: 'M1_IMPORT',
+      email: 'e2e-import-recruiter@example.test',
+      roles: 'recruiter',
+      name: 'E2E import recruiter',
+    },
   ].map((u) => Object.freeze(u)),
 );
 /**
