@@ -256,6 +256,43 @@ describe('section.finish and section deadlines (§4.6, R5-20)', () => {
     expect((await h.core.item(AUTH, 1)).ok).toBe(true);
   });
 
+  it('a resend after a lost ack lists the refused seqs again, within one batch of the high-water mark (R5-67)', async () => {
+    const h = await coreHarness(pkgOf());
+    const { view: v } = await startCoreV2(h);
+    served(await h.core.item(AUTH, 1));
+    const batch = [choice(1, 1, 'a'), choice(2, 2, 'b')]; // position 2 is not served: refused (R5-59 b)
+    expect(await h.core.events(AUTH, { streamId: v.streamId, events: batch })).toMatchObject({
+      ok: true,
+      ackSeq: 2,
+      refusedSeqs: [2],
+    });
+    // The ack was lost: the same seqs come again, alone or with new ones; each refused seq is listed once.
+    expect(await h.core.events(AUTH, { streamId: v.streamId, events: batch })).toMatchObject({
+      ok: true,
+      ackSeq: 2,
+      refusedSeqs: [2],
+    });
+    expect(
+      await h.core.events(AUTH, {
+        streamId: v.streamId,
+        events: [...batch, choice(2, 2, 'b'), choice(3, 2, 'c'), choice(4, 1, 'd')],
+      }),
+    ).toMatchObject({ ok: true, ackSeq: 4, refusedSeqs: [2, 3] });
+    // An accepted seq resent is never listed.
+    expect(
+      await h.core.events(AUTH, { streamId: v.streamId, events: [choice(4, 1, 'd')] }),
+    ).toEqual(expect.not.objectContaining({ refusedSeqs: expect.anything() }));
+    // A resend's seqs lie within one batch (≤ 100 events) of the mark: older refusals are forgotten.
+    await h.core.events(AUTH, {
+      streamId: v.streamId,
+      events: Array.from({ length: 100 }, (_v, i) => heartbeat(5 + i)),
+    });
+    expect(
+      await h.core.events(AUTH, { streamId: v.streamId, events: [choice(3, 2, 'c')] }),
+    ).toEqual(expect.not.objectContaining({ refusedSeqs: expect.anything() }));
+    expect((await view(h)).answers).toEqual([{ position: 1, choice: 'd' }]);
+  });
+
   it('events up to GRACE_MS after a section deadline count; later ones are refused; reads close at once', async () => {
     const h = await coreHarness(pkgOf(true));
     const t0 = h.clock.ms;
