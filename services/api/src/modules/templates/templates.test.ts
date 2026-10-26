@@ -4,17 +4,19 @@
 // the template's keywords) and never stored, logged or returned (only its SHA-256 and the permille). A template creates
 // the job, the test and its draft: one pool per available blueprint section, filled with library copies (up to 10x the
 // draw), Standard (or the template's preset) with the org's locks, weights summing to 100; voice and typing sections
-// are skipped with a note. Synthetic data only.
+// are skipped with a note. R5-71 d / R5-63 f: the writes are one call of `public.create_test_from_template` (atomic);
+// the template list pages by 50 over the whole merged catalogue. Synthetic data only.
 import {
   BlueprintProposeResponse,
   CreateTestFromTemplateResponse,
   RoleTemplateListResponse,
+  encodePageCursor,
 } from '@trace/shared/contracts/m1';
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
 import { sha256Hex } from '../candidate/encoding.js';
-import { RestError } from '../tests/org-context.js';
-import { idMaker } from '../tests/rest.test-helpers.js';
+import { OrgError, PGRST_MAX_ROWS, RestError } from '../tests/org-context.js';
+import { idMaker, type Row } from '../tests/rest.test-helpers.js';
 import {
   OPEN_BOOK,
   ORG,
@@ -28,7 +30,14 @@ import {
   type AuthoringDb,
 } from '../tests/tests.test-helpers.js';
 import type { LibraryItemRef, ReferenceSource, TemplateRef } from './reference.js';
-import { createTemplatesRoutes, matchPermille, tokensOf } from './routes.js';
+import {
+  TEMPLATE_LIST_CAP,
+  createTemplatesRoutes,
+  matchPermille,
+  templateDraftPayload,
+  tokensOf,
+} from './routes.js';
+import { ownTemplateRow, withTemplateRpc } from './templates.test-helpers.js';
 
 const CUSTOMER_SUPPORT: TemplateRef = {
   id: '7e000000-0000-4000-8000-000000000001',
@@ -83,7 +92,10 @@ const libraryRefs = (skillKey: string, format: 'mcq' | 'written', count: number)
     createdAt: `2026-10-01T00:00:00.${String(100000 + n)}+00:00`,
   }));
 
-const reference = (library: LibraryItemRef[]): ReferenceSource & { browsed: unknown[] } => {
+const reference = (
+  library: LibraryItemRef[],
+  templates: TemplateRef[] = [CUSTOMER_SUPPORT, BPO_VOICE],
+): ReferenceSource & { browsed: unknown[] } => {
   const browsed: unknown[] = [];
   return {
     browsed,
@@ -95,7 +107,7 @@ const reference = (library: LibraryItemRef[]): ReferenceSource & { browsed: unkn
         open_book: { version: 1, values: { ...OPEN_BOOK } },
       },
     }),
-    templates: async () => [CUSTOMER_SUPPORT, BPO_VOICE],
+    templates: async () => templates,
     browse: async (_caller, _org, filter) => {
       browsed.push(filter);
       const rows = library
@@ -175,10 +187,16 @@ const setup = (
     limiter?: ReturnType<typeof limiterOf>;
     /** No limiter bound (the env has no rate-limit binding). */
     unboundLimiter?: boolean;
+    /** The library's published templates (default: Customer Support and BPO Voice). */
+    templates?: TemplateRef[];
+    /** The org's own role_templates rows. */
+    own?: Row[];
   } = {},
 ) => {
   const db = authoringDb();
   withLibraryCopies(db);
+  const rpc = withTemplateRpc(db);
+  rowsOf(db, 'role_templates').push(...(opts.own ?? []));
   if (opts.locks === true) {
     rowsOf(db, 'org_integrity_locks').push({
       id: '0c000000-0000-4000-8000-000000000001',
@@ -194,6 +212,7 @@ const setup = (
       ...libraryRefs('verbal', 'mcq', 25),
       ...libraryRefs('written_communication', 'written', 3),
     ],
+    opts.templates,
   );
   const limiter = opts.limiter ?? limiterOf();
   const app = new Hono<{ Bindings: Env }>();
@@ -215,7 +234,7 @@ const setup = (
       },
       {} as Env,
     );
-  return { db, call, ref, limiter };
+  return { db, call, ref, limiter, rpc };
 };
 
 describe('JD matching (M1-17)', () => {
@@ -337,6 +356,54 @@ describe('POST …/tests/from-template', () => {
       org_id: ORG,
       workspace_id: WS,
     });
+    // R5-71 d: one write, the function, with the DB-shape payload (the JD text never in it).
+    expect(s.rpc.apiWrites()).toEqual([{ method: 'rpc', table: 'create_test_from_template' }]);
+    expect(s.rpc.payloads).toEqual([
+      {
+        p_org: ORG,
+        p_payload: {
+          workspaceId: WS,
+          jobTitle: 'Synthetic Support Associate',
+          roleTemplateVersionId: CUSTOMER_SUPPORT.id,
+          jdSha256: await sha256Hex(jd),
+          templateMatchPermille: 500,
+          totalTimeSeconds: 2400,
+          qualityCutoff: 40,
+          presetKey: 'standard',
+          presetVersion: 5,
+          settings: STANDARD,
+          sections: [
+            {
+              name: 'Verbal ability',
+              format: 'mcq',
+              weight: 50,
+              drawCount: 2,
+              skillKey: 'verbal',
+              shuffleItems: true,
+              shuffleOptions: true,
+              navigation: 'free',
+              libraryItemVersionIds: libraryRefs('verbal', 'mcq', 20).map(
+                (r) => r.libraryItemVersionId,
+              ),
+            },
+            {
+              name: 'Written communication',
+              format: 'written',
+              weight: 50,
+              drawCount: 1,
+              skillKey: 'written_communication',
+              shuffleItems: false,
+              shuffleOptions: false,
+              navigation: 'forward_only',
+              libraryItemVersionIds: libraryRefs('written_communication', 'written', 3).map(
+                (r) => r.libraryItemVersionId,
+              ),
+            },
+          ],
+        },
+      },
+    ]);
+    expect(JSON.stringify(s.rpc.payloads)).not.toContain(jd);
   });
 
   it("applies the org's admin locks to the template preset (custom when a lock moved a value)", async () => {
@@ -400,7 +467,7 @@ describe('POST …/tests/from-template', () => {
   });
 });
 
-describe('POST …/tests/from-template: limiter, clean failure, preset version (fix round 1 #9, #10)', () => {
+describe('POST …/tests/from-template: limiter, atomic write, preset version (R5-63 e, f; R5-71 d)', () => {
   const body = {
     jobTitle: 'Synthetic Support Associate',
     templateKey: 'customer_support',
@@ -427,29 +494,140 @@ describe('POST …/tests/from-template: limiter, clean failure, preset version (
     expect(s.ref.browsed).toEqual([]);
   });
 
-  it('library_cap mid-way archives the job and the test it created (no live test or job left)', async () => {
+  it('library_cap mid-way leaves no job, test, version, pool or copy (one transaction, R5-63 f)', async () => {
     const s = setup();
     s.db.failNext('insert', 'library_copy_requests', new RestError(403, '42501', 'library_cap'));
     const res = await s.call('POST', '/tests/from-template', body);
     expect(res.status).toBe(429);
     expect(await res.text()).toBe('{"error":{"code":"library_cap"}}');
-    expect(rowsOf(s.db, 'jobs')).toHaveLength(1);
-    expect(rowsOf(s.db, 'tests')).toHaveLength(1);
-    for (const table of ['jobs', 'tests']) {
-      for (const row of rowsOf(s.db, table))
-        expect(row.archived_at, table).toEqual(expect.any(String));
+    for (const table of [
+      'jobs',
+      'tests',
+      'test_versions',
+      'ruleset_versions',
+      'pools',
+      'pool_items',
+      'library_copy_requests',
+      'sections',
+    ]) {
+      expect(rowsOf(s.db, table), table).toEqual([]);
     }
+    // Nothing to undo: the api never archives (no update of its own).
+    expect(s.rpc.apiWrites()).toEqual([{ method: 'rpc', table: 'create_test_from_template' }]);
   });
 
-  it('a failed draft save also archives both', async () => {
+  it('a failed draft save inside the function also leaves nothing', async () => {
     const s = setup();
     s.db.failNext('rpc', 'save_test_draft', new RestError(503, null));
     const res = await s.call('POST', '/tests/from-template', body);
     expect(res.status).toBe(503);
-    for (const table of ['jobs', 'tests']) {
-      for (const row of rowsOf(s.db, table))
-        expect(row.archived_at, table).toEqual(expect.any(String));
+    for (const table of ['jobs', 'tests', 'test_versions', 'pools', 'pool_items', 'sections']) {
+      expect(rowsOf(s.db, table), table).toEqual([]);
     }
+    expect(s.rpc.apiWrites()).toEqual([{ method: 'rpc', table: 'create_test_from_template' }]);
+  });
+
+  it("maps the function's refusal by its code (a guard key, a hidden parent)", async () => {
+    const s = setup();
+    s.db.failNext('rpc', 'create_test_from_template', new RestError(403, '42501'));
+    const res = await s.call('POST', '/tests/from-template', body);
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe('{"error":{"code":"not_found"}}');
+    const g = setup();
+    g.db.failNext(
+      'rpc',
+      'create_test_from_template',
+      new RestError(400, '55000', 'library_not_approved'),
+    );
+    expect((await g.call('POST', '/tests/from-template', body)).status).toBe(409);
+  });
+
+  it('an answer that is not {jobId, testId, versionId} uuids is 503 unavailable', async () => {
+    for (const answerOf of [
+      () => ({ jobId: 'x', testId: 'y', versionId: 'z' }),
+      () => null,
+      () => ({
+        jobId: '30000000-0000-4000-8000-000000000001',
+        testId: 'e1000000-0000-4000-8000-000000000001',
+      }),
+      () => ({
+        jobId: '30000000-0000-4000-8000-000000000001',
+        testId: 'e1000000-0000-4000-8000-000000000001',
+        versionId: 'f1000000-0000-4000-8000-000000000001',
+        extra: true,
+      }),
+    ]) {
+      const s = setup();
+      s.db.functions.create_test_from_template = answerOf;
+      const res = await s.call('POST', '/tests/from-template', body);
+      expect(res.status).toBe(503);
+      expect(await res.text()).toBe('{"error":{"code":"unavailable"}}');
+    }
+  });
+
+  it('a draw of 100 sends 1,000 library ids in one section (copied 500 a request)', async () => {
+    const large: TemplateRef = {
+      ...CUSTOMER_SUPPORT,
+      id: '7e000000-0000-4000-8000-000000000003',
+      templateKey: 'large_verbal',
+      blueprint: {
+        sections: [
+          {
+            title: 'Verbal ability',
+            format: 'mcq',
+            skillKey: 'verbal',
+            drawCount: 100,
+            available: true,
+          },
+        ],
+        totalTimeSeconds: 3600,
+      },
+    };
+    const s = setup({ templates: [large], library: libraryRefs('verbal', 'mcq', 1005) });
+    const res = await s.call('POST', '/tests/from-template', {
+      ...body,
+      templateKey: 'large_verbal',
+    });
+    expect(res.status).toBe(201);
+    const sent = s.rpc.payloads[0]?.p_payload as {
+      sections: { libraryItemVersionIds: string[] }[];
+    };
+    expect(sent.sections[0]?.libraryItemVersionIds).toHaveLength(1000);
+    expect(rowsOf(s.db, 'library_copy_requests')).toHaveLength(2);
+    expect(rowsOf(s.db, 'pool_items')).toHaveLength(1000);
+  });
+
+  it('more than 1,000 library ids for one section is 503 unavailable before the call', () => {
+    const payloadWith = (count: number) =>
+      templateDraftPayload({
+        workspaceId: WS,
+        jobTitle: 'Synthetic Support Associate',
+        template: CUSTOMER_SUPPORT,
+        jdSha256: null,
+        templateMatchPermille: null,
+        settings: { presetKey: 'standard', presetVersion: 5, settings: STANDARD },
+        sections: [
+          {
+            title: 'Verbal ability',
+            format: 'mcq',
+            skillKey: 'verbal',
+            drawCount: 100,
+            weight: 100,
+            libraryItemVersionIds: libraryRefs('verbal', 'mcq', count).map(
+              (r) => r.libraryItemVersionId,
+            ),
+          },
+        ],
+      });
+    expect(payloadWith(1000).sections[0]?.libraryItemVersionIds).toHaveLength(1000);
+    let thrown: unknown = null;
+    try {
+      payloadWith(1001);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(OrgError);
+    expect((thrown as OrgError).code).toBe('unavailable');
   });
 
   it("stores the template preset's catalog version; a lock that moves a value stores none", async () => {
@@ -465,5 +643,137 @@ describe('POST …/tests/from-template: limiter, clean failure, preset version (
       preset_key: null,
       preset_version: null,
     });
+  });
+});
+
+describe('GET …/templates paging (R5-63 f)', () => {
+  const list = async (s: ReturnType<typeof setup>, cursor?: string) => {
+    const res = await s.call(
+      'GET',
+      cursor === undefined ? '/templates' : `/templates?cursor=${encodeURIComponent(cursor)}`,
+    );
+    expect(res.status).toBe(200);
+    return RoleTemplateListResponse.parse(await res.json());
+  };
+  /** n own templates role_0001.. (stored in reverse, so no read relies on insertion order). */
+  const own = (n: number, from = 1) =>
+    Array.from({ length: n }, (_, i) => ownTemplateRow(from + i)).reverse();
+
+  it('pages the merged list by 50 in (templateKey, version) order; the last page has no cursor', async () => {
+    const s = setup({ own: own(120) });
+    const seen: string[] = [];
+    const sizes: number[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await list(s, cursor);
+      sizes.push(page.templates.length);
+      seen.push(...page.templates.map((t) => `${t.templateKey}:${String(t.version)}`));
+      if (page.nextCursor === null) break;
+      cursor = page.nextCursor;
+    }
+    expect(sizes).toEqual([50, 50, 22]);
+    expect(new Set(seen).size).toBe(122);
+    expect(seen.slice(0, 3)).toEqual(['bpo_voice:1', 'customer_support:1', 'role_0001:1']);
+    expect(seen.at(-1)).toBe('role_0120:1');
+    expect([...seen].sort()).toEqual(seen);
+  });
+
+  it("the org's own template wins a clash with the library's; drafts and other orgs are not listed", async () => {
+    const s = setup({
+      own: [
+        ownTemplateRow(1, { template_key: 'customer_support', name: '[synthetic] Own support' }),
+        ownTemplateRow(2, { status: 'draft' }),
+        ownTemplateRow(3, { org_id: 'a1000000-0000-4000-8000-000000000003' }),
+      ],
+    });
+    const page = await list(s);
+    expect(page.templates.map((t) => [t.templateKey, t.name])).toEqual([
+      ['bpo_voice', 'BPO Voice'],
+      ['customer_support', '[synthetic] Own support'],
+    ]);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it('reads own templates in keyset pages of PGRST_MAX_ROWS until exhausted', async () => {
+    const s = setup({ own: own(1500) });
+    const page = await list(s);
+    expect(page.templates).toHaveLength(50);
+    const reads = s.db.calls.filter((c) => c.table === 'role_templates').map((c) => c.query);
+    expect(reads.map((q) => [q.order, q.limit])).toEqual([
+      ['id.asc', String(PGRST_MAX_ROWS)],
+      ['id.asc', String(PGRST_MAX_ROWS)],
+    ]);
+    expect(reads[0]?.id).toBeUndefined();
+    expect(reads[1]?.id).toBe(`gt.${String(ownTemplateRow(1000).id)}`);
+  });
+
+  it('past 2,000 merged templates every reader answers 503 (never a cut list)', async () => {
+    expect(TEMPLATE_LIST_CAP).toBe(2000);
+    const fits = setup({ own: own(TEMPLATE_LIST_CAP - 2) });
+    expect((await fits.call('GET', '/templates')).status).toBe(200);
+    const over = setup({ own: own(TEMPLATE_LIST_CAP - 1) });
+    for (const [method, path, payload] of [
+      ['GET', '/templates', undefined],
+      ['POST', '/blueprints/propose', { jdText: 'customer support' }],
+      [
+        'POST',
+        '/tests/from-template',
+        { jobTitle: 'X', templateKey: 'customer_support', templateVersion: 1 },
+      ],
+    ] as const) {
+      const res = await over.call(method, path, payload);
+      expect(res.status, path).toBe(503);
+      expect(await res.text()).toBe('{"error":{"code":"unavailable"}}');
+    }
+    expect(over.rpc.payloads).toEqual([]);
+  });
+
+  it('a malformed cursor, a cursor of another list, or a vanished anchor is 400', async () => {
+    const s = setup({ own: own(120) });
+    for (const bad of [
+      'not-a-cursor!',
+      'e30',
+      encodePageCursor({
+        createdAt: '2026-10-20T09:00:00.000+00:00',
+        id: String(ownTemplateRow(3).id),
+      }),
+    ]) {
+      const res = await s.call('GET', `/templates?cursor=${encodeURIComponent(bad)}`);
+      expect(res.status, bad).toBe(400);
+      expect(await res.text()).toBe('{"error":{"code":"bad_request"}}');
+    }
+    const first = await list(s);
+    expect(first.nextCursor).not.toBeNull();
+    // The anchor (the page's last row) is retired between pages: its place is unknown, so the cursor is refused.
+    const anchor = first.templates.at(-1);
+    s.db.tables.role_templates = rowsOf(s.db, 'role_templates').filter(
+      (r) => r.template_key !== anchor?.templateKey,
+    );
+    const res = await s.call(
+      'GET',
+      `/templates?cursor=${encodeURIComponent(first.nextCursor ?? '')}`,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('propose and from-template scan every page (a template past the first 50)', async () => {
+    const late = ownTemplateRow(200, {
+      template_key: 'zz_synthetic_garden',
+      keywords: ['gardener', 'plants', 'lawn'],
+    });
+    const s = setup({ own: [...own(120), late] });
+    const proposed = BlueprintProposeResponse.parse(
+      await (
+        await s.call('POST', '/blueprints/propose', { jdText: 'a gardener for plants and lawn' })
+      ).json(),
+    );
+    expect(proposed.proposal).toMatchObject({ templateKey: 'zz_synthetic_garden', version: 1 });
+    const res = await s.call('POST', '/tests/from-template', {
+      jobTitle: 'Synthetic Gardener',
+      templateKey: 'zz_synthetic_garden',
+      templateVersion: 1,
+    });
+    expect(res.status).toBe(201);
+    expect(rowsOf(s.db, 'jobs')[0]).toMatchObject({ role_template_version_id: late.id });
   });
 });
