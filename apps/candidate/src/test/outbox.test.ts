@@ -41,6 +41,8 @@ const fakeEdge = () => {
     loseAnswer: false,
     /** Items whose answers are acknowledged as refused (their section closed, R5-20). */
     refuseItems: new Set<number>(),
+    /** The refused seqs the stream keeps (R5-67: listed again when a batch resends them). */
+    refused: new Set<number>(),
   };
   const events = vi.fn(
     async (_token: string, batch: BatchReq): Promise<ApiResult<EventBatchAck>> => {
@@ -71,7 +73,11 @@ const fakeEdge = () => {
       const refusedSeqs: number[] = [];
       let gap = false;
       for (const ev of batch.events) {
-        if (ev.seq <= hw) continue;
+        if (ev.seq <= hw) {
+          // R5-67: a resend after a lost ack lists its refused seqs again (within one batch of the mark).
+          if (state.refused.has(ev.seq) && ev.seq > hw - 100) refusedSeqs.push(ev.seq);
+          continue;
+        }
         if (ev.seq !== hw + 1 || (state.acceptOnly !== undefined && ev.seq > state.acceptOnly)) {
           gap = true;
           break;
@@ -106,8 +112,18 @@ const fakeEdge = () => {
       state.texts = texts;
       state.choices = choices;
       state.stored.push(...accepted);
+      for (const seq of refusedSeqs) state.refused.add(seq);
       if (state.loseAnswer) return { ok: false, code: 'network', status: 0 };
-      if (gap) return { ok: false, code: 'out_of_order', status: 409, ackSeq: hw };
+      if (gap) {
+        // R5-67: the 409 lists the refused seqs of the part it kept, as an ack does.
+        return {
+          ok: false,
+          code: 'out_of_order',
+          status: 409,
+          ackSeq: hw,
+          ...(refusedSeqs.length === 0 ? {} : { refusedSeqs }),
+        };
+      }
       return {
         ok: true,
         value: {
@@ -547,6 +563,52 @@ describe('package v2 (AT-M1-32; R5-20, R5-45, R5-59 d, R5-66 f)', () => {
       .flatMap((r) => r.events)
       .filter((e) => e.kind === 'answer.text');
     expect(texts).toHaveLength(1);
+  });
+
+  it('R5-68 e: a 409 gap body listing a refused seq reverts that answer, as an ack would', async () => {
+    const o = make();
+    o.choice(1, 'b');
+    const first = o.flush();
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(first).resolves.toBe(true);
+    edge.state.refuseItems.add(1);
+    o.choice(1, 'a');
+    typeInto(o, ['x']);
+    // The edge keeps seq 2 (the choice, refused) and stops at a gap before seq 3.
+    edge.state.acceptOnly = 2;
+    const done = o.flush();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(edge.state.requests[1]?.events.map((e) => e.seq)).toEqual([2, 3]);
+    expect(seen.reverts).toEqual([{ item: 1, choice: 'b' }]);
+    edge.state.acceptOnly = undefined;
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(done).resolves.toBe(true);
+    expect(edge.state.texts.get(2)).toBe('x');
+    // Later choices start from what the edge kept.
+    edge.state.refuseItems.clear();
+    o.choice(1, 'a');
+    const again = o.flush();
+    await vi.advanceTimersByTimeAsync(300);
+    await expect(again).resolves.toBe(true);
+    expect(edge.state.choices.get(1)).toBe('a');
+  });
+
+  it('R5-68 e: a resend after a lost ack whose ack lists the refused seq reverts it', async () => {
+    const o = make([[2, 'kept']]);
+    edge.state.texts.set(2, 'kept');
+    edge.state.refuseItems.add(2);
+    typeInto(o, ['kept!']);
+    // The edge stores seq 1 as refused, but its ack is lost on the way back.
+    edge.state.loseAnswer = true;
+    await vi.advanceTimersByTimeAsync(2_000);
+    edge.state.loseAnswer = false;
+    expect(edge.state.refused.has(1)).toBe(true);
+    expect(seen.reverts).toEqual([]);
+    // The resend (seq <= hw) is acknowledged with seq 1 listed again: the screen goes back to what the edge kept.
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(o.ackedSeq()).toBe(1);
+    expect(seen.reverts).toEqual([{ item: 2, text: 'kept' }]);
+    expect(edge.state.texts.get(2)).toBe('kept');
   });
 
   it('enqueuedSeq is the highest seq the outbox has enqueued (acked + queued)', async () => {

@@ -283,6 +283,32 @@ describe('failures', () => {
     });
   });
 
+  it('R5-67, R5-68 e: a 409 out_of_order carries the refusedSeqs of the part the edge kept', async () => {
+    answer = () => json(409, { error: 'out_of_order', ackSeq: 7, refusedSeqs: [2, 7] });
+    expect(await api.events(SESSION_TOKEN, { streamId: STREAM_ID, events: [] })).toEqual({
+      ok: false,
+      code: 'out_of_order',
+      status: 409,
+      ackSeq: 7,
+      refusedSeqs: [2, 7],
+    });
+    // Checked as an ack's: distinct, each acknowledged (<= ackSeq), at most 100; else the answer fits no contract.
+    const tooMany = Array.from({ length: 101 }, (_, k) => k + 1);
+    for (const refusedSeqs of [[8], [2, 2], [0], ['2'], 'x', null, tooMany]) {
+      answer = () => json(409, { error: 'out_of_order', ackSeq: 7, refusedSeqs });
+      expect(
+        await api.events(SESSION_TOKEN, { streamId: STREAM_ID, events: [] }),
+        JSON.stringify(refusedSeqs).slice(0, 20),
+      ).toEqual({ ok: false, code: 'unexpected', status: 409 });
+    }
+    const hundred = Array.from({ length: 100 }, (_, k) => k + 1);
+    answer = () => json(409, { error: 'out_of_order', ackSeq: 100, refusedSeqs: hundred });
+    expect(await api.events(SESSION_TOKEN, { streamId: STREAM_ID, events: [] })).toMatchObject({
+      code: 'out_of_order',
+      refusedSeqs: hundred,
+    });
+  });
+
   it('parses odd bodies defensively', async () => {
     const cases: [Response, string][] = [
       [new Response('not json', { status: 503 }), 'unavailable'],
