@@ -185,6 +185,8 @@ export type Refusal = {
   error: CandidateErrorCode;
   retryAfterSeconds?: number;
   ackSeq?: number;
+  /** With `out_of_order` from an events batch: the refused seqs of the part kept before the gap (R5-67). */
+  refusedSeqs?: number[];
   /** Set when the test package is missing or invalid (RT-12): the route logs `session.package_invalid`. */
   pkg?: PackageCause;
 };
@@ -1126,7 +1128,13 @@ export class SessionCore implements SessionApi {
       // A finish in this batch may have opened the next section: drawn now, before its first serve.
       if (nav !== null) this.#sync(next, now);
     }
-    if (gap) return refuse('out_of_order', { ackSeq: hw });
+    if (gap) {
+      // The part before the gap is kept: its refusals are reported as an ack would (R5-67).
+      return refuse('out_of_order', {
+        ackSeq: hw,
+        ...(refusedSeqs.length === 0 ? {} : { refusedSeqs }),
+      });
+    }
     return {
       ok: true,
       ackSeq: hw,
