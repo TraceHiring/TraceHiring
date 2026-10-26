@@ -9,7 +9,7 @@
 //     a signal (R5-68 b, SR-4): the outbox hands its unsent signals and `section.finish` over, each with the moment it
 //     was raised, and the screen sends them first on the new stream.
 //   - Only an attach that fails for the network, a 503 or a 429 is retried (1, 2, 4, 8, then every 10 s; Retry-After
-//     wins). Any other answer goes once to the screen D1 shows for it (R5-68 g): `superseded` to "open in another
+//     wins, at most 60 s). Any other answer goes once to the screen D1 shows for it (R5-68 g): `superseded` to "open in another
 //     window", an answer that fits no contract to the network error, every other code to "can no longer be used here"
 //     (D1 forgets a stored session the edge refuses and sends the candidate back to the link). A finished session
 //     shows its receipt.
@@ -25,7 +25,17 @@ import type { Held, Outbox } from './outbox';
 export const TRANSITION = {
   flushRetryMs: 2_000,
   attachBackoffMs: [1_000, 2_000, 4_000, 8_000, 10_000],
+  /** A Retry-After longer than this is capped, as on D1's boot path. */
+  maxRetryAfterMs: 60_000,
 } as const;
+
+/** The wait before attach try `failures + 1`: its Retry-After (at most 60 s) or the backoff 1, 2, 4, 8, 10 s. */
+export const attachWaitMs = (res: { retryAfterSeconds?: number }, failures: number): number => {
+  if (res.retryAfterSeconds !== undefined)
+    return Math.min(res.retryAfterSeconds * 1_000, TRANSITION.maxRetryAfterMs);
+  const backoff = TRANSITION.attachBackoffMs;
+  return backoff[Math.min(failures, backoff.length - 1)] ?? 10_000;
+};
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -83,12 +93,7 @@ export const useSectionTransition = (deps: TransitionDeps) => {
       if (res.code === 'superseded') return now.end('superseded');
       const retried = res.code === 'network' || res.status === 503 || res.status === 429;
       if (!retried) return now.end(res.code === 'unexpected' ? 'network' : 'invalid');
-      const backoff = TRANSITION.attachBackoffMs;
-      const wait =
-        res.retryAfterSeconds !== undefined
-          ? res.retryAfterSeconds * 1_000
-          : (backoff[Math.min(failures, backoff.length - 1)] ?? 10_000);
-      await sleep(wait);
+      await sleep(attachWaitMs(res, failures));
     }
   };
 
