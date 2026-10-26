@@ -637,6 +637,85 @@ describe('package v2 (AT-M1-32; R5-20, R5-45, R5-59 d, R5-66 f)', () => {
     ]);
   });
 
+  it('R5-68 b: handOver stops the stream and gives its unsent signals and section.finish with their raise time', async () => {
+    const o = make();
+    typeInto(o, ['a']);
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(edge.state.hw).toBe(1);
+    o.signal({ sig: 'tab_hidden', item: 2, ms: 3_000 });
+    o.finish(SECTION);
+    // An answer edit is not handed over: the new view carries what the edge kept.
+    o.choice(1, 'a');
+    const held = await o.handOver();
+    expect(held).toEqual([
+      { kind: 'signal', signal: { sig: 'tab_hidden', item: 2, ms: 3_000 }, raisedAt: 2_500 },
+      { kind: 'section.finish', sectionId: SECTION, raisedAt: 2_500 },
+    ]);
+    // The old stream sends nothing more.
+    const sent = edge.state.requests.length;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(edge.state.requests.length).toBe(sent);
+    expect(await o.flush()).toBe(false);
+
+    // The next stream (same origin) sends them first, each with the t of the moment it was raised.
+    const next = fakeEdge();
+    const STREAM_2 = '33333333-3333-4333-8333-333333333333';
+    const o2 = createOutbox({
+      api: { events: next.events },
+      sessionToken: 'fakeSessionHead.fakeSessionBody.fakeSessionSig',
+      streamId: STREAM_2,
+      heartbeatSeconds: 10,
+      texts: new Map(),
+      choices: new Map(),
+      originMono: 0,
+      monoNow: () => Date.now() - T0,
+      wallNow: () => Date.now(),
+      on: {
+        status: () => undefined,
+        revert: () => undefined,
+        ack: () => undefined,
+        end: () => undefined,
+      },
+    });
+    try {
+      o2.hold(held);
+      o2.signal({ sig: 'fullscreen_exit', item: 2 });
+      const done = o2.flush();
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(done).resolves.toBe(true);
+      expect(next.state.requests[0]?.streamId).toBe(STREAM_2);
+      expect(next.state.stored).toEqual([
+        { seq: 1, t: 2_500, kind: 'signal', sig: 'tab_hidden', item: 2, ms: 3_000 },
+        { seq: 2, t: 2_500, kind: 'section.finish', sectionId: SECTION },
+        { seq: 3, t: 7_500, kind: 'signal', sig: 'fullscreen_exit', item: 2 },
+      ]);
+    } finally {
+      o2.stop();
+    }
+  });
+
+  it('R5-68 b: handOver waits for the batch in flight; a signal it delivered is not handed over again', async () => {
+    const o = make();
+    o.signal({ sig: 'tab_hidden', item: 2, ms: 3_000 });
+    void o.flush();
+    const held = o.handOver();
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(held).resolves.toEqual([]);
+    expect(edge.state.stored).toHaveLength(1);
+  });
+
+  it('R5-68 b: a signal whose batch failed in flight is handed over (never dropped)', async () => {
+    const o = make();
+    edge.state.mode = { kind: 'network' };
+    o.signal({ sig: 'tab_hidden', item: 2, ms: 3_000 });
+    void o.flush();
+    const held = o.handOver();
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(held).resolves.toEqual([
+      { kind: 'signal', signal: { sig: 'tab_hidden', item: 2, ms: 3_000 }, raisedAt: 0 },
+    ]);
+  });
+
   it('the 10-minute compaction keeps a queued section.finish', async () => {
     const o = make();
     edge.state.mode = { kind: 'network' };

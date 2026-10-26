@@ -492,6 +492,51 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
     expect(itemCalls(fake, 1)).toHaveLength(1);
   });
 
+  it('R5-68 b (SR-4): a signal raised during the last flush round arrives on the new stream with its own t', async () => {
+    const view = viewV2At(Date.now());
+    const fake = fakeApi(view);
+    fake.state.next.push(afterFirstCloses(undefined, [{ position: 1, choice: 'a' }]));
+    let finishing = false;
+    let raised = 0;
+    const ok = fake.events.getMockImplementation();
+    // While each flush round's batch is in flight on the old stream, the candidate pastes once more.
+    fake.events.mockImplementation(async (token, batch) => {
+      if (finishing && batch.streamId === STREAM_ID && raised < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        raised += 1;
+        const e = new Event('paste', { bubbles: true, cancelable: true });
+        Object.defineProperty(e, 'clipboardData', { value: { getData: () => 'x'.repeat(raised) } });
+        document.body.dispatchEvent(e);
+      }
+      return ok === undefined ? fail('network', 0) : ok(token, batch);
+    });
+    const container = await render(view, fake);
+    await click(await radio(container, 'a'));
+    await click(await waitForButton(container, COPY.test.finishSection));
+    finishing = true;
+    await click(await waitForButton(container, COPY.test.finishConfirm));
+    await textarea(container);
+    await waitFor(() => raised === 3, 'three pastes');
+    // Every paste is sent exactly once (none dropped with the old stream).
+    const pastes = () => fake.sent().filter((e) => e.kind === 'signal' && e.sig === 'paste');
+    await waitFor(() => pastes().length >= 3, 'every paste sent', 6_000);
+    expect(pastes().map((e) => (e.kind === 'signal' && e.sig === 'paste' ? e.len : 0))).toEqual([
+      1, 2, 3,
+    ]);
+    // The last one went out on the new stream, with the t of the moment it was raised: not before the old stream's
+    // last event, and not reset to the new stream's start.
+    const last = pastes()[2];
+    expect(last?.streamId).toBe(STREAM_ID_2);
+    const oldT = Math.max(
+      ...fake
+        .sent()
+        .filter((e) => e.streamId === STREAM_ID)
+        .map((e) => e.t),
+    );
+    expect(last?.t).toBeGreaterThanOrEqual(oldT);
+    expect(fake.attach).toHaveBeenCalledTimes(1);
+  });
+
   it('cancelling the finish confirm keeps the section open', async () => {
     const view = viewV2At(Date.now());
     const fake = fakeApi(view);
