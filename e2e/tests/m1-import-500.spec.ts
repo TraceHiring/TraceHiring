@@ -28,7 +28,7 @@
 //
 // Skipped unless E2E_LOCAL=1 (scripts/e2e-local.mjs). Synthetic data only; nothing printed holds a secret.
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import { buildImportFixture } from '../support/m1-fixtures.js';
@@ -81,108 +81,113 @@ test('AT-M1-10: 500 items with 500 distinct images import in under 300 s', async
   const zipPath = path.join(dir, 'images.zip');
   writeFileSync(xlsxPath, fixture.xlsx);
   writeFileSync(zipPath, fixture.imagesZip);
-
-  // ---- sign in and open the import screen (not timed) -------------------------------------------------------------
-  const session = await signInThroughUi(browser, values.recruiterUrl, user, 'import recruiter');
-  await seedSession(context, values.recruiterUrl, session);
-  await page.goto('/tests');
-  const nav = page.getByRole('navigation', { name: 'Main' });
-  await expect(nav).toBeVisible({ timeout: 30_000 });
-  await nav.getByRole('link', { name: 'Item bank', exact: true }).click();
-  await expect(page.getByRole('heading', { level: 2, name: 'Item bank', exact: true })).toBeVisible(
-    {
-      timeout: 30_000,
-    },
-  );
-  await page.getByRole('link', { name: 'Import items', exact: true }).click();
-  await expect(
-    page.getByRole('heading', { level: 2, name: 'Import items', exact: true }),
-  ).toBeVisible();
-
-  // ---- the import (timed) -----------------------------------------------------------------------------------------
-  const startedIso = new Date(Date.now() - 60_000).toISOString();
-  const t0 = Date.now();
-  let checkMs = 0;
-  let runMs = 0;
-  let finishMs = 0;
-  let finished = false;
   try {
-    await page.getByLabel('Items file (.xlsx or .docx)', { exact: true }).setInputFiles(xlsxPath);
-    await page
-      .getByLabel('Images zip (optional, for .xlsx)', { exact: true })
-      .setInputFiles(zipPath);
-    await page.getByRole('button', { name: 'Check file', exact: true }).click();
-    const ready = page.getByText(`Ready to import: ${ROWS}`, { exact: true });
-    const failure = page.getByRole('alert');
-    await expect(ready.or(failure)).toBeVisible({ timeout: 540_000 });
-    await expect(ready).toBeVisible({ timeout: 1_000 });
-    checkMs = Date.now() - t0;
-    await expect(page.getByText(`Rows in the file: ${ROWS}`, { exact: true })).toBeVisible();
-    await expect(page.getByText('Rows with problems: 0', { exact: true })).toBeVisible();
-    await expect(page.getByText(`Images found: ${ROWS}`, { exact: true })).toBeVisible();
-
-    const tRun = Date.now();
-    await page.getByRole('button', { name: 'Start import', exact: true }).click();
-    const sent = page.getByText('All rows were sent.', { exact: true });
-    await expect(sent.or(failure)).toBeVisible({ timeout: 540_000 });
-    await expect(sent).toBeVisible({ timeout: 1_000 });
-    runMs = Date.now() - tRun;
-    await expect(page.getByText(`Rows accepted: ${ROWS}`, { exact: true })).toBeVisible();
-
-    const tFinish = Date.now();
-    await page.getByRole('button', { name: 'Finish import', exact: true }).click();
-    const done = page.getByText('Import finished.', { exact: true });
-    await expect(done.or(failure)).toBeVisible({ timeout: 120_000 });
-    await expect(done).toBeVisible({ timeout: 1_000 });
-    finishMs = Date.now() - tFinish;
-    finished = true;
-  } finally {
-    const elapsed = Date.now() - t0;
-    recordMeasurement(testInfo, 'm1-at10', {
-      elapsed_ms: elapsed,
-      check_ms: checkMs,
-      send_ms: runMs,
-      finish_ms: finishMs,
-      limit_ms: LIMIT_MS,
-      rows: ROWS,
-      images: fixture.images,
-      image_bytes_min: fixture.imageBytes.min,
-      image_bytes_max: fixture.imageBytes.max,
-      xlsx_bytes: fixture.xlsx.length,
-      zip_bytes: fixture.imagesZip.length,
-      finished,
+    // ---- sign in and open the import screen (not timed) -------------------------------------------------------------
+    const session = await signInThroughUi(browser, values.recruiterUrl, user, 'import recruiter');
+    await seedSession(context, values.recruiterUrl, session);
+    await page.goto('/tests');
+    const nav = page.getByRole('navigation', { name: 'Main' });
+    await expect(nav).toBeVisible({ timeout: 30_000 });
+    await nav.getByRole('link', { name: 'Item bank', exact: true }).click();
+    await expect(
+      page.getByRole('heading', { level: 2, name: 'Item bank', exact: true }),
+    ).toBeVisible({
+      timeout: 30_000,
     });
+    await page.getByRole('link', { name: 'Import items', exact: true }).click();
+    await expect(
+      page.getByRole('heading', { level: 2, name: 'Import items', exact: true }),
+    ).toBeVisible();
+
+    // ---- the import (timed) -----------------------------------------------------------------------------------------
+    const startedIso = new Date(Date.now() - 60_000).toISOString();
+    const t0 = Date.now();
+    let checkMs = 0;
+    let runMs = 0;
+    let finishMs = 0;
+    let finished = false;
+    try {
+      await page.getByLabel('Items file (.xlsx or .docx)', { exact: true }).setInputFiles(xlsxPath);
+      await page
+        .getByLabel('Images zip (optional, for .xlsx)', { exact: true })
+        .setInputFiles(zipPath);
+      await page.getByRole('button', { name: 'Check file', exact: true }).click();
+      const ready = page.getByText(`Ready to import: ${ROWS}`, { exact: true });
+      const failure = page.getByRole('alert');
+      await expect(ready.or(failure)).toBeVisible({ timeout: 540_000 });
+      await expect(ready).toBeVisible({ timeout: 1_000 });
+      checkMs = Date.now() - t0;
+      await expect(page.getByText(`Rows in the file: ${ROWS}`, { exact: true })).toBeVisible();
+      await expect(page.getByText('Rows with problems: 0', { exact: true })).toBeVisible();
+      await expect(page.getByText(`Images found: ${ROWS}`, { exact: true })).toBeVisible();
+
+      const tRun = Date.now();
+      await page.getByRole('button', { name: 'Start import', exact: true }).click();
+      const sent = page.getByText('All rows were sent.', { exact: true });
+      await expect(sent.or(failure)).toBeVisible({ timeout: 540_000 });
+      await expect(sent).toBeVisible({ timeout: 1_000 });
+      runMs = Date.now() - tRun;
+      await expect(page.getByText(`Rows accepted: ${ROWS}`, { exact: true })).toBeVisible();
+
+      const tFinish = Date.now();
+      await page.getByRole('button', { name: 'Finish import', exact: true }).click();
+      const done = page.getByText('Import finished.', { exact: true });
+      await expect(done.or(failure)).toBeVisible({ timeout: 120_000 });
+      await expect(done).toBeVisible({ timeout: 1_000 });
+      finishMs = Date.now() - tFinish;
+      finished = true;
+    } finally {
+      const elapsed = Date.now() - t0;
+      recordMeasurement(testInfo, 'm1-at10', {
+        elapsed_ms: elapsed,
+        check_ms: checkMs,
+        send_ms: runMs,
+        finish_ms: finishMs,
+        limit_ms: LIMIT_MS,
+        rows: ROWS,
+        images: fixture.images,
+        image_bytes_min: fixture.imageBytes.min,
+        image_bytes_max: fixture.imageBytes.max,
+        xlsx_bytes: fixture.xlsx.length,
+        zip_bytes: fixture.imagesZip.length,
+        finished,
+      });
+    }
+    const elapsedMs = Date.now() - t0;
+    await expect(page.getByText(`Questions imported: ${ROWS}`, { exact: true })).toBeVisible();
+
+    // ---- read back what the database holds (RLS applies) ------------------------------------------------------------
+    const rest = restClient(request, values.supabaseUrl, values.publishableKey);
+    const jwt = await accessToken(page);
+    const jobs = await rest.select<JobRow>(
+      'import_jobs',
+      `select=id,status,rows_total,rows_ok,rows_error,images_ok&rows_total=eq.${ROWS}` +
+        `&created_at=gte.${encodeURIComponent(startedIso)}&order=created_at.desc&limit=5`,
+      jwt,
+    );
+    expect(jobs).toHaveLength(1);
+    const job = jobs[0];
+    if (job === undefined) throw new Error('no import job');
+    expect(job).toMatchObject({
+      status: 'completed',
+      rows_total: ROWS,
+      rows_ok: ROWS,
+      rows_error: 0,
+      images_ok: ROWS,
+    });
+    const versions = await rest.select<{ status: string }>(
+      'item_versions',
+      `select=status&import_job_id=eq.${job.id}&limit=1000`,
+      jwt,
+    );
+    expect(versions).toHaveLength(ROWS);
+    expect(versions.every((v) => v.status === 'approved')).toBe(true);
+
+    // ---- the gate ---------------------------------------------------------------------------------------------------
+    expect(elapsedMs).toBeLessThan(LIMIT_MS);
+  } finally {
+    // The generated 30 MB are not kept (m1-at10.json is).
+    rmSync(xlsxPath, { force: true });
+    rmSync(zipPath, { force: true });
   }
-  const elapsedMs = Date.now() - t0;
-  await expect(page.getByText(`Questions imported: ${ROWS}`, { exact: true })).toBeVisible();
-
-  // ---- read back what the database holds (RLS applies) ------------------------------------------------------------
-  const rest = restClient(request, values.supabaseUrl, values.publishableKey);
-  const jwt = await accessToken(page);
-  const jobs = await rest.select<JobRow>(
-    'import_jobs',
-    `select=id,status,rows_total,rows_ok,rows_error,images_ok&rows_total=eq.${ROWS}` +
-      `&created_at=gte.${encodeURIComponent(startedIso)}&order=created_at.desc&limit=5`,
-    jwt,
-  );
-  expect(jobs).toHaveLength(1);
-  const job = jobs[0];
-  if (job === undefined) throw new Error('no import job');
-  expect(job).toMatchObject({
-    status: 'completed',
-    rows_total: ROWS,
-    rows_ok: ROWS,
-    rows_error: 0,
-    images_ok: ROWS,
-  });
-  const versions = await rest.select<{ status: string }>(
-    'item_versions',
-    `select=status&import_job_id=eq.${job.id}&limit=1000`,
-    jwt,
-  );
-  expect(versions).toHaveLength(ROWS);
-  expect(versions.every((v) => v.status === 'approved')).toBe(true);
-
-  // ---- the gate ---------------------------------------------------------------------------------------------------
-  expect(elapsedMs).toBeLessThan(LIMIT_MS);
 });

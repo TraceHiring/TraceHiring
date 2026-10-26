@@ -7,27 +7,30 @@
 // HUMAN PACE (R2-20), applied as a BUDGET ADDED to the measured time, not as real waits (support/m1-pace.ts): 2 s per
 // click, 1 s per field focus, typing at 40 wpm (300 ms a character), 10 s of reading per screen. The spec calls
 // `pace.click()` / `focus()` / `typed()` / `read()` where a person would, and the browser acts at machine speed.
-//   elapsed_ms = measured wall-clock time (sign-in, page loads, api calls, waits) + the modelled human time,
-// minus the placeholder item bank set-up (`pace.excluded`, see below). `elapsed_ms` must be <= 300,000. It is recorded
-// as a test annotation and in `<output dir>/m1-at01.json` / `m1-at30.json` (numbers only).
+//   elapsed_ms = measured wall-clock time (page loads, api calls, waits, and the sign-in when this run signed in) + the
+// modelled human time, minus the placeholder item bank set-up (`pace.excluded`, see below). `elapsed_ms` must be <=
+// 300,000. It is recorded as a test annotation and in `<output dir>/m1-at01.json` / `m1-at30.json` (numbers only).
+// `includes_sign_in` says whether this run signed in (AT-M1-01: true) or reused that session (AT-M1-30: false).
 //
-// PLACEHOLDER BANK (excluded from the time): the local stack has no library content (§1.3 M1-4, R5-28), so a template
-// creates its pools empty ("needs N more items", §6.1) and a test cannot be published with fewer approved pool items
-// than its draw count (§6.5). The spec creates approved synthetic items in the recruiter's own org through the import
-// api before the form (`seedBank`), and adds them to the draft's pools right after "Create draft from template"
-// (`fillPools`, skipped for a pool the library already filled). A recruiter with a library would do neither.
+// KNOWN LIMIT (placeholder bank, excluded from the time): the local stack has no library content (§1.3 M1-4, R5-28).
+// The spec seeds approved synthetic items in the RECRUITER'S OWN org through the import api before the form
+// (`seedBank`), and tops up the draft's pools through the pool api right after "Create draft from template"
+// (`fillPools`, excluded from the time), because a test cannot be published with fewer approved pool items than its
+// draw count (§6.5). So AT-M1-01 does NOT exercise the from-template library copy, and the pools (12 / 12 / 10 / 3
+// items) are below the 10x rule for drives (§6.5). A library-seeding route for E2E is a lead ask (owed).
 //
 // SIGN-IN: `signInThroughUi` enrols the TOTP factor of a fresh local user through the app's own screens in a context
 // that records nothing; its real duration is in `measured_ms`; the typing, reading and clicks of a sign-in are modelled.
 //
-// ASSUMED UI (not mounted at the base commit, lead ask 1): the wizard steps 2 to 4 of §6.10 (Questions, Integrity,
-// Review and publish) are modelled as `WIZARD_SCREENS` screens read and clicked through; the only wizard controls this
-// spec presses are the ones D1's editor already has (`Publish...`, `Publish test`), on `/tests/:testId`.
+// WIZARD (apps/recruiter/src/authoring/WizardEditor.tsx): on `/tests/:testId` the page shows the step list "Steps" and
+// three regions, "Step 2: Questions", "Step 3: Integrity", "Step 4: Review and publish". The spec asserts all of them
+// before "Publish..." and models `WIZARD_SCREENS` = 3 regions read. It also adds 3 clicks: a deliberate over-count
+// (scrolling between regions on one page), so the budget errs on the safe side.
 //
 // Labels used (apps/recruiter/src):
 //   shell/SignedIn.tsx:31            navigation "Main"
 //   authoring/TestsListPage.tsx:80   heading (2) "Tests";  :28 link "New test"
-//   authoring/TestEditorPage.tsx:248 heading (2) "New test"
+//   authoring/TestEditorPage.tsx:312 heading (2) "New test"
 //   authoring/FromTemplateRoute.tsx:116 heading (3) "Or start from a role template"
 //   authoring/FromTemplateRoute.tsx:138 field "Job title";  :150 field "Job description (optional)"
 //   authoring/FromTemplateRoute.tsx:171 button "Suggest a template";  :100 text "Suggested from the job description: <name>."
@@ -35,8 +38,12 @@
 //   authoring/FromTemplateRoute.tsx:207 button "Create draft from template";  :69 text "Draft created: <name>."
 //   authoring/FromTemplateRoute.tsx:72 heading (3) "Not in this draft yet";  :78 items "<title> (<format> section)"
 //   authoring/FromTemplateRoute.tsx:84 link "Open the draft"
-//   authoring/TestEditorPage.tsx:200 heading (2) <test name>;  :123 button "Publish...";  :39 dialog "Publish this test"
-//   authoring/TestEditorPage.tsx:22  freeze text;  :49 button "Publish test";  :106 text "Published, version <n>. ..."
+//   authoring/TestEditorPage.tsx:261 heading (2) <test name>
+//   authoring/WizardEditor.tsx:37    list "Steps" (items "1. Job details" ... "4. Review and publish", :33-:41)
+//   authoring/WizardEditor.tsx:52    headings (3) "Step 2: Questions", "Step 3: Integrity", "Step 4: Review and publish"
+//   authoring/WizardEditor.tsx:485   button "Publish..."
+//   authoring/PublishDialog.tsx:18   dialog "Publish this test" (:20);  :5 freeze text;  :30 button "Publish test"
+//   authoring/WizardEditor.tsx:86    text "Published, version <n>. Settings are frozen; ..."
 // Template and section names: supabase/migrations/20261023020000_m1_tests.sql:1414-1431 (customer_support, bpo_voice).
 //
 // Skipped unless E2E_LOCAL=1 (scripts/e2e-local.mjs). Synthetic data only; nothing printed holds a secret.
@@ -159,6 +166,8 @@ const publishFromTemplate = async (
   const pace = new PaceClock();
   pace.start();
   let published = false;
+  // True when this run signed in (modelled and measured), false when it reused the first test's session.
+  const signedInHere = shared.session === undefined;
   try {
     // ---- sign in, land on the home screen, go to Tests -------------------------------------------------------
     const session = await ensureSession(browser, values, pace);
@@ -244,8 +253,29 @@ const publishFromTemplate = async (
     await expect(
       page.getByRole('heading', { level: 2, name: scenario.jobTitle, exact: true }),
     ).toBeVisible({ timeout: 30_000 });
-    pace.read(WIZARD_SCREENS); // Questions, Integrity, Review and publish
-    pace.click(WIZARD_SCREENS); // the click that reaches each of them
+    const steps = page.getByRole('list', { name: 'Steps', exact: true });
+    await expect(steps).toBeVisible();
+    for (const title of [
+      '1. Job details',
+      '2. Questions',
+      '3. Integrity',
+      '4. Review and publish',
+    ]) {
+      await expect(steps.getByRole('listitem').filter({ hasText: title })).toBeVisible();
+    }
+    for (const heading of [
+      'Step 2: Questions',
+      'Step 3: Integrity',
+      'Step 4: Review and publish',
+    ]) {
+      await expect(
+        page.getByRole('heading', { level: 3, name: heading, exact: true }),
+      ).toBeVisible();
+    }
+    pace.read(WIZARD_SCREENS); // the three regions: Questions, Integrity, Review and publish
+    // A deliberate over-count: the regions share one page, so a person scrolls rather than clicks. Kept so the budget
+    // errs on the safe side.
+    pace.click(WIZARD_SCREENS);
 
     pace.click(); // "Publish..."
     await page.getByRole('button', { name: 'Publish...', exact: true }).click();
@@ -273,6 +303,7 @@ const publishFromTemplate = async (
       ...facts,
       limit_ms: LIMIT_MS,
       published,
+      includes_sign_in: signedInHere,
       pace_model: 'budget-added: click 2000, focus 1000, typing 40 wpm, read 10000 per screen',
     });
   }
