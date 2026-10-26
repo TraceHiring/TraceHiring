@@ -87,6 +87,19 @@ describe('loadItemImage (R5-68 c)', () => {
     expect(waits).toEqual([1_000, 3_000, 4_000]);
   });
 
+  it('caps a 429 Retry-After at 60 s', async () => {
+    const hash = await sha256HexOf(PNG_BYTES);
+    const media = sequence(
+      { ok: false, code: 'rate_limited', status: 429, retryAfterSeconds: 3_600 },
+      png(),
+    );
+    const { sleep, waits } = sleeps();
+    expect(await loadItemImage({ media }, SESSION_TOKEN, hash, { sleep })).toMatchObject({
+      kind: 'ok',
+    });
+    expect(waits).toEqual([60_000]);
+  });
+
   it('gives up after 4 tries: the line shows with "Try again"', async () => {
     const hash = await sha256HexOf(PNG_BYTES);
     const media = fakeMedia({ ok: false, code: 'network', status: 0 });

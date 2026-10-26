@@ -46,6 +46,7 @@ import {
   WRITTEN_ITEM,
 } from '../fixtures.test-helpers';
 import { Test, type TestEnd } from './Test';
+import { attachWaitMs } from './useSectionTransition';
 
 type Fn<K extends keyof CandidateApi> = ReturnType<typeof vi.fn<CandidateApi[K]>>;
 
@@ -527,6 +528,49 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
     expect(navButton(container, 1, 2)?.disabled).toBe(true);
   });
 
+  it('R5-68 d: a pending or failed GET for N+1 never lets the screen move past N+1', async () => {
+    const view = viewV2At(Date.now(), {
+      sections: [writtenSection({ position: 1 })],
+      slots: [3],
+      served: [1],
+    });
+    const fake = fakeApi(view);
+    const held = deferred<ApiResult<ServedItemV2>>();
+    let failNext = true;
+    fake.item.mockImplementation(async (_t, position) => {
+      if (position === 2 && failNext) {
+        failNext = false;
+        return held.promise;
+      }
+      return { ok: true, value: writtenItemV2(position) };
+    });
+    const container = await render(view, fake);
+    await textarea(container);
+    // A double click on "Next" sends one GET.
+    const next = await waitForButton(container, COPY.test.next);
+    await click(next);
+    await click(next);
+    await waitFor(() => itemCalls(fake, 2).length === 1, 'GET 2');
+    const stuck = () => {
+      expect(buttonByText(container, COPY.test.next)?.disabled).toBe(true);
+      expect(navButton(container, 3, 3)?.disabled).toBe(true);
+      expect(navButton(container, 1, 3)?.disabled).toBe(true);
+    };
+    stuck();
+    // The GET fails: question 2 keeps its "Try again", question 1 stays passed, question 3 stays shut.
+    held.resolve(fail('network', 0));
+    const retry = await waitForButton(container, COPY.test.retry);
+    stuck();
+    expect(itemCalls(fake, 3)).toHaveLength(0);
+    await click(retry);
+    await textarea(container);
+    expect(heading(container)).toContain(COPY.test.question(2, 3));
+    expect(itemCalls(fake, 2)).toHaveLength(2);
+    expect((await waitForButton(container, COPY.test.next)).disabled).toBe(false);
+    expect(navButton(container, 1, 3)?.disabled).toBe(true);
+    expect(itemCalls(fake, 3)).toHaveLength(0);
+  });
+
   it('forward-only: the GET carries afterSeq; on 409 it flushes and retries, so the last edits are kept', async () => {
     const view = viewV2At(Date.now(), {
       sections: [writtenSection({ position: 1 })],
@@ -655,6 +699,14 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
     await textarea(container);
     expect(fake.attach).toHaveBeenCalledTimes(3);
     expect(ends).toEqual([]);
+  });
+
+  it('an attach Retry-After is capped at 60 s, like the D1 boot path; else the backoff runs', () => {
+    expect(attachWaitMs(fail('rate_limited', 429, { retryAfterSeconds: 3_600 }), 0)).toBe(60_000);
+    expect(attachWaitMs(fail('rate_limited', 429, { retryAfterSeconds: 5 }), 0)).toBe(5_000);
+    expect(attachWaitMs(fail('network', 0), 0)).toBe(1_000);
+    expect(attachWaitMs(fail('unavailable', 503), 3)).toBe(8_000);
+    expect(attachWaitMs(fail('network', 0), 9)).toBe(10_000);
   });
 
   it('finish: the confirm says finishing is final; confirming sends section.finish and attaches', async () => {

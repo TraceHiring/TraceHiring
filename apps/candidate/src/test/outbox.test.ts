@@ -704,16 +704,43 @@ describe('package v2 (AT-M1-32; R5-20, R5-45, R5-59 d, R5-66 f)', () => {
     expect(edge.state.stored).toHaveLength(1);
   });
 
-  it('R5-68 b: a signal whose batch failed in flight is handed over (never dropped)', async () => {
+  it('R5-68 b: a batch the edge never got is retried on the old stream, then handed over (never dropped)', async () => {
     const o = make();
     edge.state.mode = { kind: 'network' };
     o.signal({ sig: 'tab_hidden', item: 2, ms: 3_000 });
     void o.flush();
     const held = o.handOver();
-    await vi.advanceTimersByTimeAsync(10);
+    // The batch in flight fails, then three more tries with the same seq (1, 2, 4 s apart).
+    await vi.advanceTimersByTimeAsync(7_100);
     await expect(held).resolves.toEqual([
       { kind: 'signal', signal: { sig: 'tab_hidden', item: 2, ms: 3_000 }, raisedAt: 0 },
     ]);
+    expect(edge.state.requests.map((r) => r.events.map((e) => e.seq))).toEqual([
+      [1],
+      [1],
+      [1],
+      [1],
+    ]);
+    expect(edge.state.requests.every((r) => r.streamId === STREAM)).toBe(true);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(edge.state.requests).toHaveLength(4);
+  });
+
+  it('R5-68 b: a batch the edge stored whose answer was lost is resent on the old stream, never handed over', async () => {
+    const o = make();
+    edge.state.loseAnswer = true;
+    o.signal({ sig: 'tab_hidden', item: 2, ms: 3_000 });
+    o.finish(SECTION);
+    void o.flush();
+    const held = o.handOver();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(edge.state.hw).toBe(2);
+    edge.state.loseAnswer = false;
+    await vi.advanceTimersByTimeAsync(1_100);
+    // The resend carries the same seqs and contents; the edge skips them (seq <= hw) and acknowledges.
+    expect(edge.state.requests[1]?.events).toEqual(edge.state.requests[0]?.events);
+    await expect(held).resolves.toEqual([]);
+    expect(edge.state.stored).toHaveLength(2);
   });
 
   it('the 10-minute compaction keeps a queued section.finish', async () => {
