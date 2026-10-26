@@ -145,6 +145,15 @@ describe('AT-D21: the never-build list (rule 7)', () => {
     expect(srcDirs().flatMap(sourceFiles).length).toBeGreaterThan(100);
   });
 
+  it('scans source in a src directory named test (the candidate test screen; A7 spec review #4)', () => {
+    const files = srcDirs()
+      .flatMap(sourceFiles)
+      .map((f) => path.relative(repoRoot, f).replaceAll('\\', '/'));
+    expect(files).toContain('apps/candidate/src/test/Test.tsx');
+    expect(files).toContain('apps/candidate/src/test/signals.ts');
+    expect(files.filter((f) => TEST_FILE.test(f))).toEqual([]);
+  });
+
   it('no source identifier names gaze, emotion, personality, a voiceprint, face matching, AI-likeness or an ASN', () => {
     const hits = srcDirs()
       .flatMap(sourceFiles)
