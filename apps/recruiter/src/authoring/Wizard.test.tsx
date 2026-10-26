@@ -30,7 +30,7 @@ import {
   type Mounted,
   type Routes as ApiRoutes,
 } from './dom.test-helpers';
-import { EditorBody, TestEditorRoute } from './TestEditorPage';
+import { EditorBody, FREEZE_COPY, TestEditorRoute } from './TestEditorPage';
 
 const TEST = uuid(1);
 const VERSION = uuid(3);
@@ -137,7 +137,7 @@ const draftView = (
       sections,
     },
   });
-const integrityView = (presetKey: 'standard' | 'strict' | null) => {
+const integrityView = (presetKey: 'standard' | 'strict' | null, stored = presetKey !== null) => {
   const values =
     presetKey === 'strict'
       ? INTEGRITY_PRESETS.strict
@@ -153,6 +153,7 @@ const integrityView = (presetKey: 'standard' | 'strict' | null) => {
       id_verification: 'always',
     },
     candidateSummary: renderCandidateSummary(values, INTEGRITY_CATALOG_VERSION).lines,
+    stored,
   });
 };
 const pool = (n: number, name: string, format: 'mcq' | 'written'): PoolDetail => ({
@@ -199,6 +200,8 @@ const editorCalls = (calls: Call[]) =>
     .filter((c) => c.path.startsWith(`/tests/${TEST}`) || c.path === '/pools')
     .filter((c) => !c.path.includes('/assignments'))
     .map((c) => `${c.method} ${c.path}${c.query}`);
+/** R5-70 a: every draft save names the version it was loaded from. */
+const Q = `?version=${VERSION}`;
 const bodyOf = (calls: Call[], key: string) =>
   calls.find((c) => `${c.method} ${c.path}` === key)?.body;
 
@@ -294,7 +297,7 @@ describe('a D1-shaped draft keeps D1 save and publish exactly (R5-69 b, h)', () 
   it('saves with PUT /tests/:id, never PUT …/draft, and the body has no M1 field', async () => {
     const { c, calls } = await mountBody(draftView(d1Sections), integrityView(null));
     await click(button(c, 'Save draft'));
-    expect(editorCalls(calls)).toEqual([`PUT /tests/${TEST}`]);
+    expect(editorCalls(calls)).toEqual([`PUT /tests/${TEST}${Q}`]);
     const body = bodyOf(calls, `PUT /tests/${TEST}`) as { sections: Record<string, unknown>[] };
     expect(body.sections.map((s) => Object.keys(s).sort())).toEqual([
       ['format', 'items', 'name', 'weight'],
@@ -309,7 +312,7 @@ describe('a D1-shaped draft keeps D1 save and publish exactly (R5-69 b, h)', () 
     const dialog = c.querySelector('[role="dialog"]');
     expect(dialog?.querySelector('h3')?.textContent).toBe('Publish this test');
     await click(button(c, 'Publish test'));
-    expect(editorCalls(calls)).toEqual([`PUT /tests/${TEST}`, `POST /tests/${TEST}/publish`]);
+    expect(editorCalls(calls)).toEqual([`PUT /tests/${TEST}${Q}`, `POST /tests/${TEST}/publish`]);
     expect(bodyOf(calls, `POST /tests/${TEST}/publish`)).toEqual({ testVersionId: VERSION });
     expect(onReload).toHaveBeenCalledTimes(1);
   });
@@ -320,7 +323,7 @@ describe('a D1-shaped draft keeps D1 save and publish exactly (R5-69 b, h)', () 
     });
     await click(field<HTMLInputElement>(c, 'Standard'));
     await click(button(c, 'Save settings'));
-    expect(editorCalls(calls)).toEqual([`PUT /tests/${TEST}/integrity`, `PUT /tests/${TEST}`]);
+    expect(editorCalls(calls)).toEqual([`PUT /tests/${TEST}/integrity`, `PUT /tests/${TEST}${Q}`]);
     expect(onReload).toHaveBeenCalledTimes(1);
   });
 });
@@ -329,7 +332,7 @@ describe('a v2 draft (R5-69 b-e)', () => {
   it('saves with PUT …/draft; written sections take the stored paste setting', async () => {
     const { c, calls } = await mountBody(draftView(templateSections), integrityView('standard'));
     await click(button(c, 'Save draft'));
-    expect(editorCalls(calls)).toEqual(['GET /pools', `PUT /tests/${TEST}/draft`]);
+    expect(editorCalls(calls)).toEqual(['GET /pools', `PUT /tests/${TEST}/draft${Q}`]);
     const body = bodyOf(calls, `PUT /tests/${TEST}/draft`) as {
       sections: { mode: string; poolId?: string; pasteRule?: string; navigation: string }[];
     };
@@ -348,7 +351,7 @@ describe('a v2 draft (R5-69 b-e)', () => {
     await click(button(c, 'Publish test'));
     expect(editorCalls(calls)).toEqual([
       'GET /pools',
-      `PUT /tests/${TEST}/draft`,
+      `PUT /tests/${TEST}/draft${Q}`,
       `POST /tests/${TEST}/publish`,
     ]);
     expect(bodyOf(calls, `POST /tests/${TEST}/publish`)).toEqual({ testVersionId: VERSION });
@@ -391,7 +394,7 @@ describe('a v2 draft (R5-69 b-e)', () => {
     expect(editorCalls(calls)).toEqual([
       'GET /pools',
       `PUT /tests/${TEST}/integrity`,
-      `PUT /tests/${TEST}/draft`,
+      `PUT /tests/${TEST}/draft${Q}`,
     ]);
     const body = bodyOf(calls, `PUT /tests/${TEST}/draft`) as {
       sections: { format: string; pasteRule?: string }[];
@@ -515,5 +518,135 @@ describe('the published view (R5-69 g)', () => {
     expect(onReload).not.toHaveBeenCalled();
     if (link !== undefined) await click(link);
     expect(onReload).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---- fix round 1 (R5-70 d, e) ---------------------------------------------------------------------------------------
+
+const mountRoute = async (routes: ApiRoutes) => {
+  const { api, calls } = fakeApi(routes);
+  mounted = await mountScreen(
+    <Routes>
+      <Route path="/tests/:testId" element={<TestEditorRoute />} />
+    </Routes>,
+    api,
+    ['recruiter'],
+    `/tests/${TEST}`,
+  );
+  return { c: mounted.container, calls };
+};
+const publishButton = (c: HTMLElement) => button(c, 'Publish...');
+
+describe('which editor, from `stored` (R5-70 d)', () => {
+  it('stored custom settings (preset null) on D1 sections make a v2 draft', async () => {
+    const { c } = await mountBody(draftView(d1Sections), integrityView(null, true));
+    expect(headings(c, 'h3')).toContain('Sections');
+    expect(c.querySelectorAll('[aria-label="Multiple choice section"]')).toHaveLength(0);
+  });
+
+  it('settings not stored: D1 sections keep the D1 editor', async () => {
+    const { c } = await mountBody(draftView(d1Sections), integrityView(null, false));
+    expect(c.querySelectorAll('[aria-label="Multiple choice section"]')).toHaveLength(1);
+  });
+
+  it('the integrity read failed: the sections decide, and step 3 loads the settings itself', async () => {
+    const failing = {
+      [`GET /tests/${TEST}/integrity`]: () => ({
+        status: 503,
+        body: { error: { code: 'unavailable' } },
+      }),
+    };
+    const d1 = await mountRoute(routesFor(draftView(d1Sections), integrityView(null), failing));
+    expect(d1.c.querySelectorAll('[aria-label="Multiple choice section"]')).toHaveLength(1);
+    expect(editorCalls(d1.calls).filter((x) => x.endsWith('/integrity'))).toHaveLength(2);
+    await mounted?.unmount();
+    mounted = undefined;
+
+    const v2 = await mountRoute(
+      routesFor(draftView(templateSections), integrityView(null), failing),
+    );
+    expect(headings(v2.c, 'h3')).toContain('Sections');
+    expect(plain(v2.c.innerHTML)).toContain(errorText('unavailable'));
+  });
+});
+
+describe('publish waits for step 3 (R5-70 e)', () => {
+  it('v2: unsaved integrity changes disable Publish with a note, until they are saved', async () => {
+    const { c } = await mountBody(draftView(templateSections), integrityView('standard'), {
+      [`PUT /tests/${TEST}/integrity`]: () => ({ body: integrityView('strict') }),
+    });
+    expect(publishButton(c).disabled).toBe(false);
+    await click(field<HTMLInputElement>(c, 'Strict'));
+    expect(publishButton(c).disabled).toBe(true);
+    expect(plain(c.innerHTML)).toContain(
+      'Step 3 has unsaved changes. Save the settings before you publish.',
+    );
+    await click(button(c, 'Save settings'));
+    expect(publishButton(c).disabled).toBe(false);
+    expect(plain(c.innerHTML)).not.toContain('Step 3 has unsaved changes.');
+  });
+
+  it('D1: the same', async () => {
+    const { c } = await mountBody(draftView(d1Sections), integrityView(null));
+    expect(publishButton(c).disabled).toBe(false);
+    await click(field<HTMLInputElement>(c, 'Strict'));
+    expect(publishButton(c).disabled).toBe(true);
+    expect(plain(c.innerHTML)).toContain(
+      'Step 3 has unsaved changes. Save the settings before you publish.',
+    );
+  });
+});
+
+describe('the rest of R5-70 e', () => {
+  it('a stored pool missing from the loaded pages shows as "Current pool"', async () => {
+    const { c } = await mountBody(draftView(templateSections), integrityView('standard'), {
+      'GET /pools': () => ({
+        body: { pools: [pool(52, 'Reading pool', 'mcq')], nextCursor: null },
+      }),
+    });
+    const select = field<HTMLSelectElement>(
+      c.querySelector('li[data-section]') as HTMLElement,
+      'Pool',
+    );
+    expect(select.value).toBe(uuid(50));
+    expect(select.selectedOptions[0]?.textContent).toBe('Current pool');
+    expect(plain(c.innerHTML)).not.toContain('Choose a pool');
+  });
+
+  it('the 10-question limit counts the whole test: Add question is disabled in both inline sections', async () => {
+    const many = (item: typeof mcqItem | typeof writtenItem, n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...item,
+        id: uuid(300 + i + (item.format === 'mcq' ? 0 : 50)),
+        position: i + 1,
+      }));
+    const sections = [
+      { ...d1Sections[0], navigation: 'free', items: many(mcqItem, 6) },
+      {
+        ...d1Sections[1],
+        navigation: 'forward_only',
+        pasteRule: 'allowed_logged',
+        items: many(writtenItem, 4),
+      },
+    ];
+    const { c } = await mountBody(draftView(sections), integrityView('standard'));
+    const adds = [...c.querySelectorAll('button')].filter((b) => b.textContent === 'Add question');
+    expect(adds).toHaveLength(2);
+    for (const b of adds) expect(b.disabled).toBe(true);
+  });
+
+  it('the v2 publish dialog carries the freeze copy', async () => {
+    const { c } = await mountBody(draftView(templateSections), integrityView('standard'));
+    await click(publishButton(c));
+    const dialog = c.querySelector('[role="dialog"]');
+    expect(plain(dialog?.innerHTML ?? '')).toContain(FREEZE_COPY);
+  });
+
+  it('the D1 published view keeps the "Reviewers" region', async () => {
+    const { c } = await mountBody(draftView(d1Sections, 'published'), integrityView(null), {
+      [`GET /tests/${TEST}/assignments`]: () => ({ body: { assignments: [] } }),
+    });
+    const region = c.querySelector('section[aria-labelledby="reviewers-title"]');
+    expect(region?.querySelector('h3')?.textContent).toBe('Reviewers');
   });
 });

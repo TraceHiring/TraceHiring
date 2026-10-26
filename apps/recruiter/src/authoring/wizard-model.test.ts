@@ -87,6 +87,7 @@ const view = (sections: unknown[]) =>
 const integrity = (
   presetKey: 'standard' | 'strict' | null,
   values = presetKey === 'strict' ? INTEGRITY_PRESETS.strict : INTEGRITY_PRESETS.standard,
+  stored = true,
 ) =>
   IntegritySettingsView.parse({
     presetKey,
@@ -97,9 +98,14 @@ const integrity = (
       id_verification: 'always',
     },
     candidateSummary: renderCandidateSummary(values, INTEGRITY_CATALOG_VERSION).lines,
+    stored,
   });
 /** The api's answer for a draft without stored settings: D1's equivalent values, preset null. */
-const unstored = integrity(null, { ...INTEGRITY_PRESETS.standard, paste_written: 'blocked' });
+const unstored = integrity(
+  null,
+  { ...INTEGRITY_PRESETS.standard, paste_written: 'blocked' },
+  false,
+);
 
 const withSettings = d1Sections.map((s) =>
   s.format === 'mcq'
@@ -121,7 +127,7 @@ const poolSection = {
   navigation: 'free',
 };
 
-describe('integrityStored and isD1Shaped (R5-69 b)', () => {
+describe('integrityStored and isD1Shaped (R5-69 b, R5-70 d)', () => {
   it('a D1 draft whose settings are not stored is D1-shaped', () => {
     expect(integrityStored(view(d1Sections), unstored)).toBe(false);
     expect(isD1Shaped(view(d1Sections), unstored)).toBe(true);
@@ -135,11 +141,21 @@ describe('integrityStored and isD1Shaped (R5-69 b)', () => {
     expect(isD1Shaped(view(d1Sections), integrity('standard'))).toBe(false);
   });
 
-  it('custom settings (preset null) are told apart by the sections the api rewrote when they were saved', () => {
-    // PUT …/integrity gives every section a navigation and every written one the paste rule (R5-63 b, DB-M1-1).
+  it('`stored` decides: custom settings (preset null) are stored, with or without sections', () => {
     expect(integrityStored(view(withSettings), integrity(null))).toBe(true);
-    expect(isD1Shaped(view(withSettings), integrity(null))).toBe(false);
+    expect(integrityStored(view([]), integrity(null))).toBe(true);
+    expect(isD1Shaped(view(d1Sections), integrity(null))).toBe(false);
+    expect(isD1Shaped(view([]), integrity(null))).toBe(false);
+    // Sections with the default navigation but nothing stored: D1 can still save them (d1Editable).
+    expect(integrityStored(view(withSettings), unstored)).toBe(false);
+    expect(isD1Shaped(view(withSettings), unstored)).toBe(true);
+  });
+
+  it('only when the integrity read failed do the sections decide (the fallback)', () => {
+    // The api gives every section a navigation and every written one the paste rule once settings are stored.
+    expect(integrityStored(view(withSettings), null)).toBe(true);
     expect(isD1Shaped(view(withSettings), null)).toBe(false);
+    expect(integrityStored(view(d1Sections), null)).toBe(false);
   });
 
   it('any section D1 cannot save makes a v2 draft', () => {
