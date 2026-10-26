@@ -435,6 +435,17 @@ the 300,000 ms gate, for 500 rows and 500 distinct PNG images of 59,867 bytes ea
 `test-results/m1-at10.json` of the run's `e2e-local-report` artifact. The staging half (Hyperdrive, Workers limits)
 stays with the M1 staging founder item.
 
+**AT-M1-01, AT-M1-30 and AT-M1-10 again (BUILD 4, 2026-10-26).** Linux CI dispatch run 40368988267, branch
+`m1/e2e-specs-4` @ `62215c1` (= `m1/integration` `0a7199f` + the M1 E2E specs; after two fixes the first runs found:
+the double JSON-encoded `amr` that made every library reference read 503, `062e0b8`, and the REST name check that
+refused `publish_source_v2`, `0a7199f`), all e2e-local specs green: **AT-M1-01 PASS, `elapsed_ms` 170,943** (sign-in
+to a published Customer Support test: measured 1,743 + modelled human time 169,200 per R2-20, 12 clicks, 4 field
+focuses, 104 characters, 11 screens; placeholder bank set-up 438 ms excluded); **AT-M1-30 PASS, `elapsed_ms` 133,409**
+(BPO Voice found from a job description, voice and typing sections skipped with their notes); **AT-M1-10 PASS,
+`elapsed_ms` 10,002** (same 500 rows and images). Limit 300,000 each. Sources: `test-results/m1-at01.json`,
+`m1-at30.json`, `m1-at10.json` of the run's `e2e-local-report` artifact. The real 5-recruiter median stays a deferred
+gate (§13).
+
 ## 9. Security notes for reviewers
 Library keys (I-M1-5) and the copy definer function; the import path (browser-parsed data is untrusted: every row re-validated, images re-checked; no file stored); AI drafting (prompt-injection in topic, output schema, no candidate data); the member-provisioning secret lives only in `workers/jobs`; the image route at the edge; `public` INVOKER functions (EXECUTE only to `authenticated`, `search_path = ''`, every statement subject to RLS).
 
