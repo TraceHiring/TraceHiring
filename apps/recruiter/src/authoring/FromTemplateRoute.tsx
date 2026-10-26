@@ -21,7 +21,12 @@ import { errorText } from '../common/messages';
 import ui from '../common/Ui.module.css';
 import { PRESET_INFO } from '../settings/integrity-model';
 
-const FORMAT_TEXT = { typing: 'typing', voice: 'voice' } as const;
+const FORMAT_TEXT = {
+  mcq: 'multiple-choice',
+  written: 'written',
+  typing: 'typing',
+  voice: 'voice',
+} as const;
 const templateId = (t: Pick<RoleTemplateSummary, 'templateKey' | 'version'>): string =>
   `${t.templateKey}:${t.version}`;
 

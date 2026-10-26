@@ -898,7 +898,9 @@ export const CreateTestFromTemplateResponse = z.strictObject({
     .array(
       z.strictObject({
         title: z.string().min(1).max(120),
-        format: z.enum(['typing', 'voice']),
+        // R5-71 i: typing and voice (not servable in M1), and an own template's mcq or written section marked
+        // `available: false` (M1-16, E18).
+        format: z.enum(['mcq', 'written', 'typing', 'voice']),
       }),
     )
     .max(10),
