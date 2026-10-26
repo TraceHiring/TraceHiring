@@ -41,3 +41,33 @@ Fix round (lead, tests first: red `0316b9c`, green `5504e4d`, migration M1-r `20
 - **2e carried Info, deferred to the M1 REVIEW (listed in the summary):** the A7 hand-over total time budget (~127 s
   worst case); uncapped `Retry-After` on the outbox 429 and item-GET 429 paths; an integrity PUT "invalid body + stale
   version" test. None touches rules 1-9.
+
+## M1-q first reviews and the M1-p confirming re-review
+- **Database (Job 1, M1-p fix round): CONFIRMED WITH NOTES.** Medium 1, Lows 2-4 and Info 5 fixed (two-connection
+  scenario red without the lock). N1 (Low): a direct PostgREST section write still reads the settings without a
+  lock; N2 (Info): integrity PUT vs publish may also deadlock (pre-existing, 409); N3 (Info): scenario covers a draft
+  without sections only.
+- **Database (Job 2, M1-q): APPROVE WITH FIXES.** (1) Medium: pgTAP role and edge coverage; (2) Low-Medium: one
+  call under one 8 s statement timeout; (3) Low: update without `is_parameterised` → 23502; (4) Low: an id named
+  twice → 42501 (api 404); (5) Info: clone refusals (E7, R5-64 f) api-only; (6) Info: no content size bounds (INVOKER).
+- **Security (M1-q): PASS WITH FIXES.** (1) Low: a ruleset can name a preset while its values differ (pre-existing:
+  the direct UPDATE grant and `save_test_draft` allow it too; the api refuses it); (2) Low: denied-case pgTAP gaps;
+  (3) Info: existence oracle by uuid on clone; (4) Info: limiter and R5-64 f api-only. M1-p confirmations: Low 1 and
+  Low 2 CONFIRMED; Info 3 (`sections_guard` oracle) not addressed — accepted below.
+- **Stream a8 (templates, Opus spec+security): PASS WITH FIXES.** (1) Medium: a template with only voice/typing
+  sections now 400 instead of 201 (M1-q required 1-10 sections); (2) Low: no test for it. Fix writer `m1/a8-fix-1`.
+- **Stream a9 (bank, Opus security+spec): PASS**, no findings.
+
+Fix round M1-s (lead, red `rls_m1_rpcs` 7 of 59, green with migration `20261026210000_m1_rpc_fixes.sql`): 0-10
+sections (a8 1), ≤ 2,000 ids a call (DB 2), ids de-duplicated (DB 4), `is_parameterised` defaulted on update (DB 3),
+role and edge cases (DB 1, SEC 2). The api half (zero sections, total-id cap) is on `m1/a8-fix-1`.
+
+Accepted or deferred (lead decisions, AUTOPILOT §4; none touches rules 1-9):
+- SEC 1 (preset name vs values in the database): deferred to the M1 REVIEW; the api refuses a mislabelled preset on
+  every path, and a database check would change 23 existing settings fixtures. Tracked in the M1 summary.
+- DB N1 (unlocked derive on a direct section write): accepted; it fails closed at publish (DB-M1-1), and a lock there
+  would bring back a deadlock with `save_test_draft` on that raw path. The api never writes sections directly.
+- DB 2 measurement (the largest template under the 8 s timeout on staging): with the founder-approved staging
+  dispatch; locally 1,200 copies + 2,000 pool items took 2.6 s.
+- DB 5, SEC 3, SEC 4, SEC Info 3 (`sections_guard`): uuid-only existence oracles and api-only clone refusals are
+  equally reachable through the existing direct grants; noted for the M1 REVIEW.
