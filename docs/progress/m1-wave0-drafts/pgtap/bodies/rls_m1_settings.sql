@@ -34,6 +34,11 @@ insert into public.item_versions (org_id, section_id, format, position, stem, ru
   (pg_temp.id('A'), '51000000-0000-4000-8000-0000000000c2', 'written', 1, '[synthetic] Essay',
    (select r.id from public.rubric_versions as r where r.org_id = pg_temp.id('A') and r.rubric_key = 'default'), repeat('c', 64));
 select pg_temp.preset('w34', 'strict');
+select is((select paste_rule from public.sections where id = '51000000-0000-4000-8000-0000000000c2'), 'blocked', 'DB-M1-1 (M1-p): storing Strict settings derives the written section''s paste rule');
+-- The mismatch below never arises through a write since M1-p; the derive trigger is off to pin the publish guard.
+alter table public.sections disable trigger sections_settings_derive;
+update public.sections set paste_rule = 'allowed_logged' where id = '51000000-0000-4000-8000-0000000000c2';
+alter table public.sections enable always trigger sections_settings_derive;
 select pg_temp.tv('t1', pg_temp.id('A'), pg_temp.id('A1'));
 insert into pg_temp.ids select 't1_rs', ruleset_version_id from public.test_versions where id = pg_temp.id('t1');
 select pg_temp.session('sess_std', 'vstd', 1);

@@ -39,6 +39,8 @@ const CASES: [text: string, key: GuardKey, code: string, status: number][] = [
   ['the key reviewer records their own review', 'key_reviewer_self', 'forbidden', 403],
   // Spec review Note 6: a settled invite is a state refusal, never a 404.
   ['a settled invite is final', 'invite_settled', 'conflict', 409],
+  // R5-71 (R5-70 re-review Low 1): D1's shape re-checked inside save_test_draft under its row lock.
+  ['the draft has sections the D1 editor cannot save', 'd1_shape', 'conflict', 409],
 ];
 
 describe('A2a guard keys', () => {

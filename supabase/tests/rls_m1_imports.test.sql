@@ -356,6 +356,23 @@ begin
 end
 $f$;
 select plan(135);
+-- R5-64 g: a client never chooses a job id, so org-user fixture inserts name none; next_id(id) sets the id the next
+-- import_jobs / ai_draft_jobs insert takes through this one-shot BEFORE trigger (rolled back with the transaction).
+create function private.pgtap_next_id() returns trigger language plpgsql set search_path = '' as $f$
+begin
+  if coalesce(current_setting('trace_test.next_id', true), '') <> '' then
+    new.id := current_setting('trace_test.next_id')::uuid;
+    perform set_config('trace_test.next_id', '', true);
+  end if;
+  return new;
+end
+$f$;
+create trigger a_pgtap_next_id before insert on public.import_jobs for each row execute function private.pgtap_next_id();
+create trigger a_pgtap_next_id before insert on public.ai_draft_jobs for each row execute function private.pgtap_next_id();
+create function pg_temp.next_id(p_id uuid) returns void language sql as $f$
+  select set_config('trace_test.next_id', p_id::text, true)
+$f$;
+grant execute on function pg_temp.next_id(uuid) to public;
 -- Fixtures (operator path): an approved bank item in workspace A1 (content hash c…c, for duplicate_in_bank); batches as
 -- jsonb (pg_temp.batch) and function results (pg_temp.res), readable by every persona.
 select pg_temp.bank('dup', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'approved');
@@ -394,16 +411,21 @@ insert into pg_temp.batch values
 
 -- ===== import_jobs: I (OW AD RC in their workspaces) =====
 select pg_temp.u('owner');
-select is(pg_temp.try($$insert into public.import_jobs (id, org_id, workspace_id, source_kind, template_version) values ('a7000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'xlsx', 'trace-items-v1')$$), 'OK 1', 'import_jobs I: owner starts an xlsx import in workspace A1');
-select is(pg_temp.try($$insert into public.import_jobs (id, org_id, workspace_id, source_kind, template_version) values ('a7000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'docx', 'trace-items-v1')$$), 'OK 1', 'import_jobs I: owner starts a docx import');
+select pg_temp.next_id('a7000000-0000-4000-8000-000000000001');
+select is(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'xlsx', 'trace-items-v1')$$), 'OK 1', 'import_jobs I: owner starts an xlsx import in workspace A1');
+select pg_temp.next_id('a7000000-0000-4000-8000-000000000004');
+select is(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'docx', 'trace-items-v1')$$), 'OK 1', 'import_jobs I: owner starts a docx import');
 select matches(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'csv', 'trace-items-v1')$$), '^23514', 'import_jobs I: only the xlsx and docx templates (§6.9)');
 select matches(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version, status) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'xlsx', 'trace-items-v1', 'completed')$$), '^42501 permission denied', 'import_jobs I: status is outside the insert grant (a job starts open)');
 select matches(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version, rows_ok) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'xlsx', 'trace-items-v1', 500)$$), '^42501 permission denied', 'import_jobs I: counts are outside the insert grant');
 select pg_temp.u('recruiter');
-select is(pg_temp.try($$insert into public.import_jobs (id, org_id, workspace_id, source_kind, template_version) values ('a7000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'xlsx', 'trace-items-v1')$$), 'OK 1', 'import_jobs I: recruiter starts an import');
+select pg_temp.next_id('a7000000-0000-4000-8000-000000000002');
+select is(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'xlsx', 'trace-items-v1')$$), 'OK 1', 'import_jobs I: recruiter starts an import');
 select pg_temp.u('ws_recruiter');
-select is(pg_temp.try($$insert into public.import_jobs (id, org_id, workspace_id, source_kind, template_version) values ('a7000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000002', 'xlsx', 'trace-items-v1')$$), 'OK 1', 'import_jobs I: workspace recruiter starts an import in workspace A2');
-select is(pg_temp.try($$insert into public.import_jobs (id, org_id, workspace_id, source_kind, template_version) values ('a7000000-0000-4000-8000-000000000005', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000002', 'xlsx', 'trace-items-v1')$$), 'OK 1', 'import_jobs I: workspace recruiter starts a second A2 import');
+select pg_temp.next_id('a7000000-0000-4000-8000-000000000003');
+select is(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000002', 'xlsx', 'trace-items-v1')$$), 'OK 1', 'import_jobs I: workspace recruiter starts an import in workspace A2');
+select pg_temp.next_id('a7000000-0000-4000-8000-000000000005');
+select is(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000002', 'xlsx', 'trace-items-v1')$$), 'OK 1', 'import_jobs I: workspace recruiter starts a second A2 import');
 select matches(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'xlsx', 'trace-items-v1')$$), '^42501', 'import_jobs I: workspace recruiter cannot import into workspace A1');
 select pg_temp.u('reviewer');
 select matches(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'xlsx', 'trace-items-v1')$$), '^42501', 'import_jobs I: reviewer cannot import');
@@ -412,7 +434,8 @@ select matches(pg_temp.try($$insert into public.import_jobs (org_id, workspace_i
 select pg_temp.u('b_admin');
 select matches(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'xlsx', 'trace-items-v1')$$), '^42501', 'import_jobs I: org B admin cannot import into org A');
 select pg_temp.u('lib_author');
-select is(pg_temp.try(format($$insert into public.import_jobs (id, org_id, workspace_id, source_kind, template_version) values ('a7000000-0000-4000-8000-00000000000a', %L, %L, 'xlsx', 'trace-items-v1')$$, pg_temp.id('L'), pg_temp.id('LW'))), 'OK 1', 'import_jobs I: library staff import into the library org');
+select pg_temp.next_id('a7000000-0000-4000-8000-00000000000a');
+select is(pg_temp.try(format($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values (%L, %L, 'xlsx', 'trace-items-v1')$$, pg_temp.id('L'), pg_temp.id('LW'))), 'OK 1', 'import_jobs I: library staff import into the library org');
 select pg_temp.w('trace_authoring_worker', pg_temp.id('A'));
 select matches(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'xlsx', 'trace-items-v1')$$), '^42501 permission denied', 'import_jobs I: the authoring worker holds nothing on imports (R2-23)');
 select pg_temp.w('trace_admin_worker', pg_temp.id('A'));

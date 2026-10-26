@@ -400,9 +400,13 @@ insert into pg_temp.ids select 'p_rs', ruleset_version_id from public.test_versi
 -- ===== Publish refusals (§3.4, each checked alone; a refused publish changes nothing) =====
 select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a version that uses M1 features needs its integrity settings', 'publish (R3-1): a version with pool sections needs its settings');
 select pg_temp.preset('p', 'standard');
+-- M1-p derives a draft's navigation and written paste rule from its settings (rls_m1_atomic), so these states never
+-- arise through a write; the derive trigger is off around them to pin the publish guard behind it (defence in depth).
+alter table public.sections disable trigger sections_settings_derive;
 update public.sections set navigation = null where id = pg_temp.id('ps1');
 select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: every section of a version 2 test has its navigation', 'publish (R2-1): every v2 section names its navigation');
 update public.sections set navigation = 'free' where id = pg_temp.id('ps1');
+alter table public.sections enable always trigger sections_settings_derive;
 update public.sections set draw_count = 13 where id = pg_temp.id('ps1');
 select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: the pool has fewer approved items than the section draws', 'publish (E4): a draw larger than the approved pool is refused');
 update public.sections set draw_count = 1 where id = pg_temp.id('ps1');
@@ -427,11 +431,13 @@ update public.sections set pool_id = 'd1000000-0000-4000-8000-0000000000a4', dra
 select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a candidate is served at most 100 items', 'publish (R5-9): more than 100 served items are refused');
 update public.sections set pool_id = 'd1000000-0000-4000-8000-0000000000a1', draw_count = 1 where id = pg_temp.id('ps1');
 -- DB-M1-1 (rule 3, fairness): a written section's paste rule is the test's paste setting (Standard: allowed_logged).
+alter table public.sections disable trigger sections_settings_derive;
 update public.sections set paste_rule = null where id = pg_temp.id('ps2');
 select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a written section of a version 2 test has its paste rule', 'publish (DB-M1-1): a v2 written section names its paste rule');
 update public.sections set paste_rule = 'blocked' where id = pg_temp.id('ps2');
 select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a written section''s paste rule follows the test''s paste setting', 'publish (DB-M1-1): a paste rule other than the settings'' paste_written is refused');
 update public.sections set paste_rule = 'allowed_logged' where id = pg_temp.id('ps2');
+alter table public.sections enable always trigger sections_settings_derive;
 -- DB-M1-12: a section's strata quotas sum to its draw; an inline section has no strata.
 update public.sections set blueprint = '{"strata": [{"skillKey": "verbal", "difficultyBand": 2, "count": 1}, {"skillKey": "quant", "difficultyBand": 2, "count": 1}]}' where id = pg_temp.id('ps1');
 select matches(pg_temp.try($$select pg_temp.publish('p')$$), '^42501 TRACE_GUARD: a section''s strata quotas sum to its draw', 'publish (DB-M1-12): strata quotas that do not sum to the draw are refused');

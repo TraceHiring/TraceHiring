@@ -1,10 +1,28 @@
 -- rls_m1_ai_drafts (spec specs/m1-test-authoring.md revision 5 §10 row rls_m1_ai_drafts; §3.2 ai_draft_jobs; §3.3 item_versions (R5-35 CHECK, job keys); §3.5; §4.4; §6.4; M1-8, M1-19; AT-M1-07, AT-M1-09 (DB half), AT-M1-25; R2-6, R2-23, R5-26, R5-35, R5-38). RED first: written from the spec before migration M1-c. Personas and drafts are synthetic; no topic text exists anywhere.
+-- R5-64 g: a client never chooses a job id, so org-user fixture inserts name none; next_id(id) sets the id the next
+-- import_jobs / ai_draft_jobs insert takes through this one-shot BEFORE trigger (rolled back with the transaction).
+create function private.pgtap_next_id() returns trigger language plpgsql set search_path = '' as $f$
+begin
+  if coalesce(current_setting('trace_test.next_id', true), '') <> '' then
+    new.id := current_setting('trace_test.next_id')::uuid;
+    perform set_config('trace_test.next_id', '', true);
+  end if;
+  return new;
+end
+$f$;
+create trigger a_pgtap_next_id before insert on public.import_jobs for each row execute function private.pgtap_next_id();
+create trigger a_pgtap_next_id before insert on public.ai_draft_jobs for each row execute function private.pgtap_next_id();
+create function pg_temp.next_id(p_id uuid) returns void language sql as $f$
+  select set_config('trace_test.next_id', p_id::text, true)
+$f$;
+grant execute on function pg_temp.next_id(uuid) to public;
 -- Jobs: d1 (recruiter, A1, count 2), d2 (owner, A1, fails), d3 (admin, A1, running), d5 (admin, A1, stays queued),
 -- dw (workspace recruiter, A2). Items of the drafts are written by the authoring worker with fixed ids c8…01-04.
 
 -- ===== ai_draft_jobs: I (OW AD RC) =====
 select pg_temp.u('recruiter');
-select is(pg_temp.try($$insert into public.ai_draft_jobs (id, org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a8000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'ai_draft_jobs I: recruiter requests two MCQ drafts in workspace A1');
+select pg_temp.next_id('a8000000-0000-4000-8000-000000000001');
+select is(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'ai_draft_jobs I: recruiter requests two MCQ drafts in workspace A1');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version, status) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1', 'running')$$), '^42501 permission denied', 'ai_draft_jobs I: status is outside the insert grant (a job starts queued)');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version, drafts_created) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1', 2)$$), '^42501 permission denied', 'ai_draft_jobs I: counts are outside the insert grant');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'astrology', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^23503 TRACE_GUARD: skill not found', 'ai_draft_jobs I: the skill comes from the taxonomy');
@@ -14,12 +32,16 @@ select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'voice', 'spoken_english', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^(22P02|23514)', 'ai_draft_jobs I: drafts are MCQ or written only (enum today, CHECK once voice joins section_format)');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, '[synthetic] Write about a named customer', 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^23514', 'ai_draft_jobs I: the topic is stored only as its SHA-256 (text never fits)');
 select pg_temp.u('owner');
-select is(pg_temp.try($$insert into public.ai_draft_jobs (id, org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a8000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'written', 'written_communication', 0.40, 3, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'ai_draft_jobs I: owner requests written drafts');
+select pg_temp.next_id('a8000000-0000-4000-8000-000000000002');
+select is(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'written', 'written_communication', 0.40, 3, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'ai_draft_jobs I: owner requests written drafts');
 select pg_temp.u('admin');
-select is(pg_temp.try($$insert into public.ai_draft_jobs (id, org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a8000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 1, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'ai_draft_jobs I: admin requests drafts');
-select is(pg_temp.try($$insert into public.ai_draft_jobs (id, org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a8000000-0000-4000-8000-000000000005', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 1, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'ai_draft_jobs I: admin requests a second job');
+select pg_temp.next_id('a8000000-0000-4000-8000-000000000003');
+select is(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 1, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'ai_draft_jobs I: admin requests drafts');
+select pg_temp.next_id('a8000000-0000-4000-8000-000000000005');
+select is(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 1, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'ai_draft_jobs I: admin requests a second job');
 select pg_temp.u('ws_recruiter');
-select is(pg_temp.try($$insert into public.ai_draft_jobs (id, org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a8000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000002', 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'ai_draft_jobs I: workspace recruiter requests drafts in workspace A2');
+select pg_temp.next_id('a8000000-0000-4000-8000-000000000004');
+select is(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000002', 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'ai_draft_jobs I: workspace recruiter requests drafts in workspace A2');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^42501', 'ai_draft_jobs I: workspace recruiter cannot request drafts in workspace A1');
 select pg_temp.u('reviewer');
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^42501', 'ai_draft_jobs I: reviewer cannot request drafts');
