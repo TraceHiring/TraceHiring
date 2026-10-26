@@ -793,6 +793,16 @@ describe('main', () => {
     expect(h.removed).toEqual([STATE]);
   });
 
+  it('starts edge+jobs only once the api answers: two wrangler sessions starting together on one state folder can hit SQLITE_BUSY (run 40328678565)', async () => {
+    const h = harness({ ready: (url) => !url.includes(':8788') });
+    expect(await main(h.deps)).toBe(1);
+    expect(h.lines.join('\n')).toMatch(/api did not answer 200/);
+    expect(h.started.map((s) => s.name)).toEqual(['api']);
+    expect(h.stopped).toEqual(['api']);
+    expect(h.calls.some((c) => c.startsWith('playwright'))).toBe(false);
+    expect(h.removed).toEqual([STATE]);
+  });
+
   it('fails when a process exits before it is ready', async () => {
     const h = harness({ exitEarly: { recruiter: 1 }, ready: (url) => !url.includes(':5174') });
     expect(await main(h.deps)).toBe(1);
