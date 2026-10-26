@@ -10,13 +10,15 @@ import {
 } from '@trace/shared/contracts/m1';
 import { renderCandidateSummary } from '@trace/shared';
 import type { ReactNode } from 'react';
+import { ApiClient } from '../api/client';
 import { OrgInfoContext } from '../api/runtime';
 import { INTEGRITY_PRESETS, fromIntegrityView } from '../settings/integrity-model';
 import { fromDraftView } from './editor-v2-model';
 import { FromTemplateView } from './FromTemplateRoute';
 import { IntegrityStepView } from './IntegrityStep';
 import { SectionsEditorView } from './SectionsEditor';
-import { NewTestRoute } from './TestEditorPage';
+import { EditorBody, NewTestRoute } from './TestEditorPage';
+import { EditAsNewVersionView } from './WizardEditor';
 
 const ID = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const AT = '2026-10-23T10:00:00.000Z';
@@ -95,6 +97,24 @@ const draft = TestDraftView.parse({
       },
     ],
   },
+});
+
+/** The same draft, published (the read-only view with "Edit as new version"). */
+const published = TestDraftView.parse({
+  ...draft,
+  version: { ...draft.version, status: 'published', publishedAt: AT },
+});
+/** A D1-shaped draft: one inline section, navigation null. */
+const d1Draft = TestDraftView.parse({
+  ...draft,
+  version: { ...draft.version, sections: draft.version.sections.slice(0, 1) },
+});
+/** An api client whose calls never answer: the registry renders on the server, where no effect runs anyway. */
+const idleApi = new ApiClient({
+  origin: 'https://trace-api-staging.example-sub.workers.dev',
+  orgId: ID(90),
+  getAccessToken: () => Promise.resolve(null),
+  fetch: () => new Promise<Response>(() => undefined),
 });
 
 const pools: PoolDetail[] = [
@@ -237,6 +257,30 @@ export function m1Screens(): Record<string, ReactNode> {
     ),
     'integrity-step-read-only': (
       <IntegrityStepView state={fromIntegrityView(integrityView(null))} {...stepProps} readOnly />
+    ),
+    // R5-69: the wizard on /tests/:testId (steps 2 to 4) for a v2 draft, a D1-shaped draft and a published version.
+    'wizard-v2-draft': (
+      <EditorBody api={idleApi} detail={draft} integrity={integrityView(null)} onReload={noop} />
+    ),
+    'wizard-v2-published': (
+      <EditorBody
+        api={idleApi}
+        detail={published}
+        integrity={integrityView(null)}
+        onReload={noop}
+      />
+    ),
+    'wizard-d1-draft': (
+      <EditorBody api={idleApi} detail={d1Draft} integrity={null} onReload={noop} />
+    ),
+    'edit-as-new-version-open': (
+      <EditAsNewVersionView
+        testId={ID(1)}
+        busy={false}
+        outcome="already_open"
+        onEdit={noop}
+        onOpen={noop}
+      />
     ),
     'from-template': <FromTemplateView {...templateProps} />,
     'from-template-loading': <FromTemplateView {...templateProps} status="loading" />,
