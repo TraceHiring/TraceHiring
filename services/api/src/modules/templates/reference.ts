@@ -67,12 +67,12 @@ export interface ReferenceSource {
 
 const REFERENCE_SQL =
   'select private.library_reference($1::uuid, $2, ' +
-  "(select coalesce(array_agg(m), '{}') from jsonb_array_elements_text($3::jsonb) as m), $4) as r";
+  "(select coalesce(array_agg(m), '{}') from jsonb_array_elements_text($3::text::jsonb) as m), $4) as r";
 
 const BROWSE_SQL =
   'select library_item_version_id, format::text as format, skill_key, difficulty::text as difficulty, ' +
   "to_json(created_at)#>>'{}' as created_at from private.library_browse($1::uuid, $2, " +
-  "(select coalesce(array_agg(m), '{}') from jsonb_array_elements_text($3::jsonb) as m), $4, " +
+  "(select coalesce(array_agg(m), '{}') from jsonb_array_elements_text($3::text::jsonb) as m), $4, " +
   '$5::public.section_format, null, null, $6::timestamptz, $7::uuid, $8::int)';
 
 const CatalogRow = z.object({

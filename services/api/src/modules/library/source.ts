@@ -35,7 +35,7 @@ const BROWSE_SQL =
   'select library_item_version_id, format::text as format, skill_key, difficulty::text as difficulty, stem, ' +
   "options, is_parameterised, to_json(created_at)#>>'{}' as created_at " +
   'from private.library_browse($1::uuid, $2, ' +
-  "(select coalesce(array_agg(m), '{}') from jsonb_array_elements_text($3::jsonb) as m), $4, " +
+  "(select coalesce(array_agg(m), '{}') from jsonb_array_elements_text($3::text::jsonb) as m), $4, " +
   '$5::public.section_format, $6::numeric, $7::numeric, $8::timestamptz, $9::uuid, $10::int)';
 
 const BrowseRow = z.object({
