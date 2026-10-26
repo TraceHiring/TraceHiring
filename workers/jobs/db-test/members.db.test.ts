@@ -282,6 +282,24 @@ describe('member provisioning on the real schema (AT-M1-26)', () => {
     expect(m?.user_id).toBe(u?.id);
   });
 
+  it('E26 (R5-62 owed): an address held by more than one Auth account is refused and the invite settled as failed, with no Auth call', async () => {
+    const shared = address('twice');
+    for (const spelling of [shared, shared.toUpperCase()]) {
+      const id = newId();
+      users.push(id);
+      await h.admin.unsafe(
+        "insert into auth.users (id, aud, role, email) values ($1, 'authenticated', 'authenticated', $2)",
+        [id, spelling],
+      );
+    }
+    const id = await insertInvite(org, shared);
+    expect(await deniedCode(asWorker(org, (s) => s.authUserIdForInvite(id, shared)))).toBe('42501');
+    const a = auth();
+    expect(await handleInviteMessage(msg(id, shared), deps(a))).toBe('failed');
+    expect(a.calls).toBe(0);
+    expect((await statusOf(id)).status).toBe('failed');
+  });
+
   it('E26: a second invite for a user who already holds a live membership is settled as failed', async () => {
     const id = await insertInvite(org, address('invitee'));
     expect(await handleInviteMessage(msg(id, address('invitee')), deps())).toBe('failed');
