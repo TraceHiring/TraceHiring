@@ -25,13 +25,18 @@ export function ItemImages({ api, sessionToken, media }: Props) {
 
   const load = useCallback(
     (hash: string) => {
-      setLoaded((l) => ({ ...l, [hash]: undefined }));
       void loadItemImage(api, sessionToken, hash, { alive: () => alive.current }).then((res) => {
         if (alive.current) setLoaded((l) => ({ ...l, [hash]: res }));
       });
     },
     [api, sessionToken],
   );
+
+  /** "Try again": back to loading, then the same tries once more. */
+  const again = (hash: string) => {
+    setLoaded((l) => ({ ...l, [hash]: undefined }));
+    load(hash);
+  };
 
   useEffect(() => {
     alive.current = true;
@@ -58,7 +63,7 @@ export function ItemImages({ api, sessionToken, media }: Props) {
                 type="button"
                 className={ui.secondary}
                 data-testid="image-retry"
-                onClick={() => load(m.hash)}
+                onClick={() => again(m.hash)}
               >
                 {COPY.test.retry}
               </button>

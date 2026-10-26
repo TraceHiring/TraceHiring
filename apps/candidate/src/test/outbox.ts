@@ -167,7 +167,7 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
   /** Set by `handOver`: no new batch starts. */
   let closing = false;
   /** Called once the batch in flight has settled. */
-  let idle: (() => void)[] = [];
+  const idle: (() => void)[] = [];
   let offline = false;
   let failures = 0;
   let notBefore = -Infinity;
