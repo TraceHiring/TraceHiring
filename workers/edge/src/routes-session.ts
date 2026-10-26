@@ -58,7 +58,9 @@ import { verifyCandidateToken } from './token.js';
 
 /** Answers a refusal of the SessionDO with its constant code (409 with `ackSeq`, 429 with `Retry-After`). */
 const refuseSession = (result: Refusal): never => {
-  if (result.error === 'out_of_order') return failOutOfOrder(result.ackSeq ?? 0);
+  if (result.error === 'out_of_order') {
+    return failOutOfOrder(result.ackSeq ?? 0, result.refusedSeqs);
+  }
   return fail(result.error, result.retryAfterSeconds);
 };
 

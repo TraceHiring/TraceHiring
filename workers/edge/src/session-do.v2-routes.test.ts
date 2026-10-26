@@ -83,6 +83,29 @@ describe('package v2 session routes', () => {
     });
   });
 
+  it('a batch that stops at a gap still lists the refusedSeqs of the part it kept (R5-67)', async () => {
+    const { h, token, view } = await v2Harness();
+    expect(
+      (await h.request('GET', `/v1/session/items/${FIRST}?afterSeq=0`, { token })).status,
+    ).toBe(200);
+    // Seq 1 answers a served item, seq 2 answers an unserved one (refused, R5-59 b), seq 4 leaves a gap.
+    const gap = await postEvents(h, token, view.streamId, [
+      text(1, FIRST, 0, 0, 'draft'),
+      text(2, SECOND, 0, 0, 'early'),
+      text(4, FIRST, 5, 0, ' more'),
+    ]);
+    expect(gap.status).toBe(409);
+    expect(OutOfOrderBody.parse(await gap.json())).toEqual({
+      error: 'out_of_order',
+      ackSeq: 2,
+      refusedSeqs: [2],
+    });
+    // A gap with nothing refused keeps the D1 body.
+    const plain = await postEvents(h, token, view.streamId, [text(4, FIRST, 5, 0, ' more')]);
+    expect(plain.status).toBe(409);
+    expect(await plain.json()).toEqual({ error: 'out_of_order', ackSeq: 2 });
+  });
+
   it('a malformed afterSeq is a bad request; an accepted batch without refusals has no refusedSeqs', async () => {
     const { h, token, view } = await v2Harness();
     expect(

@@ -384,11 +384,23 @@ export const CandidateErrorCode = z.enum(
 );
 /** Every code except `out_of_order` answers exactly `{ error }`. */
 export const CandidateErrorBody = z.strictObject({ error: CandidateErrorCode });
-/** 409 `out_of_order` also carries the stream's high-water mark so the client resends from `ackSeq + 1` (§4.4). */
-export const OutOfOrderBody = z.strictObject({
-  error: z.literal('out_of_order'),
-  ackSeq: z.int().min(0),
-});
+/**
+ * 409 `out_of_order` also carries the stream's high-water mark so the client resends from `ackSeq + 1` (§4.4), and,
+ * for an events batch that stopped at a gap, the `refusedSeqs` of the part it kept, as an ack lists them (R5-67).
+ */
+export const OutOfOrderBody = z
+  .strictObject({
+    error: z.literal('out_of_order'),
+    ackSeq: z.int().min(0),
+    refusedSeqs: z.array(Position).max(100).optional(),
+  })
+  .refine(
+    (body) =>
+      body.refusedSeqs === undefined ||
+      (new Set(body.refusedSeqs).size === body.refusedSeqs.length &&
+        body.refusedSeqs.every((seq) => seq <= body.ackSeq)),
+    { message: 'refusedSeqs are distinct and acknowledged' },
+  );
 
 // ---- Tokens (ADR-030 §7, spec §4.3) ----------------------------------------------------------------------------
 

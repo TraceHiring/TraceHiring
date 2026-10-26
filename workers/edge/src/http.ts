@@ -23,11 +23,17 @@ export const LOBBY_BODY_LIMIT = 4 * 1024;
 export const PHOTO_BODY_LIMIT = 512_000;
 export const EVENTS_BODY_LIMIT = 64 * 1024;
 
+/** The extra fields of a 409 `out_of_order` body (`OutOfOrderBody`; R5-67 for `refusedSeqs`). */
+export interface OutOfOrderExtra {
+  ackSeq: number;
+  refusedSeqs?: number[];
+}
+
 /** The answer for a constant code, with `Retry-After` on a 429 when the wait is known. */
 export const errorResponse = (
   code: CandidateErrorCode,
   retryAfterSeconds?: number,
-  ackSeq?: number,
+  outOfOrder?: OutOfOrderExtra,
 ): Response => {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
@@ -36,22 +42,29 @@ export const errorResponse = (
   if (retryAfterSeconds !== undefined) {
     headers['retry-after'] = String(Math.max(1, Math.ceil(retryAfterSeconds)));
   }
-  return new Response(
-    JSON.stringify(ackSeq === undefined ? { error: code } : { error: code, ackSeq }),
-    {
-      status: CANDIDATE_ERROR_STATUS[code],
-      headers,
-    },
-  );
+  const body =
+    outOfOrder === undefined
+      ? { error: code }
+      : {
+          error: code,
+          ackSeq: outOfOrder.ackSeq,
+          ...(outOfOrder.refusedSeqs === undefined || outOfOrder.refusedSeqs.length === 0
+            ? {}
+            : { refusedSeqs: outOfOrder.refusedSeqs }),
+        };
+  return new Response(JSON.stringify(body), {
+    status: CANDIDATE_ERROR_STATUS[code],
+    headers,
+  });
 };
 
 /** A candidate error: thrown, answered by the shared 4xx path as is. The message is the literal code. */
 export class EdgeError extends HTTPException {
   readonly code: CandidateErrorCode;
 
-  constructor(code: CandidateErrorCode, retryAfterSeconds?: number, ackSeq?: number) {
+  constructor(code: CandidateErrorCode, retryAfterSeconds?: number, outOfOrder?: OutOfOrderExtra) {
     const status = CANDIDATE_ERROR_STATUS[code] as ContentfulStatusCode;
-    super(status, { message: code, res: errorResponse(code, retryAfterSeconds, ackSeq) });
+    super(status, { message: code, res: errorResponse(code, retryAfterSeconds, outOfOrder) });
     this.code = code;
   }
 }
@@ -60,9 +73,15 @@ export const fail = (code: CandidateErrorCode, retryAfterSeconds?: number): neve
   throw new EdgeError(code, retryAfterSeconds);
 };
 
-/** 409 `out_of_order` with the stream's high-water mark: the client resends from `ackSeq + 1` (§4.4). */
-export const failOutOfOrder = (ackSeq: number): never => {
-  throw new EdgeError('out_of_order', undefined, ackSeq);
+/**
+ * 409 `out_of_order` with the stream's high-water mark: the client resends from `ackSeq + 1` (§4.4); an events batch
+ * that stopped at a gap also lists the refused seqs of the part it kept (R5-67).
+ */
+export const failOutOfOrder = (ackSeq: number, refusedSeqs?: number[]): never => {
+  throw new EdgeError('out_of_order', undefined, {
+    ackSeq,
+    ...(refusedSeqs === undefined ? {} : { refusedSeqs }),
+  });
 };
 
 export const isEdgeError = (err: unknown): err is EdgeError => err instanceof EdgeError;

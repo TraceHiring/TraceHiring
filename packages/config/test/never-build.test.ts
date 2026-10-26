@@ -16,7 +16,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const SOURCE_ROOTS = ['apps', 'workers', 'services', 'packages'];
 const SOURCE_FILE = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
-const SKIP_DIRS = new Set(['node_modules', 'dist', '.wrangler', '__tests__', 'test', 'tests']);
+// A src directory named `test` holds product code (the candidate's test screen), so only test files are excluded there.
+const SKIP_DIRS = new Set(['node_modules', 'dist', '.wrangler', '__tests__']);
 
 /** One forbidden concept: a run of words that must not appear in a row in an identifier. */
 const FORBIDDEN_WORDS: readonly (readonly string[])[] = [
@@ -143,6 +144,15 @@ describe('AT-D21: the never-build list (rule 7)', () => {
     ])
       expect(dirs).toContain(expected);
     expect(srcDirs().flatMap(sourceFiles).length).toBeGreaterThan(100);
+  });
+
+  it('scans source in a src directory named test (the candidate test screen; A7 spec review #4)', () => {
+    const files = srcDirs()
+      .flatMap(sourceFiles)
+      .map((f) => path.relative(repoRoot, f).replaceAll('\\', '/'));
+    expect(files).toContain('apps/candidate/src/test/Test.tsx');
+    expect(files).toContain('apps/candidate/src/test/signals.ts');
+    expect(files.filter((f) => TEST_FILE.test(f))).toEqual([]);
   });
 
   it('no source identifier names gaze, emotion, personality, a voiceprint, face matching, AI-likeness or an ASN', () => {
