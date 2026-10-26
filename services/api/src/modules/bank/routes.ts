@@ -5,8 +5,9 @@
 // refuses reserved names the contract's ParamName lets through), keeps images under the org's prefix (SEC-M1-5), and
 // generates a parameterised draft's variants (§6.3, seeded by the version id, R5-52 b) before it leaves draft. Item
 // review says approve or send back (`not_approved`, R5-22); the body id must equal the path id (R5-54 a). A
-// library-sourced key or param spec is never shown (I-M1-5). Answers are parsed by their contracts; errors are
-// constant codes and never echo a stem, option or key.
+// library-sourced key or param spec is never shown (I-M1-5). A draft's create, edit and clone write its content and
+// its key in one `save_bank_draft` call (R5-71 e). Answers are parsed by their contracts; errors are constant codes and
+// never echo a stem, option or key.
 import {
   ApproveItemRequest,
   BankItemCreateResponse,
@@ -153,52 +154,41 @@ const detail = async (ctx: OrgContext, orgId: string, v: VersionRow) => {
   return detailOf(v, keys.get(v.id), exposure.get(v.item_id) ?? 0);
 };
 
-/** Best-effort undo of a create whose later step failed (draft rows are deletable; the answer stands). */
-const undo = async (ctx: OrgContext, orgId: string, made: { item?: string; version?: string }) => {
-  for (const [table, id] of [
-    ['item_answer_keys', made.version],
-    ['item_versions', made.version],
-    ['items', made.item],
-  ] as const) {
-    if (id === undefined) continue;
-    try {
-      await ctx.rest.remove(
-        table,
-        table === 'item_answer_keys'
-          ? { item_version_id: eq(id), org_id: eq(orgId) }
-          : { id: eq(id), org_id: eq(orgId) },
-      );
-    } catch {
-      // The original failure is answered; an empty draft item is harmless.
+/** The `save_bank_draft` payload (M1-q; the DB shape its SQL body reads). */
+type DraftPayload =
+  | { mode: 'create'; workspaceId: string; keyOptionId: string | null; content: DbContent }
+  | {
+      mode: 'update';
+      itemId: string;
+      versionId: string;
+      keyOptionId: string | null;
+      content: DbContent;
     }
-  }
-};
+  | { mode: 'clone'; itemId: string; keyOptionId: string | null; content: DbContent };
 
-/** Inserts a draft version of `itemId` (the guard numbers it and sets origin, status and workspace). */
-const insertVersion = async (
+const SavedId = z.uuid();
+const SavedUpdate = z.uuid().nullable();
+
+/**
+ * R5-71 e (R5-63 f, R5-64 b, A2a re-review Low 4): a draft's content and its answer key in one transaction as the
+ * caller (`public.save_bank_draft`, SECURITY INVOKER: RLS and every guard apply; the guard numbers a new version and
+ * sets its origin, status and workspace). A submit can no longer land between the content and the key, and a failure
+ * leaves both as they were. The version id, or null when an edit matched no draft the caller can edit; any other
+ * answer is 503.
+ */
+const saveDraft = async (
   ctx: OrgContext,
   orgId: string,
-  itemId: string,
-  content: DbContent,
-): Promise<VersionRow> => {
-  const [row] = parseRows(
-    VersionRow,
-    await ctx.rest.insert(
-      'item_versions',
-      { org_id: orgId, item_id: itemId, ...content },
-      { select: VERSION_COLS },
-    ),
-  );
-  return row ?? orgFail('not_found');
+  payload: DraftPayload,
+): Promise<string | null> => {
+  const raw = await rpcOf(ctx.rest)('save_bank_draft', { p_org: orgId, p_payload: payload });
+  const parsed = (payload.mode === 'update' ? SavedUpdate : SavedId).safeParse(raw);
+  return parsed.success ? parsed.data : orgFail('unavailable');
 };
 
-const insertKey = async (ctx: OrgContext, orgId: string, versionId: string, optionId: string) => {
-  await ctx.rest.insert(
-    'item_answer_keys',
-    { org_id: orgId, item_version_id: versionId, format: 'mcq', key: { option_id: optionId } },
-    { select: 'item_version_id' },
-  );
-};
+/** The stored version a save answered (as the caller), for the detail answer. */
+const savedVersion = async (ctx: OrgContext, orgId: string, id: string): Promise<VersionRow> =>
+  (await findVersion(ctx, orgId, id)) ?? orgFail('not_found');
 
 /** After a guarded status update matched no row: 404 when the caller cannot see the version, else 409. */
 const missedUpdate = async (ctx: OrgContext, orgId: string, versionId: string): Promise<never> =>
@@ -291,31 +281,15 @@ export const createBankRoutes = (deps: BankDeps): Hono<{ Bindings: Env }> => {
       const draft = parseBody(BankItemDraft, await readJson(c.req.raw));
       const content = await contentOf(orgId, draft, deps.variants(c.env));
       const workspaceId = draft.workspaceId ?? (await defaultWorkspace(ctx, orgId));
-      const [item] = parseRows(
-        z.object({ id: z.uuid() }),
-        await ctx.rest.insert(
-          'items',
-          {
-            org_id: orgId,
-            workspace_id: workspaceId,
-            format: draft.format,
-            skill_key: draft.skillKey,
-          },
-          { select: 'id' },
-        ),
-      );
-      if (item === undefined) return orgFail('not_found');
-      const made: { item?: string; version?: string } = { item: item.id };
-      try {
-        const version = await insertVersion(ctx, orgId, item.id, content);
-        made.version = version.id;
-        const key = keyOf(draft);
-        if (key !== null) await insertKey(ctx, orgId, version.id, key);
-        return answer(BankItemCreateResponse, await detail(ctx, orgId, version), 201);
-      } catch (err) {
-        await undo(ctx, orgId, made);
-        throw err;
-      }
+      const id =
+        (await saveDraft(ctx, orgId, {
+          mode: 'create',
+          workspaceId,
+          keyOptionId: keyOf(draft),
+          content,
+        })) ?? orgFail('unavailable');
+      const version = await savedVersion(ctx, orgId, id);
+      return answer(BankItemCreateResponse, await detail(ctx, orgId, version), 201);
     }),
   );
 
@@ -344,44 +318,19 @@ export const createBankRoutes = (deps: BankDeps): Hono<{ Bindings: Env }> => {
       }
       // I-M1-3: only a draft is edited; anything else is a new version (POST …/versions).
       if (v.status !== 'draft') return orgFail('conflict');
-      // The format is the item's and never changes; the update carries the content columns only.
-      const patch: Partial<DbContent> = await contentOf(orgId, draft, deps.variants(c.env));
-      delete patch.format;
-      const [updated] = parseRows(
-        VersionRow,
-        await ctx.rest.update(
-          'item_versions',
-          { id: eq(v.id), org_id: eq(orgId), status: 'eq.draft', select: VERSION_COLS },
-          patch,
-        ),
-      );
-      if (updated === undefined) return missedUpdate(ctx, orgId, v.id);
-      const key = keyOf(draft);
-      const keyWhere = { item_version_id: eq(v.id), org_id: eq(orgId) };
-      if (key === null) {
-        await ctx.rest.remove('item_answer_keys', keyWhere);
-      } else {
-        // A2a database D1 (R5-64 b): the contract puts the key on one of this request's options. The content is
-        // already written, so a failed key write must not leave the old key on an option that no longer exists:
-        // the key is removed (best effort) and the draft cannot leave draft until a PUT stores its key again (the
-        // readiness guard refuses it, 422 draft_incomplete). One atomic write is `save_bank_draft` (R5-63 f, lead).
-        try {
-          const [changed] = await ctx.rest.update(
-            'item_answer_keys',
-            { ...keyWhere, select: 'item_version_id' },
-            { key: { option_id: key } },
-          );
-          if (changed === undefined) await insertKey(ctx, orgId, v.id, key);
-        } catch (err) {
-          try {
-            await ctx.rest.remove('item_answer_keys', keyWhere);
-          } catch {
-            // The original failure is answered; the guard still refuses a key on a deleted option.
-          }
-          throw err;
-        }
-      }
-      return answer(BankItemDetail, await detail(ctx, orgId, updated));
+      const content = await contentOf(orgId, draft, deps.variants(c.env));
+      // R5-64 b / Low 4: the content and the key (the contract puts it on one of this request's options; the
+      // database refuses a key on no current option, 23514 → 400) are one write; the function edits only a draft
+      // of this item (I-M1-3) and never the format (the item's).
+      const id = await saveDraft(ctx, orgId, {
+        mode: 'update',
+        itemId,
+        versionId: v.id,
+        keyOptionId: keyOf(draft),
+        content,
+      });
+      if (id === null) return missedUpdate(ctx, orgId, v.id);
+      return answer(BankItemDetail, await detail(ctx, orgId, await savedVersion(ctx, orgId, id)));
     }),
   );
 
@@ -395,7 +344,7 @@ export const createBankRoutes = (deps: BankDeps): Hono<{ Bindings: Env }> => {
       // One open version at a time (the database's partial unique index too: its 23505 is 409, R5-64 a); a library
       // copy is frozen content (E7: a new library version is a new copy); an AI draft a human sent back is never
       // cloned (R5-64 f). A clone of an approved or retired AI draft is a human-authored version with its own review:
-      // the insert names no origin (the guard sets `human`) and the AI provenance stays on the earlier version.
+      // the payload names no origin (the guard sets `human`) and the AI provenance stays on the earlier version.
       if (
         v.status === 'draft' ||
         v.status === 'in_review' ||
@@ -426,16 +375,12 @@ export const createBankRoutes = (deps: BankDeps): Hono<{ Bindings: Env }> => {
           paramSpec: v.param_spec,
         }),
       };
-      const made: { version?: string } = {};
-      try {
-        const version = await insertVersion(ctx, orgId, itemId, content);
-        made.version = version.id;
-        if (key !== null) await insertKey(ctx, orgId, version.id, key);
-        return answer(BankItemCreateResponse, await detail(ctx, orgId, version), 201);
-      } catch (err) {
-        await undo(ctx, orgId, made);
-        throw err;
-      }
+      // The new version and its key in one write; a second open version is the index's 23505 (409, R5-64 a).
+      const id =
+        (await saveDraft(ctx, orgId, { mode: 'clone', itemId, keyOptionId: key, content })) ??
+        orgFail('unavailable');
+      const version = await savedVersion(ctx, orgId, id);
+      return answer(BankItemCreateResponse, await detail(ctx, orgId, version), 201);
     }),
   );
 
