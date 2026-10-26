@@ -15,6 +15,7 @@
 // refused answer never counts as kept: its item goes back to what the edge holds through `revert`, and the unsent
 // edits of that item queued behind it are dropped (they were built on the refused text). `section.finish` is an
 // event like a signal: compaction and a refused batch keep it. `enqueuedSeq` is the `afterSeq` of a v2 item GET.
+// R5-67, R5-68 e: a 409 `out_of_order` body's `refusedSeqs` and an ack after a resend are undone the same way.
 // Events carry metadata only; nothing here logs.
 import type { ClientEvent, ClientSignal, SessionState } from '@trace/shared/contracts/candidate';
 import { isOffline, type ApiFailure, type CandidateApi } from '../api';
@@ -387,8 +388,9 @@ export const createOutbox = (deps: OutboxDeps): Outbox => {
     const ended = ENDS[failure.code];
     if (ended !== undefined) return end(ended);
     if (failure.code === 'out_of_order') {
-      // The edge holds everything up to ackSeq; the rest is resent with the same numbers.
-      ackTo(failure.ackSeq ?? acked);
+      // The edge holds everything up to ackSeq; the rest is resent with the same numbers. The part it kept may list
+      // refused seqs (R5-67): they are undone exactly as on an ack (R5-68 e).
+      ackTo(failure.ackSeq ?? acked, new Set(failure.refusedSeqs ?? []));
       settleWaiters(null);
       return later(OUTBOX.minGapMs);
     }

@@ -80,6 +80,11 @@ export interface ApiFailure {
   retryAfterSeconds?: number;
   /** 409 `out_of_order`: the stream's high-water mark; resend from `ackSeq + 1`. */
   ackSeq?: number;
+  /**
+   * 409 `out_of_order` on events (R5-67): the seqs of the part the edge kept that it recorded as refused, checked as
+   * an ack's (distinct, each <= `ackSeq`, at most 100). Absent when none.
+   */
+  refusedSeqs?: number[];
 }
 
 export type ApiResult<T> = { ok: true; value: T } | ApiFailure;
@@ -369,7 +374,10 @@ const failureOf = (res: Response, body: unknown): ApiFailure => {
     if (named === 'out_of_order') {
       const ackSeq = isObj(body) ? body['ackSeq'] : undefined;
       if (!isInt(ackSeq, 0)) return { ok: false, code: 'unexpected', status };
-      return { ok: false, code: named, status, ackSeq };
+      const refused = isObj(body) ? body['refusedSeqs'] : undefined;
+      if (refused === undefined) return { ok: false, code: named, status, ackSeq };
+      if (!isRefusedSeqs(refused, ackSeq)) return { ok: false, code: 'unexpected', status };
+      return { ok: false, code: named, status, ackSeq, refusedSeqs: refused as number[] };
     }
     return { ok: false, code: named, status, ...extra };
   }
