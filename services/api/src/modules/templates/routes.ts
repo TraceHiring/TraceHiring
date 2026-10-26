@@ -11,7 +11,12 @@
 //   of its skill and format, R2-8); voice and typing sections are skipped and returned as a note (M1-16, E18); the
 //   template's preset with the org's admin locks applied is stored as the draft's settings (R5-34) with the preset's
 //   catalog version; weights sum to 100. It spends the caller's library budget first (the injected LibraryLimiter,
-//   R5-56 g), and on any failure after its first write it archives the job and the test it created (fix round 1 #10).
+//   R5-56 g). Every read and check comes first; then one call of `public.create_test_from_template` (M1-q, R5-71 d,
+//   R5-63 f) writes the job, test, draft, pools, copies, sections and settings in one transaction as the caller, so a
+//   failure leaves nothing behind.
+// - The template list (R5-63 f) is the org's own published templates (read in keyset pages of PGRST_MAX_ROWS) merged
+//   with the library's, sorted by (templateKey, version), capped at TEMPLATE_LIST_CAP (503 past it, never a cut list)
+//   and served in pages of 50; propose and from-template scan the whole list.
 import {
   BlueprintProposeRequest,
   BlueprintProposeResponse,
@@ -19,19 +24,19 @@ import {
   CreateTestFromTemplateResponse,
   RoleTemplateListQuery,
   RoleTemplateListResponse,
-  type SaveTestDraftRequest,
+  encodePageCursor,
 } from '@trace/shared/contracts/m1';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { sha256Hex } from '../candidate/encoding.js';
 import { loadLocks } from '../integrity-settings/locks.js';
-import { pinPresetVersion, presetWithLocks } from '../integrity-settings/settings-write.js';
+import { presetWithLocks, type SettingsWrite } from '../integrity-settings/settings-write.js';
 import { parseRows } from '../tests/authoring.js';
 import { PUBLISHERS, draftViewOf } from '../tests/draft-routes.js';
-import { buildSavePayload } from '../tests/draft.js';
 import { answer, parseBody, readJson, readQuery } from '../tests/http.js';
 import { requireRole } from '../tests/membership.js';
 import {
+  PGRST_MAX_ROWS,
   RestError,
   eq,
   handleOrg,
@@ -42,7 +47,7 @@ import {
   type OrgContext,
   type OrgDeps,
 } from '../tests/org-context.js';
-import { cursorOf } from '../tests/rest-keyset.js';
+import { PAGE_SIZE, cursorOf } from '../tests/rest-keyset.js';
 import {
   TemplateRefSchema,
   type LibraryItemRef,
@@ -70,11 +75,15 @@ export interface TemplatesDeps {
 export const PROPOSE_THRESHOLD_PERMILLE = 150;
 /** R2-8: a pool holds up to ten times its section's draw. */
 const POOL_FACTOR = 10;
-/** library_browse returns at most 100 rows a call; library_copy_requests takes at most 500 ids. */
+/** library_browse returns at most 100 rows a call. */
 const BROWSE_PAGE = 100;
-const COPY_BATCH = 500;
 const DEFAULT_CUTOFF = 40;
-const MAX_TEMPLATES = 50;
+/** create_test_from_template refuses a section naming more library items (it copies them 500 a request). */
+export const MAX_SECTION_LIBRARY_IDS = 1000;
+/** create_test_from_template refuses more library ids in one call, all sections together (statement timeout, daily copy cap). */
+export const MAX_CALL_LIBRARY_IDS = 2000;
+/** The most templates (own and library, merged) any reader scans; past it every reader answers 503. */
+export const TEMPLATE_LIST_CAP = 2000;
 
 const STOP_WORDS = new Set([
   'a',
@@ -138,34 +147,51 @@ const OwnTemplateRow = z.object({
   preset_key: z.string(),
 });
 
-/** The org's own published templates (as the caller) and the library's (as trace_api); the org's own win a clash. */
+const toTemplateRef = (r: z.infer<typeof OwnTemplateRow>): TemplateRef => {
+  const t = TemplateRefSchema.safeParse({
+    id: r.id,
+    templateKey: r.template_key,
+    version: r.version,
+    name: r.name,
+    keywords: r.keywords,
+    blueprint: r.blueprint,
+    presetKey: r.preset_key,
+  });
+  return t.success ? t.data : orgFail('unavailable');
+};
+
+/**
+ * The org's own published templates (as the caller, keyset pages of PGRST_MAX_ROWS by id until exhausted) and the
+ * library's (as trace_api); the org's own win a clash. Sorted by (templateKey, version). Never a silently cut list
+ * (DB review r3 m-3): past TEMPLATE_LIST_CAP it fails closed.
+ */
 const usableTemplates = async (
   ctx: OrgContext,
   orgId: string,
   reference: ReferenceSource,
 ): Promise<TemplateRef[]> => {
-  const own = parseRows(
-    OwnTemplateRow,
-    await ctx.rest.select('role_templates', {
-      select: 'id,template_key,version,name,keywords,blueprint,preset_key',
-      org_id: eq(orgId),
-      status: 'eq.published',
-      limit: String(MAX_TEMPLATES + 1),
-    }),
-  ).map((r) => {
-    const t = TemplateRefSchema.safeParse({
-      id: r.id,
-      templateKey: r.template_key,
-      version: r.version,
-      name: r.name,
-      keywords: r.keywords,
-      blueprint: r.blueprint,
-      presetKey: r.preset_key,
-    });
-    return t.success ? t.data : orgFail('unavailable');
-  });
+  const own: TemplateRef[] = [];
+  let after: string | null = null;
+  for (;;) {
+    const rows: z.infer<typeof OwnTemplateRow>[] = parseRows(
+      OwnTemplateRow,
+      await ctx.rest.select('role_templates', {
+        select: 'id,template_key,version,name,keywords,blueprint,preset_key',
+        org_id: eq(orgId),
+        status: 'eq.published',
+        ...(after === null ? {} : { id: `gt.${after}` }),
+        order: 'id.asc',
+        limit: String(PGRST_MAX_ROWS),
+      }),
+    );
+    own.push(...rows.map(toTemplateRef));
+    if (own.length > TEMPLATE_LIST_CAP) return orgFail('unavailable');
+    const last = rows[rows.length - 1];
+    if (rows.length < PGRST_MAX_ROWS || last === undefined) break;
+    after = last.id;
+  }
   const library = await reference.templates(ctx.caller, orgId);
-  const keyOf = (t: TemplateRef) => `${t.templateKey}:${t.version}`;
+  const keyOf = (t: TemplateRef) => `${t.templateKey}:${String(t.version)}`;
   const ownKeys = new Set(own.map(keyOf));
   const all = [...own, ...library.filter((t) => !ownKeys.has(keyOf(t)))].sort((a, b) =>
     a.templateKey === b.templateKey
@@ -174,9 +200,25 @@ const usableTemplates = async (
         ? -1
         : 1,
   );
-  // Never a silently cut list (DB review r3 m-3): the catalogue is small; past one page it fails closed.
-  if (all.length > MAX_TEMPLATES) return orgFail('unavailable');
+  if (all.length > TEMPLATE_LIST_CAP) return orgFail('unavailable');
   return all;
+};
+
+/**
+ * The template list cursor. The contract's cursor carries only a `PageCursor` (`{createdAt, id}`), and a library
+ * template has no `created_at`, so the cursor names the page's last template by id under a fixed marker time; the next
+ * page starts after that template's (templateKey, version). A cursor of another list (other time) or whose template
+ * is no longer listed (its place is unknown) is 400 `bad_request`, never a guessed page.
+ */
+const TEMPLATE_CURSOR_AT = '1970-01-01T00:00:00.000Z';
+const templateCursor = (t: TemplateRef): string =>
+  encodePageCursor({ createdAt: TEMPLATE_CURSOR_AT, id: t.id });
+const pageStart = (all: readonly TemplateRef[], text: string | undefined): number => {
+  const cursor = cursorOf(text);
+  if (cursor === null) return 0;
+  if (cursor.createdAt !== TEMPLATE_CURSOR_AT) return orgFail('bad_request');
+  const at = all.findIndex((t) => t.id === cursor.id);
+  return at < 0 ? orgFail('bad_request') : at + 1;
 };
 
 const proposalOf = (t: TemplateRef, permille: number) => ({
@@ -208,64 +250,67 @@ const libraryItems = async (
   return out.slice(0, want);
 };
 
-const CopyRow = z.object({ result_item_version_ids: z.array(z.uuid()) });
-
-/** Copies library versions into the workspace (the guarded insert reuses earlier copies, R3-8) and returns local ids. */
-const copyIntoWorkspace = async (
-  ctx: OrgContext,
-  orgId: string,
-  workspaceId: string,
-  ids: readonly string[],
-): Promise<string[]> => {
-  const out: string[] = [];
-  for (let i = 0; i < ids.length; i += COPY_BATCH) {
-    const [row] = parseRows(
-      CopyRow,
-      await ctx.rest.insert(
-        'library_copy_requests',
-        {
-          org_id: orgId,
-          workspace_id: workspaceId,
-          library_item_version_ids: ids.slice(i, i + COPY_BATCH),
-        },
-        { select: 'result_item_version_ids' },
-      ),
-    );
-    out.push(...(row?.result_item_version_ids ?? orgFail('unavailable')));
-  }
-  return out;
-};
-
-/**
- * Archives the job and the test a failed from-template call created (best effort, as POST …/tests archives a test
- * whose draft insert failed): neither stays live, and the original failure is answered.
- */
-const archiveCreated = async (
-  ctx: OrgContext,
-  orgId: string,
-  made: { jobId: string | null; testId: string | null },
-): Promise<void> => {
-  const at = new Date().toISOString();
-  for (const [table, id] of [
-    ['tests', made.testId],
-    ['jobs', made.jobId],
-  ] as const) {
-    if (id === null) continue;
-    try {
-      await ctx.rest.update(
-        table,
-        { id: eq(id), org_id: eq(orgId), archived_at: 'is.null', select: 'id' },
-        { archived_at: at },
-      );
-    } catch {
-      // The failure answer stands; a list hides a test without a usable draft anyway.
-    }
-  }
-};
-
 /** Equal integer weights summing to 100 (the first sections take the remainder). */
 const weightsOf = (n: number): number[] =>
   Array.from({ length: n }, (_, i) => Math.floor(100 / n) + (i < 100 % n ? 1 : 0));
+
+/** One available blueprint section with its weight and the library item versions found for its pool. */
+export interface TemplateDraftSection {
+  title: string;
+  format: 'mcq' | 'written';
+  skillKey: string;
+  drawCount: number;
+  weight: number;
+  libraryItemVersionIds: readonly string[];
+}
+
+/**
+ * The create_test_from_template payload (DB shape, the keys the function reads): MCQ sections shuffle items and
+ * options and navigate freely, written ones neither shuffle nor go back. More than MAX_SECTION_LIBRARY_IDS library ids
+ * for one section, or MAX_CALL_LIBRARY_IDS in all, is 503 `unavailable` (the function refuses it too).
+ */
+export const templateDraftPayload = (args: {
+  workspaceId: string;
+  jobTitle: string;
+  template: TemplateRef;
+  jdSha256: string | null;
+  templateMatchPermille: number | null;
+  settings: SettingsWrite;
+  sections: readonly TemplateDraftSection[];
+}) => {
+  if (
+    args.sections.some((s) => s.libraryItemVersionIds.length > MAX_SECTION_LIBRARY_IDS) ||
+    args.sections.reduce((n, s) => n + s.libraryItemVersionIds.length, 0) > MAX_CALL_LIBRARY_IDS
+  ) {
+    return orgFail('unavailable');
+  }
+  return {
+    workspaceId: args.workspaceId,
+    jobTitle: args.jobTitle,
+    roleTemplateVersionId: args.template.id,
+    jdSha256: args.jdSha256,
+    templateMatchPermille: args.templateMatchPermille,
+    totalTimeSeconds: args.template.blueprint.totalTimeSeconds,
+    qualityCutoff: DEFAULT_CUTOFF,
+    presetKey: args.settings.presetKey,
+    presetVersion: args.settings.presetVersion,
+    settings: args.settings.settings,
+    sections: args.sections.map((s) => ({
+      name: s.title,
+      format: s.format,
+      weight: s.weight,
+      drawCount: s.drawCount,
+      skillKey: s.skillKey,
+      shuffleItems: s.format === 'mcq',
+      shuffleOptions: s.format === 'mcq',
+      navigation: s.format === 'mcq' ? 'free' : 'forward_only',
+      libraryItemVersionIds: [...s.libraryItemVersionIds],
+    })),
+  };
+};
+
+/** create_test_from_template's answer; anything else is 503 `unavailable`. */
+const CreatedIds = z.strictObject({ jobId: z.uuid(), testId: z.uuid(), versionId: z.uuid() });
 
 export const TEMPLATES_PATH = '/v1/orgs/:orgId/templates';
 export const BLUEPRINTS_PROPOSE_PATH = '/v1/orgs/:orgId/blueprints/propose';
@@ -282,8 +327,9 @@ export const createTemplatesRoutes = (deps: TemplatesDeps): Hono<{ Bindings: Env
       const query = readQuery(c.req.url, RoleTemplateListQuery);
       const reference = deps.reference(c.env) ?? orgFail('unavailable');
       const all = await usableTemplates(ctx, orgId, reference);
-      // The catalogue is one page; a cursor (never issued) reads past its end.
-      const rows = cursorOf(query.cursor) === null ? all : [];
+      const start = pageStart(all, query.cursor);
+      const rows = all.slice(start, start + PAGE_SIZE);
+      const last = rows[rows.length - 1];
       return answer(RoleTemplateListResponse, {
         templates: rows.map((t) => ({
           templateKey: t.templateKey,
@@ -291,7 +337,8 @@ export const createTemplatesRoutes = (deps: TemplatesDeps): Hono<{ Bindings: Env
           name: t.name,
           presetKey: t.presetKey,
         })),
-        nextCursor: null,
+        nextCursor:
+          start + PAGE_SIZE < all.length && last !== undefined ? templateCursor(last) : null,
       });
     }),
   );
@@ -354,160 +401,64 @@ export const createTemplatesRoutes = (deps: TemplatesDeps): Hono<{ Bindings: Env
         await loadLocks(ctx.rest, orgId),
       );
 
-      // Fix round 1 #10: every write after the first one is undone the way POST …/tests undoes a failed create
-      // (DB review r3 m-4): on any failure the job and the test are archived (best effort) before the answer.
-      const made: { jobId: string | null; testId: string | null } = { jobId: null, testId: null };
-      try {
-        // M1-17, E19: only the JD's hash and the match permille are kept.
-        const jdText = req.jdText ?? '';
-        const [job] = parseRows(
-          z.object({ id: z.uuid() }),
-          await ctx.rest.insert(
-            'jobs',
-            {
-              org_id: orgId,
-              workspace_id: workspaceId,
-              title: req.jobTitle,
-              role_template_version_id: template.id,
-              jd_sha256: jdText === '' ? null : await sha256Hex(jdText),
-              template_match_permille:
-                jdText === '' ? null : matchPermille(tokensOf(jdText), template.keywords),
-            },
-            { select: 'id' },
-          ),
+      const available = template.blueprint.sections.filter(
+        (x): x is typeof x & { format: 'mcq' | 'written' } =>
+          x.available && (x.format === 'mcq' || x.format === 'written'),
+      );
+      const skippedSections = template.blueprint.sections
+        .filter((x) => !x.available || (x.format !== 'mcq' && x.format !== 'written'))
+        .map((x) => ({ title: x.title, format: x.format }));
+      const weights = weightsOf(available.length);
+      const sections: TemplateDraftSection[] = [];
+      for (const [i, x] of available.entries()) {
+        const found = await libraryItems(
+          reference,
+          ctx,
+          orgId,
+          x.skillKey,
+          x.format,
+          POOL_FACTOR * x.drawCount,
         );
-        if (job === undefined) return orgFail('not_found');
-        made.jobId = job.id;
-        const [test] = parseRows(
-          z.object({ id: z.uuid() }),
-          await ctx.rest.insert(
-            'tests',
-            { org_id: orgId, workspace_id: workspaceId, name: req.jobTitle, job_id: job.id },
-            { select: 'id' },
-          ),
-        );
-        if (test === undefined) return orgFail('not_found');
-        made.testId = test.id;
-        const [version] = parseRows(
-          z.object({ id: z.uuid(), ruleset_version_id: z.uuid().nullable() }),
-          await ctx.rest.insert(
-            'test_versions',
-            {
-              org_id: orgId,
-              test_id: test.id,
-              total_time_seconds: template.blueprint.totalTimeSeconds,
-              quality_cutoff: DEFAULT_CUTOFF,
-            },
-            { select: 'id,ruleset_version_id' },
-          ),
-        );
-        if (version === undefined) return orgFail('not_found');
+        sections.push({
+          title: x.title,
+          format: x.format,
+          skillKey: x.skillKey,
+          drawCount: x.drawCount,
+          weight: weights[i] ?? 1,
+          libraryItemVersionIds: found.map((f) => f.libraryItemVersionId),
+        });
+      }
+      // M1-17, E19: only the JD's hash and the match permille are kept.
+      const jdText = req.jdText ?? '';
+      const payload = templateDraftPayload({
+        workspaceId,
+        jobTitle: req.jobTitle,
+        template,
+        jdSha256: jdText === '' ? null : await sha256Hex(jdText),
+        templateMatchPermille:
+          jdText === '' ? null : matchPermille(tokensOf(jdText), template.keywords),
+        settings,
+        sections,
+      });
 
-        const available = template.blueprint.sections.filter(
-          (s): s is typeof s & { format: 'mcq' | 'written' } =>
-            s.available && (s.format === 'mcq' || s.format === 'written'),
-        );
-        const skippedSections = template.blueprint.sections
-          .filter((s) => !s.available || (s.format !== 'mcq' && s.format !== 'written'))
-          .map((s) => ({ title: s.title, format: s.format }));
-        const weights = weightsOf(available.length);
-        const sections: SaveTestDraftRequest['sections'] = [];
-        for (const [i, s] of available.entries()) {
-          const [pool] = parseRows(
-            z.object({ id: z.uuid() }),
-            await ctx.rest.insert(
-              'pools',
-              {
-                org_id: orgId,
-                workspace_id: workspaceId,
-                name: s.title,
-                format: s.format,
-                skill_key: s.skillKey,
-              },
-              { select: 'id' },
-            ),
-          );
-          if (pool === undefined) return orgFail('not_found');
-          const found = await libraryItems(
-            reference,
-            ctx,
-            orgId,
-            s.skillKey,
-            s.format,
-            POOL_FACTOR * s.drawCount,
-          );
-          const local =
-            found.length === 0
-              ? []
-              : await copyIntoWorkspace(
-                  ctx,
-                  orgId,
-                  workspaceId,
-                  found.map((f) => f.libraryItemVersionId),
-                );
-          if (local.length > 0) {
-            await ctx.rest.insert(
-              'pool_items',
-              [...new Set(local)].map((id) => ({
-                org_id: orgId,
-                pool_id: pool.id,
-                item_version_id: id,
-              })),
-              { select: 'item_version_id' },
-            );
-          }
-          sections.push({
-            mode: 'pool',
-            format: s.format,
-            name: s.title,
-            weight: weights[i] ?? 1,
-            items: [],
-            poolId: pool.id,
-            drawCount: s.drawCount,
-            shuffleItems: s.format === 'mcq',
-            shuffleOptions: s.format === 'mcq',
-            navigation: s.format === 'mcq' ? 'free' : 'forward_only',
-          });
-        }
-        const payload = await buildSavePayload(
-          {
-            name: req.jobTitle,
-            durationMinutes: Math.min(
-              120,
-              Math.max(5, Math.round(template.blueprint.totalTimeSeconds / 60)),
-            ),
-            qualityCutoff: DEFAULT_CUTOFF,
-            sections,
-          },
-          {
-            settings: null,
-            rubrics: new Map(),
-            write: { presetKey: settings.presetKey, settings: settings.settings },
-          },
-        );
-        payload.totalTimeSeconds = template.blueprint.totalTimeSeconds;
-        try {
-          await rpcOf(ctx.rest)('save_test_draft', {
-            p_test_version: version.id,
-            p_payload: payload,
-          });
-          // Fix round 1 #9: the preset's catalog version next to its key (save_test_draft stores none).
-          if (version.ruleset_version_id !== null) {
-            await pinPresetVersion(ctx, orgId, version.ruleset_version_id, settings);
-          }
-        } catch (err) {
-          if (err instanceof RestError) return orgFail(restErrorCode(err));
-          throw err;
-        }
-        return answer(
-          CreateTestFromTemplateResponse,
-          { draft: await draftViewOf(ctx, orgId, test.id), skippedSections },
-          201,
-        );
+      // R5-71 d / R5-63 f: one transaction as the caller; a failure anywhere leaves nothing behind.
+      let created: unknown;
+      try {
+        created = await rpcOf(ctx.rest)('create_test_from_template', {
+          p_org: orgId,
+          p_payload: payload,
+        });
       } catch (err) {
-        await archiveCreated(ctx, orgId, made);
+        if (err instanceof RestError) return orgFail(restErrorCode(err));
         throw err;
       }
+      const ids = CreatedIds.safeParse(created);
+      if (!ids.success) return orgFail('unavailable');
+      return answer(
+        CreateTestFromTemplateResponse,
+        { draft: await draftViewOf(ctx, orgId, ids.data.testId), skippedSections },
+        201,
+      );
     }),
   );
 
