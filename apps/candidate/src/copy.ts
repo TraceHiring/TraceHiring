@@ -114,8 +114,8 @@ export const COPY = {
     title: 'Test rules',
     intro: 'Please read these rules before you start.',
     items: [
-      // R5-24, R5-66 c: no paste rule before start; each section shows its own rule during the test.
-      'Answer on your own. Each section of the test shows its own rule for pasting text. Dropping text is turned off. Paste and drop attempts are recorded.',
+      // R5-24, R5-66 c, R5-68 a: no paste rule before start; the test screen shows it where an answer is typed.
+      'Answer on your own. Where you type an answer, the screen shows whether pasting text is allowed. Dropping text is turned off. Paste and drop attempts are recorded.',
       'We record your start photo, your answers and every edit, paste and drop attempts, when you leave this tab, when you leave full screen, and a regular signal that the page is still connected.',
       'We never record camera video, sound or your screen.',
       'The timer starts when you press Start test and keeps running even if you lose your connection or close the page. Your answers are saved as you type.',
@@ -172,6 +172,8 @@ export const COPY = {
     forwardOnly:
       'Questions in this section are answered in order: you cannot go back to an earlier question.',
     pasteBlocked: 'Pasting text is turned off in this section. Paste attempts are recorded.',
+    /** R5-68 a: a v1 (D1) test screen, from the view's `pasteBlocked`. */
+    pasteOffInTest: 'Pasting text is turned off in this test. Paste attempts are recorded.',
     pasteAllowed:
       'Pasting text is allowed in this section. Each paste is recorded and shown to the reviewers as context.',
     dropBlocked: 'Dropping text is turned off.',

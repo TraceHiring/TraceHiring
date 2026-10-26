@@ -7,7 +7,8 @@
 // M1 (package v2, R5-9, R5-20, R5-24, R5-45, R5-59, R5-66): sections with server states and deadlines, a section
 // bar with its own timer and rules, forward-only navigation without "Previous", `afterSeq` on every item GET with the
 // 409 flush-and-retry, closed sections read-only, and the section transition (useSectionTransition) that moves the
-// screen to a new stream. A v1 view keeps the D1 screen: no section bar, no `afterSeq`, paste always prevented.
+// screen to a new stream. A v1 view keeps the D1 screen: no section bar, no `afterSeq`, paste always prevented, plus
+// one test-wide paste line from `pasteBlocked` (R5-68 a).
 import type { Receipt } from '@trace/shared/contracts/candidate';
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { isV2, type AnyItem, type AnyView, type ApiFailure, type CandidateApi } from '../api';
@@ -456,6 +457,12 @@ export function Test({ api, sessionToken, view: initialView, offsetMs, onReceipt
             {COPY.test.fullscreen}
           </button>
         </div>
+      ) : null}
+
+      {!isV2(view) && view.pasteBlocked ? (
+        <ul className={ui.list}>
+          <li>{COPY.test.pasteOffInTest}</li>
+        </ul>
       ) : null}
 
       {v2 && section !== undefined ? (
