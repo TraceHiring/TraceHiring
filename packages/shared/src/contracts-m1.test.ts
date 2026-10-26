@@ -666,7 +666,8 @@ describe('IntegritySettingsRequest and IntegritySettingsView', () => {
   };
   it('the view says whether the version has stored settings (R5-70 d)', () => {
     expect(ok(IntegritySettingsView, { ...view, presetKey: null, stored: false })).toBe(true);
-    const { stored: _omit, ...without } = view;
+    const without: Partial<typeof view> = { ...view };
+    delete without.stored;
     expect(ok(IntegritySettingsView, without)).toBe(false);
     expect(ok(IntegritySettingsView, { ...view, stored: 'yes' })).toBe(false);
   });
