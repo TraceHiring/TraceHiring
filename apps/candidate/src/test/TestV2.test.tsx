@@ -298,6 +298,66 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
       expect(el.getAttribute('src')?.startsWith('data:')).toBe(true);
   });
 
+  describe('R5-68 c: image failures', () => {
+    const withImage = async (fake: Fake) => {
+      const hash = await sha256HexOf(PNG_BYTES);
+      fake.item.mockImplementation(async (_t, position) => ({
+        ok: true,
+        value: { ...mcqItemV2(position), media: [{ hash, alt: 'A synthetic chart' }] },
+      }));
+      return hash;
+    };
+    const png = { ok: true, value: { type: 'image/png', bytes: PNG_BYTES } } as const;
+
+    it('a network failure is retried, then the image shows', async () => {
+      const view = viewV2At(Date.now());
+      const fake = fakeApi(view);
+      await withImage(fake);
+      fake.media.mockResolvedValueOnce(fail('network', 0)).mockResolvedValue(png);
+      const container = await render(view, fake);
+      const img = await waitFor(() => container.querySelector('img'), 'image', 6_000);
+      expect(img.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
+      expect(fake.media).toHaveBeenCalledTimes(2);
+      expect(container.textContent).not.toContain(COPY.test.imageUnavailable('A synthetic chart'));
+    });
+
+    it('a 404 is final: the line with the alt text, no "Try again", no retry', async () => {
+      const view = viewV2At(Date.now());
+      const fake = fakeApi(view);
+      await withImage(fake);
+      fake.media.mockResolvedValue(fail('invalid_link', 404));
+      const container = await render(view, fake);
+      await waitFor(
+        () => container.textContent?.includes(COPY.test.imageUnavailable('A synthetic chart')),
+        'line',
+      );
+      await settle(1_200);
+      expect(fake.media).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('[data-testid="image-retry"]')).toBeNull();
+    });
+
+    it('after 4 tries the line shows with "Try again", which loads it again', async () => {
+      const view = viewV2At(Date.now());
+      const fake = fakeApi(view);
+      await withImage(fake);
+      // A 429 whose Retry-After is 0: its Retry-After wins over the backoff, so the tries run at once.
+      fake.media.mockResolvedValue(fail('rate_limited', 429, { retryAfterSeconds: 0 }));
+      const container = await render(view, fake);
+      const again = await waitFor(
+        () => container.querySelector<HTMLButtonElement>('[data-testid="image-retry"]'),
+        'try again',
+      );
+      expect(again.textContent).toBe(COPY.test.retry);
+      expect(container.textContent).toContain(COPY.test.imageUnavailable('A synthetic chart'));
+      expect(fake.media).toHaveBeenCalledTimes(4);
+      fake.media.mockResolvedValue(png);
+      await click(again);
+      await waitFor(() => container.querySelector('img'), 'image');
+      expect(fake.media).toHaveBeenCalledTimes(5);
+      expect(container.querySelector('[data-testid="image-retry"]')).toBeNull();
+    });
+  });
+
   it('a refused answer (refusedSeqs) is reverted on screen and never resent', async () => {
     const view = viewV2At(Date.now());
     const fake = fakeApi(view);
