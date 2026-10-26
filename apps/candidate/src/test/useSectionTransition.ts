@@ -8,8 +8,11 @@
 //     After three rounds the flush stops waiting for what is still being raised (heartbeats, signals), but never drops
 //     a signal (R5-68 b, SR-4): the outbox hands its unsent signals and `section.finish` over, each with the moment it
 //     was raised, and the screen sends them first on the new stream.
-//   - An attach that fails for the network, a 503 or a 429 is retried (1, 2, 4, 8, then every 10 s; Retry-After
-//     wins); `superseded` and an unusable token end the screen; a finished session shows its receipt.
+//   - Only an attach that fails for the network, a 503 or a 429 is retried (1, 2, 4, 8, then every 10 s; Retry-After
+//     wins). Any other answer goes once to the screen D1 shows for it (R5-68 g): `superseded` to "open in another
+//     window", an answer that fits no contract to the network error, every other code to "can no longer be used here"
+//     (D1 forgets a stored session the edge refuses and sends the candidate back to the link). A finished session
+//     shows its receipt.
 //   - It never runs twice at once, and never after the test began submitting (a submit on the old stream would
 //     race the attach).
 import type { Receipt } from '@trace/shared/contracts/candidate';
@@ -37,7 +40,7 @@ export interface TransitionDeps {
   /** Events the stopped stream handed over, to send first on the next one (R5-68 b). */
   hold(events: Held[]): void;
   receipt(receipt: Receipt): void;
-  end(why: 'superseded' | 'invalid'): void;
+  end(why: 'superseded' | 'invalid' | 'network'): void;
 }
 
 export const useSectionTransition = (deps: TransitionDeps) => {
@@ -78,7 +81,8 @@ export const useSectionTransition = (deps: TransitionDeps) => {
         return now.apply(view, offsetOf(view.serverNow, sentAt, receivedAt));
       }
       if (res.code === 'superseded') return now.end('superseded');
-      if (res.code === 'token_invalid' || res.code === 'token_expired') return now.end('invalid');
+      const retried = res.code === 'network' || res.status === 503 || res.status === 429;
+      if (!retried) return now.end(res.code === 'unexpected' ? 'network' : 'invalid');
       const backoff = TRANSITION.attachBackoffMs;
       const wait =
         res.retryAfterSeconds !== undefined
