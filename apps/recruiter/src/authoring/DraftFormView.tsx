@@ -75,11 +75,12 @@ function McqItem({
   form,
   readOnly,
   onChange,
-}: { item: McqItemForm; index: number } & Props) {
+  keyPrefix,
+}: { item: McqItemForm; index: number; keyPrefix: string } & Props) {
   const set = (next: McqItemForm) => {
     onChange(updateItem(form, 'mcq', index, next));
   };
-  const name = `mcq-key-${index}`;
+  const name = `${keyPrefix}mcq-key-${index}`;
   return (
     <li className={ui.panel}>
       <h4 className={ui.subtitle}>Question {index + 1} (multiple choice)</h4>
@@ -286,31 +287,22 @@ function WrittenItem({
   );
 }
 
-function Section({ which, form, readOnly, onChange }: { which: SectionKey } & Props) {
+/**
+ * The questions of one section and its "Add question" button: D1's item editor. Exported for the v2 editor's inline
+ * sections (specs/m1-test-authoring.md R5-69 d), which pass `full` (D1's limit of 10 questions counts the whole test)
+ * and a `keyPrefix` that keeps each section's answer-key radio groups apart.
+ */
+export function SectionItems({
+  which,
+  form,
+  readOnly,
+  onChange,
+  full = itemCount(form) >= MAX_ITEMS,
+  keyPrefix = '',
+}: { which: SectionKey; full?: boolean; keyPrefix?: string } & Props) {
   const section = form[which];
-  const title = which === 'mcq' ? 'Multiple choice section' : 'Written section';
-  const full = itemCount(form) >= MAX_ITEMS;
   return (
-    <section className={ui.stack} aria-label={title}>
-      <h3 className={ui.subtitle}>{title}</h3>
-      <div className={ui.row}>
-        <Text
-          label="Section name"
-          value={section.name}
-          disabled={readOnly}
-          onChange={(name) => {
-            onChange({ ...form, [which]: { ...section, name } });
-          }}
-        />
-        <Text
-          label="Section weight (1 to 100)"
-          value={section.weight}
-          disabled={readOnly}
-          onChange={(weight) => {
-            onChange({ ...form, [which]: { ...section, weight } });
-          }}
-        />
-      </div>
+    <>
       <ol className={ui.items}>
         {section.items.map((item, index) =>
           item.format === 'mcq' ? (
@@ -321,6 +313,7 @@ function Section({ which, form, readOnly, onChange }: { which: SectionKey } & Pr
               form={form}
               readOnly={readOnly}
               onChange={onChange}
+              keyPrefix={keyPrefix}
             />
           ) : (
             <WrittenItem
@@ -346,6 +339,35 @@ function Section({ which, form, readOnly, onChange }: { which: SectionKey } & Pr
           Add question
         </button>
       )}
+    </>
+  );
+}
+
+function Section({ which, form, readOnly, onChange }: { which: SectionKey } & Props) {
+  const section = form[which];
+  const title = which === 'mcq' ? 'Multiple choice section' : 'Written section';
+  return (
+    <section className={ui.stack} aria-label={title}>
+      <h3 className={ui.subtitle}>{title}</h3>
+      <div className={ui.row}>
+        <Text
+          label="Section name"
+          value={section.name}
+          disabled={readOnly}
+          onChange={(name) => {
+            onChange({ ...form, [which]: { ...section, name } });
+          }}
+        />
+        <Text
+          label="Section weight (1 to 100)"
+          value={section.weight}
+          disabled={readOnly}
+          onChange={(weight) => {
+            onChange({ ...form, [which]: { ...section, weight } });
+          }}
+        />
+      </div>
+      <SectionItems which={which} form={form} readOnly={readOnly} onChange={onChange} />
     </section>
   );
 }

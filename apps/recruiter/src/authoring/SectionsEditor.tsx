@@ -4,8 +4,8 @@
 // there is no per-section choice. The test-wide publish rules of a v2 draft (weights add up to 100, timers on every
 // section or none) are shown under the sections. Controls are text fields, selects and buttons only (no checkbox: the
 // recruiter guards ban row selection). Every value is React text. The component works on the pure model in
-// editor-v2-model.ts; the A2+A5 switch mounts it in the live editor later (R5-53 b), so it is not wired into the D1
-// route yet. Inline items are edited by D1's item editor.
+// editor-v2-model.ts; the wizard on /tests/:testId mounts it as step 2 of a v2 draft (R5-69) and passes `renderItems`,
+// D1's item editor for the questions of an inline section (R5-69 d).
 import type { PoolDetail } from '@trace/shared/contracts/m1';
 import type { ReactNode } from 'react';
 import ui from '../common/Ui.module.css';
@@ -246,6 +246,7 @@ function SectionPanel({
   onSection,
   onForm,
   form,
+  renderItems,
 }: {
   index: number;
   count: number;
@@ -256,6 +257,7 @@ function SectionPanel({
   onSection(next: SectionForm): void;
   onForm(next: EditorV2Form): void;
   form: EditorV2Form;
+  renderItems: RenderItems | undefined;
 }) {
   const written = section.format === 'written';
   const n = index + 1;
@@ -310,6 +312,7 @@ function SectionPanel({
             {`${section.items.length} question${section.items.length === 1 ? '' : 's'} written here. Remove the questions written here before drawing from a pool.`}
           </p>
         )}
+        {section.mode === 'inline' && renderItems?.(section, index, onSection)}
         {section.mode === 'pool' && (
           <PoolBlock section={section} pools={pools} disabled={disabled} onChange={onSection} />
         )}
@@ -413,16 +416,25 @@ function SectionPanel({
   );
 }
 
+/** The questions editor of an inline section (the wizard passes D1's item editor; R5-69 d). */
+export type RenderItems = (
+  section: SectionForm,
+  index: number,
+  onSection: (next: SectionForm) => void,
+) => ReactNode;
+
 export function SectionsEditorView({
   form,
   pools,
   readOnly,
   onChange,
+  renderItems,
 }: {
   form: EditorV2Form;
   pools: readonly PoolDetail[];
   readOnly: boolean;
   onChange(next: EditorV2Form): void;
+  renderItems?: RenderItems;
 }): ReactNode {
   const issues = sectionIssues(form);
   return (
@@ -440,6 +452,7 @@ export function SectionsEditorView({
             issues={issues.filter((x) => x.section === i).map((x) => x.code)}
             disabled={readOnly}
             form={form}
+            renderItems={renderItems}
             onForm={onChange}
             onSection={(next) => {
               onChange({ ...form, sections: form.sections.map((s, j) => (j === i ? next : s)) });

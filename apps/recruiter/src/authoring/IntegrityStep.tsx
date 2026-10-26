@@ -2,8 +2,8 @@
 // presets, one control per catalog setting (a radio group or a select, never a checkbox), "Locked by admin" and the
 // always-locked settings, "What candidates will see" from the shared renderer, and the static "Data and review" panel
 // that follows the plan, not the design's numbers. Nothing here can turn a detector into a flag (rule 3): every value is
-// one of the catalog's own, and the focus signals are described as context only. The A2+A5 switch mounts the step in the
-// editor; until then it is rendered by tests and the guard registry.
+// one of the catalog's own, and the focus signals are described as context only. The wizard on /tests/:testId mounts
+// the step as step 3 (R5-69), passing the settings it already loaded.
 import {
   INTEGRITY_SETTING_VALUES,
   type IntegritySettingsView,
@@ -258,23 +258,31 @@ function Loaded({
 }
 
 /**
- * Loads `GET …/tests/:testId/integrity` and saves with `PUT` (draft only; `readOnly` for a published version).
- * `onSaved` receives the stored settings after a save, so the editor can make every written section follow
- * `paste_written` (`setPasteWritten`, rule 3) and save the draft again before publish.
+ * Loads `GET …/tests/:testId/integrity` (unless `initial` is the view already loaded) and saves with `PUT` (draft only;
+ * `readOnly` for a published version). `onSaved` receives the stored settings after a save, so the editor can make
+ * every written section follow `paste_written` (`setPasteWritten`, rule 3) and save the draft again before publish.
  */
 export function IntegrityStep({
   api,
   testId,
   readOnly = false,
+  initial,
   onSaved,
 }: {
   api: ApiClient;
   testId: string;
   readOnly?: boolean;
+  /** The view already loaded by the page, or null/absent to load it here. */
+  initial?: IntegritySettingsView | null;
   onSaved?: (saved: IntegritySettingsView) => void;
 }) {
-  const load = useCallback(() => getIntegritySettings(api, testId), [api, testId]);
-  const [state] = useResource(load);
+  const fetchView = useCallback(() => getIntegritySettings(api, testId), [api, testId]);
+  const [state] = useResource(initial === undefined || initial === null ? fetchView : null);
+  if (initial !== undefined && initial !== null) {
+    return (
+      <Loaded api={api} testId={testId} view={initial} readOnly={readOnly} onSaved={onSaved} />
+    );
+  }
   if (state.kind === 'loading') return <p role="status">Loading...</p>;
   if (state.kind === 'error') {
     return (

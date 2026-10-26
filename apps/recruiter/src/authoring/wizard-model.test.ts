@@ -165,8 +165,13 @@ describe('v2FormOf (R5-69 b: never saved as v2 by merely loading it)', () => {
 
 describe('inline items in D1 form (R5-69 d)', () => {
   it('round-trips an mcq and a written item', () => {
-    const { id: _a, position: _b, ...mcqItem } = mcq;
-    const { id: _c, position: _d, ...writtenItem } = written;
+    const mcqItem = {
+      format: mcq.format,
+      prompt: mcq.prompt,
+      options: mcq.options,
+      correctOptionId: mcq.correctOptionId,
+    };
+    const writtenItem = { format: written.format, prompt: written.prompt, rubric: written.rubric };
     expect(draftItemOf(itemFormOf(mcqItem))).toEqual(mcqItem);
     expect(draftItemOf(itemFormOf(writtenItem))).toEqual(writtenItem);
     expect(itemFormOf(writtenItem)).toMatchObject({
