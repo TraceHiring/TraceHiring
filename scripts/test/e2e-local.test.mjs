@@ -567,12 +567,34 @@ describe('main', () => {
       'REVIEWER',
       'STORE_RECRUITER',
       'UI_RECRUITER',
+      'M1_TEMPLATE',
+      'M1_IMPORT',
     ]);
     const org = h.operators.find((o) => o.name === 'createOrg');
     expect(org.argv).toEqual(expect.arrayContaining(['--slug', 'e2e-local', '--kind', 'customer']));
     const members = h.operators.filter((o) => o.name === 'addMember');
     const rolesOf = (o) => o.argv[o.argv.indexOf('--roles') + 1];
-    expect(members.map(rolesOf)).toEqual(['recruiter', 'reviewer', 'recruiter', 'recruiter']);
+    expect(members.map(rolesOf)).toEqual([
+      'recruiter',
+      'reviewer',
+      'recruiter',
+      'recruiter',
+      'recruiter',
+      'recruiter',
+    ]);
+  });
+
+  it('creates one recruiter per M1 spec (AT-M1-01/30 and AT-M1-10), each with its own TOTP factor', async () => {
+    const h = harness();
+    await main(h.deps);
+    const env = h.pw.opts.env;
+    expect(env.E2E_M1_TEMPLATE_EMAIL).toBe('e2e-template-recruiter@example.test');
+    expect(env.E2E_M1_IMPORT_EMAIL).toBe('e2e-import-recruiter@example.test');
+    for (const email of [env.E2E_M1_TEMPLATE_EMAIL, env.E2E_M1_IMPORT_EMAIL]) {
+      expect(h.operators.some((o) => o.name === 'enrolSmokeUser' && o.argv.includes(email))).toBe(
+        true,
+      );
+    }
   });
 
   it('creates a separate recruiter for the candidate-UI spec, a member like the store recruiter', async () => {
