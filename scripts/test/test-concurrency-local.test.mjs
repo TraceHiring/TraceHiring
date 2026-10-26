@@ -15,6 +15,11 @@ import {
   importCountsSql,
   importSetupSql,
   ownersSql,
+  pasteDraftSaveSql,
+  pasteRulesSql,
+  pasteSettingsSql,
+  pasteSetupSql,
+  pasteVerdict,
   setupSql,
   upFrontVerdict,
   verdict,
@@ -65,6 +70,38 @@ describe('test-concurrency-local (M0B-DB-5)', () => {
     expect(verdict({ firstErrored: false, secondErrored: true, owners: 0 })).toMatch(
       /0 active owners/,
     );
+  });
+});
+
+describe('test-concurrency-local: a draft save during a settings write (M1 R5-71, M1-p review)', () => {
+  it('builds SQL only from validated ids and markers', () => {
+    const owner = randomUUID();
+    const versionId = randomUUID();
+    const rulesetId = randomUUID();
+    const setup = pasteSetupSql({ owner, suffix: '0a1b2c3d' });
+    expect(setup).toMatch(/p-conc-paste-0a1b2c3d@example\.test/);
+    expect(setup).toContain("preset_key = 'standard'");
+    expect(() => pasteSetupSql({ owner, suffix: "x'" })).toThrow();
+    const settings = pasteSettingsSql({ owner, rulesetId, marker: 'A_SETTINGS' });
+    expect(settings).toContain('begin isolation level read committed;');
+    expect(settings).toContain(`'${rulesetId}'`);
+    expect(settings).toContain("p.preset_key = 'strict'");
+    expect(settings).toContain('\\echo A_SETTINGS');
+    expect(() => pasteSettingsSql({ owner, rulesetId: "x' or true", marker: 'x' })).toThrow();
+    const save = pasteDraftSaveSql({ owner, versionId, marker: 'B_SAVED' });
+    expect(save).toContain('public.save_test_draft');
+    expect(save).toContain(`'${versionId}'`);
+    expect(() => pasteDraftSaveSql({ owner, versionId, marker: "x'" })).toThrow();
+    expect(() => pasteRulesSql("'; drop table x; --")).toThrow();
+  });
+
+  it('passes only when the save waited, both committed and the written section follows the new setting', () => {
+    const ok = { waited: true, settingsErrored: false, saveErrored: false, rules: 'blocked' };
+    expect(pasteVerdict(ok)).toBeNull();
+    expect(pasteVerdict({ ...ok, waited: false })).toMatch(/did not wait/);
+    expect(pasteVerdict({ ...ok, settingsErrored: true })).toMatch(/settings write failed/);
+    expect(pasteVerdict({ ...ok, saveErrored: true })).toMatch(/save failed/);
+    expect(pasteVerdict({ ...ok, rules: 'allowed_logged' })).toMatch(/stale/);
   });
 });
 

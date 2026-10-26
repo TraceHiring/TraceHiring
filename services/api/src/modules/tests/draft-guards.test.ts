@@ -6,6 +6,7 @@
 // later lock never makes the draft unsavable. Runs on the fake PostgREST of tests.test-helpers.ts.
 import { TestDraftView } from '@trace/shared/contracts/m1';
 import { describe, expect, it } from 'vitest';
+import { RestError } from './org-context.js';
 import {
   ORG,
   STANDARD,
@@ -159,7 +160,9 @@ describe("D1's shape re-checked by the database under its row lock (R5-71 a, R5-
     seedPool(s.db, { poolId: POOL, format: 'mcq', count: 3, prefix: 'b9' });
     // The api's own check reads a D1-shaped draft; a concurrent v2 save then stores a pool section before
     // save_test_draft takes the row lock, so the database's re-check refuses the D1 save.
-    s.db.beforeSave = () => {
+    // The concurrent write commits on its own: it runs before the fake's one-transaction snapshot.
+    s.db.beforeRpc = (fn) => {
+      if (fn !== 'save_test_draft') return;
       rowsOf(s.db, 'sections').push({
         id: '5c000000-0000-4000-8000-0000000000ff',
         org_id: ORG,
@@ -183,6 +186,18 @@ describe("D1's shape re-checked by the database under its row lock (R5-71 a, R5-
     // The refusal comes from the database (the api's own check passed): its guard key answers 409.
     expect(await codeOf(res)).toBe('conflict');
     expect(s.db.savePayloads.at(-1)).toMatchObject({ requireD1Shape: true });
+    // M1-p spec review 1: the concurrent v2 save's pool section is never overwritten.
+    expect(rowsOf(s.db, 'sections').some((x) => x.pool_id === POOL)).toBe(true);
+  });
+
+  it('a deadlock the database breaks (40P01) is 409 conflict, never a 500 (M1-p database review 2)', async () => {
+    const s = await setup();
+    s.db.beforeRpc = (fn) => {
+      if (fn === 'save_test_draft') throw new RestError(500, '40P01');
+    };
+    const res = await s.call('PUT', s.v2Path, saveBody());
+    expect(res.status).toBe(409);
+    expect(await codeOf(res)).toBe('conflict');
   });
 });
 

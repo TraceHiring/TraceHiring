@@ -355,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(37);
+select plan(48);
 -- Fixtures (operator path): dd = a D1-shaped draft (one inline MCQ section, no settings); dx = a draft whose stored
 -- section is shuffled (D1's editor cannot express it); pd = a draft with an MCQ and a written section and no settings.
 select pg_temp.tv('dd', pg_temp.id('A'), pg_temp.id('A1'));
@@ -390,6 +390,7 @@ select is(pg_temp.try($$select public.save_test_draft(pg_temp.id('dd'), (select 
 select is(pg_temp.try($$select public.save_test_draft(pg_temp.id('dx'), (select j from pg_temp.batch where k = 'd1'))$$), '55000 TRACE_GUARD: the draft has sections the D1 editor cannot save', 'D1 shape: a shuffled stored section refuses a D1 save');
 select is((select string_agg(s.name || ':' || s.shuffle_items, ',') from public.sections as s where s.test_version_id = pg_temp.id('dx')), 'Choices:true', 'D1 shape: the refused save wrote nothing (the stored section is kept)');
 select is((select t.name from public.tests as t join public.test_versions as v on v.test_id = t.id where v.id = pg_temp.id('dx')), 'Test dx', 'D1 shape: the refused save did not rename the test');
+select is((select v.total_time_seconds || '|' || v.quality_cutoff from public.test_versions as v where v.id = pg_temp.id('dx')), '1800|40', 'D1 shape: the version update before the check is rolled back too (M1-p spec review 2)');
 select is(pg_temp.try($$select public.save_test_draft(pg_temp.id('dx'), (select j from pg_temp.batch where k = 'v2'))$$), 'OK 1', 'D1 shape: a v2 save (no requireD1Shape) of the same draft is unchanged');
 select pg_temp.op();
 update public.sections set time_limit_seconds = 600 where test_version_id = pg_temp.id('dd');
@@ -458,5 +459,34 @@ select matches(pg_temp.try($$insert into public.import_jobs (id, org_id, workspa
 select matches(pg_temp.try($$insert into public.ai_draft_jobs (id, org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values (gen_random_uuid(), pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), '^42501 permission denied', 'job ids: a recruiter cannot choose a drafting job id');
 select is(pg_temp.try($$insert into public.import_jobs (org_id, workspace_id, source_kind, template_version) values (pg_temp.id('A'), pg_temp.id('A1'), 'xlsx', 'trace-items-v1')$$), 'OK 1', 'job ids: an import without an id still opens (the database picks it)');
 select is(pg_temp.try($$insert into public.ai_draft_jobs (org_id, workspace_id, format, skill_key, difficulty, count, topic_sha256, provider, model_id, prompt_version) values (pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 2, repeat('e', 64), 'mock', 'mock-drafter-v1', 'draft-v1')$$), 'OK 1', 'job ids: a drafting job without an id is still requested');
+
+
+-- ===== M1-p fix round (database review 1, 2, 4; security review 1, 2; spec review 2) =====
+-- The lock order (ruleset, then version) of save_test_draft: the race itself is a two-connection scenario in
+-- scripts/test-concurrency-local.mjs ("draft save during a settings write"); here the lock is pinned in the body.
+select is((select position('for no key update' in pg_get_functiondef('public.save_test_draft(uuid, jsonb)'::regprocedure)) between 1 and position('update public.test_versions' in pg_get_functiondef('public.save_test_draft(uuid, jsonb)'::regprocedure))), true, 'lock order: save_test_draft locks the ruleset before it updates the version');
+select pg_temp.op();
+insert into public.sections (org_id, test_version_id, position, name, format, weight, navigation)
+  values (pg_temp.id('A'), pg_temp.id('dd'), 2, 'Essay', 'written', 1, 'forward_only');
+select pg_temp.u('admin');
+select is(pg_temp.try($$select public.save_test_draft(pg_temp.id('dd'), (select j from pg_temp.batch where k = 'd1'))$$), 'OK 1', 'D1 shape: an admin''s D1 save of a draft whose written section is forward-only (its default) is accepted');
+select pg_temp.op();
+update public.sections set shuffle_items = true where test_version_id = pg_temp.id('dx');
+insert into pg_temp.batch select 'd1_string', j || '{"requireD1Shape": "true"}'::jsonb from pg_temp.batch where k = 'v2';
+select pg_temp.u('owner');
+select is(pg_temp.try($$select public.save_test_draft(pg_temp.id('dx'), (select j from pg_temp.batch where k = 'd1_string'))$$), 'OK 1', 'D1 shape: only the JSON boolean true asks for the check (a string is ignored; the api sends the boolean)');
+select pg_temp.u('hm');
+select matches(pg_temp.try($$select public.save_test_draft(pg_temp.id('dd'), (select j from pg_temp.batch where k = 'd1'))$$), '^23503 TRACE_GUARD: test version not found', 'D1 shape: a hiring manager cannot save a draft');
+select pg_temp.op();
+select is(has_function_privilege('trace_candidate', 'public.save_test_draft(uuid, jsonb)', 'EXECUTE')::text || '|' || has_function_privilege('anon', 'public.save_test_draft(uuid, jsonb)', 'EXECUTE')::text, 'false|false', 'save_test_draft: the candidate role and anon cannot execute it');
+select pg_temp.u('ws_recruiter');
+select matches(pg_temp.try($$insert into public.sections (org_id, test_version_id, position, name, format, weight, paste_rule) values (pg_temp.id('A'), pg_temp.id('pd'), 9, 'Fenced', 'written', 1, 'blocked')$$), '^42501', 'derive: a workspace A2 recruiter cannot add a section to a workspace A1 draft (the DEFINER trigger gives no reach)');
+select is(pg_temp.try($$update public.ruleset_versions set settings = (select j from pg_temp.batch where k = 'strict') where id = pg_temp.id('pd_rs')$$), 'OK 0', 'derive: a workspace A2 recruiter cannot reach workspace A1 settings');
+select pg_temp.u('reviewer');
+select is(pg_temp.try($$update public.ruleset_versions set settings = (select j from pg_temp.batch where k = 'strict') where id = pg_temp.id('pd_rs')$$), 'OK 0', 'derive: a reviewer cannot write settings');
+select pg_temp.u('b_admin');
+select matches(pg_temp.try($$insert into public.sections (org_id, test_version_id, position, name, format, weight) values (pg_temp.id('A'), pg_temp.id('pd'), 9, 'Foreign', 'written', 1)$$), '^42501', 'derive: org B admin cannot add a section to an org A draft');
+select pg_temp.op();
+select is((select count(*)::int || '|' || string_agg(s.paste_rule, ',') from public.sections as s where s.test_version_id = pg_temp.id('pd') and s.format = 'written'), '1|allowed_logged', 'derive: the refused writes changed no org A section');
 select * from finish();
 rollback;

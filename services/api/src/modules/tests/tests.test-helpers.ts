@@ -220,15 +220,8 @@ const publishGuard = async (old: Row, next: Row, d: FakeDb): Promise<Row> => {
   return out;
 };
 
-/**
- * Records every save_test_draft payload the api sent (for assertions); `beforeSave` runs at the start of each
- * save_test_draft call (a concurrent write landing between the api's reads and the database's row lock).
- */
-export type AuthoringDb = FakeDb & {
-  rest: OrgContext['rest'];
-  savePayloads: unknown[];
-  beforeSave?: () => void;
-};
+/** Records every save_test_draft payload the api sent (for assertions). */
+export type AuthoringDb = FakeDb & { rest: OrgContext['rest']; savePayloads: unknown[] };
 
 export const authoringDb = (): AuthoringDb => {
   const ids = {
@@ -402,7 +395,6 @@ export const authoringDb = (): AuthoringDb => {
             }[];
           }[];
         };
-        (d as Partial<AuthoringDb>).beforeSave?.();
         const v = versionOf(d, args.p_test_version);
         if (v === undefined) throw new RestError(409, '23503', 'other');
         if (v.status !== 'draft') throw frozen();

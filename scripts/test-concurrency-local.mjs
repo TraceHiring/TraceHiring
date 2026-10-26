@@ -185,6 +185,62 @@ export function cancelVerdict({ waited, batchErrored, cancelErrored, counts }) {
   return null;
 }
 
+/**
+ * R5-71 setup (M1-p reviews: database Medium 1, security Low 1): a draft test version with no section yet whose
+ * ruleset has the Standard settings (paste_written allowed_logged), on the operator path.
+ */
+export function pasteSetupSql({ owner, suffix }) {
+  return [
+    orgSetupSql({ owner, suffix, kind: 'paste' }),
+    "insert into public.tests (org_id, workspace_id, name) values (:'org_id', :'ws_id', '[synthetic] Conc paste')",
+    '  returning id as test_id \\gset',
+    'insert into public.test_versions (org_id, test_id, total_time_seconds, quality_cutoff)',
+    "  values (:'org_id', :'test_id', 1800, 40) returning id as version_id, ruleset_version_id as ruleset_id \\gset",
+    "update public.ruleset_versions set preset_key = 'standard', settings = (select p.preset_values",
+    "  from public.integrity_presets as p where p.preset_key = 'standard' and p.version = 1) where id = :'ruleset_id';",
+    "select 'VER ' || :'version_id';",
+    "select 'RS ' || :'ruleset_id';",
+  ].join('\n');
+}
+
+/** R5-71 connection A: the owner stores Strict settings (paste_written blocked) in one write, left open. */
+export function pasteSettingsSql({ owner, rulesetId, marker: m }) {
+  return [
+    'begin isolation level read committed;',
+    "select p.preset_values::text as strict from public.integrity_presets as p where p.preset_key = 'strict'",
+    '  and p.version = 1 \\gset',
+    asOwnerSql(owner),
+    "update public.ruleset_versions set preset_key = 'strict', settings = :'strict'::jsonb",
+    `  where id = ${uuid(rulesetId)};`,
+    `\\echo ${marker(m)}`,
+  ].join('\n');
+}
+
+/** R5-71 connection B: the owner saves the draft with one written section naming no paste rule. */
+export function pasteDraftSaveSql({ owner, versionId, marker: m }) {
+  return [
+    'begin isolation level read committed;',
+    asOwnerSql(owner),
+    `select public.save_test_draft(${uuid(versionId)}, '{"name": "[synthetic] Conc paste", "totalTimeSeconds": 1800,`,
+    `  "qualityCutoff": 40, "sections": [{"name": "Essay", "format": "written", "weight": 100, "items": []}]}') is not null;`,
+    `\\echo ${marker(m)}`,
+  ].join('\n');
+}
+
+/** The written sections' paste rules of the version, read as the operator. */
+export const pasteRulesSql = (versionId) =>
+  "select coalesce(string_agg(coalesce(s.paste_rule, 'null'), ','), '') from public.sections as s" +
+  ` where s.test_version_id = ${uuid(versionId)} and s.format = 'written';`;
+
+/** R5-71 verdict: the save waited for the settings write, both committed, and the section took the new setting. */
+export function pasteVerdict({ waited, settingsErrored, saveErrored, rules }) {
+  if (settingsErrored) return 'the settings write failed';
+  if (!waited) return 'the draft save did not wait for the settings write';
+  if (saveErrored) return 'the draft save failed';
+  if (rules !== 'blocked') return `the written section's paste rule is stale (${rules})`;
+  return null;
+}
+
 /** M1 setup, operator part: an org and a queued count-1 drafting job. */
 export function draftSetupSql({ owner, suffix }) {
   return [
@@ -418,7 +474,33 @@ async function draftCapScenario() {
   });
 }
 
+async function pasteScenario() {
+  const owner = randomUUID();
+  const setup = runOnce(pasteSetupSql({ owner, suffix: randomBytes(4).toString('hex') }));
+  const pick = (k) => (setup.out.match(new RegExp(`^${k} (\\S+)$`, 'm')) || [])[1] ?? '';
+  const [versionId, rulesetId] = ['VER', 'RS'].map(pick);
+  if (setup.status !== 0 || ![versionId, rulesetId].every(isUuid)) return 'setup failed';
+  const r = await race({
+    aSql: pasteSettingsSql({ owner, rulesetId, marker: 'A_SETTINGS' }),
+    aMarker: 'A_SETTINGS',
+    bSql: pasteDraftSaveSql({ owner, versionId, marker: 'B_SAVED' }),
+    waitKey: versionId,
+  });
+  if (r.problem) return r.problem;
+  return pasteVerdict({
+    waited: r.waited,
+    settingsErrored: /ERROR/.test(r.aErr),
+    saveErrored: /ERROR/.test(r.bErr),
+    rules: runOnce(pasteRulesSql(versionId)).out,
+  });
+}
+
 export const M1_SCENARIOS = Object.freeze([
+  {
+    name: 'draft save during a settings write',
+    run: pasteScenario,
+    ok: 'the save waited and took the new paste rule',
+  },
   {
     name: 'import cancel during a batch',
     run: importCancelScenario,

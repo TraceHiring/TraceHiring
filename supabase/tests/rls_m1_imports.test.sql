@@ -607,8 +607,8 @@ select pg_temp.u('owner');
 select matches(pg_temp.try($$delete from public.import_jobs where id = 'a7000000-0000-4000-8000-000000000004'$$), '^42501 permission denied', 'import_jobs D: no delete grant');
 select pg_temp.op();
 select matches(pg_temp.try($$delete from public.import_jobs where id = 'a7000000-0000-4000-8000-000000000004'$$), '^42501 TRACE_GUARD: import jobs are kept', 'import_jobs D: kept even on the operator path');
-select is((select pg_temp.keys(details) || '|' || (details ->> 'import_job_id') from public.audit_log where action = 'import.cancel'), 'import_job_id|a7000000-0000-4000-8000-000000000002', 'AT-M1-25: import.cancel carries the job id only');
-select is((select pg_temp.keys(details) || '|' || (details ->> 'error_code') from public.audit_log where action = 'import.fail'), 'error_code,import_job_id|timeout', 'AT-M1-25: import.fail carries the job id and an error code enum');
+select is((select pg_temp.keys(details) || '|' || (details ->> 'import_job_id') from public.audit_log where action = 'import.cancel' and org_id = pg_temp.id('A')), 'import_job_id|a7000000-0000-4000-8000-000000000002', 'AT-M1-25: import.cancel carries the job id only');
+select is((select pg_temp.keys(details) || '|' || (details ->> 'error_code') from public.audit_log where action = 'import.fail' and org_id = pg_temp.id('A')), 'error_code,import_job_id|timeout', 'AT-M1-25: import.fail carries the job id and an error code enum');
 select is((select count(*)::int from public.audit_log where action like 'import.%' and exists (select 1 from jsonb_each(details) as e where jsonb_typeof(e.value) not in ('string', 'number'))), 0, 'AT-M1-25: no import audit row carries a nested or free-text structure');
 
 -- ===== public.save_test_draft (M1-18: one transaction as the caller; E1) =====

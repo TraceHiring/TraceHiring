@@ -36,6 +36,8 @@ export interface FakeDb {
   calls: { method: FakeMethod; table: string; query: Query }[];
   /** Makes the next call to `table` (or function) with this method fail with this status and SQLSTATE. */
   failNext(method: FakeMethod, table: string, err: RestError): void;
+  /** Runs at the start of each rpc, before its rollback snapshot (a concurrent caller's committed write). */
+  beforeRpc?: (fn: string) => void;
 }
 
 const unquote = (v: string) => (v.startsWith('"') && v.endsWith('"') ? v.slice(1, -1) : v);
@@ -223,6 +225,8 @@ export const fakeDb = (
       take('rpc', fn);
       const impl = db.functions[fn];
       if (impl === undefined) throw new RestError(404, 'PGRST202');
+      // A write committed by another caller just before this call takes its locks (outside its transaction).
+      db.beforeRpc?.(fn);
       // One transaction: a throw leaves every table as it was.
       const snapshot = structuredClone(db.tables);
       try {
