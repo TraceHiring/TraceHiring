@@ -67,6 +67,10 @@ const MCQ_DRAFT: BankItemDraft = {
 const SETTINGS = Object.fromEntries(
   Object.entries(INTEGRITY_SETTING_VALUES).map(([key, values]) => [key, values[0]]),
 ) as Parameters<typeof m1.putIntegritySettings>[2]['values'];
+/** Ids with hex letters, so the lower-casing of a versioned PUT shows. */
+const HEX_TEST = 'abcdef00-0000-4000-8000-00000000000a';
+const HEX_VERSION = 'ABCDEF00-0000-4000-8000-00000000000B';
+const D1_BODY = { name: 'Synthetic test', durationMinutes: 30, qualityCutoff: 55, sections: [] };
 const DRAFT_BODY: SaveTestDraftRequest = {
   name: 'Synthetic test',
   durationMinutes: 30,
@@ -390,6 +394,29 @@ const CASES: Case[] = [
     path: `/tests/${uid(3)}/draft`,
     body: DRAFT_BODY,
   },
+  // R5-70 a: the draft and integrity PUTs name the version the editor loaded; the ids are sent lower-cased.
+  {
+    name: 'saveTestDraft with the expected version',
+    run: (api) => m1.saveTestDraft(api, HEX_TEST.toUpperCase(), DRAFT_BODY, HEX_VERSION),
+    method: 'PUT',
+    path: `/tests/${HEX_TEST}/draft?version=${HEX_VERSION.toLowerCase()}`,
+    body: DRAFT_BODY,
+  },
+  {
+    name: 'putIntegritySettings with the expected version',
+    run: (api) =>
+      m1.putIntegritySettings(api, uid(3), { presetKey: null, values: SETTINGS }, HEX_VERSION),
+    method: 'PUT',
+    path: `/tests/${uid(3)}/integrity?version=${HEX_VERSION.toLowerCase()}`,
+    body: { presetKey: null, values: SETTINGS },
+  },
+  {
+    name: 'updateDraft with the expected version',
+    run: (api) => m1.updateDraft(api, uid(3), D1_BODY, HEX_VERSION),
+    method: 'PUT',
+    path: `/tests/${uid(3)}?version=${HEX_VERSION.toLowerCase()}`,
+    body: D1_BODY,
+  },
 ];
 
 describe('M1 endpoints: request shapes', () => {
@@ -492,6 +519,31 @@ describe('M1 endpoints: a bad request is refused before it is sent', () => {
         } as never),
     ],
     ['an empty id batch', (api) => m1.addPoolItems(api, uid(5), { itemVersionIds: [] })],
+    // R5-70 a: a versioned PUT whose version or test id is not a uuid is never sent.
+    [
+      'a draft save whose expected version is not a uuid',
+      (api) => m1.saveTestDraft(api, uid(3), DRAFT_BODY, 'not-a-uuid'),
+    ],
+    [
+      'a draft save whose test id is not a uuid (with a version)',
+      (api) => m1.saveTestDraft(api, '../x', DRAFT_BODY, uid(4)),
+    ],
+    [
+      'a D1 save whose expected version is not a uuid',
+      (api) => m1.updateDraft(api, uid(3), D1_BODY, `${uid(4)}?x=1`),
+    ],
+    [
+      'a D1 save whose test id is not a uuid (with a version)',
+      (api) => m1.updateDraft(api, 'abc', D1_BODY, uid(4)),
+    ],
+    [
+      'an integrity save whose expected version is not a uuid',
+      (api) => m1.putIntegritySettings(api, uid(3), { presetKey: null, values: SETTINGS }, ''),
+    ],
+    [
+      'an integrity save whose test id is not a uuid (with a version)',
+      (api) => m1.putIntegritySettings(api, 'x/y', { presetKey: null, values: SETTINGS }, uid(4)),
+    ],
   ];
 
   it.each(refused)('%s', async (_name, run) => {

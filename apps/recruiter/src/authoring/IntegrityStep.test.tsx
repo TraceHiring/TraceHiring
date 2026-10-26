@@ -21,6 +21,9 @@ import {
 } from './dom.test-helpers';
 import { DataAndReviewPanel, IntegrityStep, IntegrityStepView } from './IntegrityStep';
 
+/** The draft version the editor loaded; every settings save names it (R5-70 a, A5d re-review #2). */
+const VERSION = uuid(10);
+
 const viewOf = (
   values = INTEGRITY_PRESETS.standard,
   adminLocked: Record<string, 'admin'> = {},
@@ -134,7 +137,11 @@ describe('IntegrityStep (load and save)', () => {
         return { body: viewOf(b.values, { paste_written: 'admin' }, b.presetKey) };
       },
     });
-    mounted = await mountScreen(<IntegrityStep api={api} testId={uuid(9)} />, api, ['recruiter']);
+    mounted = await mountScreen(
+      <IntegrityStep api={api} testId={uuid(9)} versionId={VERSION} />,
+      api,
+      ['recruiter'],
+    );
     const c = mounted.container;
     expect(plain(c.innerHTML)).toContain('What candidates will see');
     // Locked: the control is disabled.
@@ -148,6 +155,8 @@ describe('IntegrityStep (load and save)', () => {
       `GET /tests/${uuid(9)}/integrity`,
       `PUT /tests/${uuid(9)}/integrity`,
     ]);
+    // R5-70 a: the save names the version the editor loaded; a stale tab is refused with 409.
+    expect(calls.map((x) => x.query)).toEqual(['', `?version=${VERSION}`]);
     const sent = saved[0] as { presetKey: unknown; values: Record<string, string> };
     expect(sent.presetKey).toBeNull();
     expect(sent.values.single_screen).toBe('on');
@@ -168,6 +177,7 @@ describe('IntegrityStep (load and save)', () => {
       <IntegrityStep
         api={api}
         testId={uuid(9)}
+        versionId={VERSION}
         onSaved={(view) => {
           savedViews.push(view);
         }}
@@ -192,7 +202,12 @@ describe('IntegrityStep (load and save)', () => {
       }),
     });
     mounted = await mountScreen(
-      <IntegrityStep api={api} testId={uuid(9)} onSaved={(v) => savedViews.push(v)} />,
+      <IntegrityStep
+        api={api}
+        testId={uuid(9)}
+        versionId={VERSION}
+        onSaved={(v) => savedViews.push(v)}
+      />,
       api,
       ['recruiter'],
     );
@@ -206,7 +221,11 @@ describe('IntegrityStep (load and save)', () => {
         body: viewOf(INTEGRITY_PRESETS.strict, {}, 'strict'),
       }),
     });
-    mounted = await mountScreen(<IntegrityStep api={api} testId={uuid(9)} />, api, ['recruiter']);
+    mounted = await mountScreen(
+      <IntegrityStep api={api} testId={uuid(9)} versionId={VERSION} />,
+      api,
+      ['recruiter'],
+    );
     const c = mounted.container;
     expect(plain(c.innerHTML)).toContain('blocked');
     await choose(field(c, 'Paste on written answers'), 'allowed_logged');
@@ -221,7 +240,11 @@ describe('IntegrityStep (load and save)', () => {
         body: { error: { code: 'conflict' } },
       }),
     });
-    mounted = await mountScreen(<IntegrityStep api={api} testId={uuid(9)} />, api, ['recruiter']);
+    mounted = await mountScreen(
+      <IntegrityStep api={api} testId={uuid(9)} versionId={VERSION} />,
+      api,
+      ['recruiter'],
+    );
     await click(button(mounted.container, 'Save settings'));
     expect(plain(mounted.container.innerHTML)).toContain(
       'That change is no longer possible. Reload the page.',
@@ -230,9 +253,11 @@ describe('IntegrityStep (load and save)', () => {
 
   it('read-only (a published version) disables the controls and offers no save', async () => {
     const { api } = fakeApi({ [`GET /tests/${uuid(9)}/integrity`]: () => ({ body: viewOf() }) });
-    mounted = await mountScreen(<IntegrityStep api={api} testId={uuid(9)} readOnly />, api, [
-      'recruiter',
-    ]);
+    mounted = await mountScreen(
+      <IntegrityStep api={api} testId={uuid(9)} versionId={VERSION} readOnly />,
+      api,
+      ['recruiter'],
+    );
     expect(field<HTMLSelectElement>(mounted.container, 'Single screen').disabled).toBe(true);
     expect(
       [...mounted.container.querySelectorAll('button')].map((b) => b.textContent),

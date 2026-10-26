@@ -323,7 +323,10 @@ describe('a D1-shaped draft keeps D1 save and publish exactly (R5-69 b, h)', () 
     });
     await click(field<HTMLInputElement>(c, 'Standard'));
     await click(button(c, 'Save settings'));
-    expect(editorCalls(calls)).toEqual([`PUT /tests/${TEST}/integrity`, `PUT /tests/${TEST}${Q}`]);
+    expect(editorCalls(calls)).toEqual([
+      `PUT /tests/${TEST}/integrity${Q}`,
+      `PUT /tests/${TEST}${Q}`,
+    ]);
     expect(onReload).toHaveBeenCalledTimes(1);
   });
 });
@@ -393,7 +396,7 @@ describe('a v2 draft (R5-69 b-e)', () => {
     await click(button(c, 'Save settings'));
     expect(editorCalls(calls)).toEqual([
       'GET /pools',
-      `PUT /tests/${TEST}/integrity`,
+      `PUT /tests/${TEST}/integrity${Q}`,
       `PUT /tests/${TEST}/draft${Q}`,
     ]);
     const body = bodyOf(calls, `PUT /tests/${TEST}/draft`) as {
