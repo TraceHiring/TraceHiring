@@ -336,6 +336,16 @@ describe('CreateTestFromTemplateResponse (POST …/tests/from-template)', () => 
   it('accepts the new draft and the sections skipped as not yet servable (M1-16)', () => {
     expect(R().parse(created)).toEqual(created);
     expect(ok(R(), { ...created, skippedSections: [] })).toBe(true);
+    // R5-71 i: an own template's unavailable mcq or written section is skipped and listed (M1-16, E18).
+    expect(
+      ok(R(), {
+        ...created,
+        skippedSections: [
+          { title: 'V', format: 'mcq' },
+          { title: 'W', format: 'written' },
+        ],
+      }),
+    ).toBe(true);
   });
   it.each([
     [
@@ -349,14 +359,6 @@ describe('CreateTestFromTemplateResponse (POST …/tests/from-template)', () => 
       },
     ],
     ['an unknown format', { ...created, skippedSections: [{ title: 'Code', format: 'code' }] }],
-    [
-      'a servable mcq section (M1-16)',
-      { ...created, skippedSections: [{ title: 'V', format: 'mcq' }] },
-    ],
-    [
-      'a servable written section (M1-16)',
-      { ...created, skippedSections: [{ title: 'W', format: 'written' }] },
-    ],
     ['an empty title', { ...created, skippedSections: [{ title: '', format: 'typing' }] }],
     [
       'more than 10 skipped sections',

@@ -454,6 +454,12 @@ describe('POST …/tests/from-template', () => {
       ],
       [{ title: 'Spoken English', format: 'voice' }],
     ],
+    // R5-71 i (a8 fix round lead ask): an unavailable mcq or written section is skipped and listed too.
+    [
+      'only an unavailable mcq section',
+      [{ title: 'Choices', format: 'mcq', skillKey: 'verbal', drawCount: 2, available: false }],
+      [{ title: 'Choices', format: 'mcq' }],
+    ],
   ])(
     'an own template with %s answers 201 with an empty draft and every section skipped (M1-16, E18)',
     async (_name, sections, skipped) => {
