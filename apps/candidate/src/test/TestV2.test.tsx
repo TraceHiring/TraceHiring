@@ -14,7 +14,7 @@ import type {
   SessionViewV2,
 } from '@trace/shared/contracts/candidate';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ApiResult, CandidateApi } from '../api';
+import type { ApiFailure, ApiResult, CandidateApi } from '../api';
 import { COPY } from '../copy';
 import {
   buttonByText,
@@ -702,11 +702,15 @@ describe('AT-M1-32 candidate app v2', { timeout: 20_000 }, () => {
   });
 
   it('an attach Retry-After is capped at 60 s, like the D1 boot path; else the backoff runs', () => {
-    expect(attachWaitMs(fail('rate_limited', 429, { retryAfterSeconds: 3_600 }), 0)).toBe(60_000);
-    expect(attachWaitMs(fail('rate_limited', 429, { retryAfterSeconds: 5 }), 0)).toBe(5_000);
-    expect(attachWaitMs(fail('network', 0), 0)).toBe(1_000);
-    expect(attachWaitMs(fail('unavailable', 503), 3)).toBe(8_000);
-    expect(attachWaitMs(fail('network', 0), 9)).toBe(10_000);
+    const failure = (code: string, status: number, extra: object = {}) =>
+      ({ ok: false, code, status, ...extra }) as ApiFailure;
+    expect(attachWaitMs(failure('rate_limited', 429, { retryAfterSeconds: 3_600 }), 0)).toBe(
+      60_000,
+    );
+    expect(attachWaitMs(failure('rate_limited', 429, { retryAfterSeconds: 5 }), 0)).toBe(5_000);
+    expect(attachWaitMs(failure('network', 0), 0)).toBe(1_000);
+    expect(attachWaitMs(failure('unavailable', 503), 3)).toBe(8_000);
+    expect(attachWaitMs(failure('network', 0), 9)).toBe(10_000);
   });
 
   it('finish: the confirm says finishing is final; confirming sends section.finish and attaches', async () => {
