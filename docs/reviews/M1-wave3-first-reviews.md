@@ -88,3 +88,27 @@ holds (a save never writes client-chosen settings; locks only move values toward
    (as R5-70 a says).
 4. Info — lead ask: move `putVersioned` (`authoring/editor-actions.ts`) into `api/endpoints.ts`; add a non-uuid test.
 **Merged** into `m1/integration` (`chore: merge m1/a5d-fix-1`).
+
+## A5d fix round 2 (`a00083b..abe6064`) — Opus confirming re-review
+**Spec: CONFIRMED WITH NOTES. Security: CONFIRMED.** `?version=` on the integrity PUT (409 before any write), the
+versioned PUT helper moved into `api/endpoints.ts` (uuid-checked, refused unsent). Info: no test for "invalid body +
+stale version → 400, nothing written" (optional). **Merged.**
+
+## Lead fixes found by the M1 E2E runs on Linux CI (2026-10-26)
+1. `062e0b8` — the caller's `amr` was JSON-encoded twice by postgres.js (`$3::jsonb`), so every library reference
+   read (templates, blueprint propose, from-template, presets, library browse) answered 503 for real members, locally
+   and on staging. Now `$3::text::jsonb`; static guard `services/api/src/sql-params.test.ts` (red `8acbf75`).
+2. `0a7199f` — the REST client's name check refused `publish_source_v2` (a digit), so every v2 publish answered 400
+   before reaching PostgREST. Now `/^[a-z][a-z0-9_]{0,63}$/` (red `f0ea392`). Both were invisible to unit tests (fakes).
+
+## M1 E2E specs (`b1a667a..cf90491`, branch `m1/e2e-specs`) — Opus first review
+**PASS WITH FIXES.** No rule 1-9 issue. Green on Linux CI (run 40368988267).
+1. Medium — the spec modelled wizard steps 2-4 as unmounted and never asserted them. → fix round (assert the step
+   list and headings; `click(3)` kept as a deliberate over-count).
+2. Medium — the placeholder bank is seeded in the recruiter's org and pools are topped up after the draft exists
+   (excluded from the time): AT-M1-01 does not exercise the from-template library copy, and the pools (12/12/10/3) are
+   below the 10× rule. → recorded as a known limit (spec §8); a library-seeding route for E2E is owed (lead).
+3. Low — AT-M1-30's time excludes sign-in silently. → `includes_sign_in` in the facts.
+4. Low — ~30 MB of generated fixtures ship in the CI artifact. → deleted after the read-back.
+Pace model (R2-20 constants, budget added, recorded in a `finally`), AT-M1-30 and AT-M1-10 assertions, synthetic
+data, sign-in without trace, serial tests and timeouts checked clean.

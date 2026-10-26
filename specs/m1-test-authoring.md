@@ -444,7 +444,11 @@ focuses, 104 characters, 11 screens; placeholder bank set-up 438 ms excluded); *
 (BPO Voice found from a job description, voice and typing sections skipped with their notes); **AT-M1-10 PASS,
 `elapsed_ms` 10,002** (same 500 rows and images). Limit 300,000 each. Sources: `test-results/m1-at01.json`,
 `m1-at30.json`, `m1-at10.json` of the run's `e2e-local-report` artifact. The real 5-recruiter median stays a deferred
-gate (§13).
+gate (§13). **Known limits of this proxy** (E2E first review #2): the local stack has no library content, so the
+spec seeds approved synthetic items in the recruiter's own org and tops up the template's pools after the draft
+exists (438 ms, excluded from the time); AT-M1-01 therefore does not exercise the from-template library copy, and the
+pools (12/12/10/3) publish but sit below the 10× rule for drives. A library-seeding route for E2E is owed (lead,
+before the M1 exit or recorded as a deferred gate).
 
 ## 9. Security notes for reviewers
 Library keys (I-M1-5) and the copy definer function; the import path (browser-parsed data is untrusted: every row re-validated, images re-checked; no file stored); AI drafting (prompt-injection in topic, output schema, no candidate data); the member-provisioning secret lives only in `workers/jobs`; the image route at the edge; `public` INVOKER functions (EXECUTE only to `authenticated`, `search_path = ''`, every statement subject to RLS).
