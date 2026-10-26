@@ -440,6 +440,57 @@ describe('POST …/tests/from-template', () => {
     expect(rowsOf(s.db, 'ruleset_versions')[0]).toMatchObject({ preset_key: 'strict' });
   });
 
+  it.each([
+    [
+      'only a voice section',
+      [
+        {
+          title: 'Spoken English',
+          format: 'voice',
+          skillKey: 'spoken_english',
+          drawCount: 1,
+          available: true,
+        },
+      ],
+      [{ title: 'Spoken English', format: 'voice' }],
+    ],
+    [
+      'only an unavailable mcq section',
+      [
+        {
+          title: 'Verbal ability',
+          format: 'mcq',
+          skillKey: 'verbal',
+          drawCount: 1,
+          available: false,
+        },
+      ],
+      [{ title: 'Verbal ability', format: 'mcq' }],
+    ],
+  ])(
+    'an own template with %s answers 201 with an empty draft and every section skipped (M1-16, E18)',
+    async (_name, sections, skipped) => {
+      const own = ownTemplateRow(7, { blueprint: { sections, totalTimeSeconds: 900 } });
+      const s = setup({ own: [own] });
+      const res = await s.call('POST', '/tests/from-template', {
+        jobTitle: 'Synthetic Empty Blueprint',
+        templateKey: 'role_0007',
+        templateVersion: 1,
+      });
+      expect(res.status).toBe(201);
+      const body = CreateTestFromTemplateResponse.parse(await res.json());
+      expect(body.skippedSections).toEqual(skipped);
+      expect(body.draft.version.sections).toEqual([]);
+      expect(s.rpc.apiWrites()).toEqual([{ method: 'rpc', table: 'create_test_from_template' }]);
+      expect(s.rpc.payloads).toHaveLength(1);
+      expect((s.rpc.payloads[0]?.p_payload as { sections: unknown }).sections).toEqual([]);
+      expect(rowsOf(s.db, 'jobs')).toHaveLength(1);
+      expect(rowsOf(s.db, 'tests')).toHaveLength(1);
+      expect(rowsOf(s.db, 'test_versions')).toHaveLength(1);
+      expect(rowsOf(s.db, 'pools')).toEqual([]);
+    },
+  );
+
   it('an unknown template is 404; a reviewer is 404 before any write', async () => {
     const s = setup();
     expect(
