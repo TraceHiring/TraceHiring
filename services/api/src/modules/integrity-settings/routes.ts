@@ -7,8 +7,9 @@
 //   switches a signal on or off (rule 3). Nothing here rejects anyone or reads an integrity result (rule 2).
 // - A named preset must carry exactly that preset's values (read from the library catalog as trace_api); other values
 //   are stored as custom (preset null).
-// - A written section with a navigation takes the settings' paste_written (DB-M1-1), so the candidate's paste rule and
-//   the band input come from one setting; a section without a navigation takes the default (R5-63 b).
+// - The database derives every written section's paste rule from the settings' paste_written in the same write
+//   (DB-M1-1, M1-p, R5-71 b), so the candidate's paste rule and the band input come from one setting; a section
+//   without a navigation takes the default (R5-63 b).
 // - A named preset is stored with the catalog version whose values were checked; custom stores none (fix round 1 #9).
 // - The view of a draft shows an admin lock's value in place of the stored one (E16: the stored value can be neither
 //   saved nor published; A5c review M2); a published version shows its frozen values (E17).

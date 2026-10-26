@@ -496,7 +496,8 @@ export const restErrorCode = (err: unknown): OrgErrorCode => {
       default:
         break;
     }
-    if (err.sqlstate === '23505') return 'conflict';
+    // A unique clash, or a deadlock the database broke (40P01: a save racing a publish of the same draft, R5-71 f).
+    if (err.sqlstate === '23505' || err.sqlstate === '40P01') return 'conflict';
     // A foreign key or guard naming a parent the caller cannot see (a test or membership of another org).
     if (err.sqlstate === '23503') return 'not_found';
     if (

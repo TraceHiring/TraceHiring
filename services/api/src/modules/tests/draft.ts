@@ -173,9 +173,9 @@ export interface SaveOptions {
 }
 
 /**
- * The `p_payload` of public.save_test_draft. A written section with a navigation (a v2 section) takes the paste rule of
- * the settings when there are settings; a different paste rule in the request is 400 (the database refuses it at
- * publish anyway, DB-M1-1). When every section is timed, the total time is the sum of the section times (M1-11).
+ * The `p_payload` of public.save_test_draft. When there are settings, a written v2 section's paste rule is the
+ * settings' (the database derives and stores it, M1-p, R5-71 b); a different paste rule in the request is 400 here.
+ * When every section is timed, the total time is the sum of the section times (M1-11).
  */
 export const buildSavePayload = async (
   req: SaveTestDraftRequest,
