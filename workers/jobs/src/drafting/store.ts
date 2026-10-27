@@ -1,8 +1,9 @@
 // SQL of the AI drafting job (specs/m1-test-authoring.md §6.4, M1-19, R5-35, R5-50), run as trace_authoring_worker inside
 // one transaction per stage with trace.job_org_id bound (queue/stage-db.ts). Constant SQL text, bound parameters only,
 // jsonb sent as `$n::text::jsonb`, values selected as text or plain numbers. The worker's grants (M1-19) are: SELECT and
-// UPDATE (status, drafts_discarded, error_code) on its org's ai_draft_jobs; SELECT and INSERT of items and item_versions;
-// INSERT only of item_answer_keys (it never reads a key, so no RETURNING there); SELECT and INSERT of its `ai_draft`
+// UPDATE (status, drafts_discarded, error_code) on its org's ai_draft_jobs; SELECT and INSERT of items; INSERT of
+// item_versions and SELECT of only the columns read below (M1-t, M1-REV-1: never param_spec or options); INSERT only of
+// item_answer_keys (it never reads a key, so no RETURNING there); SELECT and INSERT of its `ai_draft`
 // idempotency keys. The guards decide the rest: origin `ai_draft`, status `in_review`, the running job, the cap
 // (private.ai_draft_job_has_room) and drafts_created, counted from the stored drafts when the job ends.
 import type { AiDraftErrorCode } from '@trace/shared/contracts/m1';
