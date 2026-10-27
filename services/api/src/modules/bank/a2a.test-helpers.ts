@@ -520,7 +520,9 @@ export const a2aDb = (opts: A2aDbOptions = {}) => {
               (v) =>
                 v.org_id === ORG &&
                 v.workspace_id === row.workspace_id &&
-                v.source_item_version_id === src,
+                v.source_item_version_id === src &&
+                // As the database (M1-u, M1-REV-2): a retired copy is never reused.
+                v.status !== 'retired',
             );
             if (existing !== undefined) {
               out.push(String(existing.id));

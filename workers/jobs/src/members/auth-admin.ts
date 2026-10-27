@@ -2,8 +2,10 @@
 // R5-61 a): the invitee's Auth user id, found or created outside any database transaction, with the jobs Worker's own
 // secret key (SUPABASE_SECRET_KEY_JOBS; never in the browser or a Durable Object, CLAUDE.md).
 //
-// E26: the caller's lookup (private.auth_user_id_for_invite, bound to the pending invite in the job org, so it is no
-// general address-to-user lookup) runs first, and refuses when the invite is no longer pending, before any Auth call.
+// E26: the caller's lookup (private.auth_user_id_for_invite, which needs a pending invite in the job org but is not
+// bound to that invite's address, so this worker could use it as an address lookup; accepted, since it already holds
+// this Auth admin API: M1-REV-8, migration M1-v) runs first, and refuses when the invite is no longer pending, before
+// any Auth call.
 // Only on a miss does the adapter POST /auth/v1/admin/users {email, email_confirm: false} (the shape
 // scripts/ops/enrol-smoke-user.mjs uses; no password, no metadata: the display name stays in memberships). A 422
 // `email_exists` (the user was created meanwhile) looks up again; still nothing is a constant error, retried. So a try
