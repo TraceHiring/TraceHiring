@@ -355,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(23);
+select plan(25);
 
 -- ===== M1-REV-1: trace_authoring_worker reads only the item_versions columns of its SQL (workers/jobs/src/drafting/store.ts) =====
 select pg_temp.op();
@@ -413,5 +413,9 @@ alter table public.item_versions disable trigger user;
 select matches(pg_temp.try(format($$update public.item_versions set status = 'approved', approved_by = %L, approved_at = now(), skill_key = null where id = %L$$, pg_temp.id('owner'), pg_temp.id('r7b'))), '^23514 .*"item_versions_bank_approved"', 'AT-M1-02: an approved bank item needs its skill (CHECK alone, guard off)');
 alter table public.item_versions enable trigger user;
 select is((select string_agg(v.status::text || '/' || coalesce(v.skill_key, 'null') || '/' || (v.approved_by is null)::text, ',' order by v.stem) from public.item_versions as v where v.id in (pg_temp.id('r7a'), pg_temp.id('r7b'))), 'in_review/verbal/true,in_review/verbal/true', 'AT-M1-02: both refused approvals left the versions in review');
+
+-- ===== M1-REV-8: the E26 lookup states that it is not bound to the invite's address (comment; no behaviour change) =====
+select is((select obj_description('private.auth_user_id_for_invite(uuid, text)'::regprocedure, 'pg_proc') like '%Not bound to the invite''s address%M1-REV-8%'), true, 'M1-REV-8: the function comment records that p_email is not bound to email_hmac, and the accepted residual risk');
+select is((select has_function_privilege('trace_admin_worker', 'private.auth_user_id_for_invite(uuid, text)', 'EXECUTE')::text || '|' || has_function_privilege('authenticated', 'private.auth_user_id_for_invite(uuid, text)', 'EXECUTE')::text || '|' || has_function_privilege('trace_authoring_worker', 'private.auth_user_id_for_invite(uuid, text)', 'EXECUTE')::text), 'true|false|false', 'M1-REV-8: only trace_admin_worker may execute the lookup');
 select * from finish();
 rollback;
