@@ -6,7 +6,7 @@ Parallel docs-only chat, 2026-10-19, branch `spec/m1-m2` (cut from `trace/d1/int
 | Item | State |
 | --- | --- |
 | `specs/m1-test-authoring.md` | **Approved by autopilot reviewers** (revision 4; binding rows §1.6 R2, §1.7 R3) |
-| `specs/m2-scheduling-invites.md` | **Approved by autopilot reviewers** (revision 4; binding rows §1.5 R2, §1.6 R3, §1.7 R4) |
+| `specs/m2-scheduling-invites.md` | Revision 4 approved 2026-10-19. **Revision 5 (2026-10-27, `m2/integration`)** refreshes it against M1 as built (binding rows §1.8 R5-1…R5-40, from three Opus audits); under autopilot review (§14 records the approval). |
 | Reviewers | Round 1 (rev 1, `3dc2018`): spec-reviewer **BLOCK** (4 High, 11 Medium, Lows), database-reviewer **BLOCK** (4 Blocking, 8 High, 11 Medium, Lows); every finding resolved in revision 2 (binding tables). Round 2 (rev 2, `a79c4b6`): spec-reviewer **BLOCK** (2 new High: D1 default-settings regression, session-token lifetime), database-reviewer **BLOCK** (2 new High: message re-plan loop, overlapping section draws); all new findings resolved in revision 3. Round 3 (rev 3, `93c36b9`): both **PASS WITH FINDINGS** (no Blocking/High); all fixed in revision 4 (`7b5ef2b`); database-reviewer final confirmation **PASS** (two Low notes folded in). |
 
 ## 2. Questions for the founder (rules 1–9 or a founder answer). Each has the safe default the specs build until you answer.
@@ -19,6 +19,7 @@ Parallel docs-only chat, 2026-10-19, branch `spec/m1-m2` (cut from `trace/d1/int
 | Q-M1-4 | **Item draw: build-notes Q24 says "lowest-exposure first".** Taken literally, with exposure frozen at publish, every candidate in a drive would get the same least-used items, which helps collusion (plan §11 #23). | It changes an accepted founder default (Q24). | A **weighted random** draw: each item's chance is 1 / (1 + its exposure count at publish), so less-used items are preferred but candidates still get different items. Draws stay stratified and seeded per session. |
 | Q-M2-2 | **Should reminder emails carry the test link?** Q32 says the link token is random and only its hash is stored, so the system cannot rebuild an old link later. | It changes an accepted founder default (Q32) if you want links in reminders. | Reminders say "use the link in your invitation email, or ask the recruiter to resend it" and carry **no link**. A recruiter can resend the invite, which issues a new link. Alternative: derive links from a server key (HMAC) so reminders can include them; one key would then protect every link. |
 | Q-M2-3 | **Owner of real SMS (DLT) and WhatsApp delivery.** They are Phase 0 in plan §5 B, but need ABH-83 registration and a provider choice. | Rule 6 of build-order (deferred gates need an owner by M8). | Owner **M8** (closed beta). M2 ships the interface, flags and mocks. |
+| Q-M2-4 | **XLSX invite files (added 2026-10-27, M2 revision 5 R5-20).** You accepted the M1 Excel reader's residual parser risk (answer (b), owner M8) because only the recruiter's own question-bank file is affected. Invite files carry candidate names, emails, phones and the 18-or-older answer. | It would widen a risk acceptance you gave for a narrower case (rule 8 adjacent, candidate data). | **CSV only**: an `.xlsx` invite file is refused with "Save the sheet as CSV and upload that". Alternative: extend your acceptance to invite files now (M2 reuses the M1 reader with 5 MB / 5,000-row caps), or wait for the M8 hardening. |
 | Q-CUT | **Where the Answer Quality cutoff lives** (already in FOUNDER-QUEUE "Review rec. 2", rule 6). | Rule 6. | M1 and M2 do not change it: D1's mandatory cutoff pinned at publish stays. |
 
 ## 3. Founder gates the specs depend on (AUTOPILOT §3.1/§3.2; BUILD proceeds on mocks until they are done)
@@ -34,10 +35,12 @@ Parallel docs-only chat, 2026-10-19, branch `spec/m1-m2` (cut from `trace/d1/int
 | F-8 | **Worker secrets the lead generates** (no account needed, but they must be set on staging): `MEMBER_INVITE_PEPPER` (M1 R2-14) | M1 staging | The operator runbook script prints the command; you run it (as for `CANDIDATE_TOKEN_PRIVATE_JWK`). |
 
 ## 4. Next step (for the BUILD chats, not this chat)
+- **Update 2026-10-27:** M2 is refreshed to revision 5 on `m2/integration` (cut from `m1/integration` @ `7c33f48`); `aws4fetch` is ADR-034; F-2 is set with `wrangler secret put` (no AWS keys in GitHub, M2 R5-27); M2 BUILD follows M2 §11 (Wave 0 lead, then B1/B4/B5, then B2/B3/B6). F-7 answered "not yet" (OPEN-8a open).
 - **Superseded 2026-10-22:** M1 BUILD runs on `m1/integration` now (M1 spec revision 5, §11.4; ADR numbers: `fflate` ADR-033, `aws4fetch` ADR-034, R5-2); M2 is refreshed in its own SPEC chat. Original text: M1 ∥ M2 BUILD starts after D1 CLOSE, on `m12/integration` (F-6): lead Wave 0 per M1 §11.2 and M2 §11 (migrations M1-a…d then M2-a…c with pgTAP red first, contracts, ADR-032 `fflate`, ADR-033 `aws4fetch`, the ADR-030 amendment, MT-15, the build-notes "Autopilot changes" rows for F-6 and the Q24 draw deviation), then the streams. Merge `spec/m1-m2` (docs only) into the integration branch first.
 - Founder: answer Q-M1-1…4, Q-M2-1…3 when convenient (defaults are built); F-1…F-5 and F-8 before the staging parts of M1/M2.
 
 ## 5. Log
+- 2026-10-27: M2 revision 5 (M2 SPEC refresh chat, `m2/integration`): three read-only Opus audits (database, runtime/security, process) of revision 4 against M1 as built; 15 High and the Mediums resolved in R5-1…R5-40; new Q-M2-4.
 - 2026-10-19: confirming spec-reviewer (Sonnet) on revision 4: PASS WITH FINDINGS (2 Medium, 2 Low: stale M2 section text and AT rows); all fixed (new AT-M2-27); pushed.
 - 2026-10-19: revision 4 after round-3 re-reviews (both PASS WITH FINDINGS); final database confirmation PASS; both specs approved; pushed `spec/m1-m2`.
 - 2026-10-19: revision 3 after round-2 re-reviews (both BLOCK on new findings); stale section text rewritten.
