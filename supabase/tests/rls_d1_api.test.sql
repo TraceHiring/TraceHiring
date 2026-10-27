@@ -402,7 +402,7 @@ reset role;
 reset request.jwt.claims;
 reset trace.job_org_id;
 reset trace.api_org_id;
-select is((select proargnames::text from pg_proc where oid = 'private.resolve_invitation_by_hash(text)'::regprocedure), '{p_hash,org_id,id,status,candidate_id,session_id,started_at,test_id,test_version_id,expires_at}', 'resolve: returns exactly the listed columns and never the hash');
+select is((select proargnames::text from pg_proc where oid = 'private.resolve_invitation_by_hash(text)'::regprocedure), '{p_hash,org_id,id,status,candidate_id,session_id,started_at,test_id,test_version_id,expires_at,drive_id,slot_id,slot_starts_at,start_window_minutes,lobby_opens_minutes,self_reschedules_used}', 'resolve: returns exactly the listed columns and never the hash (widened by M2 R2-19: the drive, the slot times and the reschedule counter)');
 select is((select prosecdef from pg_proc where oid = 'private.resolve_invitation_by_hash(text)'::regprocedure), true, 'resolve: SECURITY DEFINER');
 select is((select provolatile::text from pg_proc where oid = 'private.resolve_invitation_by_hash(text)'::regprocedure), 's', 'resolve: STABLE');
 select ok((select proconfig::text like '%search_path%' from pg_proc where oid = 'private.resolve_invitation_by_hash(text)'::regprocedure), 'resolve: search_path is pinned (MT-7)');

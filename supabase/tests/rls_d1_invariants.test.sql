@@ -20,7 +20,7 @@ $f$;
 -- app_roles(): the roles whose reach is compared (platform roles, the five trace_* group roles plus trace_api, and any of the four named login roles that exist).
 create function pg_temp.app_roles() returns text[] language sql as $f$
   select array_agg(r.rolname::text order by r.rolname) from pg_catalog.pg_roles as r
-   where r.rolname in ('anon', 'authenticated', 'service_role', 'api_login', 'jobs_mirror_login', 'jobs_quality_login', 'jobs_integrity_login', 'jobs_authoring_login', 'jobs_admin_login')
+   where r.rolname in ('anon', 'authenticated', 'service_role', 'api_login', 'jobs_mirror_login', 'jobs_quality_login', 'jobs_integrity_login', 'jobs_authoring_login', 'jobs_admin_login', 'jobs_messaging_login')
       or r.rolname like 'trace\_%'
 $f$;
 -- login_violations(map): for the login roles named in the map {login: trace role} that exist, lists every departure from
@@ -227,13 +227,13 @@ select is((select count(*)::int from pg_catalog.pg_roles where rolname like 'tra
 select is((select count(*)::int from pg_catalog.pg_roles where rolname like 'trace\_%' and (rolsuper or rolbypassrls or rolcreaterole or rolcreatedb or rolreplication)), 0,
   'roles: no trace_* role is superuser, bypasses RLS, creates roles or databases, or replicates');
 select is((select array_agg(rolname::text order by rolname) from pg_catalog.pg_roles where rolname like 'trace\_%'),
-  array['trace_admin_worker', 'trace_api', 'trace_authoring_worker', 'trace_candidate', 'trace_candidate_gateway', 'trace_integrity_worker', 'trace_quality_worker', 'trace_worker'],
-  'roles: the trace_* roles are exactly api, candidate, candidate_gateway, worker, quality_worker, integrity_worker and the M1 authoring and admin workers (M1 R5-28 a)');
+  array['trace_admin_worker', 'trace_api', 'trace_authoring_worker', 'trace_candidate', 'trace_candidate_gateway', 'trace_integrity_worker', 'trace_messaging_worker', 'trace_quality_worker', 'trace_worker'],
+  'roles: the trace_* roles are exactly api, candidate, candidate_gateway, worker, quality_worker, integrity_worker the M1 authoring and admin workers (M1 R5-28 a) and the M2 messaging worker (M2 R5-8)');
 -- The only role that is a member of a trace_* role with a usable edge (inherit or set), other than the creator row of postgres
 -- and the named login roles, is the gateway into trace_candidate (set true, inherit false).
 select is((select array_agg(mem.rolname::text || '->' || grp.rolname::text || ':inherit=' || am.inherit_option::text || ',set=' || am.set_option::text order by mem.rolname)
             from pg_catalog.pg_auth_members as am join pg_catalog.pg_roles as grp on grp.oid = am.roleid join pg_catalog.pg_roles as mem on mem.oid = am.member
-           where grp.rolname like 'trace\_%' and mem.rolname <> 'postgres' and mem.rolname not in ('api_login', 'jobs_mirror_login', 'jobs_quality_login', 'jobs_integrity_login', 'jobs_authoring_login', 'jobs_admin_login')),
+           where grp.rolname like 'trace\_%' and mem.rolname <> 'postgres' and mem.rolname not in ('api_login', 'jobs_mirror_login', 'jobs_quality_login', 'jobs_integrity_login', 'jobs_authoring_login', 'jobs_admin_login', 'jobs_messaging_login')),
   array['trace_candidate_gateway->trace_candidate:inherit=false,set=true'], 'memberships: the only edge into a trace_* role (besides postgres and the named login roles) is gateway -> trace_candidate, inherit false, set true');
 select is((select count(*)::int from pg_catalog.pg_auth_members as am join pg_catalog.pg_roles as mem on mem.oid = am.member where mem.rolname like 'trace\_%' and mem.rolname <> 'trace_candidate_gateway'), 0,
   'memberships: no trace_* role other than the gateway is a member of any role');
@@ -245,7 +245,7 @@ select is((select count(*)::int from pg_catalog.pg_roles as a cross join pg_cata
               and (pg_has_role(a.oid, b.oid, 'USAGE') or pg_has_role(a.oid, b.oid, 'SET'))
               and not (a.rolname = 'trace_candidate_gateway' and b.rolname = 'trace_candidate')), 0,
   'memberships: no trace_* role can use or set another trace_* role (worker roles stay separate, rule 1); the one exception is the gateway SET into trace_candidate');
-select is(pg_temp.login_violations('{"api_login": "trace_api", "jobs_mirror_login": "trace_worker", "jobs_quality_login": "trace_quality_worker", "jobs_integrity_login": "trace_integrity_worker", "jobs_authoring_login": "trace_authoring_worker", "jobs_admin_login": "trace_admin_worker"}'::jsonb),
+select is(pg_temp.login_violations('{"api_login": "trace_api", "jobs_mirror_login": "trace_worker", "jobs_quality_login": "trace_quality_worker", "jobs_integrity_login": "trace_integrity_worker", "jobs_authoring_login": "trace_authoring_worker", "jobs_admin_login": "trace_admin_worker", "jobs_messaging_login": "trace_messaging_worker"}'::jsonb),
   '{}'::text[], 'MT-14: every operator-created login role that exists (api_login, jobs_*_login) is a member of exactly its one trace_* role with inherit false, set true, has no privileged attribute, and no unlisted login can use a trace_* role (absent roles pass)');
 -- Controls: a login role created in this transaction is judged by the same check.
 create role jobs_probe_login login;
