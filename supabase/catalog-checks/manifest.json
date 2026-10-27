@@ -178,6 +178,10 @@
         "both_schemas",
         "login_dml"
       ]
+    },
+    {
+      "id": "MT-15",
+      "branches": ["plaintext_contact_column", "age_column"]
     }
   ]
 }

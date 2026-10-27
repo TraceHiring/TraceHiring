@@ -470,6 +470,9 @@ begin
   insert into pg_temp.ids values (p_inv || '_consent', v_c);
 end
 $f$;
+grant execute on function pg_temp.pooltv(text, uuid, uuid, int), pg_temp.drive(text, text, text, text),
+  pg_temp.slot(text, text, numeric, int), pg_temp.cand(text, uuid, uuid, text), pg_temp.dinv(text, text, text, text),
+  pg_temp.consent(text), pg_temp.session(text, text, int) to public;
 select plan(37);
 -- Fixtures: ta = a 10x version; drive ds with slots s1 (+48 h), s2 (+72 h, capacity 2), s3 (+1 h), s4 (moved 2 h into the
 -- past on the operator path, so its window was missed) and sx (full, capacity 1); drive do (self-reschedule off) with t1;
@@ -526,6 +529,7 @@ select matches(pg_temp.self('i4', 's2', 'B'), '^42501 TRACE_GUARD: not the api o
 select pg_temp.api(pg_temp.id('B'));
 select matches(pg_temp.self('i4', 's2', 'B'), '^42501 TRACE_GUARD: invitation not found', 'R2-8: another org''s invitation is not found');
 select pg_temp.api(pg_temp.id('A'));
+select pg_temp.op();
 select is((select self_reschedules_used from public.invitations where id = pg_temp.id('i4')), 0::smallint, 'AT-M2-07: refused attempts leave the counter at 0');
 select pg_temp.u('recruiter');
 select matches(pg_temp.self('i4', 's2'), '^42501 permission denied', 'self_reschedule: no app role may call it');
@@ -543,7 +547,9 @@ select pg_temp.u('recruiter');
 select is(pg_temp.try(format($$select public.reschedule_invitation(%L, %L)$$, pg_temp.id('i4'), pg_temp.id('s2'))), 'OK 1', '§6.6: the recruiter moves an invitation');
 select is(pg_temp.try(format($$select public.reschedule_invitation(%L, %L)$$, pg_temp.id('i4'), pg_temp.id('s1'))), 'OK 1', '§6.6: again (unlimited for staff)');
 select is((select string_agg(actor_kind || ':' || reason_code || ':' || (actor_user_id = pg_temp.id('recruiter'))::text, ',' order by occurred_at, to_slot_id = pg_temp.id('s1')) from public.reschedule_events where invitation_id = pg_temp.id('i4')), 'org_user:recruiter:true,org_user:recruiter:true', 'R3-12: two events naming the recruiter');
+select pg_temp.op();
 select is((select self_reschedules_used from public.invitations where id = pg_temp.id('i4')), 0::smallint, '§6.6: staff moves never use the candidate''s reschedule');
+select pg_temp.u('recruiter');
 select matches(pg_temp.try(format($$select public.reschedule_invitation(%L, %L)$$, pg_temp.id('i8'), pg_temp.id('s2'))), '^42501 TRACE_GUARD: invitation not found or not movable', '§4: an otp_verified invitation is not moved by staff');
 select is((select prosecdef from pg_catalog.pg_proc where oid = 'public.reschedule_invitation(uuid, uuid)'::regprocedure), false, '§3.3: reschedule_invitation is INVOKER');
 select pg_temp.u('ws_recruiter');

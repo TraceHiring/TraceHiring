@@ -313,6 +313,58 @@ isOneToOne: false
                   Relationships: [
                     
                   ]
+                },"candidate_contacts": {
+                  Row: {
+                    "candidate_id": string,"created_at": string,"email_bidx": string,"email_ct": string,"email_hint": string,"key_version": number,"org_id": string,"phone_bidx": string | null,"phone_ct": string | null,"phone_hint": string | null,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "candidate_id": string,"created_at"?: string,"email_bidx": string,"email_ct": string,"email_hint": string,"key_version": number,"org_id": string,"phone_bidx"?: string | null,"phone_ct"?: string | null,"phone_hint"?: string | null,"workspace_id": string
+                  }
+                  Update: {
+                    "candidate_id"?: string,"created_at"?: string,"email_bidx"?: string,"email_ct"?: string,"email_hint"?: string,"key_version"?: number,"org_id"?: string,"phone_bidx"?: string | null,"phone_ct"?: string | null,"phone_hint"?: string | null,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "candidate_contacts_org_id_candidate_id_workspace_id_fkey"
+      columns: ["org_id","candidate_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "candidates"
+      referencedColumns: ["org_id","id","workspace_id"]
+    },{
+      foreignKeyName: "candidate_contacts_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"candidates": {
+                  Row: {
+                    "contact_fingerprint": string,"created_at": string,"created_by": string | null,"full_name_ct": string,"id": string,"key_version": number,"org_id": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "contact_fingerprint": string,"created_at"?: string,"created_by"?: string | null,"full_name_ct": string,"id"?: string,"key_version": number,"org_id": string,"workspace_id": string
+                  }
+                  Update: {
+                    "contact_fingerprint"?: string,"created_at"?: string,"created_by"?: string | null,"full_name_ct"?: string,"id"?: string,"key_version"?: number,"org_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "candidates_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "candidates_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
                 },"consents": {
                   Row: {
                     "event": string,"id": string,"invitation_id": string,"language": string,"notice_version_id": string,"occurred_at": string,"org_id": string,"rendered_sha256": string,"ruleset_version_id": string,"test_id": string,"test_version_id": string,"workspace_id": string
@@ -357,6 +409,44 @@ isOneToOne: false
       referencedColumns: ["org_id","id","ruleset_version_id"]
     },{
       foreignKeyName: "consents_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"drives": {
+                  Row: {
+                    "bandwidth_budget_kbps": number | null,"created_at": string,"created_by": string | null,"deadline_at": string,"default_test_version_id": string,"expected_candidates": number | null,"id": string,"lab_mode": boolean,"mode": Database["public"]['Enums']["drive_mode"],"name": string,"opens_at": string,"org_id": string,"reminder_offsets": (string)[],"self_reschedule_allowed": boolean,"status": Database["public"]['Enums']["drive_status"],"test_id": string,"timezone": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "bandwidth_budget_kbps"?: number | null,"created_at"?: string,"created_by"?: string | null,"deadline_at": string,"default_test_version_id": string,"expected_candidates"?: number | null,"id"?: string,"lab_mode"?: boolean,"mode": Database["public"]['Enums']["drive_mode"],"name": string,"opens_at": string,"org_id": string,"reminder_offsets"?: (string)[],"self_reschedule_allowed"?: boolean,"status"?: Database["public"]['Enums']["drive_status"],"test_id": string,"timezone"?: string,"workspace_id": string
+                  }
+                  Update: {
+                    "bandwidth_budget_kbps"?: number | null,"created_at"?: string,"created_by"?: string | null,"deadline_at"?: string,"default_test_version_id"?: string,"expected_candidates"?: number | null,"id"?: string,"lab_mode"?: boolean,"mode"?: Database["public"]['Enums']["drive_mode"],"name"?: string,"opens_at"?: string,"org_id"?: string,"reminder_offsets"?: (string)[],"self_reschedule_allowed"?: boolean,"status"?: Database["public"]['Enums']["drive_status"],"test_id"?: string,"timezone"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "drives_org_id_default_test_version_id_test_id_fkey"
+      columns: ["org_id","default_test_version_id","test_id"]
+isOneToOne: false
+      referencedRelation: "test_versions"
+      referencedColumns: ["org_id","id","test_id"]
+    },{
+      foreignKeyName: "drives_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "drives_org_id_test_id_workspace_id_fkey"
+      columns: ["org_id","test_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id","workspace_id"]
+    },{
+      foreignKeyName: "drives_org_id_workspace_id_fkey"
       columns: ["org_id","workspace_id"]
 isOneToOne: false
       referencedRelation: "workspaces"
@@ -565,17 +655,35 @@ isOneToOne: false
                   ]
                 },"invitations": {
                   Row: {
-                    "adult_confirmed_by_inviter": boolean | null,"adult_self_declared": boolean | null,"age_block_source": string | null,"candidate_id": string,"candidate_label": string,"contact_email": string,"created_at": string,"created_by": string | null,"expires_at": string,"id": string,"link_token_hash": string,"org_id": string,"session_id": string | null,"started_at": string | null,"status": Database["public"]['Enums']["invitation_status"],"test_id": string,"test_version_id": string,"workspace_id": string
+                    "adult_confirmed_by_inviter": boolean | null,"adult_self_declared": boolean | null,"age_block_source": string | null,"candidate_id": string,"candidate_label": string,"candidate_ref_id": string | null,"channels": (string)[],"contact_email": string | null,"created_at": string,"created_by": string | null,"drive_id": string | null,"email_bidx": string | null,"expires_at": string,"id": string,"invite_resend_no": number,"language": string,"link_token_hash": string,"org_id": string,"phone_bidx": string | null,"plan_no": number,"self_reschedules_used": number,"session_grant_exp": string | null,"session_id": string | null,"shared_contact_confirmed_by": string | null,"slot_id": string | null,"started_at": string | null,"status": Database["public"]['Enums']["invitation_status"],"test_id": string,"test_version_id": string,"token_version": number,"upload_id": string | null,"upload_row_no": number | null,"workspace_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "adult_confirmed_by_inviter"?: boolean | null,"adult_self_declared"?: boolean | null,"age_block_source"?: string | null,"candidate_id"?: string,"candidate_label": string,"contact_email": string,"created_at"?: string,"created_by"?: string | null,"expires_at": string,"id"?: string,"link_token_hash": string,"org_id": string,"session_id"?: string | null,"started_at"?: string | null,"status"?: Database["public"]['Enums']["invitation_status"],"test_id": string,"test_version_id": string,"workspace_id": string
+                    "adult_confirmed_by_inviter"?: boolean | null,"adult_self_declared"?: boolean | null,"age_block_source"?: string | null,"candidate_id"?: string,"candidate_label": string,"candidate_ref_id"?: string | null,"channels"?: (string)[],"contact_email"?: string | null,"created_at"?: string,"created_by"?: string | null,"drive_id"?: string | null,"email_bidx"?: string | null,"expires_at": string,"id"?: string,"invite_resend_no"?: number,"language"?: string,"link_token_hash": string,"org_id": string,"phone_bidx"?: string | null,"plan_no"?: number,"self_reschedules_used"?: number,"session_grant_exp"?: string | null,"session_id"?: string | null,"shared_contact_confirmed_by"?: string | null,"slot_id"?: string | null,"started_at"?: string | null,"status"?: Database["public"]['Enums']["invitation_status"],"test_id": string,"test_version_id": string,"token_version"?: number,"upload_id"?: string | null,"upload_row_no"?: number | null,"workspace_id": string
                   }
                   Update: {
-                    "adult_confirmed_by_inviter"?: boolean | null,"adult_self_declared"?: boolean | null,"age_block_source"?: string | null,"candidate_id"?: string,"candidate_label"?: string,"contact_email"?: string,"created_at"?: string,"created_by"?: string | null,"expires_at"?: string,"id"?: string,"link_token_hash"?: string,"org_id"?: string,"session_id"?: string | null,"started_at"?: string | null,"status"?: Database["public"]['Enums']["invitation_status"],"test_id"?: string,"test_version_id"?: string,"workspace_id"?: string
+                    "adult_confirmed_by_inviter"?: boolean | null,"adult_self_declared"?: boolean | null,"age_block_source"?: string | null,"candidate_id"?: string,"candidate_label"?: string,"candidate_ref_id"?: string | null,"channels"?: (string)[],"contact_email"?: string | null,"created_at"?: string,"created_by"?: string | null,"drive_id"?: string | null,"email_bidx"?: string | null,"expires_at"?: string,"id"?: string,"invite_resend_no"?: number,"language"?: string,"link_token_hash"?: string,"org_id"?: string,"phone_bidx"?: string | null,"plan_no"?: number,"self_reschedules_used"?: number,"session_grant_exp"?: string | null,"session_id"?: string | null,"shared_contact_confirmed_by"?: string | null,"slot_id"?: string | null,"started_at"?: string | null,"status"?: Database["public"]['Enums']["invitation_status"],"test_id"?: string,"test_version_id"?: string,"token_version"?: number,"upload_id"?: string | null,"upload_row_no"?: number | null,"workspace_id"?: string
                   }
                   Relationships: [
                     {
+      foreignKeyName: "invitations_candidate_fk"
+      columns: ["org_id","candidate_ref_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "candidates"
+      referencedColumns: ["org_id","id","workspace_id"]
+    },{
+      foreignKeyName: "invitations_drive_fk"
+      columns: ["org_id","drive_id","test_id"]
+isOneToOne: false
+      referencedRelation: "drives"
+      referencedColumns: ["org_id","id","test_id"]
+    },{
+      foreignKeyName: "invitations_drive_workspace_fk"
+      columns: ["org_id","drive_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "drives"
+      referencedColumns: ["org_id","id","workspace_id"]
+    },{
       foreignKeyName: "invitations_org_id_fkey"
       columns: ["org_id"]
 isOneToOne: false
@@ -599,6 +707,76 @@ isOneToOne: false
 isOneToOne: false
       referencedRelation: "workspaces"
       referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "invitations_slot_fk"
+      columns: ["org_id","slot_id","drive_id"]
+isOneToOne: false
+      referencedRelation: "slots"
+      referencedColumns: ["org_id","id","drive_id"]
+    },{
+      foreignKeyName: "invitations_upload_fk"
+      columns: ["org_id","upload_id","drive_id"]
+isOneToOne: false
+      referencedRelation: "invite_uploads"
+      referencedColumns: ["org_id","id","drive_id"]
+    }
+                  ]
+                },"invite_upload_errors": {
+                  Row: {
+                    "created_at": string,"held": boolean,"org_id": string,"reason": string,"row_no": number,"upload_id": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"held"?: boolean,"org_id": string,"reason": string,"row_no": number,"upload_id": string,"workspace_id": string
+                  }
+                  Update: {
+                    "created_at"?: string,"held"?: boolean,"org_id"?: string,"reason"?: string,"row_no"?: number,"upload_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "invite_upload_errors_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "invite_upload_errors_org_id_upload_id_fkey"
+      columns: ["org_id","upload_id"]
+isOneToOne: false
+      referencedRelation: "invite_uploads"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "invite_upload_errors_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"invite_uploads": {
+                  Row: {
+                    "completed_at": string | null,"created_at": string,"created_by": string | null,"drive_id": string,"file_sha256": string,"id": string,"org_id": string,"rows_held": number,"rows_invited": number,"rows_refused": number,"rows_total": number,"source_kind": string,"status": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "completed_at"?: string | null,"created_at"?: string,"created_by"?: string | null,"drive_id": string,"file_sha256": string,"id"?: string,"org_id": string,"rows_held"?: number,"rows_invited"?: number,"rows_refused"?: number,"rows_total": number,"source_kind"?: string,"status"?: string,"workspace_id": string
+                  }
+                  Update: {
+                    "completed_at"?: string | null,"created_at"?: string,"created_by"?: string | null,"drive_id"?: string,"file_sha256"?: string,"id"?: string,"org_id"?: string,"rows_held"?: number,"rows_invited"?: number,"rows_refused"?: number,"rows_total"?: number,"source_kind"?: string,"status"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "invite_uploads_org_id_drive_id_workspace_id_fkey"
+      columns: ["org_id","drive_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "drives"
+      referencedColumns: ["org_id","id","workspace_id"]
+    },{
+      foreignKeyName: "invite_uploads_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
     }
                   ]
                 },"item_answer_keys": {
@@ -1017,6 +1195,26 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"org_keys": {
+                  Row: {
+                    "created_at": string,"key_version": number,"kms_key_ref": string,"org_id": string,"purpose": string,"retired_at": string | null,"wrapped_dek": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"key_version": number,"kms_key_ref": string,"org_id": string,"purpose": string,"retired_at"?: string | null,"wrapped_dek": string
+                  }
+                  Update: {
+                    "created_at"?: string,"key_version"?: number,"kms_key_ref"?: string,"org_id"?: string,"purpose"?: string,"retired_at"?: string | null,"wrapped_dek"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "org_keys_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"orgs": {
                   Row: {
                     "created_at": string,"data_residency": Database["public"]['Enums']["data_residency"],"id": string,"kind": Database["public"]['Enums']["org_kind"],"name": string,"org_id": string,"slug": string,"status": Database["public"]['Enums']["org_status"]
@@ -1194,6 +1392,44 @@ isOneToOne: false
       columns: ["org_id","workspace_id"]
 isOneToOne: false
       referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"reschedule_events": {
+                  Row: {
+                    "actor_kind": string,"actor_user_id": string | null,"from_slot_id": string,"id": string,"invitation_id": string,"occurred_at": string,"org_id": string,"reason_code": string,"to_slot_id": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "actor_kind": string,"actor_user_id"?: string | null,"from_slot_id": string,"id"?: string,"invitation_id": string,"occurred_at"?: string,"org_id": string,"reason_code": string,"to_slot_id": string,"workspace_id": string
+                  }
+                  Update: {
+                    "actor_kind"?: string,"actor_user_id"?: string | null,"from_slot_id"?: string,"id"?: string,"invitation_id"?: string,"occurred_at"?: string,"org_id"?: string,"reason_code"?: string,"to_slot_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "reschedule_events_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "reschedule_events_org_id_from_slot_id_fkey"
+      columns: ["org_id","from_slot_id"]
+isOneToOne: false
+      referencedRelation: "slots"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "reschedule_events_org_id_invitation_id_workspace_id_fkey"
+      columns: ["org_id","invitation_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "invitations"
+      referencedColumns: ["org_id","id","workspace_id"]
+    },{
+      foreignKeyName: "reschedule_events_org_id_to_slot_id_fkey"
+      columns: ["org_id","to_slot_id"]
+isOneToOne: false
+      referencedRelation: "slots"
       referencedColumns: ["org_id","id"]
     }
                   ]
@@ -1527,6 +1763,38 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"slots": {
+                  Row: {
+                    "booked": number,"capacity": number,"created_at": string,"drive_id": string,"id": string,"lobby_opens_minutes": number,"org_id": string,"start_window_minutes": number,"starts_at": string,"status": string,"test_id": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "booked"?: number,"capacity": number,"created_at"?: string,"drive_id": string,"id"?: string,"lobby_opens_minutes"?: number,"org_id": string,"start_window_minutes"?: number,"starts_at": string,"status"?: string,"test_id": string,"workspace_id": string
+                  }
+                  Update: {
+                    "booked"?: number,"capacity"?: number,"created_at"?: string,"drive_id"?: string,"id"?: string,"lobby_opens_minutes"?: number,"org_id"?: string,"start_window_minutes"?: number,"starts_at"?: string,"status"?: string,"test_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "slots_org_id_drive_id_workspace_id_fkey"
+      columns: ["org_id","drive_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "drives"
+      referencedColumns: ["org_id","id","workspace_id"]
+    },{
+      foreignKeyName: "slots_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "slots_org_id_test_id_fkey"
+      columns: ["org_id","test_id"]
+isOneToOne: false
+      referencedRelation: "tests"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
                 },"staff_access_grants": {
                   Row: {
                     "approved_by": string,"expires_at": string,"granted_at": string,"id": string,"org_id": string,"revoked_at": string | null,"revoked_by": string | null,"scope": Database["public"]['Enums']["staff_grant_scope"],"staff_user_id": string,"ticket_ref": string
@@ -1747,8 +2015,14 @@ isOneToOne: false
 "import_item_batch":
 { Args: { "p_job": string,"p_rows": Json }; Returns: Json
                            },
+"ingest_invite_batch":
+{ Args: { "p_rows": Json,"p_upload": string }; Returns: Json
+                           },
 "publish_source_v2":
 { Args: { "p_frozen": boolean,"p_org_id": string,"p_test_version_id": string }; Returns: Json
+                           },
+"reschedule_invitation":
+{ Args: { "p_invitation": string,"p_to_slot": string }; Returns: string
                            },
 "save_bank_draft":
 { Args: { "p_org": string,"p_payload": Json }; Returns: string
@@ -1761,7 +2035,7 @@ isOneToOne: false
                            }
           }
           Enums: {
-            "actor_kind": "org_user"|"candidate"|"staff"|"system","data_residency": "r2_apac"|"s3_mumbai","invitation_status": "created"|"sent"|"otp_verified"|"started"|"submitted"|"expired"|"revoked"|"blocked_age","item_status": "draft"|"in_review"|"approved"|"not_approved"|"retired","membership_status": "invited"|"active"|"suspended"|"removed","org_kind": "customer"|"trace_library"|"trace_internal","org_role": "org_owner"|"admin"|"recruiter"|"reviewer"|"hiring_manager","org_status": "active"|"suspended","section_format": "written"|"mcq","staff_grant_scope": "support_read","test_version_status": "draft"|"published"|"retired","workspace_kind": "default"|"client"
+            "actor_kind": "org_user"|"candidate"|"staff"|"system","data_residency": "r2_apac"|"s3_mumbai","drive_mode": "open_window"|"scheduled","drive_status": "draft"|"scheduled"|"closed"|"cancelled","invitation_status": "created"|"sent"|"otp_verified"|"started"|"submitted"|"expired"|"revoked"|"blocked_age","item_status": "draft"|"in_review"|"approved"|"not_approved"|"retired","membership_status": "invited"|"active"|"suspended"|"removed","org_kind": "customer"|"trace_library"|"trace_internal","org_role": "org_owner"|"admin"|"recruiter"|"reviewer"|"hiring_manager","org_status": "active"|"suspended","section_format": "written"|"mcq","staff_grant_scope": "support_read","test_version_status": "draft"|"published"|"retired","workspace_kind": "default"|"client"
           }
           CompositeTypes: {
             [_ in never]: never
@@ -1877,7 +2151,7 @@ export type CompositeTypes<
 export const Constants = {
   "public": {
           Enums: {
-            "actor_kind": ["org_user", "candidate", "staff", "system"],"data_residency": ["r2_apac", "s3_mumbai"],"invitation_status": ["created", "sent", "otp_verified", "started", "submitted", "expired", "revoked", "blocked_age"],"item_status": ["draft", "in_review", "approved", "not_approved", "retired"],"membership_status": ["invited", "active", "suspended", "removed"],"org_kind": ["customer", "trace_library", "trace_internal"],"org_role": ["org_owner", "admin", "recruiter", "reviewer", "hiring_manager"],"org_status": ["active", "suspended"],"section_format": ["written", "mcq"],"staff_grant_scope": ["support_read"],"test_version_status": ["draft", "published", "retired"],"workspace_kind": ["default", "client"]
+            "actor_kind": ["org_user", "candidate", "staff", "system"],"data_residency": ["r2_apac", "s3_mumbai"],"drive_mode": ["open_window", "scheduled"],"drive_status": ["draft", "scheduled", "closed", "cancelled"],"invitation_status": ["created", "sent", "otp_verified", "started", "submitted", "expired", "revoked", "blocked_age"],"item_status": ["draft", "in_review", "approved", "not_approved", "retired"],"membership_status": ["invited", "active", "suspended", "removed"],"org_kind": ["customer", "trace_library", "trace_internal"],"org_role": ["org_owner", "admin", "recruiter", "reviewer", "hiring_manager"],"org_status": ["active", "suspended"],"section_format": ["written", "mcq"],"staff_grant_scope": ["support_read"],"test_version_status": ["draft", "published", "retired"],"workspace_kind": ["default", "client"]
           }
         }
 } as const

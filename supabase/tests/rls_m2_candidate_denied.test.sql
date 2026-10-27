@@ -470,6 +470,9 @@ begin
   insert into pg_temp.ids values (p_inv || '_consent', v_c);
 end
 $f$;
+grant execute on function pg_temp.pooltv(text, uuid, uuid, int), pg_temp.drive(text, text, text, text),
+  pg_temp.slot(text, text, numeric, int), pg_temp.cand(text, uuid, uuid, text), pg_temp.dinv(text, text, text, text),
+  pg_temp.consent(text), pg_temp.session(text, text, int) to public;
 select plan(10);
 -- m2_tables(): every table M2 adds (M2-a, M2-b).
 create function pg_temp.m2_tables() returns text[] language sql as $f$

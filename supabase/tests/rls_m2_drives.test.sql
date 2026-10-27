@@ -470,7 +470,10 @@ begin
   insert into pg_temp.ids values (p_inv || '_consent', v_c);
 end
 $f$;
-select plan(57);
+grant execute on function pg_temp.pooltv(text, uuid, uuid, int), pg_temp.drive(text, text, text, text),
+  pg_temp.slot(text, text, numeric, int), pg_temp.cand(text, uuid, uuid, text), pg_temp.dinv(text, text, text, text),
+  pg_temp.consent(text), pg_temp.session(text, text, int) to public;
+select plan(58);
 -- Fixtures: ta = a published 10x pool version (workspace A1); t9 = 9x; tin = a D1-style inline version; tdr = a draft;
 -- ta2 = a newer published version of ta's test; tb = org B; tw = a 10x version in workspace A2.
 select pg_temp.pooltv('ta', pg_temp.id('A'), pg_temp.id('A1'));
@@ -493,10 +496,11 @@ select pg_temp.publish('ta2');
 insert into public.assignments (org_id, membership_id, scope, test_id, as_role)
   select m.org_id, m.id, 'test', pg_temp.id('ta_test'), 'reviewer'
   from public.memberships as m where m.org_id = pg_temp.id('A') and m.user_id = pg_temp.id('reviewer');
--- ins(version key, mode, status): the INSERT a recruiter sends (no workspace: the guard copies it from the test).
+-- ins(version key, mode, status): the INSERT a recruiter sends into org A (no workspace: the guard copies it from the
+-- test). Values, not a SELECT, so a caller who cannot read the version still reaches the guard.
 create function pg_temp.ins(p_tv text, p_mode text, p_status text) returns text language sql as $f$
-  select pg_temp.try(format($s$insert into public.drives (org_id, test_id, default_test_version_id, name, mode, status, opens_at, deadline_at) select v.org_id, v.test_id, v.id, 'Drive', %L::public.drive_mode, %L::public.drive_status, now(), now() + interval '10 days' from public.test_versions as v where v.id = %L$s$,
-    p_mode, p_status, pg_temp.id(p_tv)))
+  select pg_temp.try(format($s$insert into public.drives (org_id, test_id, default_test_version_id, name, mode, status, opens_at, deadline_at) values (%L, %L, %L, 'Drive', %L, %L, now(), now() + interval '10 days')$s$,
+    pg_temp.id('A'), pg_temp.id(p_tv || '_test'), pg_temp.id(p_tv), p_mode, p_status))
 $f$;
 grant execute on function pg_temp.ins(text, text, text) to public;
 
@@ -523,6 +527,7 @@ select matches(pg_temp.ins('tdr', 'open_window', 'draft'), '^23503 TRACE_GUARD: 
 select is(pg_temp.ins('t9', 'open_window', 'draft'), 'OK 1', 'AT-M2-14: an open-window drive on a 9x version is allowed (warning only)');
 select is((select min_pool_ratio::text from public.test_versions where id = pg_temp.id('t9')), '9.00', 'AT-M2-14: the warning reads min_pool_ratio, which staff can select');
 select matches(pg_temp.try(format($$insert into public.drives (org_id, test_id, default_test_version_id, name, mode, opens_at, deadline_at) values (%L, %L, %L, 'D', 'open_window', now(), now() + interval '1 day')$$, pg_temp.id('A'), pg_temp.id('tin_test'), pg_temp.id('ta'))), '^42501 TRACE_GUARD: drive not found', 'R5-46: a version of another test is refused with the one not-found error');
+select pg_temp.op();
 select is((select prosecdef::text || '|' || (select rolname from pg_catalog.pg_roles where oid = proowner) from pg_catalog.pg_proc where oid = 'private.drives_guard()'::regprocedure), 'true|postgres', 'R5-10: the drives guard is SECURITY DEFINER owned by postgres');
 select is((select count(*)::int from unnest(array['authenticated', 'trace_api', 'trace_messaging_worker', 'trace_worker']) as r where has_function_privilege(r, 'private.assert_drive_pool_ratio(uuid, uuid)', 'EXECUTE')), 0, 'R5-10: no grant on assert_drive_pool_ratio is added');
 
@@ -561,7 +566,10 @@ select pg_temp.slot('s1', 'dsch', 48, 10);
 select pg_temp.u('recruiter');
 select is(pg_temp.try(format($$update public.drives set status = 'scheduled' where id = %L$$, pg_temp.id('dsch'))), 'OK 1', '§4: draft -> scheduled with a slot and a 10x version');
 select matches(pg_temp.try(format($$update public.drives set status = 'draft' where id = %L$$, pg_temp.id('dsch'))), '^42501 TRACE_GUARD: drive status moves forward only', '§4: scheduled -> draft is refused');
-select matches(pg_temp.try(format($$update public.drives set mode = 'open_window' where id = %L$$, pg_temp.id('dsch'))), '^42501 TRACE_GUARD: drive test, workspace and mode are immutable', 'U: the mode is immutable');
+select matches(pg_temp.try(format($$update public.drives set mode = 'open_window' where id = %L$$, pg_temp.id('dsch'))), '^42501 permission denied', 'U: mode is outside the update grant');
+select pg_temp.op();
+select matches(pg_temp.try(format($$update public.drives set mode = 'open_window' where id = %L$$, pg_temp.id('dsch'))), '^42501 TRACE_GUARD: drive test, workspace and mode are immutable', 'U: the guard keeps the mode immutable even for the owner');
+select pg_temp.u('recruiter');
 select matches(pg_temp.try(format($$update public.drives set deadline_at = deadline_at - interval '1 day' where id = %L$$, pg_temp.id('dsch'))), '^42501 TRACE_GUARD: a drive deadline can only be extended', 'R3-10: a scheduled drive''s deadline is never shortened');
 select is(pg_temp.try(format($$update public.drives set deadline_at = deadline_at + interval '1 day' where id = %L$$, pg_temp.id('dsch'))), 'OK 1', 'R3-10: the deadline may be extended');
 select is(pg_temp.try(format($$update public.drives set reminder_offsets = '{2 hours}' where id = %L$$, pg_temp.id('dsch'))), 'OK 1', 'AT-M2-06: the reminder offsets are configurable per drive');

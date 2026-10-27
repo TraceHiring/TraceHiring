@@ -470,6 +470,9 @@ begin
   insert into pg_temp.ids values (p_inv || '_consent', v_c);
 end
 $f$;
+grant execute on function pg_temp.pooltv(text, uuid, uuid, int), pg_temp.drive(text, text, text, text),
+  pg_temp.slot(text, text, numeric, int), pg_temp.cand(text, uuid, uuid, text), pg_temp.dinv(text, text, text, text),
+  pg_temp.consent(text), pg_temp.session(text, text, int) to public;
 select plan(69);
 -- Fixtures: ta = a 10x version (A1) and ta2 its newer version; drive ds (scheduled mode) with slots s1 (+48 h) and s2
 -- (+72 h), scheduled; drive dw (open window, scheduled); drive dd (draft). Candidates c1 and c2 share phone p1.
@@ -562,12 +565,15 @@ select is((select count(*)::int from public.audit_log where object_table = 'invi
 
 -- ===== Version pin (I-M2-5, AT-M2-17) =====
 select is((select bool_and(test_version_id = pg_temp.id('ta')) from public.invitations where drive_id = pg_temp.id('ds')), true, 'AT-M2-17: each invitation pins the drive''s default version at creation');
+insert into pg_temp.ids select 'w1', id from public.invitations where link_token_hash = pg_temp.h('l-w1');
 select matches(pg_temp.try(format($$update public.invitations set test_version_id = %L where id = %L$$, pg_temp.id('ta2'), pg_temp.id('w1'))), '^42501 TRACE_GUARD: invitation identity, pin, contact and inviter answer are immutable', 'AT-M2-17: the pin never changes');
 
 -- ===== Staff moves and revokes (R3-3, R4-4, R5-12, R5-48) =====
 select pg_temp.u('recruiter');
 select is(pg_temp.try(format($$update public.invitations set slot_id = %L where id = %L$$, pg_temp.id('s2'), pg_temp.id('i1'))), 'OK 1', 'U recruiter: a created invitation moves to another slot');
+select pg_temp.op();
 select is((select plan_no::text || '|' || (select booked from public.slots where id = pg_temp.id('s1')) || '|' || (select booked from public.slots where id = pg_temp.id('s2')) from public.invitations where id = pg_temp.id('i1')), '1|1|1', 'R4-2, R2-15: plan_no +1 and the seat moves with the invitation');
+select pg_temp.u('recruiter');
 select matches(pg_temp.try(format($$update public.invitations set plan_no = 7 where id = %L$$, pg_temp.id('i1'))), '^42501', 'U: plan_no is the guard''s');
 -- i3: consented (otp_verified), no session yet; i4: session_id set with a live grant; i5: a grant that has passed.
 select pg_temp.dinv('i3', 'ds', 's1', 'c3');
@@ -637,9 +643,9 @@ select is((select count(*)::int from unnest(array['authenticated', 'trace_api', 
 -- ===== private functions for trace_api (R2-19, R5-47, R5-66 d) =====
 select is((select proargnames::text from pg_proc where oid = 'private.resolve_invitation_by_hash(text)'::regprocedure), '{p_hash,org_id,id,status,candidate_id,session_id,started_at,test_id,test_version_id,expires_at,drive_id,slot_id,slot_starts_at,start_window_minutes,lobby_opens_minutes,self_reschedules_used}', 'R2-19: resolve is widened with the drive, the slot times and the reschedule counter (never contacts)');
 select pg_temp.api(null);
-select is((select drive_id::text || '|' || (slot_starts_at = (select starts_at from public.slots where id = pg_temp.id('s2')))::text || '|' || start_window_minutes || '|' || lobby_opens_minutes || '|' || self_reschedules_used from private.resolve_invitation_by_hash(pg_temp.h('l-i1'))), pg_temp.id('ds')::text || '|true|15|30|0', 'R2-19: resolve returns the current slot''s times');
+select is((select drive_id::text || '|' || (slot_starts_at = now() + interval '72 hours')::text || '|' || start_window_minutes || '|' || lobby_opens_minutes || '|' || self_reschedules_used from private.resolve_invitation_by_hash(pg_temp.h('l-i1'))), pg_temp.id('ds')::text || '|true|15|30|0', 'R2-19: resolve returns the current slot''s times');
 select pg_temp.api(pg_temp.id('A'));
-select is((select mode::text || '|' || (nb = (select starts_at from public.slots where id = pg_temp.id('s2')))::text || '|' || (na - nb = interval '15 minutes')::text || '|' || (nb - lobby_opens_at = interval '30 minutes')::text from private.invitation_window(pg_temp.id('i1'))), 'scheduled|true|true|true', 'R5-66 d: a scheduled row''s window is [starts_at, +15 min], lobby 30 min early');
+select is((select mode::text || '|' || (nb = now() + interval '72 hours')::text || '|' || (na - nb = interval '15 minutes')::text || '|' || (nb - lobby_opens_at = interval '30 minutes')::text from private.invitation_window(pg_temp.id('i1'))), 'scheduled|true|true|true', 'R5-66 d: a scheduled row''s window is [starts_at, +15 min], lobby 30 min early');
 select is((select mode::text || '|' || (na = drive_end)::text || '|' || (nb = lobby_opens_at)::text from private.invitation_window(pg_temp.id('w1'))), 'open_window|true|true', 'R5-66 d: an open-window row''s window is [opens_at, drive end]');
 select is((select count(*)::int from private.invitation_window(pg_temp.id('d1b'))), 0, 'R5-66 d: a D1 row has no window');
 select is((select email_ct = pg_temp.ct('e-c1') from private.invitation_recipient_ct(pg_temp.id('i1'))), true, 'R5-47: trace_api reads a drive row''s recipient ciphertext');
