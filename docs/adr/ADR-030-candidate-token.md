@@ -77,3 +77,19 @@ No new vendor or library: Web Crypto (built into Workers and Node), Postgres rol
 - The real connection chain from a Worker: login role as `session_user`, `SET LOCAL ROLE` and `set_config(..., true)` through any pooler, and hosted Supabase behaviour (the spike used `postgres` as a stand-in on the local stack).
 - Where the private key lives and how it rotates (`kid`, overlap window).
 - The lobby token's lifetime, and the exact route-to-`typ` table.
+
+## Amendment 1 (M2, Accepted (autopilot), 2026-10-27)
+From `specs/m2-scheduling-invites.md` revision 5, R5-21 as narrowed by R5-63 and R5-66 (e, f). It changes caps and the
+`portal` type only; the start path stays D1's.
+- **`lobby` verifier cap: 5,460 s** in both verifiers (`workers/edge/src/token.ts`, `services/api/src/modules/candidate/token.ts`):
+  lobby up to 60 min early + start window up to 30 min + 60 s. The tighter limits are **mint-side** rules in api
+  `lobbyMint`: a drive row not yet started gets `exp <= min(iat + 5,460 s, na + 60 s)`, so a candidate who verified in the
+  lobby needs no second OTP at the start; D1 rows and resumes keep D1's **1,800 s** (`LOBBY_TTL_SECONDS`). No claim tells
+  a verifier the row kind.
+- **`portal`: minted and accepted, 1,800 s**, only on `GET /v1/portal/slots` and `POST /v1/portal/reschedule` (R5-24),
+  reached by invite link + OTP with purpose `manage` (R5-19). This replaces "not minted and rejected everywhere"; the
+  M3a portal routes extend the same list.
+- **No `sw` claim and no new claim at all:** `CandidateTokenClaims` is unchanged; the start window travels in the api's
+  session grant (`sw { nb, na }`, drive rows, first start) and `SessionDO.start` re-checks it by its own clock.
+- **`session` unchanged:** minted at start, `exp = iat + min(duration + 3,600 s, 10,800 s)`; the `kid` overlap on rotation
+  stays D1's; the kid pattern `^d1-\d{4}-(0[1-9]|1[0-2])$` stays.
