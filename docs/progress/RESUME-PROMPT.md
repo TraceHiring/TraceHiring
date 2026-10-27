@@ -8,7 +8,13 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-26 23:45 IST, M1 BUILD 4 = Wave 3 merged (newest):** A7 candidate app v2 merged (two fix rounds,
+- **Update 2026-10-27 07:45 IST, M1 BUILD 5 done = BUILD complete (newest):** the lead's owed items merged and
+  reviewed: migrations M1-p (D1 shape under the row lock, derived paste rule, no client job ids), M1-q (atomic
+  `create_test_from_template`, `save_bank_draft`), M1-r (one lock order), M1-s (review fixes); api streams a8
+  (from-template one RPC, template paging) and a9 (bank RPC); spec R5-71 a-i; full serial gate green on `5d6f37b`
+  (rls 3893 = floor). `docs/milestones/M1-summary.md` drafted. Next: read CI on `acceb02` + dispatch 40436931164 (`static` on `5d6f37b` failed, fixed `acceb02`),
+  then **M1 REVIEW in a fresh session** (`trace-milestone-review`). HANDOFF "Next step".
+- **Update 2026-10-26 23:45 IST, M1 BUILD 4 = Wave 3 merged:** A7 candidate app v2 merged (two fix rounds,
   re-reviews CONFIRMED); new stream A5d (R5-69/R5-70) wired the recruiter wizard steps 2-4 and v2 save/publish, merged;
   E2E specs merged; AT-M1-01 170.9 s, AT-M1-30 133.4 s, AT-M1-10 10.0 s green on Linux CI (spec §8); two api bugs the
   E2E found fixed (`062e0b8` jsonb `amr`, `0a7199f` REST name check). Next: the lead's owed items before the M1 exit,
