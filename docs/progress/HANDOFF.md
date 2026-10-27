@@ -1,7 +1,7 @@
-# HANDOFF — 2026-10-27 07:45 IST (M1 BUILD 5 done: lead's owed items merged; BUILD complete, M1 REVIEW next)
-Reason for stopping: this chat's task is done (HANDOFF 2026-10-26 Next step 2 closed, step 3 drafted). Max account;
-5-hour window ~8% (after the 05:30 IST reset; the machine slept ~6 h mid-session), weekly ~58%. Start from
-`docs/progress/RESUME-PROMPT.md` §4 on **`m1/integration`** (worktree `.claude/worktrees/m1-integration`). The repo wins.
+# HANDOFF — 2026-10-27 08:20 IST (M1 REVIEW done: PASS WITH CONDITIONS; M1 FIX next)
+Reason for stopping: this chat's task is done (AUTOPILOT §2: exactly one phase per session; REVIEW done). Max account;
+5-hour window ~30%, weekly ~61%. Start from `docs/progress/RESUME-PROMPT.md` §4 on **`m1/integration`** (worktree
+`.claude/worktrees/m1-integration`). The repo wins.
 
 ## Paused: D1 (founder, 2026-10-22 night: paused, not closed)
 D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/worktrees/d1-integration`). Nothing is committed to `d1/integration` or `main` from M1. Copied from the `d1/integration` HANDOFF (`3c2e42a`, tip `1547fd0`):
@@ -11,51 +11,53 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
 - **D1 founder items:** AT-D2 screen capture (`pnpm e2e:record`); Workers Paid (OPEN-8a) "not yet", decide before any load test (M3a); Dependabot PRs #7-#12 not merged blind; after D1 merges, `e2e-local` back on the required checks.
 
 ## Where we are (verified this chat)
-- Milestone **M1 · Test authoring**, phase **BUILD complete** (BUILD 5 = the lead's owed items). Spec rev 5, rows up to
-  **R5-71 (a-i)**. `m1/integration` = the handoff commit on `acceb02` (`fix(db-types): pin the two m1-q public functions…`, on the gate commit `5d6f37b`),
-  pushed. `trace/d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged (nothing committed to either).
-- **Full serial gate green on the merged tree** (2026-10-27): typecheck, eslint, prettier, boundaries, workflows,
-  catalog, migrations, gitleaks, every package's tests with `--maxWorkers=1` (incl. edge 464, jobs 504), scripts,
-  `test:rls` **51 files / catalog 150 / rls 3893** (floor raised 3784 → 3893), db-types current, build + dist checks.
-- **Linux CI:** on `5d6f37b` the `static` job failed (db-types type test missed the two M1-q functions) → fixed `acceb02`; PR #14 run and e2e-local dispatch **40436931164** on `acceb02` started at hand-off — see "In flight".
-- New migrations (all lead, tests first): M1-p `20261026180000_m1_atomic_writes.sql`, M1-q `…190000_m1_atomic_rpcs.sql`,
-  M1-r `…200000_m1_lock_order.sql`, M1-s `…210000_m1_rpc_fixes.sql`. New pgTAP: `rls_m1_atomic` (48), `rls_m1_rpcs` (60).
+- Milestone **M1 · Test authoring**, phase **REVIEW done → FIX next**. Spec rev 5, rows up to R5-71 (a-i).
+- `m1/integration` = the handoff commit on `e25b12f` (`docs(reviews): m1 milestone review, pass with conditions`),
+  code identical to `acceb02`. `trace/d1/integration` = `1547fd0`, `trace/main` = `da5380d`: unchanged.
+- **Review report: `docs/reviews/M1.md`** — verdict **PASS WITH CONDITIONS**; no Critical/High, no rule 1-9 breach.
+- Gates run this chat on `21ba378` (code = `acceb02`): `pnpm install --frozen-lockfile` 0; `pnpm -s verify:fast` 0
+  (full mode, 255 s, no OOM this time); `pnpm test:rls` 0 (51 files, catalog 150, rls 3893 = floor, db-types current);
+  serial build + 4 dist checks 0; `pnpm audit --prod` clean; `gitleaks detect` clean (1,209 commits).
+- **Linux CI on `acceb02`: green.** PR #14 run 40436871364 (static, rls, security, migrations) and e2e-local dispatch
+  40436931164 (all jobs; D1 slice 54/54; **AT-M1-01 171,048 ms, AT-M1-10 11,700 ms, AT-M1-30 133,499 ms**).
+  PR run 40437165987 on `21ba378` (docs only) was still running at review time.
 
-## Done this chat (all on m1/integration, pushed)
-- **M1-p** (red `2ed0d6c`, `58e20a2` → `0031fac`): D1 shape re-checked inside `save_test_draft` under its row lock
-  (R5-70 re-review Low 1); navigation default + written paste rule derived in the database, integrity PUT one write
-  (R5-63 f); `id` out of the import/drafting job insert grants (R5-64 g). Opus reviews: DB APPROVE WITH FIXES, security
-  and spec PASS WITH FIXES → fix round **M1-r** (red `0316b9c` → `5504e4d`): one lock order (ruleset, then version), a
-  two-connection scenario "draft save during a settings write" in `scripts/test-concurrency-local.mjs`, 40P01 → 409.
-  Confirming re-reviews: DB CONFIRMED WITH NOTES, security CONFIRMED.
-- **M1-q** (red `7e9defe` → `16c58c4`): atomic `create_test_from_template` and `save_bank_draft` RPCs (R5-71 d, e).
-  Reviews: DB APPROVE WITH FIXES, security PASS WITH FIXES → **M1-s** (red `170a869` → `66a2674`): 0-10 sections,
-  ≤ 2,000 ids a call, de-dup, flag default, role/edge pgTAP. Confirming re-review CONFIRMED WITH NOTES (notes fixed `5d6f37b`).
-- **Stream a9** `m1/a9-bank-rpc` `a585f41` (Opus writer; review PASS) merged. **Stream a8** `m1/a8-templates-rpc`
-  `701df43` + `m1/a8-fix-1` `88557c1` (from-template one RPC, template list paging; review PASS WITH FIXES, fixed,
-  CONFIRMED WITH NOTES) merged `1a3ad2b`. Lead: R5-71 i `skippedSections` widened (red `fe169d1` → `1b9c19d`).
-- Lead decisions R5-71 g (template cursor = PageCursor with a fixed marker time), h (M1 E2E stays in `e2e-local`,
-  amends R5-27), i; 2d E2E library seeding deferred gate; 2e carried Info deferred to REVIEW.
-- Records: `docs/reviews/M1-build5-reviews.md`; summary draft `docs/milestones/M1-summary.md` (AT map: all 32
-  AT-M1-xx covered with files; gaps G2, G4-G10 and 23 deferred gates listed for REVIEW).
+## Done this chat
+- M1 REVIEW (`trace-milestone-review`, fresh session): five Opus first reviewers (security api/jobs, security
+  edge/apps, database, spec/product rules, reliability/test health) + one Opus adversarial pass (rolled-back probes;
+  scratch SQL not committed). All 8 findings CONFIRMED. Report committed `e25b12f`.
+
+## Findings to FIX (docs/reviews/M1.md "Findings"; one commit each, test first, regression test)
+| # | Sev | What | Owner |
+| --- | --- | --- | --- |
+| M1-REV-1 | Medium | `trace_authoring_worker` SELECT on all `item_versions` columns reads `param_spec.correctOptionId` (`m1_bank.sql:1611`); column-list grant + pgTAP pin | **M1 FIX** |
+| M1-REV-2 | Medium | library copy reuse returns a retired copy (`m1_bank.sql:1394-1400`, unique index `:310`) → from-template fails for good | **M1 FIX** |
+| M1-REV-3 | Medium | candidates get authored option ids, same in every variant/session (relay defence) | **M10** (ABH-39); add a spec note in FIX |
+| M1-REV-4 | Low | `authenticated` INSERT (id) still on `items`, `pools`, `library_copy_requests`, `org_integrity_locks` | M1 FIX if cheap, else M5 |
+| M1-REV-5 | Low | drafting job stuck `running` after a failed last delivery; sweep takes only `queued`; no `retry_delay` | M5 |
+| M1-REV-6 | Low | recruiter summary "may paste or drop" vs drop always blocked (`candidate-summary.ts:70`) | M1 FIX |
+| M1-REV-7 | Low | AT-M1-02 pgTAP lacks the `skill_key` and non-AI `approved_by` arms of `item_versions_bank_approved` | M1 FIX |
+| M1-REV-8 | Low | `auth_user_id_for_invite` comment overclaims (no `email_hmac` binding) | M1 FIX (doc) |
+Plus doc-only fixes to `docs/milestones/M1-summary.md` (G2 stale, header tip/commit count, 19 migrations M1-a…M1-s,
+duplicate §5 row "20", final-tip AT times, AT-M1-07 citation) — listed under the findings table in `M1.md`.
 
 ## In flight at handoff
-- **No agent is running. No uncommitted work.**
-- **CI not yet read:** PR #14 checks on `acceb02` (bound to the app session) and e2e-local dispatch **40436931164**
-  (`gh run view 40436931164 --repo TraceHiring/TraceHiring`; AT-M1-01/30 now go through `create_test_from_template`).
-  The next session reads both first; a red run is fixed before anything else (AUTOPILOT §6).
+- **No agent is running. No uncommitted work.** (`pnpm -s verify:fast` re-run on `e25b12f` at wrap-up: see LOG row.)
 - Unmerged CI-only branches (do not merge): `m1/e2e-specs-2` `b54091e`, `-3` `1dc427e`, `-4` `62215c1`.
 
 ## Stream branches
-Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · `m1/a5c-fix-1` · `m1/a4-edge-delivery` · `m1/a4-fix-1` · `m1/a3a-jobs-v2` · `m1/a3a-fix-1` · `m1/a3a-fix-2` · `m1/a3b-jobs-authoring` · `m1/a3b-fix-1` · `m1/a2b-api-tests` · `m1/a2b-fix-1` · `m1/a2a-api-bank` · `m1/a2a-fix-1` · `m1/a2a-fix-1-r2` · `m1/a7-candidate` `b89e2ea` · `m1/a7-fix-1` `91d91be` · `m1/a5d-wizard` `2489db3` · `m1/a5d-fix-1` `07a21d9` · `m1/a5d-fix-2` `abe6064` · `m1/e2e-specs` `cf90491` · `m1/e2e-specs-fix-1` `57973f1` · **`m1/a8-templates-rpc` `701df43` · `m1/a8-fix-1` `88557c1` · `m1/a9-bank-rpc` `a585f41`** (all on `trace`). Unmerged by founder answer (b): `m1/a5a-fix-2/-3/-4` (zip reader, M8).
+Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · `m1/a5c-fix-1` · `m1/a4-edge-delivery` · `m1/a4-fix-1` · `m1/a3a-jobs-v2` · `m1/a3a-fix-1` · `m1/a3a-fix-2` · `m1/a3b-jobs-authoring` · `m1/a3b-fix-1` · `m1/a2b-api-tests` · `m1/a2b-fix-1` · `m1/a2a-api-bank` · `m1/a2a-fix-1` · `m1/a2a-fix-1-r2` · `m1/a7-candidate` `b89e2ea` · `m1/a7-fix-1` `91d91be` · `m1/a5d-wizard` `2489db3` · `m1/a5d-fix-1` `07a21d9` · `m1/a5d-fix-2` `abe6064` · `m1/e2e-specs` `cf90491` · `m1/e2e-specs-fix-1` `57973f1` · `m1/a8-templates-rpc` `701df43` · `m1/a8-fix-1` `88557c1` · `m1/a9-bank-rpc` `a585f41` (all on `trace`). Unmerged by founder answer (b): `m1/a5a-fix-2/-3/-4` (zip reader, M8).
 
 ## Next step (one precise action list)
-1. Verify first (below), including both CI results above; fix any Linux CI failure first.
-2. **M1 REVIEW in a fresh session** (AUTOPILOT §2: a session that did not write the code): run the
-   `trace-milestone-review` skill on `m1/integration`, write `docs/reviews/M1.md`; input `docs/milestones/M1-summary.md`
-   (§0 gaps G2-G10, §5 deferred gates incl. 20a-20c), `docs/reviews/M1-build5-reviews.md` (accepted/deferred items).
-3. Then FIX (Blocking findings, one commit each with a regression test) and CLOSE per AUTOPILOT §2 — CLOSE waits for
-   the D1 CLOSE and the founder's go-ahead (R5-1, R5-30: merge `main` in first, re-timestamp M1 migrations).
+1. Verify first (below).
+2. **M1 FIX in a fresh session** (AUTOPILOT §2 FIX): fix M1-REV-1 and M1-REV-2 (Medium) and the M1-FIX Lows
+   (-6, -7, -8; -4 if cheap), **one commit per finding, red test first** (migrations by the lead: new files after
+   `20261026210000_m1_rpc_fixes.sql`; pgTAP via `docs/progress/m1-wave0-drafts/pgtap/bodies/*.sql` + `gen.mjs`).
+   Add the M1-REV-3 → M10 note to the spec (§1.8 new row R5-72) and M1-REV-5 → M5 / -4 (if deferred) to summary §5.
+   Apply the summary doc fixes. Then an Opus confirming re-review of the fixes (database + security), test:rls (raise
+   the rls floor), full serial verify, Linux CI on PR #14; append the re-review result to `docs/reviews/M1.md`.
+3. Then CLOSE per AUTOPILOT §2 — waits for the D1 CLOSE and the founder's go-ahead (R5-1, R5-30: merge `main` in
+   first, re-timestamp M1 migrations, re-derive the seven replaced guards). Complete `docs/milestones/M1-summary.md`.
 4. Dependency bumps owed (build-notes 2026-10-24): vitest 4.1.12 + undici 7.30.1 on/after 2026-10-29; fast-uri
    3.1.9 on/after 2026-11-02; happy-dom 21.x before 2026-11-23; then delete the matching osv ignores.
 5. Staging-only checks need a founder-approved staging dispatch: A2b Low 2 R2 `onlyIf`, DC-M1-1/5/6 staging halves,
@@ -63,17 +65,18 @@ Merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · 
 
 ## Founder items
 - Unchanged: coverage when tab focus is off (default a); D1 integrity job re-delivered after M1 (default a); M1-15 "shared-device" copy (default: leave out); import cancel keeps rows (default a); M1 staging Hyperdrive configs + secrets (+ jobs `SUPABASE_URL`, + api `MEMBER_INVITE_PEPPER` ≥ 32 bytes); Q-M1-1…Q-M1-4; OPEN-8a Workers Paid; written AI drafts; zip reader answered (b).
-- New (information only): BUILD 5 closed the lead's owed list; nothing new needs a founder answer.
+- New (information only): M1 REVIEW is PASS WITH CONDITIONS; nothing new needs a founder answer.
 
 ## Gotchas
-- Worktree guard: no `cd …&&`, `git -C`, `$(...)`, loops, compound or piped node-script commands, no heredocs appending to repo files; write scripts with the Write tool and run them plainly; commit messages via `git commit -F <unique file>`; merges `chore: merge …`. A refused compound command runs NOTHING.
+- Worktree guard: no `cd …&&`, `git -C`, `$(...)`, loops, compound or piped node-script commands, no heredocs appending to repo files; write scripts with the Write tool and run them plainly; commit messages via `git commit -F <unique file>`; merges `chore: merge …`. A refused compound command runs NOTHING. `gitleaks git …` is refused (use `gitleaks detect --source . --redact --no-banner`, or `pnpm lint`). `node -e` with `require(<arg>)` is refused.
 - `node scripts/db-types.mjs` and `pnpm test:rls` RESET the local database: never while a writer or diagnosis agent runs db-tests or psql probes. `pnpm exec supabase migration up --local` applies a new migration without a reset. Named pgTAP runs on a database that holds committed e2e/concurrency rows can fail on unscoped assertions; `test:rls` resets first.
 - A function body's comments are in `pg_get_functiondef` (a pgTAP text pin on the body sees them).
-- **RAM:** `pnpm -s verify:fast` and `pnpm lint` crash with OOM here. Run the gate serially: `pnpm -r --workspace-concurrency=1 typecheck`, `… lint`, prettier/check scripts/gitleaks, per package (apps, packages, services **and workers**) `pnpm --filter ./<pkg> exec vitest run --maxWorkers=1`, `pnpm exec vitest run --root scripts --maxWorkers=1`, `pnpm test:rls`, serial build (~15 min, all green).
-- Since M1-p the database derives a draft's navigation default and written paste rule from its settings; pgTAP cases that need a mismatched state turn `sections_settings_derive` off around it. Fixtures inserting import/drafting jobs as org users use `pg_temp.next_id(id)` (test-only trigger in those bodies).
+- **RAM:** `pnpm -s verify:fast` passed this chat (255 s) but has OOM-crashed before. Fallback: run the gate serially: `pnpm -r --workspace-concurrency=1 typecheck`, `… lint`, prettier/check scripts/gitleaks, per package `pnpm --filter ./<pkg> exec vitest run --maxWorkers=1`, `pnpm exec vitest run --root scripts --maxWorkers=1`, `pnpm test:rls`, serial build.
+- Since M1-p the database derives a draft's navigation default and written paste rule from its settings; pgTAP cases that need a mismatched state turn `sections_settings_derive` off around it. Fixtures inserting import/drafting jobs as org users use `pg_temp.next_id(id)` (test-only trigger in those bodies) — the same pattern fits M1-REV-4.
 - A branch checked out in a writer's worktree must not be moved; create a new branch (`git commit-tree` merge + `git branch`).
 - e2e-local dispatch from an `m1/**` branch runs no staging job (deploy-staging needs `main`, `d1/**` or `milestone/**`).
 - Never hand-edit generated `rls_m1_*.test.sql`: edit `docs/progress/m1-wave0-drafts/pgtap/bodies/*.sql`/`preamble.sql`, run `node docs/progress/m1-wave0-drafts/pgtap/gen.mjs . <name>`, run named files with `node docs/progress/m1-wave0-drafts/pgtap/run.mjs <names>`.
+- Rolled-back psql from Git Bash: `docker cp <file> supabase_db_trace:/tmp/x.sql`, then `MSYS_NO_PATHCONV=1 docker exec supabase_db_trace psql -U postgres -X -q -At -v ON_ERROR_STOP=1 -f /tmp/x.sql` (begin … rollback).
 
 ## Verify first
-`git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `gh run list --repo TraceHiring/TraceHiring --branch m1/integration --limit 3` · `gh run view 40436931164 --repo TraceHiring/TraceHiring` · the serial gate from Gotchas (or `pnpm -s verify:fast` on a machine with RAM) · `docker ps` (supabase_db_trace up)
+`git fetch trace` · `git log --oneline -3 m1/integration` · `git status` · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `gh run list --repo TraceHiring/TraceHiring --branch m1/integration --limit 3` (latest green) · `pnpm -s verify:fast` (or the serial gate) · `docker ps` (supabase_db_trace up)

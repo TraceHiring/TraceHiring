@@ -8,7 +8,12 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-27 07:45 IST, M1 BUILD 5 done = BUILD complete (newest):** the lead's owed items merged and
+- **Update 2026-10-27 08:20 IST, M1 REVIEW done = PASS WITH CONDITIONS (newest):** `docs/reviews/M1.md` (`e25b12f`):
+  all gates green (verify:fast, test:rls rls 3893, build, audit, gitleaks; CI 40436871364 + 40436931164 on `acceb02`,
+  AT-M1-10 11,700 ms); no Critical/High, no rule 1-9 breach. Mediums M1-REV-1 (authoring worker reads variant keys)
+  and M1-REV-2 (retired library copy blocks from-template) are M1 FIX; M1-REV-3 (option ids) is M10; five Lows.
+  Next: **M1 FIX in a fresh session**, then CLOSE after the D1 CLOSE + founder go-ahead. HANDOFF "Next step".
+- **Update 2026-10-27 07:45 IST, M1 BUILD 5 done = BUILD complete:** the lead's owed items merged and
   reviewed: migrations M1-p (D1 shape under the row lock, derived paste rule, no client job ids), M1-q (atomic
   `create_test_from_template`, `save_bank_draft`), M1-r (one lock order), M1-s (review fixes); api streams a8
   (from-template one RPC, template paging) and a9 (bank RPC); spec R5-71 a-i; full serial gate green on `5d6f37b`
