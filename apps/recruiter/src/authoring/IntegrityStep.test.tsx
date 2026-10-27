@@ -229,7 +229,9 @@ describe('IntegrityStep (load and save)', () => {
     const c = mounted.container;
     expect(plain(c.innerHTML)).toContain('blocked');
     await choose(field(c, 'Paste on written answers'), 'allowed_logged');
-    expect(plain(c.innerHTML)).toContain('You may paste or drop text into written answers.');
+    expect(plain(c.innerHTML)).toContain(
+      'You may paste text into written answers. Dropping text is turned off.',
+    );
   });
 
   it('shows a fixed failure text when the save is refused, never the server text', async () => {

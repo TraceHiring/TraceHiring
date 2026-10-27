@@ -78,13 +78,15 @@ const with_ = (
   patch: Partial<Record<SettingKey, string>>,
 ): IntegritySettingValues => ({ ...PRESETS[preset], ...patch }) as IntegritySettingValues;
 
-// The pinned copy of candidate-summary-1. Changing any of it is a new CANDIDATE_SUMMARY_VERSION.
+// The pinned copy of candidate-summary-2. Changing any of it is a new CANDIDATE_SUMMARY_VERSION. Version 2 (M1-REV-6):
+// with paste allowed the candidate app still blocks drop (TestV2.test.tsx), so the line says drop is turned off.
 const T = {
   photo: 'We ask for one start photo before the test begins. You can continue without one.',
   answers: 'We record your answers and every edit, with the time of each change.',
   pasteBlocked:
     'Pasting and dropping text into written answers are blocked. We record each attempt.',
-  pasteAllowed: 'You may paste or drop text into written answers. We record each paste and drop.',
+  pasteAllowed:
+    'You may paste text into written answers. Dropping text is turned off. We record each paste and each drop attempt.',
   untrusted: 'We record input that comes from a script or another program instead of from you.',
   tab: 'We record when you leave the test tab or window.',
   fullscreen: 'We record when you leave full screen.',
@@ -122,11 +124,11 @@ function* allCombinations(): Generator<IntegritySettingValues> {
 }
 
 describe('versions', () => {
-  it('is candidate-summary-1 on settings catalog m1-settings-v1 and signal catalog d1-signals-v1', () => {
-    expect(CANDIDATE_SUMMARY_VERSION).toBe('candidate-summary-1');
+  it('is candidate-summary-2 on settings catalog m1-settings-v1 and signal catalog d1-signals-v1', () => {
+    expect(CANDIDATE_SUMMARY_VERSION).toBe('candidate-summary-2');
     expect(INTEGRITY_CATALOG_VERSION).toBe(CATALOG);
     const s = renderCandidateSummary(PRESETS.standard, CATALOG);
-    expect(s.version).toBe('candidate-summary-1');
+    expect(s.version).toBe('candidate-summary-2');
     expect(s.catalogVersion).toBe(CATALOG);
     expect(s.signalCatalogVersion).toBe(SIGNAL_CATALOG_VERSION);
   });
@@ -217,7 +219,7 @@ describe('the settings to captureSignals mapping (§6.6 "switches D1 signals", R
 
 describe('pinned summary per preset (R2-20)', () => {
   const pinned = (captureSignals: readonly CatalogSignal[], lines: readonly string[]) => ({
-    version: 'candidate-summary-1',
+    version: 'candidate-summary-2',
     catalogVersion: CATALOG,
     signalCatalogVersion: SIGNAL_CATALOG_VERSION,
     captureSignals,

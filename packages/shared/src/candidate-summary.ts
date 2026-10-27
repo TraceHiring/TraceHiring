@@ -22,7 +22,8 @@ import {
 } from './contracts-m1.js';
 import { type CatalogSignal, SIGNAL_CATALOG, SIGNAL_CATALOG_VERSION } from './signal-catalog.js';
 
-export const CANDIDATE_SUMMARY_VERSION = 'candidate-summary-1';
+// candidate-summary-2 (M1-REV-6): with paste allowed the candidate app still blocks drop, so the paste line says so.
+export const CANDIDATE_SUMMARY_VERSION = 'candidate-summary-2';
 
 /** One value per setting of catalog m1-settings-v1 (the shape of ruleset_versions.settings). */
 export type IntegritySettingValues = IntegritySettingsRequest['values'];
@@ -67,7 +68,8 @@ const TEXT = {
   answers: 'We record your answers and every edit, with the time of each change.',
   pasteBlocked:
     'Pasting and dropping text into written answers are blocked. We record each attempt.',
-  pasteAllowed: 'You may paste or drop text into written answers. We record each paste and drop.',
+  pasteAllowed:
+    'You may paste text into written answers. Dropping text is turned off. We record each paste and each drop attempt.',
   untrusted: 'We record input that comes from a script or another program instead of from you.',
   tab: 'We record when you leave the test tab or window.',
   fullscreen: 'We record when you leave full screen.',

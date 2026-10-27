@@ -209,7 +209,7 @@ describe('what candidates will see follows the shared renderer (R5-24)', () => {
     }
     const s = fromIntegrityView(viewOf(INTEGRITY_PRESETS.strict));
     expect(candidatePreview(setSetting(s, 'paste_written', 'allowed_logged'))).toContain(
-      'You may paste or drop text into written answers. We record each paste and drop.',
+      'You may paste text into written answers. Dropping text is turned off. We record each paste and each drop attempt.',
     );
   });
 });
