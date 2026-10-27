@@ -355,7 +355,7 @@ begin
   return v_r;
 end
 $f$;
-select plan(8);
+select plan(19);
 
 -- ===== M1-REV-1: trace_authoring_worker reads only the item_versions columns of its SQL (workers/jobs/src/drafting/store.ts) =====
 select pg_temp.op();
@@ -370,5 +370,35 @@ select is(pg_temp.try(format($$select stem from public.item_versions where org_i
 select is(pg_temp.try(format($$select count(*)::int as n from public.item_versions where org_id = %L and ai_draft_job_id = %L$$, pg_temp.id('A'), gen_random_uuid())), 'OK 1', 'M1-REV-1 control: the stored-drafts count still runs');
 select is(pg_temp.try(format($$select distinct btrim(lower(regexp_replace(v.stem, '[ \t\n\r\f\v]+', ' ', 'g')), ' ') from public.item_versions as v where v.org_id = %L$$, pg_temp.id('A'))), 'OK 1', 'M1-REV-1 control: the existing-stems read still runs');
 select pg_temp.op();
+
+-- ===== M1-REV-2: a retired library copy is never reused, so a recruiter's retire does not block later copies or from-template =====
+select pg_temp.bank('rlib', pg_temp.id('L'), pg_temp.id('LW'), 'mcq', 'verbal', 0.50, 'approved');
+create table pg_temp.copies (k text primary key, v uuid[] not null);
+grant select, insert on pg_temp.copies to public;
+create table pg_temp.batch (k text primary key, j jsonb not null);
+grant select on pg_temp.batch to public;
+create table pg_temp.res (k text primary key, j jsonb);
+grant select, insert on pg_temp.res to public;
+insert into pg_temp.ids select 'tpl', t.id from public.role_templates as t where t.org_id = pg_temp.id('L') and t.status = 'published' order by t.template_key, t.version limit 1;
+insert into pg_temp.batch values ('tpl', jsonb_build_object('workspaceId', pg_temp.id('A1'), 'jobTitle', '[synthetic] Retired copy job', 'roleTemplateVersionId', pg_temp.id('tpl'), 'jdSha256', repeat('a', 64), 'templateMatchPermille', 500, 'totalTimeSeconds', 1800, 'qualityCutoff', 40, 'presetKey', 'standard', 'presetVersion', 1,
+  'settings', (select p.preset_values from public.integrity_presets as p where p.preset_key = 'standard' and p.version = 1),
+  'sections', jsonb_build_array(jsonb_build_object('name', '[synthetic] Verbal', 'format', 'mcq', 'weight', 100, 'drawCount', 1, 'skillKey', 'verbal', 'shuffleItems', true, 'shuffleOptions', true, 'navigation', 'free', 'libraryItemVersionIds', jsonb_build_array(pg_temp.id('rlib'))))));
+select pg_temp.u('recruiter');
+select is(pg_temp.try(format($$with r as (insert into public.library_copy_requests (org_id, workspace_id, library_item_version_ids) values (%L, %L, array[%L]::uuid[]) returning result_item_version_ids) insert into pg_temp.copies select 'c1', result_item_version_ids from r$$, pg_temp.id('A'), pg_temp.id('A1'), pg_temp.id('rlib'))), 'OK 1', 'M1-REV-2 setup: a recruiter copies an approved library item');
+select is(pg_temp.try(format($$update public.item_versions set status = 'retired' where id = %L$$, (select v[1] from pg_temp.copies where k = 'c1'))), 'OK 1', 'M1-REV-2 setup: the recruiter retires the copy (bank retire route)');
+select is(pg_temp.try(format($$with r as (insert into public.library_copy_requests (org_id, workspace_id, library_item_version_ids) values (%L, %L, array[%L]::uuid[]) returning result_item_version_ids) insert into pg_temp.copies select 'c2', result_item_version_ids from r$$, pg_temp.id('A'), pg_temp.id('A1'), pg_temp.id('rlib'))), 'OK 1', 'M1-REV-2: copying the same library item again succeeds');
+select pg_temp.op();
+select is((select (c2.v[1] <> c1.v[1])::text || '|' || (select v.status::text from public.item_versions as v where v.id = c2.v[1]) || '|' || (select v.status::text from public.item_versions as v where v.id = c1.v[1]) from pg_temp.copies as c1, pg_temp.copies as c2 where c1.k = 'c1' and c2.k = 'c2'), 'true|approved|retired', 'M1-REV-2: the new request makes a fresh approved copy; the retired copy stays retired');
+select pg_temp.u('recruiter');
+select is(pg_temp.try(format($$with r as (insert into public.library_copy_requests (org_id, workspace_id, library_item_version_ids) values (%L, %L, array[%L]::uuid[]) returning result_item_version_ids) insert into pg_temp.copies select 'c3', result_item_version_ids from r$$, pg_temp.id('A'), pg_temp.id('A1'), pg_temp.id('rlib'))), 'OK 1', 'M1-REV-2: a third request runs');
+select pg_temp.op();
+select is((select c3.v = c2.v from pg_temp.copies as c2, pg_temp.copies as c3 where c2.k = 'c2' and c3.k = 'c3'), true, 'M1-REV-2: a live copy is still reused (one copy per org, workspace and library version, R3-8)');
+select is((select string_agg(x.c, ',' order by x.c) from (select (l.details ->> 'count') || '/' || (l.details ->> 'reused') as c from public.audit_log as l where l.org_id = pg_temp.id('A') and l.action = 'library.copy' and l.object_id in (select r.id from public.library_copy_requests as r where pg_temp.id('rlib') = any (r.library_item_version_ids))) as x), '0/1,1/0,1/0', 'M1-REV-2: the audit (count/reused) counts the fresh copy as new, as the daily cap does: two new, one reused');
+select pg_temp.u('recruiter');
+select is(pg_temp.try(format($$update public.item_versions set status = 'retired' where id = %L$$, (select v[1] from pg_temp.copies where k = 'c2'))), 'OK 1', 'M1-REV-2 setup: the recruiter retires the second copy too');
+select is(pg_temp.try($$insert into pg_temp.res select 'ct', public.create_test_from_template(pg_temp.id('A'), (select j from pg_temp.batch where k = 'tpl'))$$), 'OK 1', 'M1-REV-2: from-template naming a library item whose copies are all retired succeeds');
+select pg_temp.op();
+select is((select string_agg(i.origin::text || '/' || i.status::text || '/' || (i.source_item_version_id = pg_temp.id('rlib'))::text || '/' || (i.id <> all (array(select c.v[1] from pg_temp.copies as c)))::text, ',') from public.sections as s join public.pool_items as pi on pi.pool_id = s.pool_id join public.item_versions as i on i.id = pi.item_version_id where s.test_version_id = (select (j ->> 'versionId')::uuid from pg_temp.res where k = 'ct')), 'library/approved/true/true', 'M1-REV-2: its pool holds one fresh approved copy of that library item');
+select is((select count(*)::int from pg_indexes where schemaname = 'public' and tablename = 'item_versions' and indexname = 'item_versions_library_copy' and indexdef like 'CREATE UNIQUE INDEX%' and indexdef like '%status <> ''retired''%'), 1, 'M1-REV-2: one live copy per org, workspace and library version (a partial unique index that leaves retired copies out)');
 select * from finish();
 rollback;
