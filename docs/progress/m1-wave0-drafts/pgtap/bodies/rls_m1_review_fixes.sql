@@ -43,3 +43,16 @@ select is(pg_temp.try($$insert into pg_temp.res select 'ct', public.create_test_
 select pg_temp.op();
 select is((select string_agg(i.origin::text || '/' || i.status::text || '/' || (i.source_item_version_id = pg_temp.id('rlib'))::text || '/' || (i.id <> all (array(select c.v[1] from pg_temp.copies as c)))::text, ',') from public.sections as s join public.pool_items as pi on pi.pool_id = s.pool_id join public.item_versions as i on i.id = pi.item_version_id where s.test_version_id = (select (j ->> 'versionId')::uuid from pg_temp.res where k = 'ct')), 'library/approved/true/true', 'M1-REV-2: its pool holds one fresh approved copy of that library item');
 select is((select count(*)::int from pg_indexes where schemaname = 'public' and tablename = 'item_versions' and indexname = 'item_versions_library_copy' and indexdef like 'CREATE UNIQUE INDEX%' and indexdef like '%status <> ''retired''%'), 1, 'M1-REV-2: one live copy per org, workspace and library version (a partial unique index that leaves retired copies out)');
+
+-- ===== M1-REV-7: AT-M1-02, the skill_key and approved_by arms of CHECK item_versions_bank_approved (operator path) =====
+-- Org-role approvals force approved_by := auth.uid() and the guard fills skill_key from its item, so only the operator
+-- path reaches these arms; the skill_key arm is reached with the user triggers off, to test the CHECK on its own.
+select pg_temp.op();
+select pg_temp.bank('r7a', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'in_review');
+select pg_temp.bank('r7b', pg_temp.id('A'), pg_temp.id('A1'), 'mcq', 'verbal', 0.50, 'in_review');
+select matches(pg_temp.try(format($$update public.item_versions set status = 'approved', approved_by = null, approved_at = now() where id = %L$$, pg_temp.id('r7a'))), '^23514 .*"item_versions_bank_approved"', 'AT-M1-02: an approved bank item needs its approver (CHECK, operator path)');
+select matches(pg_temp.try(format($$update public.item_versions set skill_key = null where id = %L$$, pg_temp.id('r7b'))), '^42501 TRACE_GUARD', 'AT-M1-02 control: the guard refuses a skill change outside draft');
+alter table public.item_versions disable trigger user;
+select matches(pg_temp.try(format($$update public.item_versions set status = 'approved', approved_by = %L, approved_at = now(), skill_key = null where id = %L$$, pg_temp.id('owner'), pg_temp.id('r7b'))), '^23514 .*"item_versions_bank_approved"', 'AT-M1-02: an approved bank item needs its skill (CHECK alone, guard off)');
+alter table public.item_versions enable trigger user;
+select is((select string_agg(v.status::text || '/' || coalesce(v.skill_key, 'null') || '/' || (v.approved_by is null)::text, ',' order by v.stem) from public.item_versions as v where v.id in (pg_temp.id('r7a'), pg_temp.id('r7b'))), 'in_review/verbal/true,in_review/verbal/true', 'AT-M1-02: both refused approvals left the versions in review');
