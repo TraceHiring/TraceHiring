@@ -6,7 +6,7 @@ Parallel docs-only chat, 2026-10-19, branch `spec/m1-m2` (cut from `trace/d1/int
 | Item | State |
 | --- | --- |
 | `specs/m1-test-authoring.md` | **Approved by autopilot reviewers** (revision 4; binding rows §1.6 R2, §1.7 R3) |
-| `specs/m2-scheduling-invites.md` | Revision 4 approved 2026-10-19. **Revision 5 (2026-10-27, `m2/integration`)** refreshes it against M1 as built (binding rows §1.8 R5-1…R5-40, from three Opus audits); under autopilot review (§14 records the approval). |
+| `specs/m2-scheduling-invites.md` | Revision 4 approved 2026-10-19. **Revision 5 (2026-10-27, `m2/integration`)** refreshes it against M1 as built (binding rows §1.8 R5-1…R5-66, from three Opus audits and three Opus review rounds); **approved by autopilot reviewers 2026-10-27** (§14). |
 | Reviewers | Round 1 (rev 1, `3dc2018`): spec-reviewer **BLOCK** (4 High, 11 Medium, Lows), database-reviewer **BLOCK** (4 Blocking, 8 High, 11 Medium, Lows); every finding resolved in revision 2 (binding tables). Round 2 (rev 2, `a79c4b6`): spec-reviewer **BLOCK** (2 new High: D1 default-settings regression, session-token lifetime), database-reviewer **BLOCK** (2 new High: message re-plan loop, overlapping section draws); all new findings resolved in revision 3. Round 3 (rev 3, `93c36b9`): both **PASS WITH FINDINGS** (no Blocking/High); all fixed in revision 4 (`7b5ef2b`); database-reviewer final confirmation **PASS** (two Low notes folded in). |
 
 ## 2. Questions for the founder (rules 1–9 or a founder answer). Each has the safe default the specs build until you answer.
