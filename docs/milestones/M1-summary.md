@@ -127,6 +127,7 @@ M1 stays within the build-order exit gate. The items below are deferred with an 
 | 22 | M1-REV-3 (Medium): candidates receive authored option ids, the same in every variant and session (relay defence, plan §8) | Content-security work; M1-7 chose parent ids on purpose; needs devtools | **M10** (ABH-39) | spec R5-72 f; `docs/reviews/M1.md` |
 | 23 | M1-REV-4 (Low): `authenticated` INSERT (id) on `items`, `pools`, `library_copy_requests`, `org_integrity_locks` | Not cheap in FIX: about 15 pgTAP fixtures and the jobs db-tests choose these ids and move to `pg_temp.next_id` first | **M5**, before ABH-87 | spec R5-72 g |
 | 24 | M1-REV-5 (Low): a drafting job left `running` after a failed last delivery; no `retry_delay` on the authoring/admin consumers | Recovery path with the real drafter | **M5** (with ABH-87) | spec R5-72 g |
+| 25 | M1 FIX re-review Lows: a retire racing a copy request can pass the daily copy cap by one request and skew the audit counts; retire-and-copy churn grows copies without a bound beyond the daily cap | Needs a two-connection test first; storage and retention only, no PII, no rule 1-9 | **M5** | `docs/reviews/M1.md` "M1 FIX" |
 
 ## 6. Autopilot decisions (grouped; ADR and spec rows)
 ADR: only **ADR-033** (`docs/adr/ADR-033-fflate-import-parsing.md`) is "Accepted (autopilot)" in M1 (2026-10-23, amended same day; README row). ADR-032 predates M1 (D1). No other ADR was added.
