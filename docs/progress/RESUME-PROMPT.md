@@ -8,7 +8,12 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-27 11:30 IST, M2 SPEC refresh done (newest):** `specs/m2-scheduling-invites.md` revision 5 is
+- **Update 2026-10-27 12:55 IST, M2 BUILD 1 Wave 0a done (newest):** on `m2/integration` (tip `2d5d98a`): red pgTAP
+  first, migrations M2-a (`20261027040000_m2_contacts.sql`) and M2-b (`20261027050000_m2_drives.sql`), MT-15, floors
+  catalog 153 / rls 4249, ADR-034 (`aws4fetch`), ADR-030 amendment 1; local serial gate green; draft CI PR
+  TraceHiring/TraceHiring#16 (`m2/integration` → `main`, never merge) opened, CI pending at handoff. Next chat:
+  **Wave 0b** (M2-c messaging, contracts, wiring, CI job, day-one checks), HANDOFF "Next step".
+- **Update 2026-10-27 11:30 IST, M2 SPEC refresh done:** `specs/m2-scheduling-invites.md` revision 5 is
   **approved by autopilot reviewers** (binding rows R5-1…R5-66; three Opus audits + three Opus review rounds) on the new
   branch **`m2/integration`** (cut from `m1/integration` @ `7c33f48`, tip `7b73de0`). Key choices: D1's start path
   kept plus a start-window check (R5-63); CSV-only invites until founder Q-M2-4; `aws4fetch` = ADR-034; M2
@@ -225,16 +230,17 @@ D1 is PAUSED, not closed (founder, 2026-10-22): its remaining steps are in HANDO
 chat, not this one. Never commit to d1/integration or main. M1 merges to main only after the D1 CLOSE and with the
 founder's go-ahead.
 
-THIS CHAT = HANDOFF "In flight" first, then HANDOFF "Next step" in order (as of 2026-10-27 11:30 IST: M1 CLOSE
-waits for the D1 CLOSE and the founder's go-ahead; the M2 spec revision 5 is approved on m2/integration (tip
-7b73de0); the next unblocked phase is M2 BUILD 1 = Wave 0 on m2/integration (worktree .claude/worktrees/m2-integration,
-enter it with EnterWorktree; on a new machine `git worktree add -b m2/integration .claude/worktrees/m2-integration
-trace/m2/integration`), lead only, per specs/m2-scheduling-invites.md §11.2 and binding rows §1.8 R5-1…R5-66).
+THIS CHAT = HANDOFF "In flight" first, then HANDOFF "Next step" in order (as of 2026-10-27 12:55 IST: M1 CLOSE
+waits for the D1 CLOSE and the founder's go-ahead; M2 BUILD 1 Wave 0a is done on m2/integration (tip 2d5d98a; draft
+CI PR TraceHiring/TraceHiring#16, check its CI first); the next unblocked step is M2 BUILD 1 Wave 0b on m2/integration
+(worktree .claude/worktrees/m2-integration, enter it with EnterWorktree; on a new machine `git worktree add -b
+m2/integration .claude/worktrees/m2-integration trace/m2/integration`), lead only, per specs/m2-scheduling-invites.md
+§11.2 and binding rows §1.8 R5-1…R5-66).
 M2 writers (later waves) use the common brief docs/progress/m1-writer-brief-common.md adapted to m2 (branches
 m2/<stream>) plus a self-contained stream brief, their own worktree (Agent isolation "worktree") and
 `git reset --hard <exact SHA>`; each stream gets Opus first reviews (spec, security, database), fixes test first, a
 confirming re-review, a merge with the lead mounts, test:rls, a full verify and Linux CI on a draft PR
-m2/integration → main (opened in Wave 0, never merged). M1 CI stays on PR #14 (TraceHiring/TraceHiring#14, draft).
+m2/integration → main (TraceHiring/TraceHiring#16, opened in Wave 0, never merged). M1 CI stays on PR #14 (TraceHiring/TraceHiring#14, draft).
 
 RULES (never break): CLAUDE.md rules 1-9; tests first; Opus first reviews, fixes test first, a confirming
 re-review, full pnpm verify (pnpm -r --workspace-concurrency=1 test plus vitest run --root scripts; this machine may
