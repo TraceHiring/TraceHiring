@@ -8,7 +8,12 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-27 08:20 IST, M1 REVIEW done = PASS WITH CONDITIONS (newest):** `docs/reviews/M1.md` (`e25b12f`):
+- **Update 2026-10-27 09:05 IST, M1 FIX done (newest):** M1-REV-1, -2, -6, -7, -8 fixed one commit each, red first
+  (migrations M1-t, M1-u, M1-v; spec R5-72); M1-REV-3 → M10, M1-REV-4/-5 and two re-review Lows → M5; Opus database +
+  security re-reviews all CONFIRMED; serial gate green on `3cfbea8` (rls 3919 = floor); CI 40443964937 green. **M1
+  CLOSE waits for the D1 CLOSE and the founder's go-ahead.** Next unblocked chat: **M2 SPEC refresh** (R5-1) on a new
+  `m2/integration` cut from `m1/integration`. HANDOFF "Next step".
+- **Update 2026-10-27 08:20 IST, M1 REVIEW done = PASS WITH CONDITIONS:** `docs/reviews/M1.md` (`e25b12f`):
   all gates green (verify:fast, test:rls rls 3893, build, audit, gitleaks; CI 40436871364 + 40436931164 on `acceb02`,
   AT-M1-10 11,700 ms); no Critical/High, no rule 1-9 breach. Mediums M1-REV-1 (authoring worker reads variant keys)
   and M1-REV-2 (retired library copy blocks from-template) are M1 FIX; M1-REV-3 (option ids) is M10; five Lows.
@@ -214,8 +219,10 @@ D1 is PAUSED, not closed (founder, 2026-10-22): its remaining steps are in HANDO
 chat, not this one. Never commit to d1/integration or main. M1 merges to main only after the D1 CLOSE and with the
 founder's go-ahead.
 
-THIS CHAT = HANDOFF "In flight" first, then HANDOFF "Next step" in order (M1 BUILD per spec
-specs/m1-test-authoring.md revision 5; binding rows §1.8 R5-n; reviews in docs/reviews/M1-wave2-first-reviews.md).
+THIS CHAT = HANDOFF "In flight" first, then HANDOFF "Next step" in order (as of 2026-10-27: M1 FIX is done and
+M1 CLOSE waits for the D1 CLOSE and the founder's go-ahead; the next unblocked phase is the M2 SPEC refresh of
+specs/m2-scheduling-invites.md per M1 spec R5-1, on a new branch m2/integration cut from m1/integration; M1 spec
+specs/m1-test-authoring.md revision 5, binding rows §1.8 R5-n; reviews in docs/reviews/M1.md).
 Writers use the common brief docs/progress/m1-writer-brief-common.md plus a self-contained stream brief, their own
 worktree (Agent isolation "worktree") and `git reset --hard <exact SHA>`; each stream gets Opus first reviews (spec,
 security, database), fixes test first, a confirming re-review, a merge with the lead mounts, test:rls, a full verify
