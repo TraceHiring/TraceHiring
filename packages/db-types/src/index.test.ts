@@ -89,6 +89,15 @@ describe('@trace/db-types', () => {
       | 'import_row_errors'
       | 'ai_draft_jobs'
       | 'member_invites'
+      // M2 migrations M2-a and M2-b (specs/m2-scheduling-invites.md §3.2)
+      | 'org_keys'
+      | 'candidates'
+      | 'candidate_contacts'
+      | 'drives'
+      | 'slots'
+      | 'invite_uploads'
+      | 'invite_upload_errors'
+      | 'reschedule_events'
     >();
     expectTypeOf<keyof Database['public']['Views']>().toEqualTypeOf<
       // M1-m (R5-64 d): per-pool counts.
@@ -103,14 +112,19 @@ describe('@trace/db-types', () => {
       | 'publish_source_v2'
       | 'create_test_from_template'
       | 'save_bank_draft'
+      // M2-b: the bulk invite batch and the recruiter's reschedule, both INVOKER (§3.3).
+      | 'ingest_invite_batch'
+      | 'reschedule_invitation'
     >();
   });
 
-  it('carries the M0b enums and the three D1 enums (migrations 1 and 2)', () => {
+  it('carries the M0b enums, the three D1 enums (migrations 1 and 2) and the two M2-b drive enums', () => {
     expect(Object.keys(Constants.public.Enums).sort()).toEqual(
       [
         'actor_kind',
         'data_residency',
+        'drive_mode',
+        'drive_status',
         'invitation_status',
         'item_status',
         'membership_status',
