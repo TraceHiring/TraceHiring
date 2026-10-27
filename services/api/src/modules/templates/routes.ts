@@ -8,7 +8,8 @@
 //   stored, logged or returned: a job keeps only its SHA-256 and the permille (R5-29: no score column).
 // - A template creates the job, the test and its draft: each available blueprint section becomes a pool section (a pool
 //   named after it, filled through `library_copy_requests` with up to 10x the section's draw of approved library items
-//   of its skill and format, R2-8); voice and typing sections are skipped and returned as a note (M1-16, E18); the
+//   of its skill and format, R2-8); voice and typing sections, and any section marked `available: false`, are skipped
+//   and returned as a note (M1-16, E18, R5-71 i); the
 //   template's preset with the org's admin locks applied is stored as the draft's settings (R5-34) with the preset's
 //   catalog version; weights sum to 100. It spends the caller's library budget first (the injected LibraryLimiter,
 //   R5-56 g). Every read and check comes first; then one call of `public.create_test_from_template` (M1-q, R5-71 d,

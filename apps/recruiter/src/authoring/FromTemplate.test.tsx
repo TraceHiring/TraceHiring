@@ -154,6 +154,22 @@ describe('FromTemplateView (static)', () => {
     expect(text).toContain('Typing speed');
     expect(text).toContain('Spoken English');
   });
+
+  it('names an unavailable multiple-choice or written section it skipped (R5-71 i)', () => {
+    const text = plain(
+      render({
+        created: {
+          ...created,
+          skippedSections: [
+            { title: 'Choices', format: 'mcq' },
+            { title: 'Essay', format: 'written' },
+          ],
+        },
+      }),
+    );
+    expect(text).toContain('Choices (multiple-choice section)');
+    expect(text).toContain('Essay (written section)');
+  });
 });
 
 describe('FromTemplateRoute', () => {

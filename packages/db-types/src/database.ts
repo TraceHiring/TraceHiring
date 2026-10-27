@@ -1741,11 +1741,17 @@ isOneToOne: false
                 }
           }
           Functions: {
-            "import_item_batch":
+            "create_test_from_template":
+{ Args: { "p_org": string,"p_payload": Json }; Returns: Json
+                           },
+"import_item_batch":
 { Args: { "p_job": string,"p_rows": Json }; Returns: Json
                            },
 "publish_source_v2":
 { Args: { "p_frozen": boolean,"p_org_id": string,"p_test_version_id": string }; Returns: Json
+                           },
+"save_bank_draft":
+{ Args: { "p_org": string,"p_payload": Json }; Returns: string
                            },
 "save_item_variants":
 { Args: { "p_item_version": string,"p_variants": Json }; Returns: number
