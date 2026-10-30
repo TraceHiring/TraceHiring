@@ -10,8 +10,10 @@
 // inside the local stack's Postgres container. Each scenario creates its own org with two fixed-shape
 // synthetic users (random ids), so a re-run never collides. Output: one line per scenario, OK or the
 // failed step; never SQL text, server output, a URL or an id.
+// M2 (AT-M2-08): two bookings on the last seat of a one-seat slot; the second waits and is refused as full.
 // Rows are committed and left behind until the next db reset: per run a running count-1 drafting job with
-// one in_review AI draft, and a cancelled import job, each in its own org-conc-* org. Nothing later in
+// one in_review AI draft, a cancelled import job, and a seat drive with one invitation and its planned messages,
+// each in its own org-conc-* org. Nothing later in
 // scripts/test-rls.mjs reads them; a future sweep over running drafting jobs across orgs must skip
 // org-conc-* orgs (database review Info 5).
 import { spawn, spawnSync } from 'node:child_process';
@@ -309,6 +311,100 @@ export function draftVerdict({ waited, firstErrored, secondErrored, state }) {
   return null;
 }
 
+// M2 (specs/m2-scheduling-invites.md AT-M2-08, I-M2-3, R2-15): two connections book the last seat of a one-seat slot
+// at once. The first holds its row locks open; the second must wait and, once the first commits, be refused with
+// "slot full", so the slot never holds more bookings than seats. The setup builds what a scheduled-mode drive needs
+// on the operator path (a published version drawing 1 item from a 10-item pool, R5-10), as the pgTAP preamble does.
+
+/** M2 setup, operator part: the org, a 10x pool version, a scheduled drive with a one-seat slot, two candidates. */
+export function seatSetupSql({ owner, suffix }) {
+  const ct = (s) => `'v1.1.${Buffer.from(s).toString('base64url')}'`;
+  const cand = (k) => [
+    'insert into public.candidates (org_id, workspace_id, full_name_ct, key_version, contact_fingerprint)',
+    `  values (:'org_id', :'ws_id', ${ct(`n-${k}`)}, 1, encode(sha256(convert_to('e-${k}-' || :'org_id', 'UTF8')), 'hex'))`,
+    `  returning id as cand_${k} \\gset`,
+    'insert into public.candidate_contacts (org_id, candidate_id, workspace_id, email_ct, email_bidx, email_hint,',
+    '    key_version)',
+    `  values (:'org_id', :'cand_${k}', :'ws_id', ${ct(`e-${k}`)},`,
+    `    encode(sha256(convert_to('e-${k}-' || :'org_id', 'UTF8')), 'hex'), 'c•••@example.test', 1);`,
+  ];
+  return [
+    orgSetupSql({ owner, suffix, kind: 'seat' }),
+    'insert into public.items (org_id, workspace_id, format, skill_key, created_by)',
+    `  select :'org_id', :'ws_id', 'mcq', 'verbal', ${uuid(owner)} from generate_series(1, 10);`,
+    'insert into public.item_versions (org_id, item_id, format, stem, options, skill_key, difficulty, content_sha256,',
+    '    created_by)',
+    '  select i.org_id, i.id, \'mcq\', \'[synthetic] Seat item\', \'[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]\',',
+    `    'verbal', 0.50, repeat('c', 64), ${uuid(owner)} from public.items as i where i.org_id = :'org_id';`,
+    'insert into public.item_answer_keys (org_id, item_version_id, format, key)',
+    "  select v.org_id, v.id, 'mcq', '{\"option_id\": \"o1\"}' from public.item_versions as v where v.org_id = :'org_id';",
+    "update public.item_versions set status = 'in_review' where org_id = :'org_id';",
+    `update public.item_versions set status = 'approved', approved_by = ${uuid(owner)} where org_id = :'org_id';`,
+    "insert into public.pools (org_id, workspace_id, name, format) values (:'org_id', :'ws_id', 'Seat pool', 'mcq')",
+    '  returning id as pool_id \\gset',
+    'insert into public.pool_items (org_id, pool_id, item_version_id)',
+    "  select v.org_id, :'pool_id', v.id from public.item_versions as v where v.org_id = :'org_id';",
+    "insert into public.tests (org_id, workspace_id, name) values (:'org_id', :'ws_id', 'Seat test') returning id as test_id \\gset",
+    'insert into public.test_versions (org_id, test_id, total_time_seconds, quality_cutoff)',
+    "  values (:'org_id', :'test_id', 1800, 40) returning id as tv_id \\gset",
+    'insert into public.sections (org_id, test_version_id, position, name, format, weight, pool_id, draw_count, navigation)',
+    "  values (:'org_id', :'tv_id', 1, 'Seat section', 'mcq', 100, :'pool_id', 1, 'free') returning id as sec_id \\gset",
+    "update public.ruleset_versions as r set preset_key = 'standard', settings = (select p.preset_values",
+    "  from public.integrity_presets as p where p.preset_key = 'standard' and p.version = 1)",
+    "  where r.id = (select v.ruleset_version_id from public.test_versions as v where v.id = :'tv_id');",
+    "update public.test_versions set status = 'published', content_sha256 = repeat('b', 64), snapshot_digest = (",
+    "  select encode(sha256(convert_to(string_agg(:'sec_id' || ':' || pi.item_version_id::text, E'\\n'",
+    "    order by :'sec_id' || ':' || pi.item_version_id::text collate \"C\"), 'UTF8')), 'hex')",
+    "  from public.pool_items as pi where pi.pool_id = :'pool_id') where id = :'tv_id';",
+    'insert into public.drives (org_id, test_id, default_test_version_id, name, mode, status, opens_at, deadline_at)',
+    "  values (:'org_id', :'test_id', :'tv_id', 'Seat drive', 'scheduled', 'draft', now() - interval '1 day',",
+    "    now() + interval '30 days') returning id as drive_id \\gset",
+    "insert into public.slots (org_id, drive_id, starts_at, capacity) values (:'org_id', :'drive_id', now() + interval '2 days', 1)",
+    '  returning id as slot_id \\gset',
+    "update public.drives set status = 'scheduled' where id = :'drive_id';",
+    ...cand('a'),
+    ...cand('b'),
+    "select 'ORG ' || :'org_id';",
+    "select 'DRIVE ' || :'drive_id';",
+    "select 'SLOT ' || :'slot_id';",
+    "select 'CANDA ' || :'cand_a';",
+    "select 'CANDB ' || :'cand_b';",
+  ].join('\n');
+}
+
+/** M2: one booking (a drive invitation on the slot) by the org owner, left open after the marker. */
+export function bookSql({ owner, orgId, driveId, slotId, candidateId, marker: m }) {
+  return [
+    'begin isolation level read committed;',
+    asOwnerSql(owner),
+    'insert into public.invitations (org_id, test_id, test_version_id, drive_id, slot_id, candidate_ref_id,',
+    '    link_token_hash, adult_confirmed_by_inviter, expires_at)',
+    `  select d.org_id, d.test_id, d.default_test_version_id, d.id, ${uuid(slotId)}, ${uuid(candidateId)},`,
+    `    encode(sha256(convert_to(${uuid(candidateId)}, 'UTF8')), 'hex'), true, now() + interval '1 day'`,
+    `  from public.drives as d where d.org_id = ${uuid(orgId)} and d.id = ${uuid(driveId)};`,
+    `\\echo ${marker(m)}`,
+  ].join('\n');
+}
+
+/** booked|live invitations of the slot, read as the operator. */
+export const seatsSql = (slotId) =>
+  [
+    "select s.booked || '|' || (select count(*) from public.invitations as i where i.slot_id = s.id",
+    "  and i.status not in ('revoked', 'expired', 'blocked_age'))",
+    `from public.slots as s where s.id = ${uuid(slotId)};`,
+  ].join('\n');
+
+/** M2 verdict: the second booking waited and was refused as full; the slot holds exactly one booking. */
+export function seatVerdict({ waited, firstErrored, secondRefusedFull, seats }) {
+  if (firstErrored) return 'the first booking failed';
+  if (!waited) return 'the second booking did not wait for the first';
+  if (!secondRefusedFull) return 'the second booking was not refused as full';
+  const [booked, invitations] = String(seats).split('|');
+  if (booked !== '1' || invitations !== '1')
+    return `the slot has booked ${booked}, invitations ${invitations}, not 1 and 1`;
+  return null;
+}
+
 const psql = (user) => {
   if (user !== 'postgres' && user !== WORKER_USER) throw new Error('unknown database user');
   return [
@@ -513,6 +609,39 @@ export const M1_SCENARIOS = Object.freeze([
   },
 ]);
 
+async function seatScenario() {
+  const owner = randomUUID();
+  const setup = runOnce(seatSetupSql({ owner, suffix: randomBytes(4).toString('hex') }));
+  const pick = (k) => (setup.out.match(new RegExp(`^${k} (\\S+)$`, 'm')) || [])[1] ?? '';
+  const [orgId, driveId, slotId, candA, candB] = ['ORG', 'DRIVE', 'SLOT', 'CANDA', 'CANDB'].map(
+    pick,
+  );
+  if (setup.status !== 0 || ![orgId, driveId, slotId, candA, candB].every(isUuid))
+    return 'setup failed';
+  const ids = { owner, orgId, driveId, slotId };
+  const r = await race({
+    aSql: bookSql({ ...ids, candidateId: candA, marker: 'A_BOOKED' }),
+    aMarker: 'A_BOOKED',
+    bSql: bookSql({ ...ids, candidateId: candB, marker: 'B_BOOKED' }),
+    waitKey: candB,
+  });
+  if (r.problem) return r.problem;
+  return seatVerdict({
+    waited: r.waited,
+    firstErrored: /ERROR/.test(r.aErr),
+    secondRefusedFull: /TRACE_GUARD: slot full/.test(r.bErr),
+    seats: runOnce(seatsSql(slotId)).out,
+  });
+}
+
+export const M2_SCENARIOS = Object.freeze([
+  {
+    name: 'last seat of a slot',
+    run: seatScenario,
+    ok: 'the second booking waited and was refused as full',
+  },
+]);
+
 export async function main({ out = process.stdout } = {}) {
   let failed = false;
   const report = (name, problem, ok) => {
@@ -534,7 +663,7 @@ export async function main({ out = process.stdout } = {}) {
         : 'refused up front, both owners stay',
     );
   }
-  for (const s of M1_SCENARIOS) {
+  for (const s of [...M1_SCENARIOS, ...M2_SCENARIOS]) {
     let problem;
     try {
       problem = await s.run();

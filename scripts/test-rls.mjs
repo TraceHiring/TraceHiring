@@ -26,7 +26,8 @@
 //   5c. `node scripts/test-concurrency-local.mjs` (M0b review M0B-DB-5): two connections demote the two
 //      owners of one org at once, under READ COMMITTED and REPEATABLE READ; the second must be refused.
 //      M1 (R5-51 b): a cancel waits for a running import batch and counts it (DB H1); two deliveries of a
-//      count-1 drafting job take turns and the second is refused (DB M1).
+//      count-1 drafting job take turns and the second is refused (DB M1). M2 (AT-M2-08): two bookings on the
+//      last seat of a slot; the second waits and is refused as full.
 //      Only its `test-concurrency-local: ` stdout lines are printed on failure; its stderr never is.
 //   5d. `node scripts/test-staging-roles-local.mjs` (d1 Chat E spec review SR-E-5): the real staging
 //      login-role SQL of scripts/ops/staging-worker-secrets.mjs, run in one rolled-back transaction.

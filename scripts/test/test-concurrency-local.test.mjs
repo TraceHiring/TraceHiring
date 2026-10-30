@@ -21,6 +21,11 @@ import {
   pasteSetupSql,
   pasteVerdict,
   setupSql,
+  M2_SCENARIOS,
+  bookSql,
+  seatSetupSql,
+  seatVerdict,
+  seatsSql,
   upFrontVerdict,
   verdict,
   waitingSql,
@@ -182,5 +187,57 @@ describe('test-concurrency-local: two deliveries of a count-1 drafting job (M1 D
     // Database review L3: the refusal text is shared with "job not running"; a job that ended is a failure.
     expect(draftVerdict({ ...ok, state: 'completed|1' })).toBe('the job is completed, not running');
     expect(draftsSql(randomUUID())).toContain('from public.ai_draft_jobs as j');
+  });
+});
+
+describe('test-concurrency-local: two bookings on the last seat (M2 AT-M2-08, I-M2-3)', () => {
+  it('runs after the M1 scenarios', () => {
+    expect(M2_SCENARIOS.map((s) => s.name)).toEqual(['last seat of a slot']);
+  });
+
+  it('builds the setup from a validated owner and suffix: a published 10x pool version, a one-seat slot', () => {
+    const owner = randomUUID();
+    const setup = seatSetupSql({ owner, suffix: '0a1b2c3d' });
+    expect(setup).toMatch(/p-conc-seat-0a1b2c3d@example\.test/);
+    expect(setup).toContain('generate_series(1, 10)');
+    expect(setup).toContain("'scheduled'");
+    expect(setup).toMatch(
+      /capacity\) values \(:'org_id', :'drive_id', now\(\) \+ interval '2 days', 1\)/,
+    );
+    for (const k of ['ORG', 'SLOT', 'CANDA', 'CANDB']) expect(setup).toContain(`'${k} ' ||`);
+    expect(setup).not.toMatch(/@(?!example\.test)/);
+    expect(() => seatSetupSql({ owner, suffix: 'zz' })).toThrow();
+    expect(() => seatSetupSql({ owner: 'x', suffix: '0a1b2c3d' })).toThrow();
+  });
+
+  it('books as the org owner under READ COMMITTED, from validated ids and a marker', () => {
+    const ids = {
+      owner: randomUUID(),
+      orgId: randomUUID(),
+      driveId: randomUUID(),
+      slotId: randomUUID(),
+      candidateId: randomUUID(),
+    };
+    const sql = bookSql({ ...ids, marker: 'A_BOOKED' });
+    expect(sql).toContain('begin isolation level read committed;');
+    expect(sql).toContain("set_config('role', 'authenticated', true)");
+    expect(sql).toContain(`'${ids.slotId}'`);
+    expect(sql).toContain(`'${ids.candidateId}'`);
+    expect(sql).toContain('\\echo A_BOOKED');
+    expect(() => bookSql({ ...ids, slotId: 'nope', marker: 'A_BOOKED' })).toThrow();
+    expect(() => bookSql({ ...ids, marker: 'a;b' })).toThrow();
+    expect(seatsSql(ids.slotId)).toContain('from public.slots as s');
+    expect(() => seatsSql("'; drop table x; --")).toThrow();
+  });
+
+  it('passes only when the second booking waited, was refused as full, and the slot holds one booking', () => {
+    const ok = { waited: true, firstErrored: false, secondRefusedFull: true, seats: '1|1' };
+    expect(seatVerdict(ok)).toBeNull();
+    expect(seatVerdict({ ...ok, waited: false })).toMatch(/did not wait/);
+    expect(seatVerdict({ ...ok, firstErrored: true })).toMatch(/first booking failed/);
+    expect(seatVerdict({ ...ok, secondRefusedFull: false, seats: '2|2' })).toMatch(
+      /not refused as full/,
+    );
+    expect(seatVerdict({ ...ok, seats: '1|2' })).toMatch(/booked 1, invitations 2/);
   });
 });
