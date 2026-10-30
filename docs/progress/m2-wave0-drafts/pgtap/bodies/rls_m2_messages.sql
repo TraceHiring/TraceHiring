@@ -175,10 +175,14 @@ select is(pg_temp.ev('pm-i1-inv', 'ev-1', 'delivery', null, null), 'applied', 'R
 select is((select status || '|' || (delivered_at is not null)::text from public.outbound_messages where id = pg_temp.msg('i1', 'invite')), 'delivered|true', 'M2-14: delivered');
 select is(pg_temp.ev('pm-i1-inv', 'ev-1', 'delivery', null, null), 'duplicate', 'E15: a replayed event is a no-op');
 select is((select count(*)::int from public.message_events where provider_event_id = 'ev-1'), 1, 'E15: stored once');
-select is(pg_temp.ev('pm-i1-inv', 'ev-2', 'send', null, null) || '|' || (select status from public.outbound_messages where id = pg_temp.msg('i1', 'invite')), 'applied|delivered', 'R2-15: a lower rank never moves the status back');
-select is(pg_temp.ev('pm-i1-inv', 'ev-3', 'bounce', 'permanent', null) || '|' || (select status from public.outbound_messages where id = pg_temp.msg('i1', 'invite')), 'applied|delivered', 'R2-15: an equal rank is ignored');
-select is(pg_temp.ev('pm-i1-inv', 'ev-4', 'complaint', null, null) || '|' || (select status from public.outbound_messages where id = pg_temp.msg('i1', 'invite')), 'applied|complained', 'R2-15: a complaint after delivery is accepted');
-select is(pg_temp.ev('pm-i1-r1', 'ev-4b', 'bounce', 'transient', null) || '|' || (select status from public.outbound_messages where invitation_id = pg_temp.id('i1') and provider_message_id = 'pm-i1-r1'), 'applied|sent', 'R2-15: a transient bounce is stored and moves nothing');
+select is(pg_temp.ev('pm-i1-inv', 'ev-2', 'send', null, null), 'applied', 'R2-15: a late send event is stored');
+select is((select status from public.outbound_messages where id = pg_temp.msg('i1', 'invite')), 'delivered', 'R2-15: a lower rank never moves the status back');
+select is(pg_temp.ev('pm-i1-inv', 'ev-3', 'bounce', 'permanent', null), 'applied', 'R2-15: a bounce after delivery is stored');
+select is((select status from public.outbound_messages where id = pg_temp.msg('i1', 'invite')), 'delivered', 'R2-15: an equal rank is ignored');
+select is(pg_temp.ev('pm-i1-inv', 'ev-4', 'complaint', null, null), 'applied', 'R2-15: a complaint is stored');
+select is((select status from public.outbound_messages where id = pg_temp.msg('i1', 'invite')), 'complained', 'R2-15: a complaint after delivery is accepted');
+select is(pg_temp.ev('pm-i1-r1', 'ev-4b', 'bounce', 'transient', null), 'applied', 'R2-15: a transient bounce is stored');
+select is((select status from public.outbound_messages where invitation_id = pg_temp.id('i1') and provider_message_id = 'pm-i1-r1'), 'sent', 'R2-15: a transient bounce moves nothing');
 select is(pg_temp.ev('pm-early', 'ev-5', 'delivery', null, pg_temp.id('A')), 'unmatched', 'R3-5: an event before the send is kept under its tag org');
 select is(pg_temp.ev('pm-untagged', 'ev-6', 'delivery', null, null), 'dropped', 'R4-6: an unknown event without the org tag is dropped');
 select is((select count(*)::int from public.message_events_unmatched where provider_message_id = 'pm-early' and org_id = pg_temp.id('A')), 1, 'R3-5: the unmatched row has the org');
@@ -213,9 +217,10 @@ select is(pg_temp.fail('i4', 'invite', 'bad_recipient', true), 'failed', 'AT-M2-
 select is((select count(*)::int from public.audit_log where action = 'message.failed' and object_id = pg_temp.msg('i4', 'invite') and actor_kind = 'system' and details ->> 'error_code' = 'bad_recipient'), 1, 'R2-21, AT-M2-24: the failure is audited as the system with its code');
 select is(pg_temp.fail('i4', 'invite', 'throttled', false), 'null', 'R3-6: a failed message holds no claim any more');
 select is((select string_agg(x.r, ',' order by x.n) from (select n, pg_temp.fail('i5', 'invite', 'provider_unavailable', false) as r from generate_series(1, 8) as n) as x),'queued,queued,queued,queued,queued,queued,queued,failed', 'AT-M2-30: the 8th failed attempt fails the message');
-select matches(pg_temp.try(format($$select private.record_send_failure(%L, %L, %L, 'oops', false)$$, pg_temp.id('A'), pg_temp.msg('i5', 'invite'), gen_random_uuid())), '^42501', 'the failure path runs as the messaging worker only');
+insert into pg_temp.ids select 'i5_msg', pg_temp.msg('i5', 'invite');
+select matches(pg_temp.try(format($$select private.record_send_failure(%L, %L, %L, 'oops', false)$$, pg_temp.id('A'), pg_temp.id('i5_msg'), gen_random_uuid())), '^42501', 'the failure path runs as the messaging worker only');
 select pg_temp.w('trace_messaging_worker', pg_temp.id('A'));
-select matches(pg_temp.try(format($$select private.record_send_failure(%L, %L, %L, 'oops', false)$$, pg_temp.id('A'), pg_temp.msg('i5', 'invite'), gen_random_uuid())), '^22023', 'error codes come from the list');
+select matches(pg_temp.try(format($$select private.record_send_failure(%L, %L, %L, 'oops', false)$$, pg_temp.id('A'), pg_temp.id('i5_msg'), gen_random_uuid())), '^22023', 'error codes come from the list');
 select pg_temp.op();
 
 -- ===== Slot moves, revoke, resend and drive cancel (R3-1, R4-2, §4, E9, E24) =====
