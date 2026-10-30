@@ -473,7 +473,7 @@ $f$;
 grant execute on function pg_temp.pooltv(text, uuid, uuid, int), pg_temp.drive(text, text, text, text),
   pg_temp.slot(text, text, numeric, int), pg_temp.cand(text, uuid, uuid, text), pg_temp.dinv(text, text, text, text),
   pg_temp.consent(text), pg_temp.session(text, text, int) to public;
-select plan(69);
+select plan(80);
 -- Fixtures: ta = a 10x version (A1) and ta2 its newer version; drive ds (scheduled mode) with slots s1 (+48 h) and s2
 -- (+72 h), scheduled; drive dw (open window, scheduled); drive dd (draft). Candidates c1 and c2 share phone p1.
 select pg_temp.pooltv('ta', pg_temp.id('A'), pg_temp.id('A1'));
@@ -654,6 +654,35 @@ select pg_temp.api(pg_temp.id('B'));
 select is((select count(*)::int from private.invitation_window(pg_temp.id('i1'))) + (select count(*)::int from private.invitation_recipient_ct(pg_temp.id('i1'))), 0, 'R5-47, R5-66 d: bound to the api org');
 select pg_temp.u('owner');
 select matches(pg_temp.try(format($$select * from private.invitation_recipient_ct(%L)$$, pg_temp.id('i1'))), '^42501 permission denied', 'R5-47: no app role may call it');
+select pg_temp.op();
+
+-- ===== Link rotation at send time (R2-4, R3-6, R5-12 (1), R5-42; AT-M2-20; migration M2-c) =====
+-- i7: a new invitation; the planner planned its invite and the claim (operator path) claims it.
+select pg_temp.cand('c10', pg_temp.id('A'), pg_temp.id('A1'));
+select pg_temp.dinv('i7', 'ds', 's2', 'c10');
+select pg_temp.op();
+select count(*) from private.claim_due_messages(now(), 1000);
+insert into pg_temp.ids select 'i7_msg', id from public.outbound_messages where invitation_id = pg_temp.id('i7') and purpose = 'invite';
+insert into pg_temp.ids select 'i7_claim', claim_id from public.outbound_messages where invitation_id = pg_temp.id('i7') and purpose = 'invite';
+insert into pg_temp.ids select 'i7_rem', id from public.outbound_messages where invitation_id = pg_temp.id('i7') and purpose = 'reminder' order by scheduled_for limit 1;
+select pg_temp.w('trace_messaging_worker', pg_temp.id('A'));
+select is((select private.rotate_link_for_send(pg_temp.id('A'), pg_temp.id('i7_msg'), pg_temp.id('i7_claim'), pg_temp.h('new-i7'))), 2, 'AT-M2-20: the worker rotates the link of its claimed invite (token_version 2)');
+select pg_temp.op();
+select is((select token_version::text || '|' || (link_token_hash = pg_temp.h('new-i7'))::text || '|' || status::text from public.invitations where id = pg_temp.id('i7')), '2|true|created', 'AT-M2-20: version + 1 and the new hash; the status moves only when the send is recorded');
+select is((select count(*)::int from private.resolve_invitation_by_hash(pg_temp.h('l-i7'))) || '|' || (select count(*)::int from private.resolve_invitation_by_hash(pg_temp.h('new-i7'))), '0|1', 'AT-M2-20, R3-6: only the latest link resolves');
+select is((select count(*)::int from public.audit_log where action = 'invitation.link_rotated' and object_id = pg_temp.id('i7') and actor_kind = 'system' and pg_temp.keys(details) = 'message_id,token_version'), 1, 'R2-21: the rotation is audited as the system, ids only');
+select pg_temp.w('trace_messaging_worker', pg_temp.id('A'));
+select matches(pg_temp.try(format($$select private.rotate_link_for_send(%L, %L, %L, %L)$$, pg_temp.id('A'), pg_temp.id('i7_msg'), gen_random_uuid(), pg_temp.h('x-i7'))), '^42501 TRACE_GUARD: message not claimed', 'R3-6: only under the current claim');
+select matches(pg_temp.try(format($$select private.rotate_link_for_send(%L, %L, %L, %L)$$, pg_temp.id('A'), pg_temp.id('i7_rem'), pg_temp.id('i7_claim'), pg_temp.h('x-i7'))), '^42501 TRACE_GUARD: message not claimed', 'R2-4: a reminder carries no link');
+select matches(pg_temp.try(format($$select private.rotate_link_for_send(%L, %L, %L, 'not-a-hash')$$, pg_temp.id('A'), pg_temp.id('i7_msg'), pg_temp.id('i7_claim'))), '^22023', 'R2-4: only a SHA-256 hex hash is stored');
+select pg_temp.w('trace_messaging_worker', pg_temp.id('B'));
+select matches(pg_temp.try(format($$select private.rotate_link_for_send(%L, %L, %L, %L)$$, pg_temp.id('A'), pg_temp.id('i7_msg'), pg_temp.id('i7_claim'), pg_temp.h('x-i7'))), '^42501 TRACE_GUARD: not the job org', 'R5-9: bound to the job org');
+select pg_temp.api(pg_temp.id('A'));
+select matches(pg_temp.try(format($$select private.rotate_link_for_send(%L, %L, %L, %L)$$, pg_temp.id('A'), pg_temp.id('i7_msg'), pg_temp.id('i7_claim'), pg_temp.h('x-i7'))), '^42501 permission denied', 'R3-11: only the messaging worker rotates');
+select pg_temp.u('recruiter');
+select is(pg_temp.try(format($$update public.invitations set status = 'revoked' where id = %L$$, pg_temp.id('i7'))), 'OK 1', 'AT-M2-20: the recruiter revokes i7 while its invite is queued');
+select pg_temp.w('trace_messaging_worker', pg_temp.id('A'));
+select matches(pg_temp.try(format($$select private.rotate_link_for_send(%L, %L, %L, %L)$$, pg_temp.id('A'), pg_temp.id('i7_msg'), pg_temp.id('i7_claim'), pg_temp.h('y-i7'))), '^42501 TRACE_GUARD: invitation_closed', 'AT-M2-20: a revoked invitation''s link is never rotated again');
 select pg_temp.op();
 select * from finish();
 rollback;

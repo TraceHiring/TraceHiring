@@ -473,7 +473,7 @@ $f$;
 grant execute on function pg_temp.pooltv(text, uuid, uuid, int), pg_temp.drive(text, text, text, text),
   pg_temp.slot(text, text, numeric, int), pg_temp.cand(text, uuid, uuid, text), pg_temp.dinv(text, text, text, text),
   pg_temp.consent(text), pg_temp.session(text, text, int) to public;
-select plan(58);
+select plan(69);
 -- Fixtures: ta = a published 10x pool version (workspace A1); t9 = 9x; tin = a D1-style inline version; tdr = a draft;
 -- ta2 = a newer published version of ta's test; tb = org B; tw = a 10x version in workspace A2.
 select pg_temp.pooltv('ta', pg_temp.id('A'), pg_temp.id('A1'));
@@ -603,5 +603,36 @@ select pg_temp.w('trace_messaging_worker', pg_temp.id('A'));
 select matches(pg_temp.try('select * from public.drives'), '^42501 permission denied', 'S messaging worker: no grant (close_due_drives is DEFINER, R5-6)');
 select pg_temp.op();
 select is((select relrowsecurity from pg_catalog.pg_class where oid = 'public.drives'::regclass), true, 'RLS: enabled on drives');
+
+-- ===== Drive auto-close (R5-6, R5-46 f, R5-51, R5-58 a; AT-M2-35; migration M2-c) =====
+-- dc1: open window, scheduled, deadline +30 days, one invitation; dc2: a draft; dc3: scheduled, deadline +30 days.
+select pg_temp.drive('dc1', 'ta', 'open_window', 'scheduled');
+select pg_temp.drive('dc2', 'ta', 'open_window', 'draft');
+select pg_temp.cand('cc1', pg_temp.id('A'), pg_temp.id('A1'));
+select pg_temp.dinv('ic1', 'dc1', null, 'cc1');
+select pg_temp.op();
+select is((select private.close_due_drives(now())), 0, 'AT-M2-35: nothing is due before the drive end');
+select is((select private.close_due_drives(now() + interval '31 days')), 1, 'AT-M2-35: a scheduled drive closes after its end (operator time travel)');
+select is((select string_agg(status::text, ',' order by name) from public.drives where id in (pg_temp.id('dc1'), pg_temp.id('dc2'))), 'closed,draft', 'AT-M2-35: draft drives are untouched');
+select is((select status::text from public.invitations where id = pg_temp.id('ic1')) || '|' || (select count(*) from public.outbound_messages where invitation_id = pg_temp.id('ic1') and status <> 'planned'), 'created|0', 'R5-6: closing changes no invitation and no message');
+select pg_temp.drive('dc3', 'ta', 'open_window', 'scheduled');
+select pg_temp.w('trace_messaging_worker', null);
+select is((select private.close_due_drives(now() + interval '31 days')), 0, 'AT-M2-35: p_now is ignored for the worker');
+select pg_temp.op();
+insert into public.drives (org_id, test_id, default_test_version_id, name, mode, status, opens_at, deadline_at)
+  values (pg_temp.id('A'), pg_temp.id('ta_test'), pg_temp.id('ta'), 'Drive dc4', 'open_window', 'scheduled', now() - interval '2 days', now() - interval '1 day');
+insert into pg_temp.ids select 'dc4', id from public.drives where name = 'Drive dc4';
+select pg_temp.w('trace_messaging_worker', null);
+select is((select private.close_due_drives(null)), 1, 'AT-M2-35: the worker closes a drive whose end has passed');
+select pg_temp.op();
+select is((select status::text from public.drives where id = pg_temp.id('dc4')) || '|' || (select status::text from public.drives where id = pg_temp.id('dc3')), 'closed|scheduled', 'AT-M2-35: only the due drive');
+select is((select count(*)::int from public.audit_log where action = 'drive.close' and object_id = pg_temp.id('dc4') and actor_kind = 'system'), 1, 'R2-21, R5-46: the worker''s close is audited as the system');
+select pg_temp.w('trace_messaging_worker', pg_temp.id('A'));
+select matches(pg_temp.try(format($$update public.drives set name = 'x' where id = %L$$, pg_temp.id('dc3'))), '^42501 permission denied', 'R5-46: the worker changes drives only through close_due_drives');
+select pg_temp.api(pg_temp.id('A'));
+select matches(pg_temp.try('select private.close_due_drives(now())'), '^42501 permission denied', 'R5-6: trace_api cannot close drives');
+select pg_temp.u('owner');
+select matches(pg_temp.try('select private.close_due_drives(now())'), '^42501 permission denied', 'R5-6: nor can staff');
+select pg_temp.op();
 select * from finish();
 rollback;
