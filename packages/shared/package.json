@@ -13,6 +13,7 @@
     "./contracts/candidate": "./src/contracts-candidate.ts",
     "./contracts/d1": "./src/contracts-d1.ts",
     "./contracts/m1": "./src/contracts-m1.ts",
+    "./contracts/m2": "./src/contracts-m2.ts",
     "./canonical-json": "./src/canonical-json.ts",
     "./item-hash": "./src/item-hash.ts",
     "./invite-email": "./src/invite-email.ts",
