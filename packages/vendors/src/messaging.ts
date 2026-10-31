@@ -20,10 +20,17 @@ export interface Messaging {
   send(msg: OutboundMessage): Promise<{ id: string; status: 'queued' }>;
 }
 /**
+ * What an outbox row records as its kind. D1's OutboxMessaging sends only `invite | otp` (its own validation is
+ * unchanged); the M2 OutboxMessagingV2 also writes `reminder` and `reschedule` (kind = purpose; lead decision,
+ * specs/m2-scheduling-invites.md R5-22: drive messages go through the outbox in dev and staging).
+ */
+export type OutboxKind = 'invite' | 'reminder' | 'reschedule' | 'otp';
+/**
  * One outbox row. `append` receives the validated message; the store assigns `id` and `createdAt`, and `list`
  * returns them. The store is idempotent on `(orgId, idempotencyKey)`: the same key returns the same id.
  */
-export interface OutboxEntry extends OutboundMessage {
+export interface OutboxEntry extends Omit<OutboundMessage, 'kind'> {
+  kind: OutboxKind;
   id?: string;
   createdAt?: string;
 }

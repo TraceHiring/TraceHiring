@@ -142,6 +142,11 @@ describe('message validation', () => {
     ['an extra key', { ...message(), cc: 'other@example.test' }],
     ['a missing key', { ...message(), idempotencyKey: undefined }],
     ['an unknown kind', message({ kind: 'sms' as never })],
+    [
+      'the v2-only kind reminder (D1 send stays invite | otp)',
+      message({ kind: 'reminder' as never }),
+    ],
+    ['the v2-only kind reschedule', message({ kind: 'reschedule' as never })],
     ['an empty org id', message({ orgId: '' })],
     ['an empty subject', message({ subject: '' })],
     ['a subject with a line break', message({ subject: 'a\nb' })],
