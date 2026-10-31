@@ -114,6 +114,15 @@ describe('api route inventory (AT-D13)', () => {
       expect(`POST /v1/orgs/:p/reports/:p/${w}`).toMatch(FORBIDDEN);
   });
 
+  // M2 R5-37: the SES event webhook may join ALLOWED (it carries no decision word), while the phone-shared
+  // confirmation stays a body flag (`confirmPhoneDuplicate`, R2-12): a `…/confirm` route would trip the guard. The drive
+  // routes join ALLOWED with stream B2's merge (as M1 A2a/A2b did).
+  it('passes the M2 SES webhook and refuses a confirm route for the phone-shared flag (M2 R5-37)', () => {
+    expect('POST /webhooks/ses').not.toMatch(FORBIDDEN);
+    expect('POST /v1/orgs/:p/drives/:p/uploads/:p/confirm').toMatch(FORBIDDEN);
+    expect('POST /v1/orgs/:p/drives/:p/uploads/:p/confirm-phone-duplicate').toMatch(FORBIDDEN);
+  });
+
   it('/media/:jti answers every method but GET with the constant 404', async () => {
     for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
       const res = await app().fetch(
