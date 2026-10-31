@@ -64,6 +64,9 @@ export const demoOutboxEnabled = (env: OutboxEnv): boolean =>
  */
 const doStore = (stub: OutboxStub, candidateLabel: string): VendorOutboxStore => ({
   async append(e) {
+    // The vendors entry kind now names the four M2 purposes (B1); this D1 store and its list contract hold `invite`
+    // and `otp` only until stream B2 widens both (build-notes "B1 first reviews" a). Anything else fails closed.
+    if (e.kind !== 'invite' && e.kind !== 'otp') throw new Error('outbox_kind_unsupported');
     const out = await stub.append({
       kind: e.kind,
       candidateLabel,
