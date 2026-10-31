@@ -42,6 +42,10 @@ function fake(
     data: uploadView(),
   }),
   gated = false,
+  cancelAnswer: () => { ok: true; data: InviteUploadView } | { ok: false; code: string } = () => ({
+    ok: true,
+    data: uploadView({ status: 'cancelled' }),
+  }),
 ): Fake {
   let release: () => void = () => undefined;
   const gate = gated
@@ -88,7 +92,7 @@ function fake(
     },
     cancel: (uploadId) => {
       calls.push(`cancel:${uploadId}`);
-      return Promise.resolve({ ok: true, data: uploadView({ status: 'cancelled' }) });
+      return Promise.resolve(cancelAnswer());
     },
   };
   return { api, batches, calls, peak: () => peak, release };
@@ -193,21 +197,65 @@ describe('held rows (R2-12)', () => {
     expect(f.calls.some((c) => c.startsWith('complete'))).toBe(false);
   });
 
-  it('re-sends exactly the held rows, once, with the flag, then finishes', async () => {
+  // Lead decision (M2-5, R5-59): one "Mark as different people" per held row. Replaces the test that re-sent every
+  // held row at once.
+  it('re-sends exactly the one held row asked for, once, with the flag; the others stay held', async () => {
     const f = fake(sharing);
     const r = run(f, 10);
     await r.start();
     const before = f.batches.length;
-    await r.markDifferentPeople();
+    await r.markDifferentPerson(3);
     const resent = f.batches.slice(before);
     expect(resent).toHaveLength(1);
-    expect(resent[0]?.rows.map((row) => row.rowNo)).toEqual([3, 7]);
+    expect(resent[0]?.rows.map((row) => row.rowNo)).toEqual([3]);
     expect(resent[0]?.rows[0]?.email).toBe('a3@example.test');
     expect(resent[0]?.confirmPhoneDuplicate).toBe(true);
+    const s = r.getState();
+    expect(s.invited).toBe(9);
+    expect(s.held).toEqual([7]);
+    expect(s.phase).toBe('ready');
+    expect(f.calls.some((c) => c.startsWith('complete'))).toBe(false);
+  });
+
+  it('finishes by itself once the last held row has been marked', async () => {
+    const f = fake(sharing);
+    const r = run(f, 10);
+    await r.start();
+    const before = f.batches.length;
+    await r.markDifferentPerson(7);
+    await r.markDifferentPerson(3);
+    expect(f.batches.slice(before).map((b) => b.rows.map((row) => row.rowNo))).toEqual([[7], [3]]);
     const s = r.getState();
     expect(s.invited).toBe(10);
     expect(s.held).toEqual([]);
     expect(s.phase).toBe('completed');
+  });
+
+  it('sends nothing for a row that is not held, or a second time for one already marked', async () => {
+    const f = fake(sharing);
+    const r = run(f, 10);
+    await r.start();
+    const before = f.batches.length;
+    await r.markDifferentPerson(4);
+    await r.markDifferentPerson(99);
+    expect(f.batches).toHaveLength(before);
+    await r.markDifferentPerson(3);
+    await r.markDifferentPerson(3);
+    expect(f.batches).toHaveLength(before + 1);
+  });
+
+  it('keeps a row held when its re-send fails, so it can be marked again', async () => {
+    let fail = true;
+    const f = fake(sharing, (_call, request) =>
+      fail && request.confirmPhoneDuplicate === true ? { ok: false, code: 'conflict' } : undefined,
+    );
+    const r = run(f, 10);
+    await r.start();
+    await r.markDifferentPerson(3);
+    expect(r.getState()).toMatchObject({ phase: 'ready', held: [3, 7], failure: 'conflict' });
+    fail = false;
+    await r.markDifferentPerson(3);
+    expect(r.getState()).toMatchObject({ phase: 'ready', held: [7], failure: null, invited: 9 });
   });
 
   it('keeps a held row that comes back refused for another reason as a refused row', async () => {
@@ -220,7 +268,7 @@ describe('held rows (R2-12)', () => {
     );
     const r = run(f, 3);
     await r.start();
-    await r.markDifferentPeople();
+    await r.markDifferentPerson(2);
     const s = r.getState();
     expect(s.held).toEqual([]);
     expect(s.refused).toEqual([{ rowNo: 2, reason: 'slot_full' }]);
@@ -241,7 +289,7 @@ describe('held rows (R2-12)', () => {
     const r = run(f, 10);
     await r.start();
     await r.finish();
-    await r.markDifferentPeople();
+    await r.markDifferentPerson(3);
     expect(f.batches.filter((b) => b.confirmPhoneDuplicate === true)).toEqual([]);
   });
 });

@@ -104,18 +104,34 @@ describe('the refused-rows table (AT-M2-32)', () => {
     expect(renderToString(<RefusedTable issues={[]} />)).toBe('');
   });
 
-  it('lists held rows with their numbers and the action that frees exactly them', () => {
+  // Lead decision (M2-5, R5-59): one button per held row. Replaces the test that expected a single button.
+  it('lists held rows with their numbers, each with its own button that frees exactly that row', () => {
     const html = renderToString(<HeldTable rowNos={[4, 9]} busy={false} onMarkDifferent={noop} />);
     const rows = rowsOf(html);
     expect(rows.slice(1)).toHaveLength(2);
     expect(rows[1]).toContain('4');
     expect(rows[2]).toContain('9');
     expect(text(html)).toContain(ROW_REASON_TEXT.phone_shared);
-    expect(
-      [...html.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)].map((m) =>
-        text(m[1] ?? '').trim(),
-      ),
-    ).toEqual(['Mark as different people']);
+    const buttons = [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)];
+    expect(buttons.map((m) => text(m[2] ?? '').trim())).toEqual([
+      'Mark as different people',
+      'Mark as different people',
+    ]);
+    expect(buttons.map((m) => /aria-label="([^"]*)"/.exec(m[1] ?? '')?.[1])).toEqual([
+      'Mark as different people, row 4',
+      'Mark as different people, row 9',
+    ]);
+    // Each button sits in its own row.
+    const tableRows = [...html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map((m) => m[1] ?? '');
+    expect(tableRows[1]).toContain('row 4');
+    expect(tableRows[2]).toContain('row 9');
+  });
+
+  it('disables every row’s button while a re-send is in flight', () => {
+    const html = renderToString(<HeldTable rowNos={[4, 9]} busy={true} onMarkDifferent={noop} />);
+    const buttons = [...html.matchAll(/<button([^>]*)>/g)].map((m) => m[1] ?? '');
+    expect(buttons).toHaveLength(2);
+    for (const attrs of buttons) expect(attrs).toContain('disabled=""');
   });
 });
 

@@ -241,26 +241,43 @@ describe('sending a file', () => {
     expect(mounted.text()).toContain(ROW_REASON_TEXT.minor);
   });
 
-  it('holds phone-shared rows, then re-sends exactly those rows with the flag on "Mark as different people"', async () => {
+  // Lead decision (M2-5, R5-59): one "Mark as different people" button per held row, which re-sends only that row.
+  // Replaces the test whose one button re-sent every held row.
+  it('holds phone-shared rows; each row’s "Mark as different people" re-sends only that row, with the flag', async () => {
     const { api, calls } = uploadApi((row, request) =>
-      request.confirmPhoneDuplicate === true || row.rowNo !== 2 ? 'invited' : 'phone_shared',
+      request.confirmPhoneDuplicate === true || row.rowNo === 1 ? 'invited' : 'phone_shared',
     );
     mounted = await mountUpload(api);
     await pickFile(mounted, FILE);
     await mounted.click(mounted.button('Start upload'));
     expect(mounted.text()).toContain(ROW_REASON_TEXT.phone_shared);
     expect(calls.some((c) => c.path.endsWith('/complete'))).toBe(false);
+    const marks = () =>
+      [...mounted!.container.querySelectorAll('button')].filter((b) =>
+        b.textContent.includes('Mark as different people'),
+      );
+    expect(marks()).toHaveLength(2);
 
-    await mounted.click(mounted.button('Mark as different people'));
-    const rows = calls.filter((c) => c.path.endsWith('/rows'));
+    await mounted.click(mounted.button('Mark as different people, row 2'));
+    let rows = calls.filter((c) => c.path.endsWith('/rows'));
     expect(rows).toHaveLength(2);
     const again = rows[1]?.body as InviteBatchRequest;
     expect(again.confirmPhoneDuplicate).toBe(true);
     expect(again.rows.map((row) => row.rowNo)).toEqual([2]);
     expect(again.rows[0]?.email).toBe('person2@example.test');
+    expect(calls.some((c) => c.path.endsWith('/complete'))).toBe(false);
+    expect(mounted.text()).toMatch(/Invited: 2/);
+    expect(mounted.maybeButton('Mark as different people, row 2')).toBeNull();
+    expect(mounted.maybeButton('Mark as different people, row 3')).not.toBeNull();
+    expect(marks()).toHaveLength(1);
+
+    await mounted.click(mounted.button('Mark as different people, row 3'));
+    rows = calls.filter((c) => c.path.endsWith('/rows'));
+    expect(rows).toHaveLength(3);
+    expect((rows[2]?.body as InviteBatchRequest).rows.map((row) => row.rowNo)).toEqual([3]);
     expect(calls.at(-1)?.path.endsWith('/complete')).toBe(true);
     expect(mounted.text()).toMatch(/Invited: 3/);
-    expect(mounted.maybeButton('Mark as different people')).toBeNull();
+    expect(marks()).toHaveLength(0);
   });
 
   it('can finish leaving held rows uninvited', async () => {
@@ -307,7 +324,7 @@ describe('what the screen leaves behind (nothing from the file)', () => {
     mounted = await mountUpload(api);
     await pickFile(mounted, FILE);
     await mounted.click(mounted.button('Start upload'));
-    await mounted.click(mounted.button('Mark as different people'));
+    await mounted.click(mounted.button('Mark as different people, row 2'));
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     expect(window.localStorage.length).toBe(0);
     expect(window.sessionStorage.length).toBe(0);
