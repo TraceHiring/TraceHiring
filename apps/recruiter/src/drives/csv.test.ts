@@ -3,8 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseCsv } from './csv';
 
-const ok = (text: string, max?: number): string[][] => {
-  const result = parseCsv(text, max);
+const ok = (text: string, max?: number, options?: { skipBlank?: boolean }): string[][] => {
+  const result = parseCsv(text, max, options);
   if (!result.ok) throw new Error(`expected a parse, got ${result.reason}`);
   return result.records;
 };
@@ -85,6 +85,20 @@ describe('parseCsv: malformed input and limits', () => {
     const text = `${Array.from({ length: 11 }, (_, i) => String(i)).join('\n')}\n`;
     expect(ok(text, 11)).toHaveLength(11);
     expect(parseCsv(text, 10)).toEqual({ ok: false, reason: 'too_many_records' });
+  });
+
+  it('can skip blank records, which then neither count towards the limit nor come back', () => {
+    const text = `a\n\n , \n\nb\n,\nc\n`;
+    expect(parseCsv(text, 3, { skipBlank: true })).toEqual({
+      ok: true,
+      records: [['a'], ['b'], ['c']],
+    });
+    expect(parseCsv(text, 2, { skipBlank: true })).toEqual({
+      ok: false,
+      reason: 'too_many_records',
+    });
+    // A quoted field that holds only spaces is still blank; one with text is not.
+    expect(ok('a\n" "\n"x"\n', 5, { skipBlank: true })).toEqual([['a'], ['x']]);
   });
 
   it('handles a large file quickly and exactly', () => {

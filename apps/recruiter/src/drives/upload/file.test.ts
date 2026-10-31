@@ -40,6 +40,26 @@ describe('the limits', () => {
     expect(check(rows(5001))).toEqual({ ok: false, refusal: 'too_many_rows' });
   });
 
+  it('counts only rows that are not blank towards the 5,000 cap', () => {
+    const spaced = (n: number) =>
+      csvOf(
+        HEADER,
+        '',
+        ...Array.from(
+          { length: n },
+          (_, i) => `${csvRow(i)}
+
+,,,,,
+
+`,
+        ),
+      );
+    const full = good(spaced(5000));
+    expect(full.rowsInFile).toBe(5000);
+    expect(full.rows).toHaveLength(5000);
+    expect(check(spaced(5001))).toEqual({ ok: false, refusal: 'too_many_rows' });
+  });
+
   it('refuses a header-only file and an empty one', () => {
     expect(check(csvOf(HEADER))).toEqual({ ok: false, refusal: 'empty' });
     expect(check('')).toEqual({ ok: false, refusal: 'empty' });
@@ -118,10 +138,34 @@ describe('the columns', () => {
       ok: false,
       refusal: 'unknown_column',
     });
-    expect(check(csvOf('full_name,email,', 'Asha Rao,a@example.test,'))).toEqual({
+    // A nameless column between named ones is still a column this screen does not know.
+    expect(check(csvOf('full_name,,email', 'Asha Rao,,a@example.test'))).toEqual({
       ok: false,
       refusal: 'unknown_column',
     });
+  });
+
+  // Replaces the case above that refused `full_name,email,`: trailing empty header cells are ignored (a sheet saved as
+  // CSV often has them), as long as the rows have nothing under them.
+  it('ignores trailing empty header cells whose data cells are empty', () => {
+    const one = good(csvOf('full_name,email,', 'Asha Rao,a@example.test,'));
+    expect(one.rows).toEqual([
+      { rowNo: 1, fullName: 'Asha Rao', email: 'a@example.test', adult18: null },
+    ]);
+    expect(one.issues).toEqual([]);
+    const two = good(
+      csvOf('full_name,email, , ', 'Asha Rao,a@example.test,,', 'Ravi Rao,r@example.test'),
+    );
+    expect(two.rows.map((row) => row.rowNo)).toEqual([1, 2]);
+    expect(two.issues).toEqual([]);
+  });
+
+  it('gives a row with a value under a trailing empty header cell the too_many_cells reason', () => {
+    const result = good(
+      csvOf('full_name,email,', 'Asha Rao,a@example.test,', 'Ravi Rao,r@example.test,Pune'),
+    );
+    expect(result.rows.map((row) => row.rowNo)).toEqual([1]);
+    expect(result.issues).toEqual([{ rowNo: 2, reason: 'too_many_cells' }]);
   });
 
   it('refuses a date-of-birth, birth-date or age column (M2-6, E21, rule 9)', () => {
