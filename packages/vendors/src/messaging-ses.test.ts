@@ -261,6 +261,22 @@ describe('SesEmailMessaging: provider errors carry codes only', () => {
   });
 });
 
+describe('SesEmailMessaging: MessageId bound (provider_message_id CHECK {1,255}; B1 fix 4)', () => {
+  it('accepts a 255-character MessageId', async () => {
+    const id = 'm'.repeat(255);
+    const rec = recordingFetch(() => jsonResponse(200, { MessageId: id }));
+    const out = await new SesEmailMessaging(options({ fetch: rec.fetch })).send(message());
+    expect(out.providerMessageId).toBe(id);
+  });
+
+  it('a 256-character MessageId is the permanent provider_bad_response', async () => {
+    const rec = recordingFetch(() => jsonResponse(200, { MessageId: 'm'.repeat(256) }));
+    const e = await sendError(new SesEmailMessaging(options({ fetch: rec.fetch })).send(message()));
+    expect(e.code).toBe('provider_bad_response');
+    expect(e.retryable).toBe(false);
+  });
+});
+
 describe('SesEmailMessaging: recipient guard outside production (AT-M2-23)', () => {
   it.each([
     'success@simulator.amazonses.com',
