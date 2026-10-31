@@ -12,6 +12,7 @@ import type { RouteDeps } from './route-support.js';
 import { mountInviteRoutes } from './routes-invite.js';
 import { mountLobbyRoutes } from './routes-lobby.js';
 import { mountPhotoRoute } from './routes-photo.js';
+import { mountPortalRoutes } from './routes-portal.js';
 import { mountSessionRoutes } from './routes-session.js';
 
 const SERVICE = 'edge';
@@ -49,6 +50,8 @@ export const createApp = (deps: AppDeps = {}): Hono<{ Bindings: Env }> => {
   mountLobbyRoutes(app, routeDeps);
   mountPhotoRoute(app, routeDeps);
   mountSessionRoutes(app, routeDeps);
+  // M2 (R5-24): the portal routes, under /v1/* so noStore and candidateCors() apply.
+  mountPortalRoutes(app, routeDeps);
 
   return app;
 };

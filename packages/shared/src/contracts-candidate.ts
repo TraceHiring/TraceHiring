@@ -1114,6 +1114,19 @@ export const PortalSlotsRes = z.strictObject({
 export type PortalSlotsRes = z.infer<typeof PortalSlotsRes>;
 export const PortalRescheduleReq = z.strictObject({ toSlotId: Uuid });
 export type PortalRescheduleReq = z.infer<typeof PortalRescheduleReq>;
+/** The answer of POST /v1/portal/reschedule (and of the portalReschedule RPC): the new slot's start, nothing else. */
+export const PortalRescheduleRes = z.strictObject({ ok: z.literal(true), slotStartsAt: Time });
+export type PortalRescheduleRes = z.infer<typeof PortalRescheduleRes>;
+
+/**
+ * The answer of POST /v1/otp/verify when the challenge was issued with purpose `manage` (R5-19: the purpose stored
+ * at issue decides; a manage code never mints a lobby token): the portal token only, no lobby token and no next step.
+ */
+export const OtpVerifyPortalRes = z.strictObject({ portalToken: Jws, expiresAt: Time });
+export type OtpVerifyPortalRes = z.infer<typeof OtpVerifyPortalRes>;
+/** What the candidate app parses from POST /v1/otp/verify: D1's lobby shape or the portal shape, never a mix. */
+export const OtpVerifyAnyRes = z.union([OtpVerifyRes, OtpVerifyPortalRes]);
+export type OtpVerifyAnyRes = z.infer<typeof OtpVerifyAnyRes>;
 
 /** `SessionDO.peek()` (R5-66 c): read-only, whether the per-invitation DO already holds a session. */
 export const SessionPeekRes = z.strictObject({ live: z.boolean() });
@@ -1126,12 +1139,12 @@ export type SessionPeekRes = z.infer<typeof SessionPeekRes>;
 export const PortalRpcSchemas = {
   portalMint: {
     in: z.strictObject({ invitationId: Uuid, orgId: Uuid, nonce: Nonce }),
-    out: z.strictObject({ portalToken: Jws, expiresAt: Time }),
+    out: OtpVerifyPortalRes,
   },
   portalSlots: { in: z.strictObject({ portalToken: Jws }), out: PortalSlotsRes },
   portalReschedule: {
     in: z.strictObject({ portalToken: Jws, toSlotId: Uuid }),
-    out: z.strictObject({ ok: z.literal(true), slotStartsAt: Time }),
+    out: PortalRescheduleRes,
   },
 } as const;
 

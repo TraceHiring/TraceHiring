@@ -848,6 +848,9 @@ describe('candidate-facing responses carry no score, band, grade, outcome, cutof
     // M2 (R5-23, R5-24): the portal shapes the candidate reads.
     ['PortalSlotsRes', Candidate.PortalSlotsRes],
     ['PortalMintRes', Candidate.PortalRpcSchemas.portalMint.out],
+    ['OtpVerifyPortalRes', Candidate.OtpVerifyPortalRes],
+    ['OtpVerifyAnyRes', Candidate.OtpVerifyAnyRes],
+    ['PortalRescheduleRes', Candidate.PortalRescheduleRes],
   ];
   it.each(responses)('%s', (_name, schema) => {
     expect(keysMatching(schema, FORBIDDEN)).toEqual([]);
@@ -2034,5 +2037,30 @@ describe('M2: the portal (R5-21, R5-24, E25, rule 5)', () => {
     expect(ok(portal.portalSlots.in, { portalToken: FAKE_JWS })).toBe(true);
     expect(ok(portal.portalReschedule.in, { portalToken: FAKE_JWS, toSlotId: id(6) })).toBe(true);
     expect(ok(portal.portalReschedule.out, { ok: true, slotStartsAt: T1 })).toBe(true);
+  });
+
+  // Wave 1 lead part (pre-flight B4): the public wire shapes of the manage login and the reschedule route.
+  it('a manage OTP verify answers a portal token only (no lobby token, no next step)', () => {
+    const res = { portalToken: FAKE_JWS, expiresAt: T1 };
+    expect(Candidate.OtpVerifyPortalRes.parse(res)).toEqual(res);
+    expect(ok(Candidate.OtpVerifyPortalRes, { ...res, lobbyToken: FAKE_JWS })).toBe(false);
+    expect(ok(Candidate.OtpVerifyPortalRes, { ...res, next: 'age' })).toBe(false);
+    expect(ok(Candidate.OtpVerifyPortalRes, { lobbyToken: FAKE_JWS, expiresAt: T1 })).toBe(false);
+  });
+  it('the verify answer is either the D1 lobby shape or the portal shape, never a mix', () => {
+    const lobby = { lobbyToken: FAKE_JWS, expiresAt: T1, next: 'age' };
+    const portal = { portalToken: FAKE_JWS, expiresAt: T1 };
+    expect(Candidate.OtpVerifyAnyRes.parse(lobby)).toEqual(lobby);
+    expect(Candidate.OtpVerifyAnyRes.parse(portal)).toEqual(portal);
+    expect(ok(Candidate.OtpVerifyAnyRes, { ...lobby, portalToken: FAKE_JWS })).toBe(false);
+    expect(ok(OtpVerifyRes, portal)).toBe(false);
+  });
+  it('POST /v1/portal/reschedule answers ok and the new slot time, the same shape as the RPC', () => {
+    const res = { ok: true, slotStartsAt: T1 };
+    expect(Candidate.PortalRescheduleRes.parse(res)).toEqual(res);
+    expect(ok(Candidate.PortalRescheduleRes, { ...res, available: true })).toBe(false);
+    expect(ok(Candidate.PortalRescheduleRes, { ok: false, slotStartsAt: T1 })).toBe(false);
+    expect(Candidate.PortalRpcSchemas.portalReschedule.out).toBe(Candidate.PortalRescheduleRes);
+    expect(Candidate.PortalRpcSchemas.portalMint.out).toBe(Candidate.OtpVerifyPortalRes);
   });
 });
