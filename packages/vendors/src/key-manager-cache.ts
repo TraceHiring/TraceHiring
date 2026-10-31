@@ -51,14 +51,32 @@ export class CachingKeyManager implements KeyManager {
     this.#maxEntries = maxEntries;
   }
 
+  /**
+   * Drops every entry whose TTL has passed (§9 "DEK cache ≤ 5 min"): run on every put and unwrap, before the size
+   * check, so no key stays referenced past the TTL just because no lookup of it arrives (B1 fix 6). A full pass, not
+   * an early stop at the first live entry, so a clock that steps back cannot leave an expired key behind a live one.
+   */
+  #sweep(now: number): void {
+    for (const [cacheKey, entry] of this.#entries) {
+      if (now >= entry.expiresAt) this.#entries.delete(cacheKey);
+    }
+  }
+
+  /** Test-only probe: how many keys the cache holds right now. */
+  cachedKeyCountForTests(): number {
+    return this.#entries.size;
+  }
+
   #put(cacheKey: string, key: DataKeyHandle): void {
+    const now = this.#now();
+    this.#sweep(now);
     this.#entries.delete(cacheKey);
     while (this.#entries.size >= this.#maxEntries) {
       const oldest = this.#entries.keys().next();
       if (oldest.done === true) break;
       this.#entries.delete(oldest.value);
     }
-    this.#entries.set(cacheKey, { key, expiresAt: this.#now() + this.#ttlMs });
+    this.#entries.set(cacheKey, { key, expiresAt: now + this.#ttlMs });
   }
 
   async generateDataKey(
@@ -82,11 +100,10 @@ export class CachingKeyManager implements KeyManager {
     keyVersion: number,
   ): Promise<DataKeyHandle> {
     const cacheKey = JSON.stringify([orgId, purpose, wrapped, kmsKeyRef, keyVersion]);
+    const now = this.#now();
+    this.#sweep(now);
     const hit = this.#entries.get(cacheKey);
-    if (hit !== undefined) {
-      if (this.#now() < hit.expiresAt) return hit.key;
-      this.#entries.delete(cacheKey);
-    }
+    if (hit !== undefined && now < hit.expiresAt) return hit.key;
     const key = await this.#inner.unwrap(orgId, purpose, wrapped, kmsKeyRef, keyVersion);
     this.#put(cacheKey, key);
     return key;
