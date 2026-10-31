@@ -8,6 +8,8 @@ import { PortalRescheduleRes, PortalSlotsRes } from '@trace/shared/contracts/can
 import { describe, expect, it } from 'vitest';
 import {
   createHarness,
+  LINK,
+  NOW_MS,
   ORIGIN,
   PORTAL_TTL,
   SLOT_A,
@@ -268,5 +270,37 @@ describe('per-invitation portal buckets (R5-24) and no link limiter', () => {
     }
     expect(h.otp.names).toEqual([]);
     expect(h.calls).toEqual([]);
+  });
+});
+
+describe('a rotated link (AT-M2-20 edge part, R2-4): only the latest link works', () => {
+  it('after a reschedule rotates the link, the old link is 404 invalid_link on every link route', async () => {
+    const link = { current: LINK() };
+    const rotated = `${'R'.repeat(21)}${'n'.repeat(22)}`;
+    const h = await createHarness({
+      // api looks the link up by its hash; after the send rotated it, the old hash matches no invitation.
+      inviteResolve: async (input) => {
+        if (input.token !== link.current) throw new Error('invalid_link');
+        return { invitationId: INVITATION, orgId: ORG, candidateId: INVITATION, state: 'sent' };
+      },
+      portalReschedule: async () => {
+        link.current = rotated;
+        return { ok: true, slotStartsAt: new Date(NOW_MS + 86_400_000).toISOString() };
+      },
+    });
+    const portal = await h.loginPortal();
+    expect((await reschedule(h, portal)).status).toBe(200);
+
+    for (const [path, json] of [
+      ['/v1/invite/resolve', { token: LINK() }],
+      ['/v1/otp/request', { token: LINK() }],
+      ['/v1/otp/verify', { token: LINK(), code: '123456' }],
+    ] as const) {
+      const res = await h.request('POST', path, { json });
+      expect({ path, status: res.status }).toEqual({ path, status: 404 });
+      expect(await res.json()).toEqual({ error: 'invalid_link' });
+    }
+    const fresh = await h.request('POST', '/v1/invite/resolve', { json: { token: rotated } });
+    expect(fresh.status).toBe(200);
   });
 });
