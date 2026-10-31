@@ -26,7 +26,12 @@ export interface OutboundMessageV2 {
   bodyHtml?: string;
   /** `${outbound_messages.idempotency_key}:${claim_id}` for drive messages (R3-6). */
   idempotencyKey: string;
-  /** outbound_messages.id (ids only; the SES `msg` tag, R4-6). */
+  /**
+   * outbound_messages.id (ids only; the SES `msg` tag, R4-6). Over SES it is REQUIRED for `invite`, `reminder` and
+   * `reschedule` and must be ABSENT for `otp`: an OTP has no outbound_messages row, so its SES send carries the `org`
+   * tag only and its SNS events are dropped and counted by the webhook (lead decision, B1 fix 2). Either case is
+   * otherwise `bad_message_id`. The outbox and load-sim adapters accept it either way.
+   */
   outboundMessageId?: string;
 }
 

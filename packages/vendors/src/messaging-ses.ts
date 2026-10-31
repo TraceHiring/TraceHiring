@@ -1,7 +1,9 @@
 // SesEmailMessaging (specs/m2-scheduling-invites.md §6.4, M2-15, M2-16, R4-6, R5-27; ADR-034; AT-M2-11, AT-M2-23):
 // SES v2 SendEmail over HTTPS in ap-south-1, signed with aws4fetch, through an injected fetch.
 // - Body: UTF-8 subject, text part and optional HTML part; EmailTags `org` and `msg` (ids only, R4-6, so SNS events
-//   carry the org); optional configuration set (the SNS event destination).
+//   carry the org); optional configuration set (the SNS event destination). `outboundMessageId` is required for
+//   invite, reminder and reschedule and must be absent for otp: an OTP has no outbound_messages row, so it carries
+//   the `org` tag only and its SNS events are dropped and counted by the webhook (lead decision, B1 fix 2).
 // - Recipient guard (founder gate: no real email to real people before M8): outside production only
 //   `@simulator.amazonses.com` addresses and the one test inbox whose HMAC-SHA-256(testRecipientHmacKey, normalised
 //   address) equals allowedTestRecipientHmac (hexEqual) are sent; anything else throws bad_recipient BEFORE any
@@ -154,7 +156,11 @@ export class SesEmailMessaging implements ChannelMessaging {
     const to = normaliseRecipientEmail(m.to);
     if (!(await this.#recipientAllowed(to))) throw new MessagingSendError('bad_recipient');
     if (m.subject === undefined) throw new MessagingSendError('bad_subject');
-    if (m.outboundMessageId === undefined) throw new MessagingSendError('bad_message_id');
+    // An OTP has no outbound_messages row: no id, no `msg` tag (its SNS events are dropped and counted, R4-6).
+    // Every other purpose must carry the id (lead decision, B1 fix 2).
+    if ((m.purpose === 'otp') !== (m.outboundMessageId === undefined)) {
+      throw new MessagingSendError('bad_message_id');
+    }
 
     const bodyParts: Record<string, { Data: string; Charset: 'UTF-8' }> = {
       Text: { Data: m.bodyText, Charset: 'UTF-8' },
@@ -166,10 +172,13 @@ export class SesEmailMessaging implements ChannelMessaging {
       Content: {
         Simple: { Subject: { Data: m.subject, Charset: 'UTF-8' }, Body: bodyParts },
       },
-      EmailTags: [
-        { Name: 'org', Value: m.orgId },
-        { Name: 'msg', Value: m.outboundMessageId },
-      ],
+      EmailTags:
+        m.outboundMessageId === undefined
+          ? [{ Name: 'org', Value: m.orgId }]
+          : [
+              { Name: 'org', Value: m.orgId },
+              { Name: 'msg', Value: m.outboundMessageId },
+            ],
     };
     if (this.#configurationSet !== undefined) request.ConfigurationSetName = this.#configurationSet;
 
