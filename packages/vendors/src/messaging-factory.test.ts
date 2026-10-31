@@ -8,6 +8,7 @@ import { createMessagingV2, parseMessagingFlag } from './messaging-factory.js';
 import type { CreateMessagingV2Options } from './messaging-factory.js';
 import { LoadSimMessaging, seededRandom } from './messaging-loadsim.js';
 import { OutboxMessagingV2 } from './messaging-outbox.js';
+import { PHONE_MOCK_IDEMPOTENCY_KEYS_MAX } from './messaging-phone.js';
 import { SesEmailMessaging } from './messaging-ses.js';
 import { MockSmsMessaging } from './messaging-sms.js';
 import { MockWhatsAppMessaging } from './messaging-whatsapp.js';
@@ -297,6 +298,20 @@ describe('SMS and WhatsApp: mocks behind flags, off by default (M2-2)', () => {
     expect(((await on.send(email()).catch((e: unknown) => e)) as MessagingSendError).code).toBe(
       'channel_refused',
     );
+  });
+
+  it('bounds the idempotency memory: the oldest key is forgotten first (B1 fix 8)', async () => {
+    expect(PHONE_MOCK_IDEMPOTENCY_KEYS_MAX).toBe(10_000);
+    const m = new MockSmsMessaging('dev', { enabled: true });
+    const base = sms();
+    const ids: string[] = [];
+    for (let i = 0; i <= PHONE_MOCK_IDEMPOTENCY_KEYS_MAX; i++) {
+      ids.push((await m.send({ ...base, idempotencyKey: `k-${i}` })).providerMessageId);
+    }
+    // Key 1 is still remembered; key 0 (the oldest) was forgotten when the cap was passed.
+    expect((await m.send({ ...base, idempotencyKey: 'k-1' })).providerMessageId).toBe(ids[1]);
+    const again = await m.send({ ...base, idempotencyKey: 'k-0' });
+    expect(again.providerMessageId).not.toBe(ids[0]);
   });
 
   it('flags must be booleans', () => {
