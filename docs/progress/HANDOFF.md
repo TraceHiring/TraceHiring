@@ -1,5 +1,10 @@
-# HANDOFF — 2026-10-31 00:35 IST (M2 BUILD 1 Wave 0b part 1 on m2/integration; db-types and the full gate wait on a local port block)
-Reason for stopping: usage guard (Max account; 5-hour window ~80% at stop, reset ~01:50 IST; weekly reset at 00:30 IST).
+# HANDOFF — 2026-10-31 07:55 IST (M2 BUILD 1 Wave 0b part 1 + candidate contracts on m2/integration; db-types and the full gate wait on a local port block)
+Reason for stopping: context ~58% (CLAUDE.md: hand off near 60%). Earlier stop 00:35 IST was the usage guard. Update
+07:55: the founder ran `net stop winnat` / `net start winnat`, but 54282-54381 was reserved again (still blocked);
+`docker desktop start` was needed again. Then **`937da1b`** feat(shared): m2 candidate contract changes (R5-23; tests
+first; shared 2195, candidate app 312, edge 469 tests, workspace typecheck 0) — pushed; `m2/integration` tip = `937da1b`.
+Fix to try next (admin, founder): `wsl --shutdown`, `net stop winnat`, `netsh int ipv4 add excludedportrange
+protocol=tcp startport=54320 numberofports=10`, `net start winnat`, then `docker desktop start`.
 Start from `docs/progress/RESUME-PROMPT.md` §4 on **`m1/integration`** (worktree `.claude/worktrees/m1-integration`);
 M2 work lives on **`m2/integration`** (worktree `.claude/worktrees/m2-integration`). The repo wins.
 
@@ -58,10 +63,9 @@ M1 merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` 
    tables, commit `feat(db-types): …`, run `pnpm test:rls` (expect rls 4401, catalog 153; the reset clears the
    leftover org-conc row), delete `.claude/allow-red`, push, check CI on #16. If it is still blocked: keep using the
    docker runner for pgTAP and do step 2's non-DB items; the gate waits.
-2. **Wave 0b remainder on `m2/integration`** (lead only, spec §11.2): candidate contract changes in
-   `contracts-candidate.ts` (R5-23, R5-57, R5-66 c, e: `schedule` phase, `OtpRequestReq.purpose`, `sw` on the grant
-   output, `sessionLive`, portal shapes, `CANDIDATE_ERROR_STATUS` codes, `CandidateRpcSchemas` portal RPCs) with
-   tests; wiring R5-9 (LOGIN_ROLES, HYPERDRIVE_PLAN + PENDING, staging-worker-secrets, check-deploy-vars,
+2. **Wave 0b remainder on `m2/integration`** (lead only, spec §11.2). Candidate contracts are DONE (`937da1b`; the
+   portal RPCs are `PortalRpcSchemas`, merged into `CandidateRpcSchemas` by B2/B4 when they implement them). Left:
+   wiring R5-9 (LOGIN_ROLES, HYPERDRIVE_PLAN + PENDING, staging-worker-secrets, check-deploy-vars,
    test-staging-roles-local, jobs wrangler/env/stage-db, cron `messaging_claim` with `withOrg(null)`, queue
    `trace-messages-<env>` + DLQ, `QUEUE_KINDS`); R5-27 secrets lists + D1 spec 4r row; R5-36 pii-crypto boundaries +
    module README; `KeyManager` in `VENDOR_INTERFACES`; R5-28 `e2e-m2-bulk` job + `e2e-local.mjs --test-scheduled`
@@ -98,4 +102,4 @@ M1 merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` 
 - e2e-local dispatch from an `m1/**` or `m2/**` branch runs no staging job.
 
 ## Verify first
-`git fetch trace` · `git log --oneline -3 m1/integration` · `git rev-parse --short trace/m2/integration` (`e9df567`) · `git status` (both worktrees) · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `pnpm -s verify:fast` · `docker ps` + `docker port supabase_db_trace` (54322 published?) · CI on PR #16 (rls expected red on db-types until step 1)
+`git fetch trace` · `git log --oneline -3 m1/integration` · `git rev-parse --short trace/m2/integration` (`937da1b`) · `git status` (both worktrees) · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `pnpm -s verify:fast` · `docker ps` + `docker port supabase_db_trace` (54322 published?) · CI on PR #16 (rls expected red on db-types until step 1)
