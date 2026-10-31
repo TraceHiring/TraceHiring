@@ -376,6 +376,34 @@ describe('failures and cancel', () => {
     expect(f.calls.at(-1)).toBe(`cancel:${uploadView().uploadId}`);
   });
 
+  it('"Try again" after a failed cancel retries the cancel and sends no further batch', async () => {
+    let down = true;
+    let cancelDown = true;
+    const f = fake(
+      undefined,
+      (call) => (down && call >= 2 ? { ok: false, code: 'unavailable' } : undefined),
+      undefined,
+      false,
+      () =>
+        cancelDown
+          ? { ok: false, code: 'network' }
+          : { ok: true, data: uploadView({ status: 'cancelled' }) },
+    );
+    const r = run(f, 400);
+    await r.start();
+    expect(r.getState().phase).toBe('stopped');
+    down = false;
+    await r.cancel();
+    expect(r.getState()).toMatchObject({ phase: 'stopped', failure: 'network' });
+    const batchesBefore = f.batches.length;
+    cancelDown = false;
+    await r.retry();
+    expect(f.batches).toHaveLength(batchesBefore);
+    expect(f.calls.filter((c) => c.startsWith('cancel'))).toHaveLength(2);
+    expect(f.calls.some((c) => c.startsWith('complete'))).toBe(false);
+    expect(r.getState()).toMatchObject({ phase: 'cancelled', failure: null, invited: 200 });
+  });
+
   it('notes a re-upload of the same file', async () => {
     const f = fake(undefined, undefined, () => ({
       ok: true,
