@@ -229,9 +229,9 @@ describe('sending a file', () => {
     const posted = calls.filter((c) => c.method === 'POST');
     expect(posted.length).toBeGreaterThan(0);
     for (const call of posted) {
-      expect(JSON.stringify(call.body)).not.toMatch(/"adult18":"no"/);
-      expect(JSON.stringify(call.body)).not.toContain('person2@example.test');
-      expect(JSON.stringify(call.body)).not.toContain('person4@example.test');
+      expect(JSON.stringify(call.body ?? null)).not.toMatch(/"adult18":"no"/);
+      expect(JSON.stringify(call.body ?? null)).not.toContain('person2@example.test');
+      expect(JSON.stringify(call.body ?? null)).not.toContain('person4@example.test');
     }
     const rows = calls.filter((c) => c.path.endsWith('/rows'));
     expect(rows.flatMap((c) => (c.body as InviteBatchRequest).rows.map((r) => r.rowNo))).toEqual([

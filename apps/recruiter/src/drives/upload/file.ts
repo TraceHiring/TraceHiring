@@ -1,6 +1,7 @@
 // Reading an invite file in the browser (specs/m2-scheduling-invites.md §6.2, M2-6, M2-7, R2-5, R5-20, E20-E22). The
 // file is CSV only: a spreadsheet is refused whole, so are a column the screen does not know, a date-of-birth or age
-// column (rule 9: ask the 18-or-older column instead) and a file over 5 MB or 5,000 rows. What is left becomes rows in
+// column (rule 9: ask the 18-or-older column instead) and a file over 5 MB or 5,000 rows. A row marked under 18 is
+// refused here as `minor` and never sent (rule 9, minimisation). What is left becomes rows in
 // the api's shape; a row the browser cannot use gets a reason and no value. The api checks everything again.
 import { InviteRow } from '@trace/shared/contracts/m2';
 import { parseCsv } from '../csv';
@@ -136,7 +137,10 @@ function readRow(rowNo: number, columns: readonly Column[], cells: readonly stri
   if (adultText !== '' && adultText !== 'yes' && adultText !== 'no') {
     return { reason: 'bad_adult_value' };
   }
-  const adult18 = adultText === 'yes' ? 'yes' : adultText === 'no' ? 'no' : null;
+  // Rule 9, minimisation (lead decision): a row the file says is under 18 is refused here and never sent, so nothing
+  // about that person leaves this browser. The api still refuses any `no` it receives.
+  if (adultText === 'no') return { reason: 'minor' };
+  const adult18 = adultText === 'yes' ? 'yes' : null;
 
   const slot = cell('slot_starts_at');
   const slotStartsAt = slot === '' ? undefined : parseSlotValue(slot);
