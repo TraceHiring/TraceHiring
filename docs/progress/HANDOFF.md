@@ -1,8 +1,8 @@
-# HANDOFF — 2026-10-31 18:10 IST (M2 BUILD 1 = Wave 0 DONE on m2/integration; next: BUILD 2 = Wave 1)
-Reason for stopping: the chat's task is done (HANDOFF Next step 1 + the Wave 0b remainder) and context is ~56%
-(CLAUDE.md: hand off near 60%). 5-hour window ~5% at stop (it reset at 17:30 IST). Max account.
-Start from `docs/progress/RESUME-PROMPT.md` §4 on **`m1/integration`** (worktree `.claude/worktrees/m1-integration`);
-M2 work lives on **`m2/integration`** (worktree `.claude/worktrees/m2-integration`). The repo wins.
+# HANDOFF — 2026-10-31 22:05 IST (M2 BUILD 2 = Wave 1 DONE and merged on m2/integration; next: BUILD 3 = Wave 2)
+Reason for stopping: the chat's task is done (HANDOFF Next step 2 = Wave 1) and the 5-hour window is at ~88% (Max;
+resets 22:40 IST). Context ~61%. Start from `docs/progress/RESUME-PROMPT.md` §4 on **`m1/integration`** (worktree
+`.claude/worktrees/m1-integration`); M2 work lives on **`m2/integration`** (worktree `.claude/worktrees/m2-integration`).
+The repo wins.
 
 ## Paused: D1 (founder, 2026-10-22: paused, not closed)
 D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/worktrees/d1-integration`). Nothing is committed to `d1/integration` or `main` from M1 or M2. Copied from the `d1/integration` HANDOFF (`3c2e42a`, tip `1547fd0`):
@@ -13,88 +13,85 @@ D1's remaining steps belong to a D1 chat on `d1/integration` (worktree `.claude/
 
 ## Where we are (verified this chat)
 - **M1 · Test authoring:** FIX done → **CLOSE founder-gated** (D1 CLOSE + go-ahead). `m1/integration` = this handoff
-  commit on **`208e5ae`** (dependency advisory fix). CI on draft PR TraceHiring/TraceHiring#14 head `208e5ae`: static,
-  rls, security, migrations **pass**.
-- **M2 · Scheduling & invites: BUILD 1 = Wave 0 DONE.** `m2/integration` tip **`fa0e7cf`** on trace. Draft CI PR
-  **TraceHiring/TraceHiring#16** (`m2/integration → main`, **never merge**): head `fa0e7cf` (run 41201435037) static,
-  rls, security, migrations **pass**; `e2e-m2-bulk` skipped (dispatch-only, as designed).
-- **Local port block is gone:** `docker port supabase_db_trace` → 54322 at chat start (Docker up, stack healthy).
-- Verify-first at chat start matched (m1 `7640e60`, m2 `937da1b`, d1 `1547fd0`, main `da5380d`, clean, verify:fast 0).
+  commit on `ef6455e` (no code change on m1 this chat). CI on draft PR TraceHiring/TraceHiring#14 head `208e5ae`: green.
+- **M2 · Scheduling & invites: BUILD 2 = Wave 1 DONE.** `m2/integration` tip **`5977902`** on trace (fast-forward of
+  `m2/w1-merge`). Full serial gate on `5977902`'s tree (B1+B4 run, then B5 merged and recruiter re-run): typecheck 0,
+  lint 0, unit tests 16/16 packages green (`@trace/config` never-build scan timed out once under load, 547/547 alone),
+  recruiter 1270/1270 after the B5 merge, scripts 2877 pass + 2 skipped, `pnpm test:rls` OK (62 files, rls 4401,
+  catalog 153, db-types current), build 0. **CI on #16 for `5977902`: pushed 22:01 IST, result not yet read.**
+- Verify-first at chat start matched (m1 `ef6455e`, m2 `fa0e7cf`, d1 `1547fd0`, main `da5380d`, clean, verify:fast 0).
 
-## Done this chat
-| Branch | Commit | What |
-| --- | --- | --- |
-| m2 | `498e35d` | db-types regenerated for M2-c (4 tables), pin test first; test:rls 62 files, rls 4401, catalog 153; `.claude/allow-red` removed |
-| m1 | `208e5ae` | fix(deps): vitest 4.1.12 + undici override 7.30.1 (workspace and `docs/spikes/d1-day-one` lockfile; spike osv file deleted), happy-dom 20.14.6; new dated ignores happy-dom GHSA-c8p4 (→11-23) and minimatch GHSA-g3hv (→11-30); full serial gate green on m1 |
-| m2 | `aa67269` | `chore: merge m1/integration` (deps) |
-| m2 | `69b58fb` | R5-9 wiring: `jobs_messaging_login` (LOGIN_ROLES, HYPERDRIVE_PLAN 7/10 + PENDING, retired twin), queue `trace-messages-<env>` + DLQ (batch 10, retries 7), `QUEUE_KINDS`, STAGE_DB `messaging` / `messaging_claim` (`withOrg(null)` list), optional `messagesClaim`, `workers/jobs/src/messaging/stub.ts`, worker types regenerated |
-| m2 | `ddfa1d8` | R5-27 allow-list: api+jobs `AWS_WORKERS_ACCESS_KEY_ID`, `AWS_WORKERS_SECRET_ACCESS_KEY`, `SES_TEST_RECIPIENT_HMAC_KEY`; jobs `JOBS_SMOKE_TOKEN`; D1 spec revision 4r |
-| m2 | `9b1ae14` | R5-36 eslint element `pii-crypto` (→shared only; api, jobs import it) + api modules README; R5-22 `KeyManager` in VENDOR_INTERFACES |
-| m2 | `ae94348` | R5-37 route guard pin (SES webhook passes, `…/confirm` fails); build-notes row "Wave 0b part 2" (lead decisions a–e) |
-| m2 | `ac1ebec` | R5-28 dispatch-only `e2e-m2-bulk` job (input `run_m2_bulk`, 40 min) + `e2e-local.mjs --test-scheduled`; **DC-M2-6** recorded (spec §8) |
-| m2 | `fa0e7cf` | **DC-M2-4** live scenario "two messaging claims at once" (OK); DC-M2-3/5 moved to Waves 1/2 (build-notes); `docs/progress/m2-wave1-preflight.md` |
+## Done this chat (all on m2 unless noted)
+| Commit | What |
+| --- | --- |
+| `40e5635` | pii-crypto skeleton + tsconfig ref + api/jobs deps; `aws4fetch` 1.0.20 (catalog, vendors); `hmacSha256HexKey` (shared, tests first); build-notes decisions a–g |
+| `1d58963` | edge `mountPortalRoutes` stub + mount; `OtpVerifyPortalRes`, `OtpVerifyAnyRes`, `PortalRescheduleRes` (tests first) |
+| `7553f8f` | recruiter drive API surface: contracts (`PageQuery`, `DriveListResponse`, uploads, `DriveInvitationPage`, …), 17 endpoint calls, routes `drives*`, nav "Drives", pins, `tests/m2-routes.test.tsx` |
+| `970436c` | M2 vars (api, jobs; staging `KEY_MANAGER_PROVIDER=kms`) + Env secret types; worker types regenerated; bindings test first |
+| `15bcdbe`, `bb155fd`, `afa94f5`, `ba0d030` | review decision rows (B1, B4, B5); `bb155fd` adds `sessionLive` to `InviteResolveRpcIn`, `portalMint`, `portalReschedule` |
+| `19f930a`, `a708f07`, `5977902` on `m2/w1-merge` | merges of B1, B4, B5 fix branches; lead mounts `e0c1c98` after B1 (vendors index exports; api D1 outbox store narrows kind) |
 
-Full serial gate on `fa0e7cf`'s tree: typecheck 0, lint 0, unit tests green (edge 29/469 and candidate 21/312 hit
-"Timeout starting pool runner" in the long serial run and passed re-run alone; the machine stalled ~2 h once),
-scripts 2871+ green (two files re-run alone after a worker-start timeout), test:rls OK, build 0.
+## Stream branches (M2; all on trace, merged into m2/integration; do not delete)
+- `m2/b1-crypto-vendors` `7dd9e4b` → `m2/b1-fix-1` `2207566` (reviews: spec + security PASS WITH FINDINGS; re-review PASS WITH FINDINGS, all 8 CONFIRMED)
+- `m2/b4-edge` `b32bb69` → `m2/b4-fix-1` `b4fb901` (reviews PASS WITH FINDINGS, 1 High spec gap; re-review **PASS**)
+- `m2/b5-recruiter-drives` `01f74de` → `m2/b5-fix-1` `0ebcc96` (reviews PASS WITH FINDINGS, 4 Medium; re-review **PASS**)
+- `m2/w1-merge` `5977902` = `m2/integration` (merge staging branch; keep).
+M1 stream branches unchanged (see git history of this file at `ef6455e`). Unmerged CI-only: `m1/e2e-specs-2/-3/-4`.
 
 ## In flight at handoff
 - **No agent is running.** No uncommitted work in `m1-integration` or `m2-integration`. No `.claude/allow-red`.
-- Unmerged CI-only branches (do not merge): `m1/e2e-specs-2` `b54091e`, `-3` `1dc427e`, `-4` `62215c1`.
-
-## Stream branches
-M1 merged (do not delete): `m1/a1-packages` · `m1/a5a-fix-1` · `m1/a5b-fix-1` · `m1/a5c-fix-1` · `m1/a4-edge-delivery` · `m1/a4-fix-1` · `m1/a3a-jobs-v2` · `m1/a3a-fix-1` · `m1/a3a-fix-2` · `m1/a3b-jobs-authoring` · `m1/a3b-fix-1` · `m1/a2b-api-tests` · `m1/a2b-fix-1` · `m1/a2a-api-bank` · `m1/a2a-fix-1` · `m1/a2a-fix-1-r2` · `m1/a7-candidate` `b89e2ea` · `m1/a7-fix-1` `91d91be` · `m1/a5d-wizard` `2489db3` · `m1/a5d-fix-1` `07a21d9` · `m1/a5d-fix-2` `abe6064` · `m1/e2e-specs` `cf90491` · `m1/e2e-specs-fix-1` `57973f1` · `m1/a8-templates-rpc` `701df43` · `m1/a8-fix-1` `88557c1` · `m1/a9-bank-rpc` `a585f41` (all on `trace`). Unmerged by founder answer (b): `m1/a5a-fix-2/-3/-4` (zip reader, M8). **M2: no stream branch yet.**
+- CI run on #16 for `5977902` (started by the 22:01 push): read it first; fix Linux CI failures before other work.
 
 ## Next step (one precise action list)
-1. Verify first (below). `pnpm -s verify:fast` (parallel) failed twice at 18:10 on m1 with different flakes: under
-   load, timing-sensitive tests (candidate `TestV2` clock, recruiter import 19 s tests; green in the serial gate), and
-   once `scripts/test/gitleaks-config.test.mjs` "finds an api_key value starting with true" (its value is random,
-   `scripts/test/fixtures/gitleaks-config.mjs:84`; green on two re-runs). Re-run before judging; a small follow-up
-   is to make that value deterministic.
-2. **M2 BUILD 2 = Wave 1, lead part first** (spec §11.4), from `docs/progress/m2-wave1-preflight.md`, tests first,
-   on `m2/integration`: take each "decide" item (record in build-notes): blind-index key type vs
-   `hmacSha256Hex`; pii-crypto takes keys as parameters; `HMAC_KEY` text vs `check-boundaries` (exemption or option
-   name); Messaging v2 vs D1 callers (keep D1 exports beside v2 until B2); `email_hint` CHECK vs `_`/`-`/`.`; B4
-   test-helper ownership. Then add: `packages/pii-crypto` skeleton (item-variants layout) + root tsconfig ref + api/jobs
-   deps; `aws4fetch` **1.0.20** (registry: 2024-08-28, MIT, no deps) in the catalog + `packages/vendors`; wrangler
-   vars + Env types (`MESSAGING_EMAIL_PROVIDER` api+jobs, `SES_ALLOWED_TEST_RECIPIENT_HMAC` api+jobs, SNS topic ARN api
-   (name it; F-4), AWS/SES/smoke secrets in the Env types); edge `mountPortalRoutes` + `routes-portal.ts` stub; wire
-   schemas for the manage-OTP verify response and `POST /v1/portal/reschedule`; **the recruiter drive API surface**
-   (blocker for B5: drive list/transitions, slots list, upload create/complete/cancel, paged invitations, revoke-all,
-   move-to-slot) as `contracts-m2.ts` schemas + `apps/recruiter/src/api/endpoints.ts` + routes/nav + their pins.
-3. Then writers B1 (Opus), B4 (Opus), B5 (Sonnet writer, Opus review) with the common brief adapted to m2
-   (`docs/progress/m1-writer-brief-common.md`), each in its own worktree reset to an exact `m2/integration` SHA;
-   Opus first reviews (spec, security; database where SQL), fixes test first, confirming re-review, merge, test:rls,
-   full serial verify, CI on #16. DC-M2-5 with B1's real code.
-4. **M1 CLOSE is founder-gated** (D1 CLOSE + go-ahead): then merge `main` into `m1/integration`, re-timestamp M1
-   migrations, re-derive the seven replaced guards, full verify, `docs/milestones/M1-summary.md` §9, CLOSE PR, tag
-   `m1-reviewed`. Do not start it before both gates.
+1. `gh pr checks 16 --repo TraceHiring/TraceHiring` for head `5977902`: static, rls, security, migrations must pass.
+2. **DC-M2-5** (lead, local; spec §8): measure WebCrypto AES-GCM + HMAC cost for a 200-row batch with the real
+   `packages/pii-crypto` (`protectContact`), record in spec §8 and build-notes.
+3. **M2 BUILD 3 = Wave 2** (spec §11.3–§11.4): a read-only Sonnet pre-flight for B2 (api), B3 (jobs), B6 (candidate
+   app). Known owed items (build-notes 2026-10-31 rows): api `DemoOutboxDO` + D1 outbox list contract widened to four
+   purposes (`outbox_kind_unsupported` narrow in `services/api/src/modules/outbox/outbox-writer.ts` until then);
+   shared `MessageProvider` enum; published version id for a test with an open draft (recruiter); drive-route error
+   codes + words in `apps/recruiter/src/drives/messages.ts`; `PortalRpcSchemas` merged into `CandidateRpcSchemas`
+   (drop the spread in `workers/edge/src/rpc.ts`); B2 must implement the api behaviour B4's fakes assume (build-notes
+   "B4 first reviews" e and the B4 writer list: `inviteResolve` with `sessionLive` → `schedule: null`, lobby window
+   refusals, `lobbyMint` caps, `sessionGrant` window/`sw`, portal RPCs incl. `too_late_to_reschedule` while live, a
+   portal token refused after start/revoke/used reschedule); B3 passes a `ctx.waitUntil` scheduler to loadsim and
+   `org_keys.key_version` to `unwrap`; `KEY_MANAGER_DEV_KEK` wiring (+ staging secret row at the staging go-ahead);
+   DC-M2-3 with B3's real code. Then the lead part (tests first), then writers B2, B3, B6 (Opus) with reviews per §11.3.
+4. **M1 CLOSE is founder-gated** (D1 CLOSE + go-ahead), unchanged from the previous handoff.
 5. Dependency bumps still owed: fast-uri override 3.1.9 on/after 2026-11-02 (osv ignores expire 11-09); happy-dom
-   21.0.4 from 2026-11-03 (ignores GHSA-834v, GHSA-c8p4 expire 11-23); minimatch GHSA-g3hv re-check by 11-30. Lead
-   commits on `m1/integration`, then `chore: merge m1/integration` into `m2/integration`.
-6. Staging-only checks need a founder-approved staging dispatch: M1 (A2b Low 2 R2 `onlyIf`, DC-M1-1/5/6 staging halves,
-   AT-M1-10 on staging, largest from-template call under 8 s); M2 (AT-M2-12, DC-M2-1/2, DC-M2-3/5 staging halves).
+   21.0.4 from 2026-11-03 (GHSA-834v, GHSA-c8p4 expire 11-23); minimatch GHSA-g3hv re-check by 11-30. Lead commits on
+   `m1/integration`, then `chore: merge m1/integration` into `m2/integration`.
+6. Staging-only checks still need a founder-approved staging dispatch (M1 and M2 lists unchanged).
 
-## Decisions made this chat (lead, AUTOPILOT §4; build-notes rows 2026-10-31)
-- Deps: bump owed versions now; dated ignores for fixes only in a new major (happy-dom 21, minimatch 11).
-- R5-9: consumer batch 10; stub consumer until B3; `messagesClaim` unset until B3; cross-org stage list constant.
-- R5-27: smoke secret `JOBS_SMOKE_TOKEN`; AWS pair names from F-2; wrangler vars deferred to the Wave 1 lead part.
-- R5-22/36/37: KeyManager exports at B1's merge; pii-crypto edges; api ALLOWED entries at B2's merge, edge
-  route-inventory test is B4's.
-- DC-M2-4 as a permanent concurrency scenario; DC-M2-3/5 measured with B3/B1's real code.
+## Decisions made this chat (lead, AUTOPILOT §4; build-notes rows 2026-10-31 "Wave 1 lead part", "B1/B4/B5 first reviews", "B5 writer report")
+- Blind-index key = HMAC `CryptoKey`; pii-crypto takes keys as parameters; Messaging v2 beside D1; email hint first
+  char = first `[a-z0-9]` (no migration; M2-4 narrowed by the hint CHECK); env names (g).
+- v2 outbox takes all four purposes; OTP over SES has no `msg` tag; key version bound into wrapping.
+- A live DO session counts as started on resolve and on the portal (R5-66 c); photos close after the DO window check.
+- The browser refuses known minors (never posted); one "Mark as different people" per held row; age columns refused
+  like DOB (rule 9 safe default); reminder plan per slot computed in the page.
 
 ## Founder items
-- No new blocking item. The Windows port block resolved itself (no admin action needed now).
-- Unchanged M1 items: coverage when tab focus is off (default a); D1 integrity job re-delivered after M1 (default a); M1-15 "shared-device" copy (default: leave out); import cancel keeps rows (default a); M1 staging Hyperdrive configs + secrets; Q-M1-1…Q-M1-4; OPEN-8a Workers Paid; written AI drafts; zip reader answered (b).
-- M2 (rows on `m2/integration`'s `docs/progress/FOUNDER-QUEUE.md`): Q-M2-1…Q-M2-4; F-2…F-5 + the `jobs_messaging_login` Hyperdrive config.
+- No new blocking item. Unchanged M1 and M2 items (FOUNDER-QUEUE on each branch): Q-M2-1…Q-M2-4, F-2…F-5, the
+  `jobs_messaging_login` Hyperdrive config, M1 staging items, OPEN-8a.
 
 ## Gotchas
-- Worktree guard: no `cd …&&`, `git -C`, `$(...)`, loops, compound or piped git commands, no `powershell`; commit messages via `git commit -F <unique file>` (body lines ≤ 100 chars); merges `chore: merge …`. Use EnterWorktree to switch worktrees. Multi-line edits: a node replace script with a JSON spec file avoids shell quoting.
-- `node scripts/db-types.mjs` and `pnpm test:rls` RESET the local database: never while a writer or reviewer runs db-tests.
-- **Slow machine:** long serial runs hit vitest "Timeout starting pool runner"; re-run that package alone (`pnpm --filter <pkg> test`) or resume with `pnpm -r --workspace-concurrency=1 --resume-from <pkg> test`. `pnpm lint` can exceed 10 min: run it in the background.
-- wrangler dev experiments: a short `--persist-to` path (long paths give SQLITE_CANTOPEN); stopping the task leaves workerd/node children — kill the tree (`taskkill //PID <pid> //T //F`) after checking the image name.
-- M2 pgTAP: edit `docs/progress/m2-wave0-drafts/pgtap/{preamble.sql,bodies/*.sql}`, regenerate with `node docs/progress/m2-wave0-drafts/pgtap/gen.mjs . <names>`; never read a table and call a state-changing function in one statement.
-- **RAM:** gate serially: `pnpm -r --workspace-concurrency=1 typecheck`, `pnpm lint`, `pnpm -r --workspace-concurrency=1 test`, `pnpm exec vitest run --root scripts --maxWorkers=1`, `pnpm test:rls`, `pnpm -r --workspace-concurrency=1 build`.
+- Writers: launch each with Agent isolation "worktree"; **never resume a writer with SendMessage after an API error**
+  (the resumed agent is pinned to the lead's worktree and loses its own; relaunch fresh — happened to B1 this chat).
+- Merge streams on a staging branch (`m2/w1-merge` pattern), run the full serial gate, then fast-forward
+  `m2/integration`; a fix branch based on an older tip may need `git merge --no-ff <lead commit>` first.
+- `check-boundaries` rule 1 rejects the text `HMAC_KEY` (any case) under `packages/` and `workers/edge/`; the
+  bindings test rejects var names with `HMAC` except the exempted `SES_ALLOWED_TEST_RECIPIENT_HMAC`.
+- Worktree guard: no heredocs, `cd …&&`, `git -C`, `$(...)`, compound or piped git commands; commit messages via
+  `git commit -F <unique file>`. Network to github can reset: retry the push.
+- **Slow machine:** long serial runs can time out a single test ("Test timed out in 5000ms" in the never-build scan, or
+  "Timeout starting pool runner"); re-run that package alone, then `--resume-from <pkg>`. `pnpm lint` > 10 min: run it
+  in the background. `node scripts/db-types.mjs` and `pnpm test:rls` RESET the local database.
+- **RAM:** gate serially: `pnpm -r --workspace-concurrency=1 typecheck`, `pnpm lint`, `pnpm -r
+  --workspace-concurrency=1 test`, `pnpm exec vitest run --root scripts --maxWorkers=1`, `pnpm test:rls`,
+  `pnpm -r --workspace-concurrency=1 build`.
 
 ## Verify first
-`git fetch trace` · `git log --oneline -3 m1/integration` · `git rev-parse --short trace/m2/integration` (`fa0e7cf`) · `git status` (both worktrees) · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short trace/main` (`da5380d`) · `pnpm -s verify:fast` · `docker port supabase_db_trace` (54322) · CI on #16 (`fa0e7cf`) and #14 (`208e5ae`)
+`git fetch trace` · `git log --oneline -3 m1/integration` · `git rev-parse --short trace/m2/integration` (`5977902`) ·
+`git status` (both worktrees) · `git rev-parse --short trace/d1/integration` (`1547fd0`) · `git rev-parse --short
+trace/main` (`da5380d`) · `pnpm -s verify:fast` · `docker port supabase_db_trace` (54322) · CI on #16 (`5977902`) and #14 (`208e5ae`)

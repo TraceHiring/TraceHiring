@@ -8,7 +8,14 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-31 18:10 IST (newest), M2 BUILD 1 = Wave 0 DONE:** on `m2/integration` (tip `fa0e7cf`): db-types
+- **Update 2026-10-31 22:05 IST (newest), M2 BUILD 2 = Wave 1 DONE:** `m2/integration` tip `5977902` on trace
+  (fast-forward of `m2/w1-merge`): lead part `40e5635` (pii-crypto skeleton, aws4fetch, decisions), `1d58963` (portal
+  stub, manage-OTP and reschedule wire shapes), `7553f8f` (recruiter drive API surface, routes, nav), `970436c` (M2
+  vars and Env types), decision rows `15bcdbe`, `bb155fd` (sessionLive contract), `afa94f5`, `ba0d030`; streams
+  merged after Opus first reviews, fix rounds and confirming re-reviews: B1 `m2/b1-fix-1` `2207566`, B4
+  `m2/b4-fix-1` `b4fb901`, B5 `m2/b5-fix-1` `0ebcc96`; full serial gate green. Next chat: CI on #16 for `5977902`,
+  DC-M2-5, then **BUILD 3 = Wave 2** (pre-flight, lead part, writers B2, B3, B6; HANDOFF "Next step").
+- **Update 2026-10-31 18:10 IST, M2 BUILD 1 = Wave 0 DONE:** on `m2/integration` (tip `fa0e7cf`): db-types
   for M2-c `498e35d`; R5-9 wiring `69b58fb`; R5-27 `ddfa1d8`; R5-36/R5-22 `9b1ae14`; R5-37 `ae94348`; R5-28 +
   DC-M2-6 `ac1ebec`; DC-M2-4 + Wave 1 pre-flight `fa0e7cf`. Deps advisory fix `208e5ae` on `m1/integration` (merged into
   m2). Port block gone. Next chat: **BUILD 2 = Wave 1**, lead part first from `docs/progress/m2-wave1-preflight.md`
@@ -242,14 +249,16 @@ D1 is PAUSED, not closed (founder, 2026-10-22): its remaining steps are in HANDO
 chat, not this one. Never commit to d1/integration or main. M1 merges to main only after the D1 CLOSE and with the
 founder's go-ahead.
 
-THIS CHAT = HANDOFF "In flight" first, then HANDOFF "Next step" in order (as of 2026-10-31 18:10 IST: M1 CLOSE
-waits for the D1 CLOSE and the founder's go-ahead; M2 BUILD 1 = Wave 0 is DONE on m2/integration (tip fa0e7cf; draft
-CI PR TraceHiring/TraceHiring#16); the next step is HANDOFF Next step 2 = M2 BUILD 2 (Wave 1): first the lead part
-from docs/progress/m2-wave1-preflight.md (decisions, pii-crypto skeleton, aws4fetch, vars and Env types, portal
-mount, wire schemas, the recruiter drive API surface), tests first, then writers B1, B4, B5, on m2/integration
-(worktree .claude/worktrees/m2-integration, enter it with EnterWorktree; on a new machine `git worktree add -b
-m2/integration .claude/worktrees/m2-integration trace/m2/integration`), per specs/m2-scheduling-invites.md §11.3-§11.4
-and binding rows §1.8 R5-1…R5-66).
+THIS CHAT = HANDOFF "In flight" first, then HANDOFF "Next step" in order (as of 2026-10-31 22:05 IST: M1 CLOSE
+waits for the D1 CLOSE and the founder's go-ahead; M2 BUILD 2 = Wave 1 is DONE and merged on m2/integration (tip
+5977902; draft CI PR TraceHiring/TraceHiring#16, check its CI first); the next steps are DC-M2-5 (lead, local, with
+packages/pii-crypto) and M2 BUILD 3 (Wave 2): a read-only pre-flight agent for streams B2 (api), B3 (jobs), B6
+(candidate app), then the lead part it lists (tests first; owed items in the docs/build-notes.md rows dated
+2026-10-31), then writers B2, B3, B6 (all Opus), on m2/integration (worktree .claude/worktrees/m2-integration, enter
+it with EnterWorktree; on a new machine `git worktree add -b m2/integration .claude/worktrees/m2-integration
+trace/m2/integration`), per specs/m2-scheduling-invites.md §11.3-§11.4 and binding rows §1.8 R5-1…R5-66). Writers
+need their OWN worktree: launch each with Agent isolation "worktree"; never resume a writer with SendMessage after an
+error (a resumed agent loses its worktree): relaunch it fresh.
 M2 writers (later waves) use the common brief docs/progress/m1-writer-brief-common.md adapted to m2 (branches
 m2/<stream>) plus a self-contained stream brief, their own worktree (Agent isolation "worktree") and
 `git reset --hard <exact SHA>`; each stream gets Opus first reviews (spec, security, database), fixes test first, a
