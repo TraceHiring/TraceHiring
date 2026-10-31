@@ -1,12 +1,13 @@
 // The slots of a scheduled drive (specs/m2-scheduling-invites.md §3.2 slots, §5 SlotsCreateRequest, §6.1): booked of
 // capacity in IST, in cursor pages, and a form that creates slots by generator or by list while the drive is a draft or
-// published. Candidates never see these counts (E25); this is the staff view.
+// published. Each slot shows its reminder plan (§6.1, M2-13, E8): slot start minus each of the drive's offsets in IST, or
+// "skipped" when that time has passed. Candidates never see these counts (E25); this is the staff view.
 import type { SlotView } from '@trace/shared/contracts/m2';
 import ui from '../common/Ui.module.css';
 import { PagerControls } from './PagerControls';
 import type { SlotForm, SlotHow } from './slot-form';
 import { SLOT_STATUS_LABEL } from './texts';
-import { formatIst } from './time';
+import { formatIst, minutesToWords, reminderPlan } from './time';
 import type { PagerState } from './use-pager';
 import { driveErrorText } from './messages';
 
@@ -16,6 +17,10 @@ export interface SlotsPanelProps {
   hasNext: boolean;
   onPrevious(): void;
   onNext(): void;
+  /** The drive's reminder offsets, for the reminder plan of each slot (§6.1, M2-13). */
+  reminderOffsetsMinutes: readonly number[];
+  /** "Now" in ms, so a reminder whose time has passed shows as skipped (E8). */
+  now: number;
   /** False once the drive is closed or cancelled: the list stays, the form goes. */
   canCreate: boolean;
   form: SlotForm;
@@ -27,7 +32,41 @@ export interface SlotsPanelProps {
   onCreate(): void;
 }
 
-function SlotTable({ rows }: { rows: readonly SlotView[] }) {
+/** One slot's reminders: when each goes, in IST, or that it is skipped because its time has passed. */
+function ReminderPlan({
+  slot,
+  offsets,
+  now,
+}: {
+  slot: SlotView;
+  offsets: readonly number[];
+  now: number;
+}) {
+  if (slot.status === 'cancelled') return <>—</>;
+  const plan = reminderPlan(slot.startsAt, offsets, now);
+  if (plan.length === 0) return <>None</>;
+  return (
+    <>
+      {plan.map((reminder) => (
+        <div key={reminder.offsetMinutes}>
+          {`${minutesToWords(reminder.offsetMinutes)} before: ${
+            reminder.skipped ? 'skipped, that time has passed' : formatIst(reminder.at)
+          }`}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function SlotTable({
+  rows,
+  offsets,
+  now,
+}: {
+  rows: readonly SlotView[];
+  offsets: readonly number[];
+  now: number;
+}) {
   if (rows.length === 0) return <p className={ui.note}>No slots yet.</p>;
   return (
     <table className={ui.table}>
@@ -38,6 +77,7 @@ function SlotTable({ rows }: { rows: readonly SlotView[] }) {
           <th scope="col">Status</th>
           <th scope="col">Lobby opens</th>
           <th scope="col">Start window</th>
+          <th scope="col">Reminders (IST)</th>
         </tr>
       </thead>
       <tbody>
@@ -52,6 +92,9 @@ function SlotTable({ rows }: { rows: readonly SlotView[] }) {
             </td>
             <td>{`${String(slot.lobbyOpensMinutes)} minutes before`}</td>
             <td>{`${String(slot.startWindowMinutes)} minutes`}</td>
+            <td>
+              <ReminderPlan slot={slot} offsets={offsets} now={now} />
+            </td>
           </tr>
         ))}
       </tbody>
@@ -192,7 +235,9 @@ export function SlotsPanel(props: SlotsPanelProps) {
           {driveErrorText(state.code)}
         </p>
       )}
-      {state.kind === 'ready' && <SlotTable rows={state.rows} />}
+      {state.kind === 'ready' && (
+        <SlotTable rows={state.rows} offsets={props.reminderOffsetsMinutes} now={props.now} />
+      )}
       <PagerControls
         hasPrevious={props.hasPrevious}
         hasNext={props.hasNext}

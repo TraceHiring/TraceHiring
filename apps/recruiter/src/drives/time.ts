@@ -106,3 +106,30 @@ export function offsetsSentence(offsets: readonly number[], anchor: 'start' | 'd
   const list = words.length === 1 ? last : `${words.slice(0, -1).join(', ')} and ${last}`;
   return `${list} before the ${anchor}`;
 }
+
+export interface PlannedReminder {
+  offsetMinutes: number;
+  /** When the reminder would go, as an ISO instant. */
+  at: string;
+  /** True when that time is already past: the reminder is not sent (M2-13, E8). */
+  skipped: boolean;
+}
+
+/**
+ * The reminder plan of one slot as the page shows it (§6.1, M2-13): slot start minus each offset, longest first; a
+ * time at or before `nowMs` is skipped. Display only: the server plans and sends the real reminders.
+ */
+export function reminderPlan(
+  startsAt: string,
+  offsetsMinutes: readonly number[],
+  nowMs: number,
+): PlannedReminder[] {
+  const start = Date.parse(startsAt);
+  if (Number.isNaN(start)) return [];
+  return [...offsetsMinutes]
+    .sort((a, b) => b - a)
+    .map((offsetMinutes) => {
+      const at = start - offsetMinutes * 60_000;
+      return { offsetMinutes, at: new Date(at).toISOString(), skipped: at <= nowMs };
+    });
+}

@@ -55,6 +55,9 @@ export function DriveRoute() {
 function DriveScreen({ driveId }: { driveId: string }) {
   const api = useApi();
   const [drive, setDrive] = useState<DriveState>({ kind: 'loading' });
+  // "Now" for the slots' reminder plans (a reminder whose time has passed shows as skipped); taken when the screen
+  // opens, and again whenever the drive or its slots are loaded afresh.
+  const [now, setNow] = useState(() => Date.now());
   const ready = drive.kind === 'ready';
   const scheduled = drive.kind === 'ready' && drive.drive.mode === 'scheduled';
 
@@ -63,6 +66,7 @@ function DriveScreen({ driveId }: { driveId: string }) {
     let live = true;
     void getDrive(api, driveId).then((result) => {
       if (!live) return;
+      setNow(Date.now());
       setDrive(
         result.ok ? { kind: 'ready', drive: result.data } : { kind: 'error', code: result.code },
       );
@@ -175,6 +179,7 @@ function DriveScreen({ driveId }: { driveId: string }) {
       const n = result.data.slots.length;
       setSlotNotice(`${String(n)} slot${n === 1 ? '' : 's'} created.`);
       setSlotForm((f) => ({ ...EMPTY_SLOT_FORM, how: f.how }));
+      setNow(Date.now());
       slots.reset();
     } else {
       setSlotError(result.code);
@@ -280,6 +285,8 @@ function DriveScreen({ driveId }: { driveId: string }) {
               hasNext={slots.hasNext}
               onPrevious={slots.previous}
               onNext={slots.next}
+              reminderOffsetsMinutes={drive.drive.reminderOffsetsMinutes}
+              now={now}
               canCreate={drive.drive.status === 'draft' || drive.drive.status === 'scheduled'}
               form={slotForm}
               problems={slotProblems}
