@@ -1,7 +1,8 @@
 // CachingKeyManager (specs/m2-scheduling-invites.md §6.3 "unwrap DEK (cache ≤ 5 min per isolate)", §9 DEK cache
-// lifetime): caches unwrapped keys per (org, purpose, wrapped blob, key reference) for at most 300 s by an injected
-// clock, bounded in size (oldest first out). Only non-extractable CryptoKeys are cached; a failure is never cached,
-// and a wrong org or purpose is a different cache key, so it still reaches the inner manager and fails there.
+// lifetime): caches unwrapped keys per (org, purpose, wrapped blob, key reference, key version) for at most 300 s by
+// an injected clock, bounded in size (oldest first out). Only non-extractable CryptoKeys are cached; a failure is never
+// cached, and a wrong org, purpose or key version is a different cache key, so it still reaches the inner manager and
+// fails there.
 import { KeyManagerError } from './key-manager.js';
 import type { DataKey, DataKeyHandle, KeyManager, KeyPurpose } from './key-manager.js';
 
@@ -66,7 +67,10 @@ export class CachingKeyManager implements KeyManager {
     options?: { keyVersion?: number },
   ): Promise<DataKey> {
     const dk = await this.#inner.generateDataKey(orgId, purpose, options);
-    this.#put(JSON.stringify([orgId, purpose, dk.wrapped, dk.kmsKeyRef]), dk.plaintext);
+    this.#put(
+      JSON.stringify([orgId, purpose, dk.wrapped, dk.kmsKeyRef, dk.keyVersion]),
+      dk.plaintext,
+    );
     return dk;
   }
 
@@ -75,14 +79,15 @@ export class CachingKeyManager implements KeyManager {
     purpose: KeyPurpose,
     wrapped: string,
     kmsKeyRef: string,
+    keyVersion: number,
   ): Promise<DataKeyHandle> {
-    const cacheKey = JSON.stringify([orgId, purpose, wrapped, kmsKeyRef]);
+    const cacheKey = JSON.stringify([orgId, purpose, wrapped, kmsKeyRef, keyVersion]);
     const hit = this.#entries.get(cacheKey);
     if (hit !== undefined) {
       if (this.#now() < hit.expiresAt) return hit.key;
       this.#entries.delete(cacheKey);
     }
-    const key = await this.#inner.unwrap(orgId, purpose, wrapped, kmsKeyRef);
+    const key = await this.#inner.unwrap(orgId, purpose, wrapped, kmsKeyRef, keyVersion);
     this.#put(cacheKey, key);
     return key;
   }

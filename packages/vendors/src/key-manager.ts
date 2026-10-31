@@ -27,18 +27,25 @@ export interface DataKey {
 }
 
 export interface KeyManager {
-  /** A fresh data key for (org, purpose). `options.keyVersion` (default 1) is recorded, not interpreted. */
+  /**
+   * A fresh data key for (org, purpose, key version). `options.keyVersion` (default 1) is bound into the wrap (the
+   * dev AAD, the KMS EncryptionContext `kv`), so the same version must be given to `unwrap`.
+   */
   generateDataKey(
     orgId: string,
     purpose: KeyPurpose,
     options?: { keyVersion?: number },
   ): Promise<DataKey>;
-  /** The key a wrapped blob holds; fails (unwrap_failed) when it was wrapped for another org or purpose. */
+  /**
+   * The key a wrapped blob holds; fails (unwrap_failed) when it was wrapped for another org, purpose or key version.
+   * `keyVersion` is org_keys.key_version and is required (an invalid one is bad_key_version, before any request).
+   */
   unwrap(
     orgId: string,
     purpose: KeyPurpose,
     wrapped: string,
     kmsKeyRef: string,
+    keyVersion: number,
   ): Promise<DataKeyHandle>;
 }
 
@@ -100,11 +107,16 @@ export function assertWrapped(wrapped: unknown): asserts wrapped is string {
   }
 }
 
-export function keyVersionOf(options: { keyVersion?: number } | undefined): number {
-  const v = options?.keyVersion ?? INITIAL_KEY_VERSION;
+/** Throws KeyManagerError('bad_key_version') unless `v` is an integer in [1, 2^31 − 1] (org_keys.key_version). */
+export function assertKeyVersion(v: unknown): asserts v is number {
   if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 2_147_483_647) {
     throw new KeyManagerError('bad_key_version');
   }
+}
+
+export function keyVersionOf(options: { keyVersion?: number } | undefined): number {
+  const v = options?.keyVersion ?? INITIAL_KEY_VERSION;
+  assertKeyVersion(v);
   return v;
 }
 

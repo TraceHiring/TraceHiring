@@ -1,11 +1,13 @@
 // DevKeyManager (specs/m2-scheduling-invites.md M2-3, AT-M2-33): the KMS stand-in for dev and staging. It wraps each
 // fresh 256-bit data key with AES-256-GCM under a wrapping key derived (HKDF-SHA-256) from a key-encryption key passed
-// in as bytes (≥ 32; the wiring reads it from a Worker secret). The AAD binds org, purpose and the key reference, so a
-// blob unwrapped for another org or purpose fails, as KMS's EncryptionContext does. kms_key_ref is `dev:1`.
+// in as bytes (≥ 32; the wiring reads it from a Worker secret). The AAD binds org, purpose, the key reference and the
+// key version, so a blob unwrapped for another org, purpose or key version fails, as KMS's EncryptionContext does
+// (B1 fix 3). kms_key_ref is `dev:1`.
 // Production refuses it (createKeyManager and this constructor, via assertDevKeyManagerEnv).
 import {
   DATA_KEY_BYTES,
   KeyManagerError,
+  assertKeyVersion,
   assertOrgAndPurpose,
   assertWrapped,
   base64ToBytes,
@@ -29,8 +31,10 @@ export function assertDevKeyManagerEnv(env: unknown): asserts env is 'dev' | 'st
   }
 }
 
-const aad = (orgId: string, purpose: KeyPurpose): Uint8Array =>
-  new TextEncoder().encode(`trace:dek:v1|org:${orgId}|purpose:${purpose}|ref:${DEV_KEY_REF}`);
+const aad = (orgId: string, purpose: KeyPurpose, keyVersion: number): Uint8Array =>
+  new TextEncoder().encode(
+    `trace:dek:v1|org:${orgId}|purpose:${purpose}|ref:${DEV_KEY_REF}|kv:${keyVersion}`,
+  );
 
 export class DevKeyManager implements KeyManager {
   readonly #env: 'dev' | 'staging';
@@ -78,7 +82,7 @@ export class DevKeyManager implements KeyManager {
     const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
     const sealed = new Uint8Array(
       await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv, additionalData: aad(orgId, purpose) },
+        { name: 'AES-GCM', iv, additionalData: aad(orgId, purpose, keyVersion) },
         await this.#wrapKey(),
         raw,
       ),
@@ -95,10 +99,12 @@ export class DevKeyManager implements KeyManager {
     purpose: KeyPurpose,
     wrapped: string,
     kmsKeyRef: string,
+    keyVersion: number,
   ): Promise<DataKeyHandle> {
     assertDevKeyManagerEnv(this.#env);
     assertOrgAndPurpose(orgId, purpose);
     assertWrapped(wrapped);
+    assertKeyVersion(keyVersion);
     if (kmsKeyRef !== DEV_KEY_REF) throw new KeyManagerError('bad_key_ref');
     const blob = base64ToBytes(wrapped);
     if (blob === null || blob.length !== IV_BYTES + DATA_KEY_BYTES + 16) {
@@ -108,7 +114,11 @@ export class DevKeyManager implements KeyManager {
     try {
       raw = new Uint8Array(
         await crypto.subtle.decrypt(
-          { name: 'AES-GCM', iv: blob.slice(0, IV_BYTES), additionalData: aad(orgId, purpose) },
+          {
+            name: 'AES-GCM',
+            iv: blob.slice(0, IV_BYTES),
+            additionalData: aad(orgId, purpose, keyVersion),
+          },
           await this.#wrapKey(),
           blob.slice(IV_BYTES),
         ),

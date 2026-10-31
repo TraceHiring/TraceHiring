@@ -1,7 +1,8 @@
 // AwsKmsKeyManager (specs/m2-scheduling-invites.md M2-3, M2-16, E18, AT-M2-33; ADR-034): per-org data keys from
 // AWS KMS in ap-south-1 over the KMS JSON API (`TrentService.GenerateDataKey` with KeySpec AES_256, and
 // `TrentService.Decrypt`), signed with aws4fetch through an injected fetch. Both calls carry the EncryptionContext
-// { org, purpose }, so a blob wrapped for one org or purpose does not decrypt for another (KMS refuses it).
+// { org, purpose, kv } (string values; kv = the key version, B1 fix 3), so a blob wrapped for one org, purpose or
+// key version does not decrypt for another (KMS refuses it).
 // kms_key_ref is the key ARN. The plaintext key bytes are imported as a non-extractable CryptoKey and zeroed.
 // Errors carry codes only: 5xx and network errors → kms_unavailable, 429 / ThrottlingException → kms_throttled
 // (both retryable; the api answers 503 crypto_unavailable, E18); InvalidCiphertext / IncorrectKey → unwrap_failed;
@@ -9,6 +10,7 @@
 import {
   KeyManagerError,
   WRAPPED_KEY_MAX_LENGTH,
+  assertKeyVersion,
   assertOrgAndPurpose,
   assertWrapped,
   base64ToBytes,
@@ -32,6 +34,13 @@ export interface AwsKmsKeyManagerOptions extends AwsCredentials {
   now?: () => Date;
   timeoutMs?: number;
 }
+
+/** The KMS EncryptionContext: string values only (KMS requires strings). */
+const encryptionContext = (orgId: string, purpose: KeyPurpose, keyVersion: number) => ({
+  org: orgId,
+  purpose,
+  kv: String(keyVersion),
+});
 
 const UNWRAP_FAILED_TYPES: readonly string[] = [
   'InvalidCiphertextException',
@@ -127,7 +136,7 @@ export class AwsKmsKeyManager implements KeyManager {
     const out = await this.#call('GenerateDataKey', {
       KeyId: this.#keyArn,
       KeySpec: 'AES_256',
-      EncryptionContext: { org: orgId, purpose },
+      EncryptionContext: encryptionContext(orgId, purpose, keyVersion),
     });
     const { CiphertextBlob, Plaintext, KeyId } = out;
     if (
@@ -151,16 +160,18 @@ export class AwsKmsKeyManager implements KeyManager {
     purpose: KeyPurpose,
     wrapped: string,
     kmsKeyRef: string,
+    keyVersion: number,
   ): Promise<DataKeyHandle> {
     assertOrgAndPurpose(orgId, purpose);
     assertWrapped(wrapped);
     if (typeof kmsKeyRef !== 'string' || !KMS_KEY_ARN_RE.test(kmsKeyRef)) {
       throw new KeyManagerError('bad_key_ref');
     }
+    assertKeyVersion(keyVersion);
     const out = await this.#call('Decrypt', {
       CiphertextBlob: wrapped,
       KeyId: kmsKeyRef,
-      EncryptionContext: { org: orgId, purpose },
+      EncryptionContext: encryptionContext(orgId, purpose, keyVersion),
     });
     const { Plaintext, KeyId } = out;
     if (KeyId !== kmsKeyRef || typeof Plaintext !== 'string')

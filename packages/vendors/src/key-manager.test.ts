@@ -51,7 +51,7 @@ describe('DevKeyManager', () => {
     expect(dk.plaintext.extractable).toBe(false);
     expect(dk.plaintext.algorithm).toMatchObject({ name: 'AES-GCM', length: 256 });
     expect([...dk.plaintext.usages].sort()).toEqual(['decrypt', 'encrypt']);
-    const unwrapped = await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef);
+    const unwrapped = await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef, 1);
     expect(unwrapped.extractable).toBe(false);
     await sameAes(dk.plaintext, unwrapped);
   });
@@ -62,7 +62,7 @@ describe('DevKeyManager', () => {
     expect(dk.plaintext.algorithm).toMatchObject({ name: 'HMAC', hash: { name: 'SHA-256' } });
     expect([...dk.plaintext.usages]).toEqual(['sign']);
     expect(dk.plaintext.extractable).toBe(false);
-    await sameHmac(dk.plaintext, await km.unwrap(ORG_A, 'bidx', dk.wrapped, 'dev:1'));
+    await sameHmac(dk.plaintext, await km.unwrap(ORG_A, 'bidx', dk.wrapped, 'dev:1', 1));
   });
 
   it('generates a fresh key every time', async () => {
@@ -75,10 +75,10 @@ describe('DevKeyManager', () => {
   it('unwrap with the wrong org or purpose fails with unwrap_failed', async () => {
     const km = new DevKeyManager('dev', { kek: kek() });
     const dk = await km.generateDataKey(ORG_A, 'contacts');
-    expect((await keyError(km.unwrap(ORG_B, 'contacts', dk.wrapped, 'dev:1'))).code).toBe(
+    expect((await keyError(km.unwrap(ORG_B, 'contacts', dk.wrapped, 'dev:1', 1))).code).toBe(
       'unwrap_failed',
     );
-    expect((await keyError(km.unwrap(ORG_A, 'bidx', dk.wrapped, 'dev:1'))).code).toBe(
+    expect((await keyError(km.unwrap(ORG_A, 'bidx', dk.wrapped, 'dev:1', 1))).code).toBe(
       'unwrap_failed',
     );
   });
@@ -86,14 +86,14 @@ describe('DevKeyManager', () => {
   it('unwrap with another key-encryption key or a tampered blob fails', async () => {
     const dk = await new DevKeyManager('dev', { kek: kek() }).generateDataKey(ORG_A, 'contacts');
     const other = new DevKeyManager('dev', { kek: kek() });
-    expect((await keyError(other.unwrap(ORG_A, 'contacts', dk.wrapped, 'dev:1'))).code).toBe(
+    expect((await keyError(other.unwrap(ORG_A, 'contacts', dk.wrapped, 'dev:1', 1))).code).toBe(
       'unwrap_failed',
     );
     const km = new DevKeyManager('dev', { kek: kek() });
     const dk2 = await km.generateDataKey(ORG_A, 'contacts');
     const flipped = (dk2.wrapped[5] === 'A' ? 'B' : 'A') as string;
     const tampered = dk2.wrapped.slice(0, 5) + flipped + dk2.wrapped.slice(6);
-    expect((await keyError(km.unwrap(ORG_A, 'contacts', tampered, 'dev:1'))).code).toBe(
+    expect((await keyError(km.unwrap(ORG_A, 'contacts', tampered, 'dev:1', 1))).code).toBe(
       'unwrap_failed',
     );
   });
@@ -130,17 +130,19 @@ describe('DevKeyManager', () => {
     expect((await keyError(km.generateDataKey(ORG_A, 'secrets' as KeyPurpose))).code).toBe(
       'bad_purpose',
     );
-    expect((await keyError(km.unwrap(ORG_A, 'contacts', '***', 'dev:1'))).code).toBe('bad_wrapped');
-    expect((await keyError(km.unwrap(ORG_A, 'contacts', 'A'.repeat(1028), 'dev:1'))).code).toBe(
+    expect((await keyError(km.unwrap(ORG_A, 'contacts', '***', 'dev:1', 1))).code).toBe(
       'bad_wrapped',
     );
-    expect((await keyError(km.unwrap(ORG_A, 'contacts', 'AAAA', 'dev:2'))).code).toBe(
+    expect((await keyError(km.unwrap(ORG_A, 'contacts', 'A'.repeat(1028), 'dev:1', 1))).code).toBe(
+      'bad_wrapped',
+    );
+    expect((await keyError(km.unwrap(ORG_A, 'contacts', 'AAAA', 'dev:2', 1))).code).toBe(
       'bad_key_ref',
     );
     expect(
       (
         await keyError(
-          km.unwrap(ORG_A, 'contacts', 'AAAA', 'arn:aws:kms:ap-south-1:000000000000:key/x'),
+          km.unwrap(ORG_A, 'contacts', 'AAAA', 'arn:aws:kms:ap-south-1:000000000000:key/x', 1),
         )
       ).code,
     ).toBe('bad_key_ref');
@@ -182,7 +184,7 @@ describe('DevKeyManager', () => {
     const km = new DevKeyManager('dev', { kek: bytes });
     const dk = await km.generateDataKey(ORG_A, 'contacts');
     bytes.fill(0);
-    await sameAes(dk.plaintext, await km.unwrap(ORG_A, 'contacts', dk.wrapped, 'dev:1'));
+    await sameAes(dk.plaintext, await km.unwrap(ORG_A, 'contacts', dk.wrapped, 'dev:1', 1));
   });
 });
 
@@ -221,15 +223,15 @@ describe('CachingKeyManager (≤ 300 s per (org, purpose, wrapped), injected clo
     const inner = new CountingKeyManager();
     const km = new CachingKeyManager(inner, { now: () => now, ttlMs: 300_000 });
     const dk = await inner.generateDataKey(ORG_A, 'contacts');
-    const k1 = await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef);
-    const k2 = await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef);
+    const k1 = await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef, 1);
+    const k2 = await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef, 1);
     expect(k2).toBe(k1);
     expect(inner.unwraps).toBe(1);
     now += 299_999;
-    await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef);
+    await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef, 1);
     expect(inner.unwraps).toBe(1);
     now += 2;
-    await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef);
+    await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef, 1);
     expect(inner.unwraps).toBe(2);
   });
 
@@ -237,11 +239,11 @@ describe('CachingKeyManager (≤ 300 s per (org, purpose, wrapped), injected clo
     const inner = new CountingKeyManager();
     const km = new CachingKeyManager(inner, { now: () => 0 });
     const dk = await inner.generateDataKey(ORG_A, 'contacts');
-    await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef);
-    expect((await keyError(km.unwrap(ORG_B, 'contacts', dk.wrapped, dk.kmsKeyRef))).code).toBe(
+    await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef, 1);
+    expect((await keyError(km.unwrap(ORG_B, 'contacts', dk.wrapped, dk.kmsKeyRef, 1))).code).toBe(
       'unwrap_failed',
     );
-    expect((await keyError(km.unwrap(ORG_A, 'bidx', dk.wrapped, dk.kmsKeyRef))).code).toBe(
+    expect((await keyError(km.unwrap(ORG_A, 'bidx', dk.wrapped, dk.kmsKeyRef, 1))).code).toBe(
       'unwrap_failed',
     );
     expect(inner.unwraps).toBe(3);
@@ -251,10 +253,10 @@ describe('CachingKeyManager (≤ 300 s per (org, purpose, wrapped), injected clo
     const inner = new CountingKeyManager();
     const km = new CachingKeyManager(inner, { now: () => 0 });
     const dk = await km.generateDataKey(ORG_A, 'bidx');
-    expect(await km.unwrap(ORG_A, 'bidx', dk.wrapped, dk.kmsKeyRef)).toBe(dk.plaintext);
+    expect(await km.unwrap(ORG_A, 'bidx', dk.wrapped, dk.kmsKeyRef, 1)).toBe(dk.plaintext);
     expect(inner.unwraps).toBe(0);
-    await keyError(km.unwrap(ORG_B, 'bidx', dk.wrapped, dk.kmsKeyRef));
-    await keyError(km.unwrap(ORG_B, 'bidx', dk.wrapped, dk.kmsKeyRef));
+    await keyError(km.unwrap(ORG_B, 'bidx', dk.wrapped, dk.kmsKeyRef, 1));
+    await keyError(km.unwrap(ORG_B, 'bidx', dk.wrapped, dk.kmsKeyRef, 1));
     expect(inner.unwraps).toBe(2);
   });
 
@@ -264,11 +266,11 @@ describe('CachingKeyManager (≤ 300 s per (org, purpose, wrapped), injected clo
     const a = await inner.generateDataKey(ORG_A, 'contacts');
     const b = await inner.generateDataKey(ORG_A, 'bidx');
     const c = await inner.generateDataKey(ORG_B, 'contacts');
-    await km.unwrap(ORG_A, 'contacts', a.wrapped, a.kmsKeyRef);
-    await km.unwrap(ORG_A, 'bidx', b.wrapped, b.kmsKeyRef);
-    await km.unwrap(ORG_B, 'contacts', c.wrapped, c.kmsKeyRef);
+    await km.unwrap(ORG_A, 'contacts', a.wrapped, a.kmsKeyRef, 1);
+    await km.unwrap(ORG_A, 'bidx', b.wrapped, b.kmsKeyRef, 1);
+    await km.unwrap(ORG_B, 'contacts', c.wrapped, c.kmsKeyRef, 1);
     expect(inner.unwraps).toBe(3);
-    await km.unwrap(ORG_A, 'contacts', a.wrapped, a.kmsKeyRef); // evicted: goes to the inner manager again
+    await km.unwrap(ORG_A, 'contacts', a.wrapped, a.kmsKeyRef, 1); // evicted: goes to the inner manager again
     expect(inner.unwraps).toBe(4);
   });
 

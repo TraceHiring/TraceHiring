@@ -146,7 +146,7 @@ describe('AwsKmsKeyManager: request shape (AT-M2-11 local half of DC-M2-1)', () 
   it('Decrypt: sends the blob, the key ARN and the same encryption context; the key works', async () => {
     const km = new AwsKmsKeyManager(options());
     const dk = await km.generateDataKey(ORG_A, 'bidx');
-    const key = await km.unwrap(ORG_A, 'bidx', dk.wrapped, dk.kmsKeyRef);
+    const key = await km.unwrap(ORG_A, 'bidx', dk.wrapped, dk.kmsKeyRef, 1);
     const req = rec.calls[1]!;
     expect(req.headers['x-amz-target']).toBe('TrentService.Decrypt');
     expect(JSON.parse(req.body)).toEqual({
@@ -179,10 +179,10 @@ describe('AwsKmsKeyManager: failure modes (E18, AT-M2-33)', () => {
   it('unwrap with the wrong org or purpose fails with unwrap_failed (KMS refuses the context)', async () => {
     const km = new AwsKmsKeyManager(options());
     const dk = await km.generateDataKey(ORG_A, 'contacts');
-    expect((await keyError(km.unwrap(ORG_B, 'contacts', dk.wrapped, dk.kmsKeyRef))).code).toBe(
+    expect((await keyError(km.unwrap(ORG_B, 'contacts', dk.wrapped, dk.kmsKeyRef, 1))).code).toBe(
       'unwrap_failed',
     );
-    expect((await keyError(km.unwrap(ORG_A, 'bidx', dk.wrapped, dk.kmsKeyRef))).code).toBe(
+    expect((await keyError(km.unwrap(ORG_A, 'bidx', dk.wrapped, dk.kmsKeyRef, 1))).code).toBe(
       'unwrap_failed',
     );
   });
@@ -224,7 +224,7 @@ describe('AwsKmsKeyManager: failure modes (E18, AT-M2-33)', () => {
     kms.down = true;
     for (const p of [
       km.generateDataKey(ORG_A, 'contacts'),
-      km.unwrap(ORG_A, 'contacts', dk.wrapped, KEY_ARN),
+      km.unwrap(ORG_A, 'contacts', dk.wrapped, KEY_ARN, 1),
     ]) {
       const e = await keyError(p);
       expect(e.code).toBe('kms_unavailable');
@@ -279,7 +279,9 @@ describe('AwsKmsKeyManager: failure modes (E18, AT-M2-33)', () => {
   it('refuses a key reference that is not a KMS key ARN in ap-south-1, before any request', async () => {
     const km = new AwsKmsKeyManager(options());
     for (const ref of ['dev:1', 'arn:aws:kms:us-east-1:000000000000:key/x', '', `${KEY_ARN}\n`]) {
-      expect((await keyError(km.unwrap(ORG_A, 'contacts', 'AAAA', ref))).code).toBe('bad_key_ref');
+      expect((await keyError(km.unwrap(ORG_A, 'contacts', 'AAAA', ref, 1))).code).toBe(
+        'bad_key_ref',
+      );
     }
     expect(rec.calls).toHaveLength(0);
   });
