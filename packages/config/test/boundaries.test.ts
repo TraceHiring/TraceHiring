@@ -53,6 +53,14 @@ const allowed: Case[] = [
   ['services/api/src/modules/bank/variants.ts', '@trace/item-variants'],
   ['workers/edge/src/session-core.ts', '@trace/item-delivery'],
   ['services/api/src/modules/tests/publish.ts', '@trace/item-delivery'],
+  // M2 R5-36: packages/pii-crypto (normalise, encrypt/decrypt, blind index, hints) imports only @trace/shared (it
+  // reuses hmacSha256Hex and hexEqual from @trace/shared/invite-email); plaintext lives only in api and jobs memory.
+  ['packages/pii-crypto/src/index.ts', '@trace/shared'],
+  ['packages/pii-crypto/src/bidx.ts', '@trace/shared/invite-email'],
+  ['packages/pii-crypto/src/encrypt.ts', './normalise'],
+  ['packages/pii-crypto/vitest.config.ts', '@trace/config/vitest'],
+  ['services/api/src/modules/candidates/ingest.ts', '@trace/pii-crypto'],
+  ['workers/jobs/src/messaging/consumer.ts', '@trace/pii-crypto'],
   // band-engine and e2e files may import their own files
   ['packages/band-engine/src/index.ts', './types'],
   ['packages/band-engine/src/rules/parse.ts', '../types'],
@@ -158,6 +166,19 @@ const denied: Case[] = [
   ['workers/edge/src/index.ts', '@trace/item-variants'],
   ['packages/shared/src/index.ts', '@trace/item-variants'],
   ['packages/vendors/src/index.ts', '@trace/item-delivery'],
+  // M2 R5-36: only the api and jobs import pii-crypto (the edge, the apps and the packages never see plaintext
+  // contact data); pii-crypto imports nothing but @trace/shared.
+  ['workers/edge/src/index.ts', '@trace/pii-crypto'],
+  ['apps/candidate/src/main.tsx', '@trace/pii-crypto'],
+  ['apps/recruiter/src/main.tsx', '@trace/pii-crypto'],
+  ['packages/shared/src/index.ts', '@trace/pii-crypto'],
+  ['packages/vendors/src/index.ts', '@trace/pii-crypto'],
+  ['packages/workers-http/src/index.ts', '@trace/pii-crypto'],
+  ['packages/pii-crypto/src/index.ts', '@trace/vendors'],
+  ['packages/pii-crypto/src/index.ts', '@trace/db-types'],
+  ['packages/pii-crypto/src/index.ts', '@trace/workers-http'],
+  ['packages/pii-crypto/src/index.ts', '@trace/band-engine'],
+  ['packages/pii-crypto/src/index.ts', '@trace/api'],
   // band-engine imports nothing internal (pure TypeScript, specs/d1-demo-slice.md §5.2)
   ['packages/band-engine/src/index.ts', '@trace/shared'],
   ['packages/band-engine/src/index.ts', '@trace/shared/canonical-json'],

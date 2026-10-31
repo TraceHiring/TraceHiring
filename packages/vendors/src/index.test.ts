@@ -26,8 +26,8 @@ describe('@trace/vendors MockLlmDrafter exports (M1 spec R5-3, R5-52 g)', () => 
 });
 
 describe('@trace/vendors interface list', () => {
-  it('lists the M1 interfaces (LlmDrafter next to D1 LlmGrader and Messaging, M1 spec R5-3)', () => {
-    expect(VENDOR_INTERFACES).toEqual(['LlmDrafter', 'LlmGrader', 'Messaging']);
+  it('lists the M1 interfaces (LlmDrafter next to D1 LlmGrader and Messaging, M1 spec R5-3) and M2 KeyManager (R5-22)', () => {
+    expect(VENDOR_INTERFACES).toEqual(['KeyManager', 'LlmDrafter', 'LlmGrader', 'Messaging']);
   });
 
   it('exports the LlmDrafter interface and its request and result types (M1 spec §6.4)', () => {
