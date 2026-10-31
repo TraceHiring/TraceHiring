@@ -178,11 +178,17 @@ export class InviteUploadRun {
     await this.runLoop();
   }
 
-  /** Sends the batches that have no answer yet, after a stop. */
+  /**
+   * "Try again" after a stop. When the stop was a cancel the api did not take, the cancel is what is tried again and no
+   * batch is sent; otherwise the batches that have no answer yet are sent.
+   */
   async retry(): Promise<void> {
     if (this.state.phase !== 'stopped') return;
+    if (this.cancelRequested) {
+      await this.endByCancel();
+      return;
+    }
     this.stopCode = null;
-    this.cancelRequested = false;
     this.set({ phase: 'running', failure: null });
     await this.runLoop();
   }
@@ -397,7 +403,7 @@ export class InviteUploadRun {
     this.set({ phase: 'cancelling', failure: null });
     const answer = await this.api.cancel(uploadId);
     if (!answer.ok) {
-      this.cancelRequested = false;
+      // The cancel intent stays: "Try again" retries the cancel, never the batches.
       this.set({ phase: 'stopped', failure: answer.code });
       return;
     }
