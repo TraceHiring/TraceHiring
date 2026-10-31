@@ -414,3 +414,53 @@ describe('failures and cancel', () => {
     expect(r.getState().reuploadWarning).toBe(true);
   });
 });
+
+describe('no row outlives the upload (security finding 5)', () => {
+  /** Every field of the run, private ones included, with Maps and Sets opened up. */
+  const dump = (r: InviteUploadRun): string =>
+    JSON.stringify(Object.entries(r), (_key, value: unknown) =>
+      value instanceof Map ? [...value.entries()] : value instanceof Set ? [...value] : value,
+    );
+
+  it('the dump does see rows while the upload is open (the check is not vacuous)', async () => {
+    const f = fake((row) => (row.rowNo === 2 ? 'phone_shared' : 'invited'));
+    const r = run(f, 3);
+    expect(dump(r)).toContain('@example.test');
+    await r.start();
+    expect(r.getState().phase).toBe('ready');
+    expect(dump(r)).toContain('a2@example.test');
+  });
+
+  it('holds no row data once completed, only the file hash and the counts', async () => {
+    const f = fake((row) => (row.rowNo === 2 ? 'phone_shared' : 'invited'));
+    const r = run(f, 450);
+    await r.start();
+    await r.finish();
+    expect(r.getState().phase).toBe('completed');
+    expect(dump(r)).not.toContain('@example.test');
+    expect(dump(r)).not.toContain('Asha Rao');
+    expect(dump(r)).toContain(SHA);
+    expect(r.getState().rowsInFile).toBe(450);
+  });
+
+  it('holds no row data once cancelled, mid-run or before the upload was opened', async () => {
+    const f = fake(undefined, undefined, undefined, true);
+    const r = run(f, 1000);
+    const started = r.start();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5);
+    });
+    const cancelling = r.cancel();
+    f.release();
+    await cancelling;
+    await started;
+    expect(r.getState().phase).toBe('cancelled');
+    expect(dump(r)).not.toContain('@example.test');
+
+    const g = fake();
+    const early = run(g, 5);
+    await early.cancel();
+    expect(early.getState().phase).toBe('cancelled');
+    expect(dump(early)).not.toContain('@example.test');
+  });
+});
