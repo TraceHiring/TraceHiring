@@ -180,6 +180,39 @@ describe('SesEmailMessaging: SES v2 SendEmail request (AT-M2-11)', () => {
     expect((await sendError(ses.send(message({ channel: 'sms' })))).code).toBe('channel_refused');
     expect(rec.calls).toHaveLength(0);
   });
+
+  it('an otp send has no outbound message: it carries the org tag only, no msg tag (R4-6)', async () => {
+    const rec = okFetch();
+    const ses = new SesEmailMessaging(options({ fetch: rec.fetch }));
+    const otp = without(message({ purpose: 'otp', idempotencyKey: 'otp-1' }), 'outboundMessageId');
+    const out = await ses.send(otp);
+    expect(out.providerMessageId).toBe('ses-message-0001');
+    expect(rec.calls).toHaveLength(1);
+    expect(JSON.parse(rec.calls[0]!.body).EmailTags).toEqual([{ Name: 'org', Value: ORG_A }]);
+  });
+
+  it('an otp with an outbound message id is bad_message_id (an OTP has no outbound_messages row)', async () => {
+    const rec = okFetch();
+    const ses = new SesEmailMessaging(options({ fetch: rec.fetch }));
+    expect((await sendError(ses.send(message({ purpose: 'otp' })))).code).toBe('bad_message_id');
+    expect(rec.calls).toHaveLength(0);
+  });
+
+  it.each(['invite', 'reminder', 'reschedule'] as const)(
+    'a %s without the outbound message id is bad_message_id; with it, both tags',
+    async (purpose) => {
+      const rec = okFetch();
+      const ses = new SesEmailMessaging(options({ fetch: rec.fetch }));
+      const noId = without(message({ purpose }), 'outboundMessageId');
+      expect((await sendError(ses.send(noId))).code).toBe('bad_message_id');
+      expect(rec.calls).toHaveLength(0);
+      await ses.send(message({ purpose }));
+      expect(JSON.parse(rec.calls[0]!.body).EmailTags).toEqual([
+        { Name: 'org', Value: ORG_A },
+        { Name: 'msg', Value: MSG_1 },
+      ]);
+    },
+  );
 });
 
 describe('SesEmailMessaging: provider errors carry codes only', () => {
