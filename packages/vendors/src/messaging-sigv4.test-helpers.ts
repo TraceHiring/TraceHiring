@@ -102,3 +102,10 @@ export const jsonResponse = (
   contentType = 'application/json',
 ): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': contentType } });
+
+/** A copy of `o` without `k` (to build a message that lacks an optional field). */
+export function without<T extends object, K extends keyof T>(o: T, k: K): Omit<T, K> {
+  const copy = { ...o };
+  Reflect.deleteProperty(copy, k);
+  return copy;
+}

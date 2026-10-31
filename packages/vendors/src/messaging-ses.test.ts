@@ -15,6 +15,7 @@ import {
   recordingFetch,
   referenceSigV4,
   testCredentials,
+  without,
 } from './messaging-sigv4.test-helpers.js';
 
 const ORG_A = '00000000-0000-4000-8000-0000000000a1';
@@ -140,7 +141,7 @@ describe('SesEmailMessaging: SES v2 SendEmail request (AT-M2-11)', () => {
     const ses = new SesEmailMessaging(
       options({ fetch: rec.fetch, configurationSetName: 'trace-staging-events' }),
     );
-    const { bodyHtml: _drop, ...noHtml } = message();
+    const noHtml = without(message(), 'bodyHtml');
     await ses.send(noHtml);
     const body = JSON.parse(rec.calls[0]!.body) as Record<string, unknown> & {
       Content: { Simple: { Body: Record<string, unknown> } };
@@ -172,9 +173,9 @@ describe('SesEmailMessaging: SES v2 SendEmail request (AT-M2-11)', () => {
   it('requires the outbound message id for the msg tag (R4-6) and a subject', async () => {
     const rec = okFetch();
     const ses = new SesEmailMessaging(options({ fetch: rec.fetch }));
-    const { outboundMessageId: _id, ...noId } = message();
+    const noId = without(message(), 'outboundMessageId');
     expect((await sendError(ses.send(noId))).code).toBe('bad_message_id');
-    const { subject: _s, ...noSubject } = message();
+    const noSubject = without(message(), 'subject');
     expect((await sendError(ses.send(noSubject))).code).toBe('bad_subject');
     expect((await sendError(ses.send(message({ channel: 'sms' })))).code).toBe('channel_refused');
     expect(rec.calls).toHaveLength(0);

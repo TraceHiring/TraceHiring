@@ -18,6 +18,7 @@ import {
 } from './messaging-v2.js';
 import type { MessagingV2, OutboundMessageV2 } from './messaging-v2.js';
 import {
+  without,
   FIXED_DATE,
   jsonResponse,
   recordingFetch,
@@ -214,11 +215,11 @@ describe('Messaging v2 shape (R5-22)', () => {
 
 describe('SMS and WhatsApp: mocks behind flags, off by default (M2-2)', () => {
   const sms = (patch: Partial<OutboundMessageV2> = {}) =>
-    email({ channel: 'sms', to: '+919990000001', subject: undefined as never, ...patch });
+    without(email({ channel: 'sms', to: '+919990000001', ...patch }), 'subject');
 
   it('are off by default: an sms or whatsapp message is refused with channel_disabled', async () => {
     const m = create('dev', 'loadsim');
-    const { subject: _s, ...noSubject } = sms();
+    const noSubject = sms();
     for (const channel of ['sms', 'whatsapp'] as const) {
       const e = await m.send({ ...noSubject, channel }).catch((err: unknown) => err);
       expect(e).toBeInstanceOf(MessagingSendError);
@@ -228,7 +229,7 @@ describe('SMS and WhatsApp: mocks behind flags, off by default (M2-2)', () => {
 
   it('when enabled, accept only +91999 reserved test numbers and never send', async () => {
     const m = create('staging', 'loadsim', { smsEnabled: true, whatsappEnabled: true });
-    const { subject: _s, ...base } = sms();
+    const base = sms();
     for (const channel of ['sms', 'whatsapp'] as const) {
       const ok = await m.send({ ...base, channel });
       expect(ok.provider).toBe(channel === 'sms' ? 'mock_sms' : 'mock_whatsapp');
@@ -247,7 +248,7 @@ describe('SMS and WhatsApp: mocks behind flags, off by default (M2-2)', () => {
   });
 
   it('the mock classes are off unless enabled, and refuse an email message', async () => {
-    const { subject: _s, ...base } = sms();
+    const base = sms();
     const off = new MockSmsMessaging('dev');
     expect(((await off.send(base).catch((e: unknown) => e)) as MessagingSendError).code).toBe(
       'channel_disabled',
