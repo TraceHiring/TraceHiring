@@ -80,7 +80,7 @@ describe('a spreadsheet is not a CSV (R5-20)', () => {
 
 describe('the columns', () => {
   it('reads the six columns, whatever the case and order, and a byte order mark', () => {
-    const text = `﻿Email,FULL_NAME,Language,18_or_older,PHONE,Slot_Starts_At\r\nb@example.test,Ada B,hi,no,9876543210,2026-11-03 10:00\r\n`;
+    const text = `\u{FEFF}Email,FULL_NAME,Language,18_or_older,PHONE,Slot_Starts_At\r\nb@example.test,Ada B,hi,no,9876543210,2026-11-03 10:00\r\n`;
     const result = good(text);
     expect(result.rows).toEqual([
       {
@@ -162,7 +162,8 @@ describe('the columns', () => {
 describe('the 18_or_older column (R2-5)', () => {
   const adult = (value: string) => {
     const result = good(csvOf('full_name,email,18_or_older', `Asha Rao,a@example.test,${value}`));
-    return result.rows[0]?.adult18 ?? result.issues[0]?.reason;
+    const row = result.rows[0];
+    return row === undefined ? result.issues[0]?.reason : row.adult18;
   };
 
   it('maps yes, no and blank to yes, no and null, in any case', () => {

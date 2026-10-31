@@ -50,8 +50,8 @@ describe('parseCsv: RFC 4180 vectors', () => {
   });
 
   it('strips one leading byte order mark and keeps any other', () => {
-    expect(ok('﻿a,b\n1,2\n')[0]).toEqual(['a', 'b']);
-    expect(ok('﻿﻿a\n')[0]).toEqual(['﻿a']);
+    expect(ok('\u{FEFF}a,b\n1,2\n')[0]).toEqual(['a', 'b']);
+    expect(ok('\u{FEFF}\u{FEFF}a\n')[0]).toEqual(['\u{FEFF}a']);
   });
 
   it('keeps Unicode text as it is (E22)', () => {

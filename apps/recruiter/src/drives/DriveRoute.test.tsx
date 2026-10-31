@@ -8,7 +8,7 @@ import type {
   DriveInvitationPage,
   SlotListResponse,
 } from '@trace/shared/contracts/m2';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   failure,
   fakeApi,
@@ -23,9 +23,15 @@ import { DELIVERY_LABEL, INVITATION_STATUS_LABEL } from './texts';
 import { formatIst } from './time';
 
 let mounted: Mounted | null = null;
+beforeEach(() => {
+  // "Now" is fixed (only Date is faked), so the slots that count as future do not depend on the day the test runs.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-11-01T00:00:00.000Z'));
+});
 afterEach(() => {
   mounted?.unmount();
   mounted = null;
+  vi.useRealTimers();
 });
 
 const D = (patch: Partial<DriveDetail> = {}) => drive(1, patch);

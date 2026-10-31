@@ -81,6 +81,14 @@ async function pickFile(
   await act(async () => {
     input?.dispatchEvent(new Event('change', { bubbles: true }));
   });
+  // Reading the bytes and hashing them are real asynchronous work: wait (in real time) until the screen has moved on.
+  for (let i = 0; i < 100 && el.text().includes('Reading the file'); i += 1) {
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10);
+      });
+    });
+  }
   await el.settle();
 }
 

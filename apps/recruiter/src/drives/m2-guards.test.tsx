@@ -427,7 +427,7 @@ describe('M2 drive screens never show what the product never builds (AT-M2-22, R
       '4 revoked, 2 skipped (a test may still start)',
     );
     expect(text(screens['list rows'] ?? '')).toContain('[synthetic] Drive 1');
-    expect(text(screens['upload run completed'] ?? '')).toContain('Mark as different people');
+    expect(text(screens['upload run ready'] ?? '')).toContain('Mark as different people');
   });
 
   it('has no control or label for reject, decline, shortlist, decision, confirm, overturn, notice, appeal', () => {

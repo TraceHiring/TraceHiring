@@ -166,7 +166,7 @@ describe('a file that is refused as a whole (M2-6, M2-7, R5-20, E21)', () => {
 
 describe('the results of a run', () => {
   const run = (patch: Partial<RunState>): RunState => ({
-    phase: 'completed',
+    phase: 'ready',
     uploadId: '33333333-3333-4333-8333-333333333333',
     rowsInFile: 6,
     rowsSent: 6,
@@ -198,7 +198,7 @@ describe('the results of a run', () => {
   });
 
   it('offers no way to mark rows once the upload is finished and none were held', () => {
-    const html = render({ kind: 'run', run: run({ held: [] }) });
+    const html = render({ kind: 'run', run: run({ phase: 'completed', held: [] }) });
     expect(text(html)).not.toContain('Mark as different people');
   });
 });

@@ -60,7 +60,7 @@ function fake(
     },
     postRows: async (request) => {
       calls.push('rows');
-      batches.push(request);
+      const callNo = batches.push(request);
       inFlight += 1;
       peak = Math.max(peak, inFlight);
       await gate;
@@ -68,7 +68,7 @@ function fake(
         setTimeout(resolve, 1);
       });
       inFlight -= 1;
-      const forced = batch(batches.length, request);
+      const forced = batch(callNo, request);
       if (forced !== undefined) return forced;
       return {
         ok: true,
