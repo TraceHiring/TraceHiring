@@ -6,6 +6,9 @@
 // three link-token routes and is not called here. api re-verifies the raw portal token. Availability is a boolean,
 // never a count (E25, rule 5): the answers are checked against the strict contract and rebuilt field by field, so
 // nothing api might add can reach the candidate. Ids in the body are discarded; the invitation comes from the claims.
+// A reschedule carries `sessionLive` from a read-only `SessionDO.peek()` of the claims' invitation (R5-66 c, build-notes
+// "B4 first reviews" a): api refuses a self-reschedule while the object holds a session (409 `too_late_to_reschedule`).
+// A failed peek fails closed (503).
 import {
   PortalRescheduleReq,
   PortalRescheduleRes,
@@ -13,7 +16,7 @@ import {
 } from '@trace/shared/contracts/candidate';
 import type { Hono } from 'hono';
 import { capBody, handle, LOBBY_BODY_LIMIT, readJson, sendJson, type EdgeEnv } from './http.js';
-import { portalAuth, rpc, type RouteDeps } from './route-support.js';
+import { portalAuth, rpc, sessionLive, type RouteDeps } from './route-support.js';
 
 /** Mounts the two portal routes (app.ts mounts this under /v1/*, so noStore and candidateCors() apply). */
 export const mountPortalRoutes: (app: Hono<EdgeEnv>, deps: RouteDeps) => void = (app, deps) => {
@@ -36,9 +39,14 @@ export const mountPortalRoutes: (app: Hono<EdgeEnv>, deps: RouteDeps) => void = 
     '/v1/portal/reschedule',
     capBody(LOBBY_BODY_LIMIT),
     handle(async (c) => {
-      const { portalToken } = await portalAuth(c, deps, 'portal_reschedule');
+      const { portalToken, claims } = await portalAuth(c, deps, 'portal_reschedule');
       const { toSlotId } = await readJson(c, PortalRescheduleReq);
-      const out = await rpc(c, deps, 'portalReschedule', { portalToken, toSlotId });
+      const live = await sessionLive(c, claims.invitation_id);
+      const out = await rpc(c, deps, 'portalReschedule', {
+        portalToken,
+        toSlotId,
+        sessionLive: live,
+      });
       return sendJson(c, PortalRescheduleRes, { ok: true, slotStartsAt: out.slotStartsAt });
     }),
   );
