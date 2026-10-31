@@ -329,7 +329,12 @@ function Run({ run, handlers }: { run: RunState; handlers: UploadHandlers }) {
           </button>
         )}
         {(run.phase === 'running' || run.phase === 'ready' || run.phase === 'stopped') && (
-          <button type="button" className={ui.button} onClick={handlers.onCancel}>
+          <button
+            type="button"
+            className={ui.button}
+            disabled={run.busy}
+            onClick={handlers.onCancel}
+          >
             Cancel upload
           </button>
         )}

@@ -111,6 +111,8 @@ export class InviteUploadRun {
   private cancelRequested = false;
   private stopCode: string | null = null;
   private loop: Promise<void> | null = null;
+  /** A held-row re-send in flight; a cancel waits for its answer before it tells the api. */
+  private resend: Promise<void> | null = null;
 
   /** `input` is read here and not kept: only the batches hold rows, and they are dropped when the upload ends. */
   constructor(
@@ -320,9 +322,31 @@ export class InviteUploadRun {
   async markDifferentPerson(rowNo: number): Promise<void> {
     const uploadId = this.state.uploadId;
     const row = this.heldRows.get(rowNo);
-    if (this.state.phase !== 'ready' || this.state.busy || uploadId === null || row === undefined)
+    if (
+      this.state.phase !== 'ready' ||
+      this.state.busy ||
+      this.cancelRequested ||
+      uploadId === null ||
+      row === undefined
+    )
       return;
     this.set({ busy: true, failure: null });
+    const sending = this.resendRow(uploadId, row).finally(() => {
+      if (this.resend === sending) this.resend = null;
+    });
+    this.resend = sending;
+    await sending;
+    // A cancel that came while the row was in flight ends the upload itself; nothing more is sent or finished here.
+    if (this.cancelRequested) return;
+    if (this.state.failure === null && this.heldRows.size === 0) await this.finish();
+  }
+
+  private async resendRow(uploadId: string, row: InviteRow): Promise<void> {
+    // The cancel intent is checked before each chunk (one row per chunk): nothing is posted after a cancel.
+    if (this.cancelRequested) {
+      this.set({ busy: false });
+      return;
+    }
     const chunk = [row];
     const answer = await this.post(uploadId, chunk, true);
     if (!answer.ok) {
@@ -334,7 +358,6 @@ export class InviteUploadRun {
       return;
     }
     this.set({ busy: false });
-    if (this.heldRows.size === 0) await this.finish();
   }
 
   /** The answer to a re-sent chunk: a row that is still held (it should not be) is refused as phone_shared. */
@@ -400,6 +423,12 @@ export class InviteUploadRun {
       this.set({ phase: 'cancelling' });
       await loop;
       return;
+    }
+    const resend = this.resend;
+    if (resend !== null) {
+      // Let the held row in flight get its answer first, so it is counted once: invited, or settled as not invited.
+      this.set({ phase: 'cancelling' });
+      await resend;
     }
     await this.endByCancel();
   }
