@@ -8,7 +8,12 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-31 07:55 IST (newest):** candidate contract changes `937da1b` (R5-23) on `m2/integration` (tip
+- **Update 2026-10-31 18:10 IST (newest), M2 BUILD 1 = Wave 0 DONE:** on `m2/integration` (tip `fa0e7cf`): db-types
+  for M2-c `498e35d`; R5-9 wiring `69b58fb`; R5-27 `ddfa1d8`; R5-36/R5-22 `9b1ae14`; R5-37 `ae94348`; R5-28 +
+  DC-M2-6 `ac1ebec`; DC-M2-4 + Wave 1 pre-flight `fa0e7cf`. Deps advisory fix `208e5ae` on `m1/integration` (merged into
+  m2). Port block gone. Next chat: **BUILD 2 = Wave 1**, lead part first from `docs/progress/m2-wave1-preflight.md`
+  (HANDOFF "Next step" 2), then writers B1, B4, B5.
+- **Update 2026-10-31 07:55 IST:** candidate contract changes `937da1b` (R5-23) on `m2/integration` (tip
   `937da1b`); the winnat restart did not free 54282-54381 (see HANDOFF). **Update 2026-10-31 00:35 IST, Wave 0b
   part 1:** on `m2/integration` (tip `e9df567`): red pgTAP
   `0387440`, migration M2-c `83185ff` (wip: pgTAP green via docker exec; `db-types` not regenerated, `.claude/allow-red`),
@@ -237,14 +242,14 @@ D1 is PAUSED, not closed (founder, 2026-10-22): its remaining steps are in HANDO
 chat, not this one. Never commit to d1/integration or main. M1 merges to main only after the D1 CLOSE and with the
 founder's go-ahead.
 
-THIS CHAT = HANDOFF "In flight" first, then HANDOFF "Next step" in order (as of 2026-10-31 07:55 IST: M1 CLOSE
-waits for the D1 CLOSE and the founder's go-ahead; M2 BUILD 1 Wave 0a and Wave 0b part 1 are done on m2/integration
-(tip 937da1b; draft CI PR TraceHiring/TraceHiring#16, its rls job is red on db-types until HANDOFF Next step 1); if
-`docker port supabase_db_trace` shows no 54322, Windows still reserves the stack's ports (HANDOFF "LOCAL BLOCKER"); the
-next step is HANDOFF Next step 1 (db-types, test:rls), then the Wave 0b remainder on m2/integration
+THIS CHAT = HANDOFF "In flight" first, then HANDOFF "Next step" in order (as of 2026-10-31 18:10 IST: M1 CLOSE
+waits for the D1 CLOSE and the founder's go-ahead; M2 BUILD 1 = Wave 0 is DONE on m2/integration (tip fa0e7cf; draft
+CI PR TraceHiring/TraceHiring#16); the next step is HANDOFF Next step 2 = M2 BUILD 2 (Wave 1): first the lead part
+from docs/progress/m2-wave1-preflight.md (decisions, pii-crypto skeleton, aws4fetch, vars and Env types, portal
+mount, wire schemas, the recruiter drive API surface), tests first, then writers B1, B4, B5, on m2/integration
 (worktree .claude/worktrees/m2-integration, enter it with EnterWorktree; on a new machine `git worktree add -b
-m2/integration .claude/worktrees/m2-integration trace/m2/integration`), lead only, per specs/m2-scheduling-invites.md
-§11.2 and binding rows §1.8 R5-1…R5-66).
+m2/integration .claude/worktrees/m2-integration trace/m2/integration`), per specs/m2-scheduling-invites.md §11.3-§11.4
+and binding rows §1.8 R5-1…R5-66).
 M2 writers (later waves) use the common brief docs/progress/m1-writer-brief-common.md adapted to m2 (branches
 m2/<stream>) plus a self-contained stream brief, their own worktree (Agent isolation "worktree") and
 `git reset --hard <exact SHA>`; each stream gets Opus first reviews (spec, security, database), fixes test first, a
