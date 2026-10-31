@@ -2,7 +2,9 @@
 // with the file's SHA-256, send the rows in batches of at most 200 (two at a time), then finish it. Rows the api holds
 // as `phone_shared` stay here, in memory only, until the recruiter marks one as a different person; that one row is then
 // re-sent once with `confirmPhoneDuplicate: true`. Cancel keeps whoever was already invited. Every failure ends in one constant
-// code the screen turns into fixed text; nothing here logs, stores or keeps a value beyond the rows still to send.
+// code the screen turns into fixed text. Nothing here logs or stores a value; the rows still to send and the held rows
+// live in this object only, and once the upload is completed or cancelled it keeps no row, only the file's SHA-256, the
+// row count and the per-row reasons (row numbers, never values).
 import type {
   InviteBatchRequest,
   InviteBatchResponse,
@@ -99,6 +101,10 @@ export class InviteUploadRun {
   private state: RunState;
   private readonly listeners = new Set<() => void>();
   private readonly sleep: (ms: number) => Promise<void>;
+  /** The file's hash and its row count: all the run keeps of the file besides the rows still to send. */
+  private readonly fileSha256: string;
+  private readonly rowsInFile: number;
+  /** The rows still to send, built once here; a batch drops its rows once answered, and the end drops them all. */
   private batches: Batch[];
   /** Held rows, in memory only, until they are re-sent or the upload ends. */
   private heldRows = new Map<number, InviteRow>();
@@ -106,12 +112,15 @@ export class InviteUploadRun {
   private stopCode: string | null = null;
   private loop: Promise<void> | null = null;
 
+  /** `input` is read here and not kept: only the batches hold rows, and they are dropped when the upload ends. */
   constructor(
     private readonly api: UploadApi,
-    private readonly input: RunInput,
+    input: RunInput,
     options: RunOptions = {},
   ) {
     this.sleep = options.sleep ?? defaultSleep;
+    this.fileSha256 = input.fileSha256;
+    this.rowsInFile = input.rowsInFile;
     this.batches = [];
     for (let at = 0; at < input.rows.length; at += BATCH_SIZE) {
       this.batches.push({
@@ -158,8 +167,8 @@ export class InviteUploadRun {
     this.set({ phase: 'running', failure: null });
     if (this.state.uploadId === null) {
       const created = await this.api.create({
-        fileSha256: this.input.fileSha256,
-        rowsInFile: this.input.rowsInFile,
+        fileSha256: this.fileSha256,
+        rowsInFile: this.rowsInFile,
       });
       if (!created.ok) {
         this.set({ phase: 'failed', failure: created.code });
@@ -363,6 +372,7 @@ export class InviteUploadRun {
       this.set({ phase: 'ready', failure: done.code });
       return;
     }
+    this.batches = [];
     this.set({ phase: 'completed', upload: done.data, ...this.settleHeld() });
   }
 
@@ -397,6 +407,7 @@ export class InviteUploadRun {
   private async endByCancel(): Promise<void> {
     const uploadId = this.state.uploadId;
     if (uploadId === null) {
+      this.batches = [];
       this.set({ phase: 'cancelled', ...this.settleHeld() });
       return;
     }
