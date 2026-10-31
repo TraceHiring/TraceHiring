@@ -21,15 +21,29 @@ import { isEntryPoint } from './lib/cli.mjs';
  * one is a stale credential and fails this check (scripts/ops/staging-worker-secrets.mjs deletes them).
  * M1 R5-12 (specs/m1-test-authoring.md; d1 revision 4q) widens it for member provisioning (M1-20): the invite pepper
  * on api (issues invites) and jobs (provisions members), and the Supabase secret key on jobs only (the admin API
- * "create user" call, DC-M1-5). Edge stays empty.
+ * "create user" call, DC-M1-5). M2 R5-27 (specs/m2-scheduling-invites.md; d1 revision 4r) widens it for SES and
+ * KMS from the Workers: the AWS key pair of the IAM user (F-2, set by the founder with `wrangler secret put`, so CI
+ * holds no AWS key) and the HMAC key of the SES test-recipient allow-list (the allow-list itself is the public var
+ * SES_ALLOWED_TEST_RECIPIENT_HMAC, never a bare hash) on api and jobs, and the SES smoke-route token on jobs only
+ * (AT-M2-12, R2-9). Edge stays empty.
  */
 export const ALLOW_LIST = Object.freeze({
   edge: Object.freeze([]),
-  jobs: Object.freeze(['MEMBER_INVITE_PEPPER', 'SUPABASE_SECRET_KEY_JOBS']),
+  jobs: Object.freeze([
+    'AWS_WORKERS_ACCESS_KEY_ID',
+    'AWS_WORKERS_SECRET_ACCESS_KEY',
+    'JOBS_SMOKE_TOKEN',
+    'MEMBER_INVITE_PEPPER',
+    'SES_TEST_RECIPIENT_HMAC_KEY',
+    'SUPABASE_SECRET_KEY_JOBS',
+  ]),
   api: Object.freeze([
+    'AWS_WORKERS_ACCESS_KEY_ID',
+    'AWS_WORKERS_SECRET_ACCESS_KEY',
     'CANDIDATE_TOKEN_PRIVATE_JWK',
     'MEDIA_LINK_HMAC_KEY',
     'MEMBER_INVITE_PEPPER',
+    'SES_TEST_RECIPIENT_HMAC_KEY',
   ]),
 });
 

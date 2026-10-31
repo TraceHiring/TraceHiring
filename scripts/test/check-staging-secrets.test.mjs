@@ -27,12 +27,37 @@ const listed = (...names) =>
 const ok = (stdout) => ({ status: 0, stdout, stderr: '' });
 
 describe('ALLOW_LIST', () => {
-  it('is exactly the D1 list widened by M1 R5-12 (d1 §7.1 revision 4q): edge none, api 3, jobs 2', () => {
+  it('is exactly the D1 list widened by M1 R5-12 (revision 4q) and M2 R5-27 (revision 4r): edge none, api 6, jobs 6', () => {
     expect(ALLOW_LIST).toEqual({
       edge: [],
-      api: ['CANDIDATE_TOKEN_PRIVATE_JWK', 'MEDIA_LINK_HMAC_KEY', 'MEMBER_INVITE_PEPPER'],
-      jobs: ['MEMBER_INVITE_PEPPER', 'SUPABASE_SECRET_KEY_JOBS'],
+      api: [
+        'AWS_WORKERS_ACCESS_KEY_ID',
+        'AWS_WORKERS_SECRET_ACCESS_KEY',
+        'CANDIDATE_TOKEN_PRIVATE_JWK',
+        'MEDIA_LINK_HMAC_KEY',
+        'MEMBER_INVITE_PEPPER',
+        'SES_TEST_RECIPIENT_HMAC_KEY',
+      ],
+      jobs: [
+        'AWS_WORKERS_ACCESS_KEY_ID',
+        'AWS_WORKERS_SECRET_ACCESS_KEY',
+        'JOBS_SMOKE_TOKEN',
+        'MEMBER_INVITE_PEPPER',
+        'SES_TEST_RECIPIENT_HMAC_KEY',
+        'SUPABASE_SECRET_KEY_JOBS',
+      ],
     });
+  });
+
+  // M2 R5-27: the founder sets the AWS keys with `wrangler secret put` on api and jobs (F-2), so CI holds no AWS key;
+  // the SES test-recipient allow-list is an HMAC (a var) under a Worker secret key, never a bare SHA-256.
+  it('keeps the SES smoke token on jobs only and never allows a bare recipient hash (M2 R5-27)', () => {
+    expect(ALLOW_LIST.jobs).toContain('JOBS_SMOKE_TOKEN');
+    expect(ALLOW_LIST.api).not.toContain('JOBS_SMOKE_TOKEN');
+    for (const list of Object.values(ALLOW_LIST)) {
+      expect(list).not.toContain('SES_ALLOWED_TEST_RECIPIENT_SHA256');
+      expect(list).not.toContain('SES_ALLOWED_TEST_RECIPIENT_HMAC');
+    }
   });
 
   it('never lists a public var: a DSN, the Supabase URL or a publishable key', () => {
@@ -48,10 +73,15 @@ describe('ALLOW_LIST', () => {
       expect(all, name).not.toContain(name);
   });
 
-  it('gives each secret to exactly one Worker, except the invite pepper api and jobs share (M1 R5-12)', () => {
+  it('gives each secret to exactly one Worker, except the invite pepper (M1 R5-12) and the AWS and SES-HMAC keys (M2 R5-27) api and jobs share', () => {
     const all = Object.values(ALLOW_LIST).flat();
     const shared = all.filter((name, i) => all.indexOf(name) !== i);
-    expect(shared).toEqual(['MEMBER_INVITE_PEPPER']);
+    expect(shared).toEqual([
+      'AWS_WORKERS_ACCESS_KEY_ID',
+      'AWS_WORKERS_SECRET_ACCESS_KEY',
+      'MEMBER_INVITE_PEPPER',
+      'SES_TEST_RECIPIENT_HMAC_KEY',
+    ]);
     expect(ALLOW_LIST.api).toContain('MEMBER_INVITE_PEPPER');
     expect(ALLOW_LIST.jobs).toContain('MEMBER_INVITE_PEPPER');
     for (const list of Object.values(ALLOW_LIST)) expect(new Set(list).size).toBe(list.length);
