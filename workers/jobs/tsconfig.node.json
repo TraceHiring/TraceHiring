@@ -5,5 +5,12 @@
     "allowJs": true,
     "types": ["node"]
   },
-  "include": ["vitest.config.ts"]
+  // The real-database tests run in Node (R2 lead request 2; spec review F6).
+  "include": [
+    "vitest.config.ts",
+    "vitest.db.config.ts",
+    "db-test",
+    "worker-configuration.d.ts",
+    "src/queue/env.ts"
+  ]
 }

@@ -1,0 +1,60 @@
+# D1 spec review: stream R3 api, R3a/R3a2 half
+
+- Date: 2026-10-18. Reviewer: spec-reviewer agent (Opus, fresh context), read-only.
+- Scope: `git diff 6ffe4e1 cd2618f` over `services/api/src/modules/{tests,assignments,invitations,outbox,media,candidate}`, `services/api/src/app.ts` and `services/api/src/index.ts` on `d1/r3-merge` (tip `cd2618f`).
+- Checked against: spec `specs/d1-demo-slice.md` §3.2/§3.3 (grants), §4.1/§4.2, §6.2 (route rows, R3-1..R3-9), §6.3, §9 AT-D10, D12, D15, D18, §4.8 AT-D33–D35, the §11 R3 row; CLAUDE.md rules 1–9; writer report `docs/reviews/D1-r3a-writer-report.md`. The reviewer did not redo `docs/reviews/D1-security-review-r3.md` or `D1-spec-review-r3-reports.md`.
+- Run: `pnpm exec vitest run` on the six module folders: **16 files, 224 tests, all passed** (workerd). No `.skip`, `.todo` or `.only` in scope.
+
+## Verdict: PASS WITH FIXES
+
+No CLAUDE.md rule is broken and nothing blocks. Rule 9: `blocked_age` is sticky; a blocked invitation gets no link and no message. Rule 8: the link lasts 5 minutes, is used once, and every view is audited. Rule 2: no reject path exists. Rule 5: no contact address crosses the RPC. L-1 holds: the outbox is written before `sent`. Of the six findings, #1 is Medium (a test gap); #2 to #4 are Low.
+
+## Findings
+
+| # | Severity | Finding | Fix and when due |
+| --- | --- | --- | --- |
+| 1 | Medium (test gap) | The AT-D33–D35 api tests (`candidate/candidate-rpc.test.ts`) run on `fakeStore()` (`candidate.test-helpers.ts:29-170`), a hand-written copy of the migration-2 guard rules. No automated test runs the real SQL in `candidate/store.ts:101-120` (`resolve`, `invitation`, `insertConsent ... on conflict`, `declareAdult`, `setSessionId`, `markStarted`, `markExpired`). The writer's psql probes covered the invitation insert, `sent` and revoke only. `api-db.test.ts` proves only the `set local role` / `api_org_id` preamble. A wrong column, cast or grant in those statements would pass every unit test. | Run them for real before D1 CLOSE: the `e2e-local` flow steps 1–7 (link, OTP, age, consent, start, a minor's block, a revoked and an expired link), or an integration test on the local stack. Record which one in the milestone summary. |
+| 2 | Low (correctness) | A losing publish attempt can overwrite the published package in R2. `tests/routes.ts:251-256` writes R2 before the guarded UPDATE, and the 0-row UPDATE path (`:278-279`, 409) repairs nothing. Sequence: B reads draft state 1 → a PUT changes the draft to state 2 → A publishes state 2 and passes its re-check → B's put of state 1 lands → B's UPDATE matches 0 rows → 409. R2 now holds state-1 bytes while `content_sha256` = hash(state 2), so every `SessionDO` start for that version fails closed (§4.4 "immutable" broken). The security-review resolution note holds only if the stale put lands before the re-check. | On the 0-row path, re-read the version; if `published`, put the package rebuilt from the frozen rows (identical bytes from every writer), then answer 409 (or an R2 conditional put). Add a test for the sequence. Due before D1 CLOSE, or accept in writing. |
+| 3 | Low (correctness vs §6.2) | §6.2 says a half-written draft is harmless, but one breaks the editor: if a PUT fails after the `item_versions` insert and before the `item_answer_keys` insert, every later `GET /tests/:testId` answers 503, because `toDetail` calls `orgFail('unavailable')` for an mcq item without a key (`tests/authoring.ts:228`) or a written item without a rubric (`:237`). | Make `toDetail` tolerate an incomplete draft (drop the incomplete item, or make `correctOptionId`/`rubric` nullable for drafts in `contracts-d1`). Due before R4 integrates the editor. |
+| 4 | Low (contract) | `PUT /tests/:testId` and `POST /tests` have no role gate (`tests/routes.ts:156-229`). An assigned reviewer can read the draft under RLS; its PUT gets 0 rows from the first `update` (`authoring.ts:269-277`) and answers **409 conflict**, but §6.2 limits the route to OW/AD/RC. Nothing is written. | Call `requireRole(PUBLISHERS)` first, as publish does, so the reviewer gets 404. Add one test. Due with fix 3. |
+| 5 | Info | Still open from earlier reviews: (a) security N1, no CORS on `/v1/orgs/**` until R5 adds `cors()` on `ALLOWED_ORIGINS`; (b) reports review #1, the `createOrgDeps()` default now wraps `fetch` (`tests/org-context.ts:383-385`) but no test calls `createOrgDeps()` without an injected fetcher. | (a) R5. (b) One workerd test of the default path. |
+| 6 | Info | (a) `sessionStarted` takes no lobby token (`SessionStartedRpcIn`; `candidate/service.ts:339`), so AT-D33's "every method after lobbyMint re-verifies" reads wider than §4.2 and the contract; suggest rewording AT-D33. (b) `ageDeclare` refuses a change from adult to under 18 with `step_required` (`service.ts:224-228`), matching the set-once guard; a correction towards blocking is not recorded (a rule 9 owner question for M3a). (c) `POST …/start-photo-link` is gated by assignment only, not by the card's `review_state`; §6.1 hides the panel unless `reviewed`, the spec does not require the api to enforce it. (d) The edge halves of AT-D12 and AT-D35 (`workers/edge/src/start.test.ts`) belong to C1. | Lead decides; no code change due in R3. |
+
+## Acceptance test mapping (api parts)
+
+| AT | Test file : test | State |
+| --- | --- | --- |
+| AT-D10 link | `media/media-link.test.ts`: link_issued audit and 300 s watermarked link; viewer without assignment refused (every role); path-org filter (R3-8); failed COMMIT gives no link; rate limit | OK (the real gate is `rls_d1_media_view.test.sql`) |
+| AT-D10 fetch | `media-link.test.ts`: replay 404 before Postgres; concurrent fetches exactly one 200; expired 404 before DO/DB; tampered sig/exp; non-canonical spelling; DB denial; injected COMMIT failure; non-GET; R3-1/R3-3. `media-link-do.test.ts`: concurrent burns, single conditional UPDATE … RETURNING. `no-key-template.test.ts` (R3-3) | OK (R3-9 complete) |
+| AT-D10 assignments (L-16) | `assignments/assignment.test.ts`: list/assign/unassign; only reviewer role; another recruiter's test 404; reviewer, hiring manager, other-org admin 404 | OK (audit rows in `rls_d1_assignments.test.sql`) |
+| AT-D12 | `invitations/invitation.test.ts`: blocked_age with no link, no message, never `sent`; DB-returned blocked_age stays blocked; inviter "no" not blocked by DB is refused. `candidate-rpc.test.ts`: self-declared minor blocked and sticky; inviter "no" blocks before OTP, login or grant | OK (edge half: C1) |
+| AT-D15 (api) | `tests/publish.test.ts`: cutoff 422; CHECK 23514; 409 not-the-draft; retire on rebuilt mismatch; PUT cutoff 400 | OK |
+| AT-D18 (api) | `outbox/outbox.test.ts`: createMessaging refuses production/missing TRACE_ENV; non-`@example.test` refused; idempotency. `outbox-route.test.ts`: pre-auth 404. `invitation.test.ts`: deliveryFromEnv null in production | OK |
+| AT-D33 | `candidate-rpc.test.ts`: outbox then `sent`, no address; no `sent` on outbox failure; re-verify group; notice → session id; grant changes no status; `sessionStarted` set-once. `api-db.test.ts`: preamble | WEAK on the SQL (finding 1) |
+| AT-D34 | `candidate-rpc.test.ts`: refuses notice, consent, photo and grant before the age step; minor block | OK (SQL: finding 1) |
+| AT-D35 (api) | `candidate-rpc.test.ts`: failed start leaves `otp_verified` and retries succeed; past expiry before start (L-32); started session resumes past link expiry; no package hash refuses the grant; revoked/expired links refuse login; inviteResolve never one with a session id | OK (edge half: C1; SQL: finding 1) |
+
+## Writer's open questions
+
+1. **Invite link TTL 7 days** (`invitations/routes.ts:39`): the spec gives no window; 7 days matches `docs/build-notes.md:260` ("valid until drive end + 7 days"), and D1 has no drives. **Accept**; record in §6.2.
+2. **Response bodies:** POST assignments 201 with `AssignmentListResponse`; DELETE and revoke return the updated lists with 200; 409 `conflict` for revoking an invitation that is not `created`/`sent` (R-14). **Accept.**
+3. **Invite failure paths:** outbox failure revokes as the caller and answers 503 with no link (fails closed, frees the live-contact key; the revoke audit truthfully names the recruiter); a failed `sent` step answers 201 with the link and `created`; no published version is 409. **Accept.**
+4. **403 `aal2_required` on the caller's own membership:** matches m0b S18 and §6.2; `membership.ts` copies `membership_counts_for` (`20261014065417_d1_authoring.sql:42-65`). **Accept.** (The tests routes do not use the gate, so an aal1 owner gets an empty list or 404 there; harmless.)
+5. **"Removed member" label** (`assignments/routes.ts:45`): recruiters cannot read removed memberships; a fixed label exposes nothing. **Accept.**
+6. **Unreferenced rubric rows per draft PUT** (`authoring.ts:327-366`): referenced rubrics are frozen, so each PUT creates new rows; scoring reads only referenced rubrics. **Accept for D1**; M1 adds reuse or cleanup.
+
+## Checked and correct
+
+Every §6.2 row owned by these modules matches path, verb, role set, contract and error codes (tests 5, assignments 3, invitations 3, demo outbox, start-photo-link, `/media/:jti`), and the mount test pins that list with no never-build word. Every PostgREST read filters by the path `org_id`; org work runs as the caller with the publishable key; no service key in scope; trace_api is used only for `sent`, CandidateRpc and the two media grants, with constant SQL, bound parameters, `org_id = $1`, `set local role` plus `api_org_id` and a server `request_id` per transaction, over TLS. Candidate path: every lobby method re-verifies; age → consent → session id → photo → grant enforced; `sessionGrant` changes no status; `started`/`started_at` set once from the DO; lazy expiry only without a session id; strict RPC parsing with constant codes; no address returned. The package carries no key, rubric, weight or cutoff. The outbox runs only on dev/staging with `DEMO_OUTBOX=1`, `@example.test` only, no stored address. Media: v4 jti, HMAC over `v1|jti|exp` with canonical sig, `exp` before the DO, atomic burn before the DB, one 404 for every failure, per-viewer rate limit. `index.ts` exports only `default`, `CandidateRpc`, `MediaLinkDO`, `DemoOutboxDO`; the only log line is `candidate_rpc.failed`. No module touches `quality.*` or `integrity.*` or exposes a reject or decision path (rules 1, 2, 6).
+
+## Resolution (lead, 2026-10-18, on d1/r3-merge)
+
+| # | State |
+| --- | --- |
+| 1 | Open, due before D1 CLOSE: the real trace_api SQL of the candidate store runs in `e2e-local` (R5 flow steps 1–7), recorded in the D1 summary. |
+| 2 | Fixed in `ffe674a` (the losing attempt rewrites the frozen package on its 0-row path; race test). |
+| 3 | **Fixed (Chat C, lead, no contract change):** for a draft, `toDetail` leaves out an mcq item without its key and a written item without a stored rubric, so GET keeps working and the next PUT replaces the children; a published or retired version stays fail-closed (503). Test first: `services/api/src/modules/tests/authoring.test.ts`. |
+| 4 | Fixed in `76f203d` (POST and PUT tests need an authoring role). |
+| 5 | (a) R5; (b) fixed in `2c11bb5` (default fetch test). |
+| 6 | (a) AT-D33 wording recorded in spec revision 4c; (b) FOUNDER-QUEUE row (rule 9, M3a); (c) and (d) noted, no change in R3. |
+| Open questions 1–6 | Accepted and recorded in spec revision 4c. |

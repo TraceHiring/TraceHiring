@@ -1,0 +1,33 @@
+{
+  "name": "trace-d1-day-one-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Throwaway day-one checks DC-D2, D3, D4, D5, D6, D7 for specs/d1-demo-slice.md. Not part of the pnpm workspace.",
+  "scripts": {
+    "d4:node": "node --experimental-strip-types scripts/d4-node.ts",
+    "d4:workerd": "vitest run --project d4",
+    "d5:workerd": "vitest run --project d5",
+    "d5:browser": "playwright test --grep @d5",
+    "d6:browser": "playwright test --grep @d6",
+    "test:browser": "playwright test",
+    "test:all": "vitest run && playwright test",
+    "dev:multi": "wrangler dev -c workers/edge/wrangler.jsonc -c workers/api/wrangler.jsonc -c workers/jobs/wrangler.jsonc --test-scheduled --port 8801"
+  },
+  "dependencies": {
+    "pg": "8.23.0",
+    "postgres": "3.4.9"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.23.0",
+    "@playwright/test": "1.63.0",
+    "@types/node": "22.20.5",
+    "vitest": "4.1.12",
+    "wrangler": "4.149.0"
+  },
+  "overrides": {
+    "sharp": "0.35.5",
+    "undici": "7.30.1",
+    "zod": "4.6.6"
+  }
+}

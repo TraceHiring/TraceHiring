@@ -15,6 +15,7 @@ const fixture = (name) =>
   );
 const CANDIDATE = fixture('candidate');
 const RECRUITER = fixture('recruiter');
+const RECRUITER_STAGING = fixture('recruiter-staging');
 const SCRIPT = fileURLToPath(new URL('../check-headers.mjs', import.meta.url));
 const joined = (a) => a.join('\n');
 
@@ -55,6 +56,10 @@ describe('checkHeadersFile', () => {
   it('passes both fixture files', () => {
     expect(checkHeadersFile('candidate', CANDIDATE)).toEqual([]);
     expect(checkHeadersFile('recruiter', RECRUITER)).toEqual([]);
+  });
+
+  it('passes the recruiter staging output: the Supabase, api and Sentry origins together (d1 §7.1)', () => {
+    expect(checkHeadersFile('recruiter', RECRUITER_STAGING)).toEqual([]);
   });
 
   it('passes the candidate with connect-src self only (edge origin not yet known, H4)', () => {
@@ -162,6 +167,23 @@ describe('checkCsp', () => {
     expect(checkCsp('recruiter', csp).length).toBeGreaterThan(0);
   });
 
+  // ADR-033 §4 (specs/m1-test-authoring.md R5-48): the recruiter's import Web Worker is a same-origin module.
+  it("requires exactly worker-src 'self' on the recruiter and no worker-src on the candidate app", () => {
+    expect(base).toContain("worker-src 'self'");
+    expect(checkCsp('recruiter', base)).toEqual([]);
+    expect(checkCsp('recruiter', base.replace("; worker-src 'self'", ''))).toContain(
+      'CSP is missing worker-src',
+    );
+    expect(
+      joined(checkCsp('recruiter', base.replace("worker-src 'self'", "worker-src 'self' blob:"))),
+    ).toMatch(/CSP worker-src must be exactly "'self'"/);
+    const candidate = cspOf(CANDIDATE);
+    expect(candidate).not.toContain('worker-src');
+    expect(checkCsp('candidate', `${candidate}; worker-src 'self'`)).toContain(
+      'CSP has an unexpected directive worker-src',
+    );
+  });
+
   it.each([
     ['candidate', 'https://trace-edge-staging.sub.workers.dev', true],
     ['candidate', 'https://*.workers.dev', false],
@@ -173,17 +195,98 @@ describe('checkCsp', () => {
     ['recruiter', 'https://*.supabase.co', false],
     ['recruiter', 'wss://abcdefghijklmnopqrst.supabase.co', false],
     ['recruiter', 'https://trace-edge-staging.sub.workers.dev', false],
+    // d1 AT-D22 / L-24: the Sentry ingest origin (EU and US hosts), recruiter only.
+    ['recruiter', 'https://o1.ingest.de.sentry.io', true],
+    ['recruiter', 'https://o42.ingest.sentry.io', true],
+    ['recruiter', 'https://*.ingest.sentry.io', false],
+    ['recruiter', 'https://sentry.io', false],
+    ['recruiter', 'https://o1.ingest.de.sentry.io.example.test', false],
+    ['candidate', 'https://o1.ingest.de.sentry.io', false],
+    // d1 §7.1: the staging api Worker, recruiter only (the candidate reaches the api through the edge).
+    ['recruiter', 'https://trace-api-staging.abhayraj.workers.dev', true],
+    ['recruiter', 'https://trace-api-staging.fixture-sub.workers.dev', true],
+    ['recruiter', 'https://trace-api-prod.abhayraj.workers.dev', false],
+    ['recruiter', 'https://trace-api-production.abhayraj.workers.dev', false],
+    ['recruiter', 'https://trace-api-dev.abhayraj.workers.dev', false],
+    ['recruiter', 'https://trace-api.abhayraj.workers.dev', false],
+    ['recruiter', 'https://trace-jobs-staging.abhayraj.workers.dev', false],
+    ['recruiter', 'http://trace-api-staging.abhayraj.workers.dev', false],
+    ['recruiter', 'wss://trace-api-staging.abhayraj.workers.dev', false],
+    ['recruiter', 'https://trace-api-staging.abhayraj.workers.dev/', false],
+    ['recruiter', 'https://trace-api-staging.abhayraj.workers.dev/media', false],
+    ['recruiter', 'https://trace-api-staging.abhayraj.workers.dev:8443', false],
+    ['recruiter', 'https://trace-api-staging.abhayraj.workers.dev.example.test', false],
+    ['recruiter', 'https://trace-api-staging.evil.abhayraj.workers.dev', false],
+    ['recruiter', 'https://trace-api-staging.abhayraj.pages.dev', false],
+    ['recruiter', 'https://trace-api-staging.*.workers.dev', false],
+    ['recruiter', 'https://*.abhayraj.workers.dev', false],
+    ['recruiter', 'https://*.workers.dev', false],
+    ['recruiter', '*.workers.dev', false],
+    ['recruiter', 'https://user@trace-api-staging.abhayraj.workers.dev', false],
+    ['candidate', 'https://trace-api-staging.abhayraj.workers.dev', false],
+    // d1 rev 4i: a loopback origin is allowed at build time for VITE_TRACE_ENV=dev only; a shipped file never has one.
+    ['recruiter', 'http://127.0.0.1:54321', false],
+    ['recruiter', 'http://localhost:8788', false],
+    ['recruiter', 'http://127.0.0.1:8788/', false],
+    ['candidate', 'http://127.0.0.1:8787', false],
+    ['candidate', 'http://localhost:8787', false],
   ])('connect-src for %s with %s: allowed=%s', (app, origin, allowed) => {
-    const csp = base.replace("connect-src 'self'", `connect-src 'self' ${origin}`);
+    // The recruiter base carries worker-src (ADR-033 §4), which the candidate app may not have.
+    const forApp = app === 'candidate' ? base.replace("; worker-src 'self'", '') : base;
+    const csp = forApp.replace("connect-src 'self'", `connect-src 'self' ${origin}`);
     expect(checkCsp(app, csp)).toEqual(
       allowed ? [] : [expect.stringMatching(/not on the .* allow-list/)],
     );
+  });
+
+  it('allows the Supabase and the Sentry origin together (one per entry)', () => {
+    const both = 'https://abcdefghijklmnopqrst.supabase.co https://o1.ingest.de.sentry.io';
+    const csp = base.replace("connect-src 'self'", "connect-src 'self' " + both);
+    expect(checkCsp('recruiter', csp)).toEqual([]);
+  });
+
+  it('allows the Supabase, api and Sentry origins together (one per entry, any order)', () => {
+    const supabase = 'https://abcdefghijklmnopqrst.supabase.co';
+    const api = 'https://trace-api-staging.abhayraj.workers.dev';
+    const sentry = 'https://o1.ingest.de.sentry.io';
+    for (const order of [
+      [supabase, api, sentry],
+      [api, sentry, supabase],
+      [sentry, supabase, api],
+    ]) {
+      const csp = base.replace("connect-src 'self'", `connect-src 'self' ${order.join(' ')}`);
+      expect(checkCsp('recruiter', csp)).toEqual([]);
+    }
   });
 
   it('fails when connect-src names two origins for one allow-list entry (m0b AT-B12)', () => {
     const two = 'https://abcdefghijklmnopqrst.supabase.co https://bcdefghijklmnopqrstu.supabase.co';
     const csp = base.replace("connect-src 'self'", `connect-src 'self' ${two}`);
     expect(joined(checkCsp('recruiter', csp))).toMatch(/at most one connect-src origin/);
+  });
+
+  it('fails when connect-src names two api origins, or the api origin twice (d1 §7.1)', () => {
+    const a = 'https://trace-api-staging.abhayraj.workers.dev';
+    const b = 'https://trace-api-staging.other-sub.workers.dev';
+    for (const sources of [`${a} ${b}`, `${b} ${a}`]) {
+      const csp = base.replace("connect-src 'self'", `connect-src 'self' ${sources}`);
+      expect(joined(checkCsp('recruiter', csp))).toMatch(/at most one connect-src origin/);
+    }
+    const repeated = base.replace("connect-src 'self'", `connect-src 'self' ${a} ${a}`);
+    expect(joined(checkCsp('recruiter', repeated))).toMatch(/repeats a source/);
+  });
+
+  it('fails when one entry holds two origins glued into one source (d1 §7.1)', () => {
+    // A comma or a missing space does not make a second allowed origin: each source is matched whole.
+    for (const glued of [
+      'https://trace-api-staging.abhayraj.workers.dev,https://trace-api-staging.other-sub.workers.dev',
+      'https://trace-api-staging.abhayraj.workers.devhttps://trace-api-staging.other-sub.workers.dev',
+    ]) {
+      const csp = base.replace("connect-src 'self'", `connect-src 'self' ${glued}`);
+      expect(checkCsp('recruiter', csp)).toEqual([
+        expect.stringMatching(/not on the recruiter allow-list/),
+      ]);
+    }
   });
 
   it("fails when connect-src drops 'self'", () => {
@@ -214,6 +317,29 @@ describe('runChecks and the CLI over a fixture repository', () => {
     expect(r.stdout).toMatch(/check-headers: OK/);
   });
 
+  it('passes a recruiter staging build with all three origins, and the CLI exits 0', () => {
+    const root = repo({
+      'apps/candidate/dist/_headers': CANDIDATE,
+      'apps/recruiter/dist/_headers': RECRUITER_STAGING,
+    });
+    expect(runChecks(root)).toEqual([]);
+    expect(run(root).status).toBe(0);
+  });
+
+  it('fails a recruiter build whose api origin is a production host, and the CLI exits 1', () => {
+    const prod = RECRUITER_STAGING.replace('trace-api-staging', 'trace-api-prod');
+    expect(prod).not.toBe(RECRUITER_STAGING);
+    const root = repo({
+      'apps/candidate/dist/_headers': CANDIDATE,
+      'apps/recruiter/dist/_headers': prod,
+    });
+    const r = run(root);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(
+      /apps\/recruiter\/dist\/_headers: CSP connect-src source .*trace-api-prod/,
+    );
+  });
+
   it('fails when an app has no dist/_headers (not built, or public/_headers not copied)', () => {
     const root = repo({ 'apps/candidate/dist/_headers': CANDIDATE });
     expect(runChecks(root)).toEqual([
@@ -235,6 +361,9 @@ describe('runChecks and the CLI over a fixture repository', () => {
     const r = run(root);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/apps\/candidate\/dist\/_headers: permissions-policy must be/);
-    expect(r.stderr).toMatch(/1 violation/);
+    expect(r.stderr).toMatch(
+      /apps\/candidate\/dist\/_headers: CSP has an unexpected directive worker-src/,
+    );
+    expect(r.stderr).toMatch(/2 violation/);
   });
 });

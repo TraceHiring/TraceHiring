@@ -1,0 +1,9 @@
+# Synthetic fixture for scripts/test/check-headers.test.mjs (spec §10.3): the recruiter's dist/_headers as a staging
+# build writes it, with all three connect-src origins (Supabase M0b, the api Worker and the Sentry ingest host, d1).
+# The project ref and the workers.dev subdomain are made up.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://abcdefghijklmnopqrst.supabase.co https://trace-api-staging.fixture-sub.workers.dev https://o1.ingest.de.sentry.io; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'; worker-src 'self'
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=()

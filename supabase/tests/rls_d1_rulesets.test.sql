@@ -1,0 +1,301 @@
+-- rls_d1_rulesets (migration-1 part; spec specs/d1-demo-slice.md §3.6 row "rls_d1_rulesets", §3.2 ruleset_versions and notice_versions, §3.3 matrix rows ruleset_versions and notice_versions, I-4). RED first, targets migration <ts1>_d1_authoring.sql. The band_rule_versions parts (Rule-shape CHECK, seed trigger, L-8 trigger, L-33 composite FK) belong to migration 3 and are not here. Draft rulesets come from the L-8 trigger and notices from the org seed (both migration 3), so this file needs the full chain; see NOTES.md.
+begin;
+-- Helpers live in pg_temp (rolled back with the transaction). try() runs one statement as the current
+-- role and returns 'OK <rows>' or '<sqlstate> <message>', so a denial is an assertion, not an abort.
+create function pg_temp.try(p_sql text) returns text language plpgsql as $f$
+declare n bigint;
+begin
+  execute p_sql;
+  get diagnostics n = row_count;
+  return 'OK ' || n;
+exception when others then
+  return sqlstate || ' ' || sqlerrm;
+end
+$f$;
+grant execute on function pg_temp.try(text) to public;
+-- keys() lists the top-level keys of an audit details object, sorted and comma-joined.
+create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
+  select coalesce(string_agg(k, ',' order by k), '') from jsonb_object_keys(p_details) as k
+$f$;
+grant execute on function pg_temp.keys(jsonb) to public;
+grant usage on schema extensions to authenticated, anon, service_role;
+select plan(65);
+
+grant trace_worker to postgres with inherit false, set true;
+grant usage on schema extensions to trace_worker;
+grant trace_quality_worker to postgres with inherit false, set true;
+grant usage on schema extensions to trace_quality_worker;
+grant trace_integrity_worker to postgres with inherit false, set true;
+grant usage on schema extensions to trace_integrity_worker;
+grant trace_candidate to postgres with inherit false, set true;
+grant usage on schema extensions to trace_candidate;
+-- Personas (spec D1 §3.6): synthetic users, fixed ids, created on the operator path (postgres, no claims).
+insert into auth.users (id, aud, role, email) values
+  ('00000000-0000-4000-8000-000000000001', 'authenticated', 'authenticated', 'p-owner-admin@example.test'),
+  ('00000000-0000-4000-8000-000000000003', 'authenticated', 'authenticated', 'p-admin@example.test'),
+  ('00000000-0000-4000-8000-000000000004', 'authenticated', 'authenticated', 'p-admin-aal1@example.test'),
+  ('00000000-0000-4000-8000-000000000005', 'authenticated', 'authenticated', 'p-recruiter-otp@example.test'),
+  ('00000000-0000-4000-8000-000000000006', 'authenticated', 'authenticated', 'p-recruiter-pw-aal1@example.test'),
+  ('00000000-0000-4000-8000-000000000007', 'authenticated', 'authenticated', 'p-reviewer-asg@example.test'),
+  ('00000000-0000-4000-8000-000000000008', 'authenticated', 'authenticated', 'p-hm@example.test'),
+  ('00000000-0000-4000-8000-000000000009', 'authenticated', 'authenticated', 'p-ws-recruiter@example.test'),
+  ('00000000-0000-4000-8000-00000000000e', 'authenticated', 'authenticated', 'p-b-admin@example.test'),
+  ('00000000-0000-4000-8000-000000000011', 'authenticated', 'authenticated', 'p-outsider@example.test'),
+  ('00000000-0000-4000-8000-000000000013', 'authenticated', 'authenticated', 'p-recruiter-two@example.test'),
+  ('00000000-0000-4000-8000-000000000014', 'authenticated', 'authenticated', 'p-reviewer-other@example.test'),
+  ('00000000-0000-4000-8000-000000000015', 'authenticated', 'authenticated', 'p-creator-removed@example.test'),
+  ('00000000-0000-4000-8000-000000000016', 'authenticated', 'authenticated', 'p-b-reviewer@example.test');
+
+-- Org A and org B (customers). Seeds (notice, band rules, rubric) arrive with the orgs from migration 3.
+insert into public.orgs (id, kind, name, slug) values
+  ('a1000000-0000-4000-8000-000000000001', 'customer', 'Org A', 'org-a-test'),
+  ('a1000000-0000-4000-8000-000000000003', 'customer', 'Org B', 'org-b-test');
+insert into public.workspaces (id, org_id, name, kind, is_default) values
+  ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'Default', 'default', true),
+  ('b1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'Client A2', 'client', false),
+  ('b1000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000003', 'Default', 'default', true);
+insert into public.memberships (org_id, user_id, roles, workspace_id, display_name, status) values
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', '{org_owner,admin}', null, 'Persona Owner Admin', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000003', '{admin}', null, 'Persona Admin', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000004', '{admin}', null, 'Persona Admin Aal1', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000005', '{recruiter}', null, 'Persona Recruiter Otp', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000006', '{recruiter}', null, 'Persona Recruiter Pw', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000007', '{reviewer}', null, 'Persona Reviewer Assigned', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000008', '{hiring_manager}', null, 'Persona Hiring Manager', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000009', '{recruiter}', 'b1000000-0000-4000-8000-000000000002', 'Persona Ws Recruiter', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000013', '{recruiter}', null, 'Persona Recruiter Two', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000014', '{reviewer}', null, 'Persona Reviewer Other', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000015', '{recruiter}', null, 'Persona Creator Removed', 'active'),
+  ('a1000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-00000000000e', '{org_owner,admin}', null, 'Persona B Admin', 'active'),
+  ('a1000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000016', '{reviewer}', null, 'Persona B Reviewer', 'active');
+
+-- Authoring fixtures on the operator path. Four tests: T1 (ws A1, owner), T2 (ws A2, ws recruiter), T3 (ws A1,
+-- recruiter), TB (org B). Version V1 on T1 is a complete draft (publishable); V2 on T2 a draft; V3 on T3 is published
+-- below; VB is org B's draft. Only org_id, parents and content are supplied; workspace_id/test_id on children and the
+-- ruleset/notice ids on versions come from triggers (L-27, L-8).
+insert into public.tests (id, org_id, workspace_id, name, created_by) values
+  ('e1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Test One', '00000000-0000-4000-8000-000000000001'),
+  ('e1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000002', 'Test Two', '00000000-0000-4000-8000-000000000009'),
+  ('e1000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Test Three', '00000000-0000-4000-8000-000000000005'),
+  ('e1000000-0000-4000-8000-00000000000b', 'a1000000-0000-4000-8000-000000000003', 'b1000000-0000-4000-8000-000000000004', 'Test B', '00000000-0000-4000-8000-00000000000e');
+insert into public.rubric_versions (id, org_id, rubric_key, version_no, criteria, content_sha256, created_by) values
+  ('71000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'writing-basic', 1,
+   '[{"id": "c1", "label": "Clarity", "max_points": 5, "anchors": []}]', repeat('a', 64), '00000000-0000-4000-8000-000000000001'),
+  ('71000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'writing-spare', 1,
+   '[{"id": "c1", "label": "Clarity", "max_points": 5, "anchors": []}]', repeat('a', 64), '00000000-0000-4000-8000-000000000001'),
+  ('71000000-0000-4000-8000-00000000000b', 'a1000000-0000-4000-8000-000000000003', 'writing-b', 1,
+   '[{"id": "c1", "label": "Clarity", "max_points": 5, "anchors": []}]', repeat('a', 64), '00000000-0000-4000-8000-00000000000e');
+insert into public.test_versions (id, org_id, test_id, version_no, total_time_seconds, quality_cutoff, created_by) values
+  ('f1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 1, 1800, 40, '00000000-0000-4000-8000-000000000001'),
+  ('f1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000002', 1, 1800, 40, '00000000-0000-4000-8000-000000000009'),
+  ('f1000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000003', 1, 1800, 40, '00000000-0000-4000-8000-000000000005'),
+  ('f1000000-0000-4000-8000-00000000000b', 'a1000000-0000-4000-8000-000000000003', 'e1000000-0000-4000-8000-00000000000b', 1, 1800, 40, '00000000-0000-4000-8000-00000000000e');
+insert into public.sections (id, org_id, test_version_id, position, name, format, weight) values
+  ('51000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 1, 'Writing', 'written', 1),
+  ('51000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 2, 'Choices', 'mcq', 1),
+  ('51000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000002', 1, 'Choices Two', 'mcq', 1),
+  ('51000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000003', 1, 'Choices Three', 'mcq', 1),
+  ('51000000-0000-4000-8000-00000000000b', 'a1000000-0000-4000-8000-000000000003', 'f1000000-0000-4000-8000-00000000000b', 1, 'Choices B', 'mcq', 1);
+insert into public.item_versions (id, org_id, test_version_id, section_id, format, position, stem, options, rubric_version_id, origin, content_sha256, created_by) values
+  ('61000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', '51000000-0000-4000-8000-000000000001', 'written', 1, 'Describe a recent project.', null, '71000000-0000-4000-8000-000000000001', 'human', repeat('c', 64), '00000000-0000-4000-8000-000000000001'),
+  ('61000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', '51000000-0000-4000-8000-000000000002', 'mcq', 1, 'Pick one.', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', null, 'human', repeat('c', 64), '00000000-0000-4000-8000-000000000001'),
+  ('61000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000002', '51000000-0000-4000-8000-000000000003', 'mcq', 1, 'Pick one, again.', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', null, 'human', repeat('c', 64), '00000000-0000-4000-8000-000000000009'),
+  ('61000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000003', '51000000-0000-4000-8000-000000000004', 'mcq', 1, 'Pick one, third.', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', null, 'human', repeat('c', 64), '00000000-0000-4000-8000-000000000005'),
+  ('61000000-0000-4000-8000-00000000000b', 'a1000000-0000-4000-8000-000000000003', 'f1000000-0000-4000-8000-00000000000b', '51000000-0000-4000-8000-00000000000b', 'mcq', 1, 'Pick one, B.', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', null, 'human', repeat('c', 64), '00000000-0000-4000-8000-00000000000e');
+insert into public.item_answer_keys (org_id, item_version_id, format, key, created_by) values
+  ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000002', 'mcq', '{"option_id": "o1"}', '00000000-0000-4000-8000-000000000001'),
+  ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000003', 'mcq', '{"option_id": "o1"}', '00000000-0000-4000-8000-000000000009'),
+  ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000004', 'mcq', '{"option_id": "o1"}', '00000000-0000-4000-8000-000000000005'),
+  ('a1000000-0000-4000-8000-000000000003', '61000000-0000-4000-8000-00000000000b', 'mcq', '{"option_id": "o1"}', '00000000-0000-4000-8000-00000000000e');
+-- The assigned reviewer persona is assigned to T1 on the operator path (so the S* arm has something to see).
+insert into public.assignments (org_id, membership_id, scope, test_id, as_role, created_by)
+  select m.org_id, m.id, 'test', 'e1000000-0000-4000-8000-000000000001', 'reviewer', '00000000-0000-4000-8000-000000000001'
+  from public.memberships m where m.org_id = 'a1000000-0000-4000-8000-000000000001' and m.user_id = '00000000-0000-4000-8000-000000000007';
+-- V3 is published by the admin (plain update; it also makes the recruiter persona the auto-assigned creator of T3).
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = 'f1000000-0000-4000-8000-000000000003';
+reset role;
+reset request.jwt.claims;
+
+-- Fixture: V1 (T1, draft, complete), V2 (T2, draft, complete), V3 (T3, published). Each version owns one ruleset row.
+
+-- ===== ruleset_versions: S =====
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select count(*)::int from public.ruleset_versions), 3, 'ruleset_versions S: org_owner sees the three org A rulesets');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select count(*)::int from public.ruleset_versions), 3, 'ruleset_versions S: admin sees the three org A rulesets');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000005", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.ruleset_versions), 3, 'ruleset_versions S: recruiter sees the three org A rulesets');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000009", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.ruleset_versions), 1, 'ruleset_versions S: workspace recruiter sees only the workspace A2 ruleset');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select count(*)::int from public.ruleset_versions), 1, 'ruleset_versions S: assigned reviewer sees only the assigned test''s ruleset (S*)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000014", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select count(*)::int from public.ruleset_versions), 0, 'ruleset_versions S: unassigned reviewer sees nothing');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.ruleset_versions), 0, 'ruleset_versions S: hiring_manager is denied');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000004", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.ruleset_versions), 0, 'ruleset_versions S: admin at aal1 sees nothing [AT-B6]');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select count(*)::int from public.ruleset_versions), 1, 'ruleset_versions S: org B admin sees only the org B ruleset (cross-org)');
+reset role;
+reset request.jwt.claims;
+set local role trace_integrity_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select is((select count(*)::int from public.ruleset_versions), 3, 'ruleset_versions S: integrity worker with job org A sees the org A rulesets');
+reset role;
+reset trace.job_org_id;
+set local role trace_integrity_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000003';
+select is((select count(*)::int from public.ruleset_versions), 1, 'ruleset_versions S: integrity worker with job org B sees only the org B ruleset');
+reset role;
+reset trace.job_org_id;
+reset trace.job_org_id;
+set local role trace_integrity_worker;
+select is((select count(*)::int from public.ruleset_versions), 0, 'ruleset_versions S: integrity worker with no job org sees nothing');
+select matches(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64)$$), '^42501 permission denied', 'ruleset_versions U: integrity worker cannot write (S only)');
+reset role;
+reset trace.job_org_id;
+set local role trace_quality_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select matches(pg_temp.try('select * from public.ruleset_versions'), '^42501 permission denied', 'ruleset_versions S: quality worker has no privilege');
+reset role;
+reset trace.job_org_id;
+set local role trace_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select matches(pg_temp.try('select * from public.ruleset_versions'), '^42501 permission denied', 'ruleset_versions S: trace_worker has no privilege');
+reset role;
+reset trace.job_org_id;
+set local role anon;
+select matches(pg_temp.try('select * from public.ruleset_versions'), '^42501 permission denied', 'ruleset_versions S: anon has no privilege');
+reset role;
+reset request.jwt.claims;
+set local role trace_candidate;
+select matches(pg_temp.try('select * from public.ruleset_versions'), '^42501 permission denied', 'ruleset_versions S: trace_candidate has no privilege');
+reset role;
+reset request.jwt.claims;
+
+-- ===== ruleset_versions: the trigger-only columns and the write cells =====
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select matches(pg_temp.try($$update public.ruleset_versions set band_rule_version_id = gen_random_uuid()$$), '^42501 permission denied', 'ruleset_versions U: band_rule_version_id is outside the UPDATE grant (L-33)');
+select matches(pg_temp.try($$update public.ruleset_versions set signal_settings = '{}'::jsonb$$), '^42501 permission denied', 'ruleset_versions U: signal_settings is outside the UPDATE grant');
+select matches(pg_temp.try($$insert into public.ruleset_versions (org_id, test_id, version_no, signal_settings) values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 9, '{}'::jsonb)$$), '^42501 permission denied', 'ruleset_versions I: signal_settings is outside the INSERT grant');
+select matches(pg_temp.try($$insert into public.ruleset_versions (org_id, test_id, version_no, band_rule_version_id) values ('a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 9, gen_random_uuid())$$), '^42501 permission denied', 'ruleset_versions I: band_rule_version_id is outside the INSERT grant (L-33)');
+select matches(pg_temp.try($$delete from public.ruleset_versions$$), '^42501 permission denied', 'ruleset_versions D: no DELETE privilege for app roles (only the draft-version delete trigger removes a draft ruleset)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select matches(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64)$$), '^42501 permission denied', 'ruleset_versions U: reviewer has no UPDATE privilege');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select matches(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64)$$), '^42501 permission denied', 'ruleset_versions U: hiring_manager has no UPDATE privilege');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000009", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select matches(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64) where test_id = 'e1000000-0000-4000-8000-000000000003'$$), '^42501 permission denied', 'ruleset_versions U: workspace recruiter cannot touch a workspace A1 ruleset (fence) (no UPDATE grant, O-1)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select matches(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64) where org_id = 'a1000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'ruleset_versions U: org B admin cannot touch an org A ruleset (cross-org) (no UPDATE grant, O-1)');
+reset role;
+reset request.jwt.claims;
+
+-- ===== ruleset_versions: signal_settings validator, draft vs frozen =====
+select is(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64) where test_id = 'e1000000-0000-4000-8000-000000000002'$$), 'OK 1', 'freeze: the operator can still update a draft''s ruleset');
+select matches(pg_temp.try($$update public.ruleset_versions set signal_settings = '{}'::jsonb where test_id = 'e1000000-0000-4000-8000-000000000002'$$), '^23514', 'CHECK: signal_settings must have exactly the five D1 keys (empty object refused)');
+select matches(pg_temp.try($$update public.ruleset_versions set signal_settings = signal_settings || '{"extra_signal": {"enabled": true}}'::jsonb where test_id = 'e1000000-0000-4000-8000-000000000002'$$), '^23514', 'CHECK: a sixth signal key is refused');
+select matches(pg_temp.try($$update public.ruleset_versions set signal_settings = '[]'::jsonb where test_id = 'e1000000-0000-4000-8000-000000000002'$$), '^23514', 'CHECK: signal_settings must be an object');
+select matches(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64) where test_id = 'e1000000-0000-4000-8000-000000000003'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'freeze: a ruleset referenced by a published version cannot be updated (even by the operator)');
+select matches(pg_temp.try($$delete from public.ruleset_versions where test_id = 'e1000000-0000-4000-8000-000000000003'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'freeze: a ruleset referenced by a published version cannot be deleted');
+select is((select (published_at is not null)::text from public.ruleset_versions where test_id = 'e1000000-0000-4000-8000-000000000003'), 'true', 'freeze: the publish trigger stamped published_at on the ruleset of the published version');
+select is((select (published_at is null)::text from public.ruleset_versions where test_id = 'e1000000-0000-4000-8000-000000000002'), 'true', 'freeze: a draft''s ruleset has no published_at');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = 'f1000000-0000-4000-8000-000000000001'$$), 'OK 1', 'freeze: owner publishes V1 (the pinned ruleset becomes frozen with it)');
+reset role;
+reset request.jwt.claims;
+select matches(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64) where test_id = 'e1000000-0000-4000-8000-000000000001'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'freeze: after publish the ruleset of V1 is frozen for the operator');
+select is((select (published_at is not null)::text from public.ruleset_versions where test_id = 'e1000000-0000-4000-8000-000000000001'), 'true', 'freeze: publishing stamped published_at on V1''s ruleset');
+select is((select count(*)::int from public.test_versions v join public.ruleset_versions r on r.org_id = v.org_id and r.id = v.ruleset_version_id and r.test_id = v.test_id where v.id = 'f1000000-0000-4000-8000-000000000001'), 1, 'pin: V1 points at its own ruleset (same org, same test)');
+set local session_replication_role = replica;
+select matches(pg_temp.try($$update public.ruleset_versions set content_sha256 = repeat('f', 64) where test_id = 'e1000000-0000-4000-8000-000000000003'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'freeze: replica mode (ENABLE ALWAYS) still refuses a frozen ruleset update');
+select matches(pg_temp.try($$delete from public.ruleset_versions where test_id = 'e1000000-0000-4000-8000-000000000003'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'freeze: replica mode still refuses a frozen ruleset delete');
+set local session_replication_role = origin;
+select ok(exists (select 1 from pg_indexes where schemaname = 'public' and tablename = 'test_versions' and indexdef ilike 'create unique index%(org_id, id, ruleset_version_id)%'), 'pin: test_versions has the unique (org_id, id, ruleset_version_id) that sessions FK to');
+select ok(exists (select 1 from pg_indexes where schemaname = 'public' and tablename = 'ruleset_versions' and indexdef ilike 'create unique index%(org_id, test_id, version_no)%'), 'pin: ruleset_versions is unique per (org_id, test_id, version_no)');
+
+-- ===== notice_versions =====
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select array_agg(distinct org_id) from public.notice_versions), array['a1000000-0000-4000-8000-000000000001'::uuid], 'notice_versions S: org_owner sees org A notices only');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select ok((select count(*) from public.notice_versions) >= 1, 'notice_versions S: admin sees the seeded notice');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000005", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select ok((select count(*) from public.notice_versions) >= 1, 'notice_versions S: recruiter sees the seeded notice');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select ok((select count(*) from public.notice_versions) >= 1, 'notice_versions S: any reviewer sees the seeded notice');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000014", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select ok((select count(*) from public.notice_versions) >= 1, 'notice_versions S: an unassigned reviewer also sees the notice (org-level, matrix S)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.notice_versions), 0, 'notice_versions S: hiring_manager is denied');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000004", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.notice_versions), 0, 'notice_versions S: admin at aal1 sees nothing [AT-B6]');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select array_agg(distinct org_id) from public.notice_versions), array['a1000000-0000-4000-8000-000000000003'::uuid], 'notice_versions S: org B admin sees org B notices only (cross-org)');
+reset role;
+reset request.jwt.claims;
+set local role trace_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select matches(pg_temp.try('select * from public.notice_versions'), '^42501 permission denied', 'notice_versions S: trace_worker has no privilege');
+reset role;
+reset trace.job_org_id;
+set local role trace_quality_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select matches(pg_temp.try('select * from public.notice_versions'), '^42501 permission denied', 'notice_versions S: quality worker has no privilege');
+reset role;
+reset trace.job_org_id;
+set local role trace_integrity_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select matches(pg_temp.try('select * from public.notice_versions'), '^42501 permission denied', 'notice_versions S: integrity worker has no privilege');
+reset role;
+reset trace.job_org_id;
+set local role anon;
+select matches(pg_temp.try('select * from public.notice_versions'), '^42501 permission denied', 'notice_versions S: anon has no privilege');
+reset role;
+reset request.jwt.claims;
+set local role trace_candidate;
+select matches(pg_temp.try('select * from public.notice_versions'), '^42501 permission denied', 'notice_versions S: trace_candidate has no privilege');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select matches(pg_temp.try($$insert into public.notice_versions (org_id, notice_key, version, language, body_template, template_sha256, published_at) values ('a1000000-0000-4000-8000-000000000001', 'app-notice', 1, 'en', 'Body', repeat('a', 64), now())$$), '^42501 permission denied', 'notice_versions I: org_owner cannot insert (seed only)');
+select matches(pg_temp.try($$update public.notice_versions set body_template = 'Changed'$$), '^42501 permission denied', 'notice_versions U: org_owner cannot update');
+select matches(pg_temp.try($$delete from public.notice_versions$$), '^42501 permission denied', 'notice_versions D: org_owner cannot delete');
+reset role;
+reset request.jwt.claims;
+select matches(pg_temp.try($$update public.notice_versions set body_template = 'Changed' where org_id = 'a1000000-0000-4000-8000-000000000001'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'notice_versions U: immutable always, even for the operator');
+select matches(pg_temp.try($$delete from public.notice_versions where org_id = 'a1000000-0000-4000-8000-000000000001'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'notice_versions D: immutable always, even for the operator');
+select matches(pg_temp.try($$insert into public.notice_versions (org_id, notice_key, version, language, body_template, template_sha256, published_at) values ('a1000000-0000-4000-8000-000000000001', 'fixture-notice', 1, 'hi', 'Body', repeat('a', 64), now())$$), '^23514', 'notice_versions: language other than en violates the CHECK');
+select matches(pg_temp.try($$insert into public.notice_versions (org_id, notice_key, version, language, body_template, template_sha256, published_at) values ('a1000000-0000-4000-8000-000000000001', 'fixture-notice', 1, 'en', 'Body', 'not-a-hash', now())$$), '^23514', 'notice_versions: template_sha256 must be 64 hex');
+select matches(pg_temp.try($$insert into public.notice_versions (org_id, notice_key, version, language, body_template, template_sha256, published_at) values ('a1000000-0000-4000-8000-000000000001', 'fixture-notice', 1, 'en', repeat('x', 20001), repeat('a', 64), now())$$), '^23514', 'notice_versions: a body over 20000 characters violates the length CHECK');
+set local session_replication_role = replica;
+select matches(pg_temp.try($$update public.notice_versions set body_template = 'Changed' where org_id = 'a1000000-0000-4000-8000-000000000001'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'notice_versions U: replica mode (ENABLE ALWAYS) still refuses the update');
+select matches(pg_temp.try($$delete from public.notice_versions where org_id = 'a1000000-0000-4000-8000-000000000001'$$), '^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)', 'notice_versions D: replica mode still refuses the delete');
+set local session_replication_role = origin;
+
+select * from finish();
+rollback;

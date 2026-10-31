@@ -2,21 +2,57 @@
 # `auditConfig.ignoreGhsas` in pnpm-workspace.yaml (docs/build-notes.md "Autopilot changes", 2026-10-11).
 # Every entry needs a reason and an expiry, so it is re-checked instead of forgotten.
 
-[[IgnoredVulns]]
-id = "GHSA-vfj7-8cjw-p6xm"
-ignoreUntil = 2027-01-11T00:00:00Z
-reason = "braces <= 3.0.3 has no fixed release. Reached only via eslint-plugin-boundaries > micromatch at lint time, with patterns from this repository's own eslint config; never untrusted input, never shipped."
+# The vitest 4.1.11 (@vitest/mocker) and undici 7.29.1 entries were deleted on 2026-10-31: the vitest catalog is on
+# 4.1.12, the undici override on 7.30.1, and docs/spikes/d1-day-one's lockfile carries the same two versions.
 
-# @vitest/mocker 4.1.11 (published 2026-10-21, medium). The fix is vitest 4.1.12 (released 2026-10-15), which passes
-# the two-week release-age rule on 2026-10-29; bump the vitest catalog then and delete both entries. Dev and test
-# tooling only, never shipped. No vitest browser mode, @vitest/browser* or @vitest/ui is installed, so neither the mock
-# registration endpoint nor the browser redirect allow-list is served; runs are local CLI and CI only.
+# - fast-uri 3.1.8 (four advisories, URI parsing): only ajv inside @commitlint/config-validator uses it, validating this
+#   repository's own commitlint config at commit time. Fix 3.1.9 (2026-10-19) passes the rule on 2026-11-02: add a
+#   `fast-uri` override then and delete these four entries.
 [[IgnoredVulns]]
-id = "GHSA-qxg6-89mg-rqv8"
-ignoreUntil = 2026-11-05T00:00:00Z
-reason = "@vitest/mocker 4.1.11 dev only, no browser mode or UI server; fix vitest 4.1.12 passes the release-age rule on 2026-10-29, bump then."
+id = "GHSA-333x-w4r6-6crp"
+ignoreUntil = 2026-11-09T00:00:00Z
+reason = "fast-uri 3.1.8 via commitlint's ajv, validates this repository's own config at commit time only; fix 3.1.9 passes the release-age rule on 2026-11-02, override then."
 
 [[IgnoredVulns]]
-id = "GHSA-xp26-3454-mjgp"
-ignoreUntil = 2026-11-05T00:00:00Z
-reason = "@vitest/mocker 4.1.11 dev only, no browser mode or UI server; fix vitest 4.1.12 passes the release-age rule on 2026-10-29, bump then."
+id = "GHSA-w74x-v6f9-j3xg"
+ignoreUntil = 2026-11-09T00:00:00Z
+reason = "fast-uri 3.1.8 via commitlint's ajv, validates this repository's own config at commit time only; fix 3.1.9 passes the release-age rule on 2026-11-02, override then."
+
+[[IgnoredVulns]]
+id = "GHSA-wjr9-j795-jxcr"
+ignoreUntil = 2026-11-09T00:00:00Z
+reason = "fast-uri 3.1.8 via commitlint's ajv, validates this repository's own config at commit time only; fix 3.1.9 passes the release-age rule on 2026-11-02, override then."
+
+[[IgnoredVulns]]
+id = "GHSA-xhq7-xmqj-769h"
+ignoreUntil = 2026-11-09T00:00:00Z
+reason = "fast-uri 3.1.8 via commitlint's ajv, validates this repository's own config at commit time only; fix 3.1.9 passes the release-age rule on 2026-11-02, override then."
+
+# - happy-dom 20.14.6 (two highs fixed only in the 21.x major): GHSA-834v-8h66-3h79 (host code execution through a
+#   crafted ESM import alias; needs `enableJavaScriptEvaluation: true` and attacker-supplied module source) and
+#   GHSA-c8p4-j97h-3vg8 (published 2026-10-28; server-side requests when parsing untrusted HTML that holds `<iframe>`
+#   or `<link rel="stylesheet">`). happy-dom is only the vitest DOM environment for apps/candidate and apps/recruiter
+#   unit tests, which mount this repository's own components with JavaScript evaluation off (no
+#   `enableJavaScriptEvaluation` anywhere) and never load or parse external HTML (the tests that mention `<link>` match
+#   it as text with a regex). The fix is the major 21.0.4 (2026-10-20, past the two-week rule on 2026-11-03): move the
+#   catalog to it by the expiry and delete both entries. 20.14.6 already fixes GHSA-5fpq-26gf-qwcr.
+[[IgnoredVulns]]
+id = "GHSA-834v-8h66-3h79"
+ignoreUntil = 2026-11-23T00:00:00Z
+reason = "happy-dom 20.14.x is the unit-test DOM only, JavaScript evaluation off, own components only, never shipped; fix is major 21.0.4, move to a 21.x release past the release-age rule by the expiry."
+
+[[IgnoredVulns]]
+id = "GHSA-c8p4-j97h-3vg8"
+ignoreUntil = 2026-11-23T00:00:00Z
+reason = "happy-dom 20.14.x is the unit-test DOM only, never parses untrusted or external HTML, never shipped; fix is major 21.0.0+, move to 21.0.4 past the release-age rule by the expiry."
+
+# - minimatch 3.1.5 and 10.2.6 (GHSA-g3hv-75wg-m249, medium, published 2026-10-30: CPU and memory growth from an
+#   attacker-supplied glob pattern). Only eslint, @eslint/config-array, @eslint/eslintrc, eslint-plugin-jsx-a11y and
+#   @typescript-eslint/typescript-estree use it, at lint time, with globs from this repository's own eslint config
+#   and tsconfig files: never untrusted input, never shipped. The fix is the major 11.0.1 (2026-10-27), which those
+#   packages do not accept yet; re-check by the expiry for releases that move to it (an override across the major
+#   could break eslint).
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2026-11-30T00:00:00Z
+reason = "minimatch 3.1.5/10.2.6 via eslint and typescript-eslint at lint time, globs from this repository's own config only, never shipped; fix is major 11.0.1, re-check upstream by the expiry."

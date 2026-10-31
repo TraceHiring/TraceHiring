@@ -49,12 +49,16 @@ const ALIAS_URLS = {
   recruiter: 'https://trace-recruiter-staging.pages.dev',
 };
 
-/** The §10.3 headers as the apps' _headers files set them (candidate connect-src: §10.3 extra). */
+/**
+ * The §10.3 headers as the apps' _headers files set them (candidate connect-src: §10.3 extra; recruiter
+ * worker-src 'self': ADR-033 §4, scripts/check-headers.mjs APP_CSP_DIRECTIVES).
+ */
 const securityHeaders = (app) => ({
   'content-security-policy':
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'" +
     (app === 'candidate' ? ' https://trace-edge-staging.fixture-sub.workers.dev' : '') +
-    "; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
+    "; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'" +
+    (app === 'recruiter' ? "; worker-src 'self'" : ''),
   'strict-transport-security': 'max-age=31536000; includeSubDomains',
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
@@ -641,6 +645,61 @@ describe('runSmoke', () => {
 
   it('has a default overall deadline of six minutes', () => {
     expect(DEFAULTS.deadlineMs).toBe(360_000);
+  });
+
+  // Dispatch 8 (run 39559543112): the recruiter's fresh per-deployment host did not resolve within 12 attempts
+  // (`request failed (TypeError)`) while its production alias was already fine. A new <deployment>.<project>.pages.dev
+  // name can take minutes to appear, so the per-deployment checks get their own, larger budget within the deadline.
+  it('gives a per-deployment app URL four minutes of retries by default (a new pages.dev host resolves late)', () => {
+    expect(DEFAULTS.deploymentAttempts).toBe(48);
+    expect(DEFAULTS.deploymentAttempts * DEFAULTS.delayMs).toBe(240_000);
+    expect(DEFAULTS.deploymentAttempts * DEFAULTS.delayMs).toBeLessThan(DEFAULTS.deadlineMs);
+  });
+
+  it('keeps retrying the recruiter deployment URL past the Worker budget until it resolves', async () => {
+    let t = 0;
+    let failures = 0;
+    const { fetch } = fakeStaging({
+      override: (u) => {
+        if (!u.startsWith(APP_URLS.recruiter) || failures >= 40) return undefined;
+        failures++;
+        throw new TypeError('fetch failed');
+      },
+    });
+    const r = await runSmoke({
+      targets,
+      sha: SHA,
+      fetch,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+    });
+    expect(r.violations).toEqual([]);
+    expect(failures).toBe(40);
+    expect(r.report).toContain('recruiter /version.json and headers: ok');
+  });
+
+  it('a per-deployment URL that never resolves fails after its own attempts', async () => {
+    const { fetch } = fakeStaging({
+      override: (u) => {
+        if (u.startsWith(APP_URLS.recruiter)) throw new TypeError('fetch failed');
+        return undefined;
+      },
+    });
+    const r = await runSmoke({
+      targets,
+      sha: SHA,
+      fetch,
+      sleep: noSleep,
+      attempts: 2,
+      deploymentAttempts: 3,
+    });
+    expect(r.violations).toEqual([
+      expect.stringMatching(
+        /^recruiter \/version\.json: request failed \(TypeError\).*\(after 3 attempts\)$/,
+      ),
+    ]);
   });
 });
 

@@ -39,7 +39,8 @@ const rulesOf = (text: string): string[] =>
     .map((line) => line.trim());
 
 // dist/_headers is written from _headers.template by the headers-template Vite plugin, which puts the
-// Supabase origin of VITE_SUPABASE_URL in place of the token (specs/m0b-tenancy.md §2.7).
+// Supabase origin of VITE_SUPABASE_URL in place of the token (specs/m0b-tenancy.md §2.7), and from D1 the
+// api origin of VITE_API_ORIGIN and the Sentry ingest origin of VITE_SENTRY_DSN, each dropped when unset.
 describe(`${APP} _headers.template`, () => {
   const text = read('_headers.template');
   const csp = /^\s+Content-Security-Policy:\s*(.+)$/im.exec(text)?.[1] ?? '';
@@ -69,9 +70,16 @@ describe(`${APP} _headers.template`, () => {
       }
   });
 
-  it("limits connect-src to 'self' plus the one Supabase origin token (M0b)", () => {
-    expect(directives.get('connect-src')).toEqual(["'self'", '__SUPABASE_ORIGIN__']);
+  it("limits connect-src to 'self' plus the Supabase (M0b), api (d1 §7.1) and Sentry (d1 AT-D22) origin tokens", () => {
+    expect(directives.get('connect-src')).toEqual([
+      "'self'",
+      '__SUPABASE_ORIGIN__',
+      '__API_ORIGIN__',
+      '__SENTRY_ORIGIN__',
+    ]);
     expect(text.split('__SUPABASE_ORIGIN__')).toHaveLength(2);
+    expect(text.split('__API_ORIGIN__')).toHaveLength(2);
+    expect(text.split('__SENTRY_ORIGIN__')).toHaveLength(2);
   });
 
   it('is the only headers source: public/_headers would be copied over the generated file', () => {

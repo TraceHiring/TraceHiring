@@ -1,5 +1,12 @@
-// Placeholder Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
-// No secrets, no credential vars and no Queue, R2, Durable Object or cron bindings in M0a.
+// Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
+// D1 bindings (specs/d1-demo-slice.md §4.2, §7.1): the mirror Queue consumer and producer, R2 evidence
+// (read) and the every-minute sweep cron, repeated in each env block (bindings and vars are not
+// inherited). No secret on staging: the three jobs database logins are the JOBS_MIRROR_DB, JOBS_QUALITY_DB and
+// JOBS_INTEGRITY_DB Hyperdrive bindings in env.staging (ADR-031 amendment 1; their config ids are public, created
+// by the founder on 2026-10-22); the local stack instead gets the three loopback URL secrets
+// (scripts/e2e-local.mjs). Deploy order: services/api, then workers/jobs, then workers/edge.
+// M1 R5-13: consumer of trace-authoring-<env> and trace-admin-<env> too (5 tries, then their DLQs); src/index.ts
+// dispatches each batch on its queue name.
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "trace-jobs",
@@ -31,17 +38,79 @@
   },
   // The deployed commit, reported by GET /health (spec §9.3). 'dev' locally; CI overrides it with
   // `--var VERSION:<40-hex sha>` (spec §7.2). vars are not inherited by env blocks, so each env
-  // repeats it. This is a public build identifier, not a secret.
-  "vars": { "VERSION": "dev" },
+  // repeats it. This is a public build identifier, not a secret. SENTRY_DSN_WORKERS (d1 AT-D22) is
+  // empty here, so the Sentry SDK stays off; the staging deploy sets it (a DSN is public, a var).
+  "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "" },
   "env": {
     "dev": {
       "name": "trace-jobs-dev",
-      "vars": { "VERSION": "dev" },
+      "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "", "TRACE_ENV": "dev" },
+      "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "trace-evidence-dev" }],
+      "queues": {
+        // Consumer, and producer for the cron sweep re-enqueue, of one queue (spec §7.1, L-18).
+        "producers": [{ "binding": "MIRROR_QUEUE", "queue": "trace-session-mirror-dev" }],
+        "consumers": [
+          {
+            "queue": "trace-session-mirror-dev",
+            "max_batch_size": 10,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-session-mirror-dlq-dev",
+          },
+          // M1 R5-13: AI drafting and member provisioning, one job per message; queue() dispatches on the queue.
+          {
+            "queue": "trace-authoring-dev",
+            "max_batch_size": 1,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-authoring-dlq-dev",
+          },
+          {
+            "queue": "trace-admin-dev",
+            "max_batch_size": 1,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-admin-dlq-dev",
+          },
+        ],
+      },
+      "triggers": { "crons": ["* * * * *"] },
     },
     "staging": {
       "name": "trace-jobs-staging",
       "workers_dev": true,
-      "vars": { "VERSION": "dev" },
+      "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "", "TRACE_ENV": "staging" },
+      "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "trace-evidence-staging" }],
+      "queues": {
+        "producers": [{ "binding": "MIRROR_QUEUE", "queue": "trace-session-mirror-staging" }],
+        "consumers": [
+          {
+            "queue": "trace-session-mirror-staging",
+            "max_batch_size": 10,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-session-mirror-dlq-staging",
+          },
+          {
+            "queue": "trace-authoring-staging",
+            "max_batch_size": 1,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-authoring-dlq-staging",
+          },
+          {
+            "queue": "trace-admin-staging",
+            "max_batch_size": 1,
+            "max_retries": 5,
+            "dead_letter_queue": "trace-admin-dlq-staging",
+          },
+        ],
+      },
+      "triggers": { "crons": ["* * * * *"] },
+      // Configs trace-staging-jobs-{mirror,quality,integrity}-login (scripts/lib/hyperdrive.mjs); public ids.
+      // M1 R5-11: JOBS_AUTHORING_DB and JOBS_ADMIN_DB (trace-staging-jobs-{authoring,admin}-login) follow, last
+      // and in that order, once the founder has created the configs; until then they are PENDING_BINDINGS and
+      // check-deploy-vars refuses a staging deploy.
+      "hyperdrive": [
+        { "binding": "JOBS_MIRROR_DB", "id": "784e4dee7f0c4119b482340d48f6089d" },
+        { "binding": "JOBS_QUALITY_DB", "id": "29d5817a3e7f42c5ab5433f56ce0e4d5" },
+        { "binding": "JOBS_INTEGRITY_DB", "id": "e7200fda374f4caf9169b3c3163f636f" },
+      ],
     },
   },
 }
