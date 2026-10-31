@@ -1,6 +1,13 @@
 // Times on the drive screens (M2-8): shown and typed in IST (Asia/Kolkata), sent with an explicit +05:30 offset.
 import { describe, expect, it } from 'vitest';
-import { formatIst, istInputToIso, minutesToWords, offsetsSentence, parseSlotLine } from './time';
+import {
+  formatIst,
+  istInputToIso,
+  minutesToWords,
+  offsetsSentence,
+  parseSlotLine,
+  reminderPlan,
+} from './time';
 
 describe('formatIst', () => {
   it('shows an instant as the wall clock in India, 24 hours, with "IST"', () => {
@@ -66,5 +73,34 @@ describe('reminders in words', () => {
       '3 days, 24 hours and 1 hour before the deadline',
     );
     expect(offsetsSentence([], 'start')).toBe('none');
+  });
+});
+
+describe('reminderPlan (§6.1, M2-13, E8)', () => {
+  const NOW = Date.parse('2026-11-01T00:00:00.000Z');
+
+  it('puts each reminder at the slot start minus its offset, longest first, in IST', () => {
+    // A slot at 10:00 IST on 3 Nov with offsets 24 h and 1 h: 10:00 the day before, and 09:00.
+    const plan = reminderPlan('2026-11-03T04:30:00.000Z', [60, 1440], NOW);
+    expect(plan).toEqual([
+      { offsetMinutes: 1440, at: '2026-11-02T04:30:00.000Z', skipped: false },
+      { offsetMinutes: 60, at: '2026-11-03T03:30:00.000Z', skipped: false },
+    ]);
+    expect(plan.map((p) => formatIst(p.at))).toEqual([
+      '2 Nov 2026, 10:00 IST',
+      '3 Nov 2026, 09:00 IST',
+    ]);
+  });
+
+  it('marks a reminder whose time has already gone by as skipped (E8: late invite)', () => {
+    // A slot at 16:00 IST on 1 Nov, seen at 05:30 IST that day: the 24 h one is in the past, the 1 h one is not.
+    const plan = reminderPlan('2026-11-01T10:30:00.000Z', [1440, 60], NOW);
+    expect(plan.map((p) => p.skipped)).toEqual([true, false]);
+    expect(formatIst(plan[1]?.at ?? '')).toBe('1 Nov 2026, 15:00 IST');
+  });
+
+  it('is empty for no offsets, and for a start that is not a time', () => {
+    expect(reminderPlan('2026-11-03T04:30:00.000Z', [], NOW)).toEqual([]);
+    expect(reminderPlan('soon', [60], NOW)).toEqual([]);
   });
 });

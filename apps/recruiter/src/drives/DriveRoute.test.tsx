@@ -302,6 +302,34 @@ describe('the slots', () => {
     expect(mounted.text()).toContain('12 of 50');
   });
 
+  it('shows the reminder plan of each slot in IST, with a time already past as skipped (§6.1, M2-13, E8)', async () => {
+    // "Now" is 05:30 IST on 1 Nov 2026 (beforeEach).
+    const tenAm = slot(1, { startsAt: '2026-11-03T04:30:00.000Z' });
+    const today = slot(2, { startsAt: '2026-11-01T10:30:00.000Z' });
+    const { api } = driveApi({
+      drive: D({ reminderOffsetsMinutes: [1440, 60] }),
+      slots: { slots: [tenAm, today], nextCursor: null },
+    });
+    mounted = await mountDrive(api);
+    const first = rowOf(mounted, formatIst(tenAm.startsAt)).textContent.replace(/\s+/g, ' ');
+    expect(first).toContain('24 hours before: 2 Nov 2026, 10:00 IST');
+    expect(first).toContain('1 hour before: 3 Nov 2026, 09:00 IST');
+    expect(first).not.toMatch(/skipped/i);
+    const second = rowOf(mounted, formatIst(today.startsAt)).textContent.replace(/\s+/g, ' ');
+    expect(second).toContain('24 hours before: skipped, that time has passed');
+    expect(second).toContain('1 hour before: 1 Nov 2026, 15:00 IST');
+    expect(mounted.text()).toContain('Reminders (IST)');
+  });
+
+  it('shows "None" as the reminder plan of a drive without reminders', async () => {
+    const { api } = driveApi({
+      drive: D({ reminderOffsetsMinutes: [] }),
+      slots: { slots: [slot(1)], nextCursor: null },
+    });
+    mounted = await mountDrive(api);
+    expect(rowOf(mounted, formatIst(slot(1).startsAt)).textContent).toContain('None');
+  });
+
   it('is not shown for an open-window drive, which has no slots', async () => {
     const { api, calls } = driveApi({ drive: D({ mode: 'open_window' }) });
     mounted = await mountDrive(api);
