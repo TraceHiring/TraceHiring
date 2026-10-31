@@ -24,7 +24,7 @@ declare global {
     AWS_WORKERS_SECRET_ACCESS_KEY?: string;
     /** HMAC key of the SES test-inbox allow-list (the var SES_ALLOWED_TEST_RECIPIENT_HMAC holds the digest). */
     SES_TEST_RECIPIENT_HMAC_KEY?: string;
-    /** DevKeyManager's key-encryption key (dev and staging only; at least 32 bytes; refused in production). */
+    /** DevKeyManager's key-encryption key: base64 of at least 32 bytes (dev and staging only; refused in production). */
     KEY_MANAGER_DEV_KEK?: string;
   }
 }
