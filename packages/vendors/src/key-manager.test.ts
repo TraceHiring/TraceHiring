@@ -260,6 +260,52 @@ describe('CachingKeyManager (≤ 300 s per (org, purpose, wrapped), injected clo
     expect(inner.unwraps).toBe(2);
   });
 
+  it('sweeps expired entries by time on every put and unwrap, before the size check (§9; B1 fix 6)', async () => {
+    let now = 0;
+    const inner = new CountingKeyManager();
+    const km = new CachingKeyManager(inner, { now: () => now, ttlMs: 1_000, maxEntries: 100 });
+    const a = await inner.generateDataKey(ORG_A, 'contacts');
+    const b = await inner.generateDataKey(ORG_A, 'bidx');
+    await km.unwrap(ORG_A, 'contacts', a.wrapped, a.kmsKeyRef, 1);
+    now = 500;
+    await km.unwrap(ORG_A, 'bidx', b.wrapped, b.kmsKeyRef, 1);
+    expect(km.cachedKeyCountForTests()).toBe(2);
+    // A lookup of another key (a cache hit) still drops the expired entry for A.
+    now = 1_000;
+    await km.unwrap(ORG_A, 'bidx', b.wrapped, b.kmsKeyRef, 1);
+    expect(inner.unwraps).toBe(2);
+    expect(km.cachedKeyCountForTests()).toBe(1);
+    // A put (generateDataKey) sweeps too: B expired at 1 500.
+    now = 1_500;
+    await km.generateDataKey(ORG_B, 'contacts');
+    expect(km.cachedKeyCountForTests()).toBe(1);
+    // A failed unwrap still sweeps.
+    now = 2_500;
+    await keyError(km.unwrap(ORG_B, 'bidx', a.wrapped, a.kmsKeyRef, 1));
+    expect(km.cachedKeyCountForTests()).toBe(0);
+  });
+
+  it('a full cache drops every expired entry, not only the one the size check needs', async () => {
+    let now = 0;
+    const inner = new CountingKeyManager();
+    const km = new CachingKeyManager(inner, { now: () => now, ttlMs: 1_000, maxEntries: 3 });
+    const a = await inner.generateDataKey(ORG_A, 'contacts');
+    const b = await inner.generateDataKey(ORG_A, 'bidx');
+    const c = await inner.generateDataKey(ORG_B, 'contacts');
+    const d = await inner.generateDataKey(ORG_B, 'bidx');
+    await km.unwrap(ORG_A, 'contacts', a.wrapped, a.kmsKeyRef, 1);
+    now = 100;
+    await km.unwrap(ORG_A, 'bidx', b.wrapped, b.kmsKeyRef, 1);
+    now = 900;
+    await km.unwrap(ORG_B, 'contacts', c.wrapped, c.kmsKeyRef, 1);
+    expect(km.cachedKeyCountForTests()).toBe(3);
+    now = 1_100; // A and B expired; C live
+    await km.unwrap(ORG_B, 'bidx', d.wrapped, d.kmsKeyRef, 1);
+    expect(km.cachedKeyCountForTests()).toBe(2); // C and D
+    await km.unwrap(ORG_B, 'contacts', c.wrapped, c.kmsKeyRef, 1);
+    expect(inner.unwraps).toBe(4); // C was kept
+  });
+
   it('evicts the oldest entry past maxEntries', async () => {
     const inner = new CountingKeyManager();
     const km = new CachingKeyManager(inner, { now: () => 0, maxEntries: 2 });
