@@ -113,6 +113,54 @@ describe('candidateRpc', () => {
     expect(await rejection(rpc.call('inviteResolve', { token: linkToken() }))).toBe(expected);
   });
 
+  // M2 (decision f): the portal methods are typed from PortalRpcSchemas and checked the same way.
+  it('a portal method absent from the binding (api not yet deployed) fails closed with unavailable', async () => {
+    const env = envWith({}) as Env;
+    expect(
+      await rejection(candidateRpc(env).call('portalSlots', { portalToken: 'aaa.bbb.ccc' })),
+    ).toBe('unavailable');
+  });
+
+  it('portal answers are checked strictly: a slot with a seat count is unavailable', async () => {
+    const env = {
+      VERSION: 'dev',
+      API: {
+        portalSlots: async () => ({
+          slots: [
+            {
+              slotId: INVITATION,
+              startsAt: '2026-10-31T10:00:00.000Z',
+              available: true,
+              booked: 2,
+            },
+          ],
+        }),
+      },
+    } as unknown as Env;
+    expect(
+      await rejection(candidateRpc(env).call('portalSlots', { portalToken: 'aaa.bbb.ccc' })),
+    ).toBe('unavailable');
+  });
+
+  it('a portal input that does not fit (a bad slot id) is bad_request without calling api', async () => {
+    let called = false;
+    const env = {
+      VERSION: 'dev',
+      API: {
+        portalReschedule: async () => {
+          called = true;
+          return {};
+        },
+      },
+    } as unknown as Env;
+    expect(
+      await rejection(
+        candidateRpc(env).call('portalReschedule', { portalToken: 'aaa.bbb.ccc', toSlotId: 'x' }),
+      ),
+    ).toBe('bad_request');
+    expect(called).toBe(false);
+  });
+
   it('codeOf maps a non-Error throw to unavailable', () => {
     expect(codeOf('invalid_link')).toBe('unavailable');
     expect(codeOf(null)).toBe('unavailable');

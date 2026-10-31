@@ -25,6 +25,7 @@ import {
   type Receipt,
   type ServedItem,
   type ServedItemV2,
+  type SessionPeekRes,
   type SessionState,
   type SessionView,
   type SessionViewV2,
@@ -170,7 +171,15 @@ export interface StartInput {
   adultConfirmed: boolean;
   photo: PhotoRef | null;
   photoSkippedReason: PhotoSkippedReason | null;
+  /**
+   * M2 (R5-63): a drive row's start window from api's grant (first start only; never on a resume, absent for D1 rows).
+   * The object re-checks it by its own clock only when it creates the session.
+   */
+  sw?: { nb: string; na: string } | null;
 }
+
+/** What `canStart` reads from a grant: the same two fields `start` uses for its first-start window check. */
+export type StartWindowCheck = Pick<StartInput, 'sw' | 'grantStartedAt'>;
 
 /** Every session-token request presents the token's nonce and org (both from verified claims). */
 export interface SessionAuth {
@@ -221,6 +230,10 @@ export type SubmitResult = { ok: true; receipt: Receipt } | Refusal;
 
 /** What the routes call on the object (the RPC stub and the test fake both have this shape). */
 export interface SessionApi {
+  /** M2 R5-66 c: read only, whether the object holds a session (live or finished). */
+  peek(): Promise<SessionPeekRes>;
+  /** Build-notes "B4 first reviews" b: read only, whether `start` would pass its first-start window check now. */
+  canStart(input: StartWindowCheck): Promise<boolean>;
   start(input: StartInput): Promise<StartResult>;
   attach(auth: SessionAuth): Promise<AttachResult>;
   item(auth: SessionAuth, position: number, afterSeq?: number): Promise<ItemResult>;
@@ -355,6 +368,18 @@ export const evidenceKeys = (orgId: string, sessionId: string) => ({
 
 /** The stored size of one event: the UTF-8 bytes of its JSON (SEC-C1b-2). */
 const storedBytes = (event: StoredEvent): number => utf8(JSON.stringify(event)).byteLength;
+
+/**
+ * M2 R5-63: is `now` (the object's clock) inside a drive row's start window `[nb, na]`? No window (a D1 row) is always
+ * inside; a window whose times do not parse is never inside (fail closed).
+ */
+export const insideWindow = (sw: StartInput['sw'], now: number): boolean => {
+  if (sw === undefined || sw === null) return true;
+  const nb = Date.parse(sw.nb);
+  const na = Date.parse(sw.na);
+  if (!Number.isFinite(nb) || !Number.isFinite(na)) return false;
+  return now >= nb && now <= na;
+};
 
 export const mirrorBackoffMs = (failures: number): number =>
   MIRROR_BACKOFF_MS[failures - 1] ?? MIRROR_RETRY_EVERY_MS;
@@ -710,6 +735,26 @@ export class SessionCore implements SessionApi {
   // ---- start / attach / item -------------------------------------------------------------------------------------
 
   /**
+   * M2 R5-66 c: whether this object holds a session, live or finished (its meta is stored). Reads one key and writes
+   * nothing, so the edge may call it before every grant, lobby mint and OTP send; api treats `live` as a resume.
+   */
+  peek(): Promise<SessionPeekRes> {
+    return Promise.resolve({ live: this.#meta() !== undefined });
+  }
+
+  /**
+   * Build-notes "B4 first reviews" b: whether `start` would pass its first-start window check at this instant, by
+   * this object's own clock and the same rule: true when the object holds a session (a resume), when api holds a
+   * stored start, or when there is no window (a D1 row); else whether now is inside `[nb, na]` (an unparsable window
+   * is never inside). Reads one key and writes nothing. The route asks it before the photo step closes, so a start
+   * refused for the window never closes it; `start` keeps the authoritative check.
+   */
+  canStart(input: StartWindowCheck): Promise<boolean> {
+    if (this.#meta() !== undefined || input.grantStartedAt !== null) return Promise.resolve(true);
+    return Promise.resolve(insideWindow(input.sw, this.#now()));
+  }
+
+  /**
    * Creates the session on the first call (`started_at` from the object's clock, the deadline alarm set) or resumes
    * it (same `started_at`, the nonce rotated, a new stream that supersedes the older). Refuses without
    * `adultConfirmed` (rule 9, L-13). A finished session answers its receipt. The photo is set once, at creation (a
@@ -758,6 +803,11 @@ export class SessionCore implements SessionApi {
         };
       }
       if (pkg === undefined) return refuse('unavailable');
+      // M2 R5-63: a first start of a drive row is inside api's window by this object's own clock. Only here, when the
+      // session is created; a resume (stored meta, or a lost object re-created from api's stored start) never checks.
+      if (input.grantStartedAt === null && !insideWindow(input.sw, now)) {
+        return refuse('outside_start_window');
+      }
       // A session that api already recorded as started keeps that start (a lost object never extends the time).
       const stored = input.grantStartedAt === null ? Number.NaN : Date.parse(input.grantStartedAt);
       const startedAt = Number.isFinite(stored) ? Math.min(stored, now) : now;

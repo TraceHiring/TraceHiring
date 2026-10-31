@@ -149,4 +149,17 @@ describe('SessionDO (real class, SQLite-backed storage, local R2 and queue)', ()
     const keys = await runInDurableObject(stub, (_instance, state) => [...state.storage.kv.list()]);
     expect(keys).toEqual([]);
   });
+
+  it('M2 R5-66 c: peek answers live false and writes nothing, then live true once a session exists', async () => {
+    const stub = sessionStub();
+    expect(await stub.peek()).toEqual({ live: false });
+    const empty = await runInDurableObject(stub, (_instance, state) => [
+      ...state.storage.kv.list(),
+    ]);
+    expect(empty).toEqual([]);
+    const sha256 = await installRealPackage();
+    const started = await stub.start(startInput(sha256, { sessionId: crypto.randomUUID() }));
+    expect(started.ok).toBe(true);
+    expect(await stub.peek()).toEqual({ live: true });
+  });
 });

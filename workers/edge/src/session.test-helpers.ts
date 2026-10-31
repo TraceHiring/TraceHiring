@@ -16,6 +16,7 @@ import {
   fakeQueue,
   fakeSession,
   NOW_MS,
+  type ApiImpl,
   type Clock,
   type Harness,
 } from './edge.test-helpers.js';
@@ -399,24 +400,52 @@ export const tabHidden = (seq: number, item: number | null, ms: number, t = seq 
 
 // ---- the route harness --------------------------------------------------------------------------------------------
 
+/** A drive row's start window as api returns it in a first-start grant (M2 R5-63): ISO times. */
+export interface StartWindowFake {
+  nb: string;
+  na: string;
+}
+
+/**
+ * The fake api's state. `window` makes the row a drive row (M2 R5-63, R5-66 c, as stream B2 builds it): a grant that is
+ * not a resume (no stored start and `sessionLive` not true) is refused `outside_start_window` unless api's clock is in
+ * `[nb, na]` (unless `checkWindow` is false, to let the SessionDO's own check be seen), and carries `sw`; a resume
+ * carries none. Without `window` the row is a D1 row (no `sw`, no window check).
+ */
+export interface FakeApiState {
+  startedAt: string | null;
+  grants: number;
+  window: StartWindowFake | null;
+  checkWindow: boolean;
+}
+
 export interface SessionRouteHarness extends Harness {
-  /** The api's set-once started_at (as services/api stores it). */
-  api: { startedAt: string | null; grants: number };
+  /** The api's set-once started_at (as services/api stores it) and the drive row's window. */
+  api: FakeApiState;
   packageSha: string;
   /** OTP login, then POST /v1/session/start with a skipped photo; returns the session token and view. */
   startSession: (photo?: unknown) => Promise<{ token: string; view: SessionView; res: Response }>;
 }
 
 export const sessionHarness = async (
-  options: { pkg?: unknown; sessionStarted?: () => Promise<unknown> } = {},
+  options: { pkg?: unknown; sessionStarted?: () => Promise<unknown>; overrides?: ApiImpl } = {},
 ): Promise<SessionRouteHarness> => {
-  const api = { startedAt: null as string | null, grants: 0 };
+  const api: FakeApiState = { startedAt: null, grants: 0, window: null, checkWindow: true };
   const ref: { h?: Harness } = {};
   let nonceN = 0;
   const h = await createHarness({
-    sessionGrant: async () => {
+    sessionGrant: async (input) => {
       const harness = ref.h;
       if (harness === undefined) throw new Error('unavailable');
+      // R5-66 c: a live DO session makes a drive row's grant a resume; D1 rows ignore `sessionLive`.
+      const resume = api.startedAt !== null || (api.window !== null && input.sessionLive === true);
+      const window = resume ? null : api.window;
+      if (window !== null && api.checkWindow) {
+        const now = harness.clock.ms;
+        if (now < Date.parse(window.nb) || now > Date.parse(window.na)) {
+          throw new Error('outside_start_window');
+        }
+      }
       api.grants += 1;
       nonceN += 1;
       const nonce = `session-nonce-${String(nonceN).padStart(4, '0')}-abcdef`;
@@ -432,7 +461,7 @@ export const sessionHarness = async (
         exp: iat + DURATION_SECONDS + 3600,
       });
       return {
-        resume: api.startedAt !== null,
+        resume,
         startedAt: api.startedAt,
         durationSeconds: DURATION_SECONDS,
         sessionToken,
@@ -444,6 +473,7 @@ export const sessionHarness = async (
         consentId: CONSENT,
         adultConfirmed: true,
         sessionId: SESSION,
+        ...(window === null ? {} : { sw: { nb: window.nb, na: window.na } }),
       };
     },
     sessionStarted:
@@ -452,6 +482,7 @@ export const sessionHarness = async (
         api.startedAt ??= String(input.startedAt);
         return { startedAt: api.startedAt };
       }),
+    ...options.overrides,
   });
   ref.h = h;
   const packageSha = await installPackage(h.packages, options.pkg ?? makePackage());
@@ -470,6 +501,160 @@ export const sessionHarness = async (
   };
 
   return { ...h, api, packageSha, startSession };
+};
+
+// ---- the drive-row harness (M2: specs/m2-scheduling-invites.md R5-19, R5-23, R5-53, R5-63, R5-64, R5-66) ----------
+
+/** The lobby verifier cap (R5-66 f) and D1's lobby lifetime, as api mints them. */
+export const LOBBY_DRIVE_CAP_SECONDS = 5460;
+export const LOBBY_D1_SECONDS = 1800;
+const NOT_STARTED = ['created', 'sent', 'otp_verified'];
+
+/**
+ * One scheduled drive invitation as the fake api holds it (stream B2's behaviour, which these fakes stand for):
+ * `slotStartsAt`, the lobby opening `lobbyOpensMinutes` before it and the start window of `windowMinutes` after it.
+ * `sessionGrantExp` (ms) bounds a started row's lobby OTP (R5-53). `failStarted` makes `sessionStarted` fail.
+ */
+export interface DriveRow {
+  state: string;
+  mode: 'scheduled' | 'open_window';
+  slotStartsAt: number;
+  /** Where `portalReschedule` moves the row (the one self-reschedule, M2-11). */
+  nextSlotStartsAt: number;
+  lobbyOpensMinutes: number;
+  windowMinutes: number;
+  sessionGrantExp: number | null;
+  failStarted: boolean;
+}
+
+export interface DriveHarness extends SessionRouteHarness {
+  drive: DriveRow;
+  /** The window `[nb, na]` of the current slot, in ms. */
+  nb: () => number;
+  na: () => number;
+  lobbyOpensAt: () => number;
+}
+
+/**
+ * A session harness over a drive row (scheduled): api's `inviteResolve` answers `schedule` with the phase by api's
+ * clock (only for `created|sent|otp_verified`, R5-64 b); `messagingSend` (purpose `lobby`) and `lobbyMint` refuse
+ * `lobby_closed` outside the lobby window for a row not started unless `sessionLive` is true (R5-19, R5-66 c), and
+ * after `sessionGrantExp` for a started row (R5-53); `lobbyMint` mints a not-started row's lobby token to
+ * `min(iat + 5,460 s, na + 60 s)` and a resume's to 1,800 s (R5-63, R5-66 f); `sessionGrant` refuses a first start
+ * outside `[nb, na]` and returns `sw` (R5-63); `sessionStarted` marks the row started. A live DO session counts as
+ * started (R5-66 c, build-notes "B4 first reviews" a): `inviteResolve` with `sessionLive` true answers
+ * `schedule: null`, and `portalReschedule` with `sessionLive` true refuses `too_late_to_reschedule`.
+ */
+export const driveHarness = async (
+  row: Partial<DriveRow> = {},
+  pkg: unknown = makePackage(),
+): Promise<DriveHarness> => {
+  const drive: DriveRow = {
+    state: 'sent',
+    mode: 'scheduled',
+    slotStartsAt: NOW_MS + 60 * 60_000,
+    nextSlotStartsAt: NOW_MS + 24 * 60 * 60_000,
+    lobbyOpensMinutes: 30,
+    windowMinutes: 15,
+    sessionGrantExp: null,
+    failStarted: false,
+    ...row,
+  };
+  const ref: { h?: SessionRouteHarness } = {};
+  const clock = () => ref.h?.clock.ms ?? NOW_MS;
+  const lobbyOpensAt = () => drive.slotStartsAt - drive.lobbyOpensMinutes * 60_000;
+  const nb = () => drive.slotStartsAt;
+  const na = () => drive.slotStartsAt + drive.windowMinutes * 60_000;
+  const notStarted = () => NOT_STARTED.includes(drive.state);
+  const phase = () => {
+    const now = clock();
+    if (now < lobbyOpensAt()) return 'wait_lobby';
+    if (now <= na()) return 'lobby_open';
+    return 'window_missed';
+  };
+  const iso = (ms: number) => new Date(ms).toISOString();
+  /** The lobby OTP refusal of R5-19 / R5-53 / R5-66 c, as api applies it. */
+  const lobbyRefused = (sessionLive: unknown) => {
+    if (sessionLive === true) return false;
+    if (notStarted()) return phase() !== 'lobby_open';
+    if (drive.state === 'started') {
+      return drive.sessionGrantExp !== null && clock() > drive.sessionGrantExp;
+    }
+    return false;
+  };
+  const h = await sessionHarness({
+    pkg,
+    overrides: {
+      inviteResolve: async (input) => ({
+        invitationId: INVITATION,
+        orgId: ORG,
+        candidateId: CANDIDATE,
+        state: drive.state,
+        title: 'Demo assessment',
+        durationMinutes: DURATION_SECONDS / 60,
+        schedule:
+          notStarted() && input.sessionLive !== true
+            ? {
+                mode: drive.mode,
+                phase: phase(),
+                slotStartsAt: iso(drive.slotStartsAt),
+                lobbyOpensAt: iso(lobbyOpensAt()),
+                startWindowEndsAt: iso(na()),
+              }
+            : null,
+      }),
+      messagingSend: async (input) => {
+        if ((input.purpose ?? 'lobby') === 'lobby' && lobbyRefused(input.sessionLive)) {
+          throw new Error('lobby_closed');
+        }
+        return { ok: true };
+      },
+      lobbyMint: async (input) => {
+        const harness = ref.h;
+        if (harness === undefined) throw new Error('unavailable');
+        if (lobbyRefused(input.sessionLive)) throw new Error('lobby_closed');
+        if (drive.state === 'sent' || drive.state === 'created') drive.state = 'otp_verified';
+        const iat = Math.floor(harness.clock.ms / 1000);
+        const exp =
+          notStarted() && input.sessionLive !== true
+            ? Math.min(iat + LOBBY_DRIVE_CAP_SECONDS, Math.floor(na() / 1000) + 60)
+            : iat + LOBBY_D1_SECONDS;
+        const lobbyToken = await signToken(harness.key, {
+          sub: CANDIDATE,
+          candidate_id: CANDIDATE,
+          invitation_id: input.invitationId,
+          org_id: input.orgId,
+          typ: 'lobby',
+          nonce: input.nonce,
+          iat,
+          exp,
+        });
+        return { lobbyToken, expiresAt: iso(exp * 1000), next: 'age' };
+      },
+      portalReschedule: async (input) => {
+        if (input.sessionLive === true) throw new Error('too_late_to_reschedule');
+        if (!notStarted()) throw new Error('closed');
+        drive.slotStartsAt = drive.nextSlotStartsAt;
+        return { ok: true, slotStartsAt: iso(drive.slotStartsAt) };
+      },
+      sessionStarted: async (input) => {
+        const harness = ref.h;
+        if (harness === undefined || drive.failStarted) throw new Error('unavailable');
+        harness.api.startedAt ??= String(input.startedAt);
+        drive.state = 'started';
+        return { startedAt: harness.api.startedAt };
+      },
+    },
+  });
+  ref.h = h;
+  const harness: DriveHarness = { ...h, drive, nb, na, lobbyOpensAt };
+  // The window follows the row's current slot (a reschedule moves it, R5-63).
+  Object.defineProperty(h.api, 'window', {
+    get: () => ({ nb: iso(nb()), na: iso(na()) }),
+    set: () => undefined,
+    enumerable: true,
+  });
+  return harness;
 };
 
 /** POST /v1/session/events. */

@@ -6,8 +6,8 @@ import { resolveVersion } from '@trace/shared';
 import { createLogger, type Logger } from '@trace/shared/log';
 import { fail, bearer, type EdgeContext } from './http.js';
 import type { OtpApi } from './otp-do.js';
-import type { LobbyBucket, Refusal } from './otp-core.js';
-import { candidateRpc, RpcFailure, type CandidateMethod, type RpcIn, type RpcOut } from './rpc.js';
+import type { LobbyBucket, PortalBucket, Refusal } from './otp-core.js';
+import { candidateRpc, RpcFailure, type EdgeMethod, type RpcIn, type RpcOut } from './rpc.js';
 import type { SessionApi } from './session-core.js';
 import { verifyCandidateToken } from './token.js';
 
@@ -43,7 +43,7 @@ export const sessionFor = (c: EdgeContext, invitationId: string): SessionApi => 
 };
 
 /** Calls api; a failure becomes its constant code (an `unavailable` is logged with the method name only). */
-export const rpc = async <M extends CandidateMethod>(
+export const rpc = async <M extends EdgeMethod>(
   c: EdgeContext,
   deps: RouteDeps,
   method: M,
@@ -100,4 +100,38 @@ export const lobbyAuth = async (
   const gate = await otpCall(() => otp.lobbyGate(claims.nonce, bucket));
   if (!gate.ok) return refuse(gate);
   return { lobbyToken, claims };
+};
+
+export interface PortalAuth {
+  /** The raw portal token; api re-verifies it on every portal call (as for the lobby token). */
+  portalToken: string;
+  claims: CandidateTokenClaims;
+}
+
+/**
+ * Authenticates a portal request (M2 R5-19, R5-24): Bearer, the token checks of §4.3 with typ `portal` (1,800 s cap),
+ * then the portal nonce held by the invitation's InviteOtpDO (a newer manage login supersedes the token) and the
+ * route's per-invitation portal limit. Only the two portal routes call this, so `portal` is accepted nowhere else.
+ */
+export const portalAuth = async (
+  c: EdgeContext,
+  deps: RouteDeps,
+  bucket: PortalBucket,
+): Promise<PortalAuth> => {
+  const portalToken = bearer(c);
+  const claims = await verifyCandidateToken(portalToken, c.env, 'portal', nowSec(deps));
+  const otp = otpFor(c, claims.invitation_id);
+  const gate = await otpCall(() => otp.portalGate(claims.nonce, bucket));
+  if (!gate.ok) return refuse(gate);
+  return { portalToken, claims };
+};
+
+/**
+ * `SessionDO.peek()` on the invitation's object (M2 R5-66 c): whether it already holds a session. Read only. A runtime
+ * failure is `unavailable` (fail closed: api would otherwise treat a live session as not started).
+ */
+export const sessionLive = async (c: EdgeContext, invitationId: string): Promise<boolean> => {
+  const session = sessionFor(c, invitationId);
+  const peeked = await otpCall(() => session.peek());
+  return peeked.live === true;
 };
