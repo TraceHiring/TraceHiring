@@ -98,6 +98,32 @@ describe('DevKeyManager', () => {
     );
   });
 
+  it('binds the key version into the wrap: a version 1 key does not unwrap as version 2 (B1 fix 3)', async () => {
+    const km = new DevKeyManager('dev', { kek: kek() });
+    const v1 = await km.generateDataKey(ORG_A, 'contacts');
+    expect((await keyError(km.unwrap(ORG_A, 'contacts', v1.wrapped, 'dev:1', 2))).code).toBe(
+      'unwrap_failed',
+    );
+    await sameAes(v1.plaintext, await km.unwrap(ORG_A, 'contacts', v1.wrapped, 'dev:1', 1));
+    const v3 = await km.generateDataKey(ORG_A, 'bidx', { keyVersion: 3 });
+    expect(v3.keyVersion).toBe(3);
+    expect((await keyError(km.unwrap(ORG_A, 'bidx', v3.wrapped, 'dev:1', 1))).code).toBe(
+      'unwrap_failed',
+    );
+    await sameHmac(v3.plaintext, await km.unwrap(ORG_A, 'bidx', v3.wrapped, 'dev:1', 3));
+  });
+
+  it.each([undefined, 0, -1, 1.5, '1', 2_147_483_648, Number.NaN])(
+    'unwrap requires an explicit valid key version: %j is bad_key_version',
+    async (bad) => {
+      const km = new DevKeyManager('dev', { kek: kek() });
+      const dk = await km.generateDataKey(ORG_A, 'contacts');
+      expect(
+        (await keyError(km.unwrap(ORG_A, 'contacts', dk.wrapped, 'dev:1', bad as never))).code,
+      ).toBe('bad_key_version');
+    },
+  );
+
   it('validates its arguments with codes only', async () => {
     const km = new DevKeyManager('dev', { kek: kek() });
     expect((await keyError(km.generateDataKey('nope', 'contacts'))).code).toBe('bad_org');
@@ -164,14 +190,31 @@ describe('CachingKeyManager (≤ 300 s per (org, purpose, wrapped), injected clo
   class CountingKeyManager implements KeyManager {
     unwraps = 0;
     readonly inner = new DevKeyManager('dev', { kek: kek() });
-    generateDataKey(orgId: string, purpose: KeyPurpose) {
-      return this.inner.generateDataKey(orgId, purpose);
+    generateDataKey(orgId: string, purpose: KeyPurpose, options?: { keyVersion?: number }) {
+      return this.inner.generateDataKey(orgId, purpose, options);
     }
-    unwrap(orgId: string, purpose: KeyPurpose, wrapped: string, ref: string) {
+    unwrap(orgId: string, purpose: KeyPurpose, wrapped: string, ref: string, version: number) {
       this.unwraps++;
-      return this.inner.unwrap(orgId, purpose, wrapped, ref);
+      return this.inner.unwrap(orgId, purpose, wrapped, ref, version);
     }
   }
+
+  it('keys the cache by key version: another version reaches the inner manager and fails (B1 fix 3)', async () => {
+    const inner = new CountingKeyManager();
+    const km = new CachingKeyManager(inner, { now: () => 0 });
+    const dk = await inner.generateDataKey(ORG_A, 'contacts');
+    await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef, 1);
+    expect(inner.unwraps).toBe(1);
+    expect((await keyError(km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef, 2))).code).toBe(
+      'unwrap_failed',
+    );
+    expect(inner.unwraps).toBe(2);
+    const seeded = await km.generateDataKey(ORG_B, 'bidx', { keyVersion: 4 });
+    expect(await km.unwrap(ORG_B, 'bidx', seeded.wrapped, seeded.kmsKeyRef, 4)).toBe(
+      seeded.plaintext,
+    );
+    expect(inner.unwraps).toBe(2);
+  });
 
   it('serves a repeat unwrap from the cache until the TTL passes', async () => {
     let now = 1_000_000;

@@ -108,7 +108,7 @@ describe('AwsKmsKeyManager: request shape (AT-M2-11 local half of DC-M2-1)', () 
     expect(JSON.parse(req.body)).toEqual({
       KeyId: KEY_ARN,
       KeySpec: 'AES_256',
-      EncryptionContext: { org: ORG_A, purpose: 'contacts' },
+      EncryptionContext: { org: ORG_A, purpose: 'contacts', kv: '1' },
     });
     const ref = referenceSigV4({
       method: 'POST',
@@ -152,7 +152,7 @@ describe('AwsKmsKeyManager: request shape (AT-M2-11 local half of DC-M2-1)', () 
     expect(JSON.parse(req.body)).toEqual({
       CiphertextBlob: dk.wrapped,
       KeyId: KEY_ARN,
-      EncryptionContext: { org: ORG_A, purpose: 'bidx' },
+      EncryptionContext: { org: ORG_A, purpose: 'bidx', kv: '1' },
     });
     const ref = referenceSigV4({
       method: 'POST',
@@ -185,6 +185,37 @@ describe('AwsKmsKeyManager: failure modes (E18, AT-M2-33)', () => {
     expect((await keyError(km.unwrap(ORG_A, 'bidx', dk.wrapped, dk.kmsKeyRef))).code).toBe(
       'unwrap_failed',
     );
+  });
+
+  it('binds the key version into the encryption context: a version 2 key does not unwrap as version 1 (B1 fix 3)', async () => {
+    const km = new AwsKmsKeyManager(options());
+    const dk = await km.generateDataKey(ORG_A, 'contacts', { keyVersion: 2 });
+    expect(dk.keyVersion).toBe(2);
+    expect(JSON.parse(rec.calls[0]!.body).EncryptionContext).toEqual({
+      org: ORG_A,
+      purpose: 'contacts',
+      kv: '2',
+    });
+    expect((await keyError(km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef, 1))).code).toBe(
+      'unwrap_failed',
+    );
+    expect(JSON.parse(rec.calls[1]!.body).EncryptionContext).toEqual({
+      org: ORG_A,
+      purpose: 'contacts',
+      kv: '1',
+    });
+    const key = await km.unwrap(ORG_A, 'contacts', dk.wrapped, dk.kmsKeyRef, 2);
+    expect(key.extractable).toBe(false);
+  });
+
+  it('refuses a missing or invalid key version on unwrap before any request', async () => {
+    const km = new AwsKmsKeyManager(options());
+    for (const bad of [undefined, 0, 1.5, '1']) {
+      expect(
+        (await keyError(km.unwrap(ORG_A, 'contacts', 'AAAA', KEY_ARN, bad as never))).code,
+      ).toBe('bad_key_version');
+    }
+    expect(rec.calls).toHaveLength(0);
   });
 
   it('KMS down (5xx) is the retryable kms_unavailable', async () => {
