@@ -9,7 +9,8 @@
 // submitted row re-entering start gets its receipt. Fakes stand for stream B2's api; synthetic data only.
 import { InviteResolveRes, OkRes, SessionStartRes } from '@trace/shared/contracts/candidate';
 import { describe, expect, it } from 'vitest';
-import { LINK, NOTICE_ID, NOTICE_SHA, SLOT_A } from './edge.test-helpers.js';
+import { sha256HexBytes } from './encoding.js';
+import { LINK, NOTICE_ID, NOTICE_SHA, SLOT_A, testJpeg } from './edge.test-helpers.js';
 import {
   coreHarness,
   driveHarness,
@@ -145,7 +146,12 @@ describe('no OTP load in the start minute (AT-M2-10)', () => {
       'sessionGrant',
       'sessionStarted',
     ]);
-    expect(h.session.calls.slice(sessionBefore).map((c) => c.method)).toEqual(['peek', 'start']);
+    // Decision b: the DO's read-only window check runs before the photo step closes (a drive first start only).
+    expect(h.session.calls.slice(sessionBefore).map((c) => c.method)).toEqual([
+      'peek',
+      'canStart',
+      'start',
+    ]);
   });
 
   it('a D1 row start makes no OTP issue/verify and no messagingSend either', async () => {
@@ -372,6 +378,131 @@ describe('a live DO session counts as started (R5-66 c) and a submitted row gets
     const res = await start(h, await h.login());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ state: 'submitted', receipt });
+  });
+});
+
+describe('the DO window decision comes before closePhotos (decision b, SEC-1 set-once)', () => {
+  const upload = async (h: SessionRouteHarness, lobby: string, bytes: Uint8Array) =>
+    h.request('PUT', '/v1/lobby/photo', {
+      token: lobby,
+      body: bytes,
+      headers: { 'content-type': 'image/jpeg', 'x-photo-sha256': await sha256HexBytes(bytes) },
+    });
+  const startWith = async (h: SessionRouteHarness, lobby: string, bytes: Uint8Array) =>
+    h.request('POST', '/v1/session/start', {
+      token: lobby,
+      json: { rulesAcknowledged: true, photo: { sha256: await sha256HexBytes(bytes) } },
+    });
+
+  it('a start the DO refuses for the window keeps the photo step open; an in-window upload is 200 and its start succeeds', async () => {
+    const h = await driveHarness();
+    h.api.checkWindow = false; // api lets the start through (clock edge); the DO's own window refuses it
+    h.clock.ms = h.lobbyOpensAt() + MIN;
+    const lobby = await h.login();
+    const early = testJpeg(640, 480, 64);
+    expect((await upload(h, lobby, early)).status).toBe(200);
+    const otpBefore = h.otp.calls.length;
+    const refused = await startWith(h, lobby, early);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: 'outside_start_window' });
+    expect(h.otp.calls.slice(otpBefore).map((c) => c.method)).not.toContain('closePhotos');
+    expect(h.otp.kvs.get(INVITATION)?.get('photo:closed')).toBeUndefined();
+    expect(meta(h)).toBeUndefined();
+
+    h.clock.ms = h.nb() + MIN;
+    const later = testJpeg(640, 480, 96);
+    const retake = await upload(h, lobby, later);
+    expect(retake.status).toBe(200);
+    const ok = await startWith(h, lobby, later);
+    expect(ok.status).toBe(200);
+    const stored = h.session.sessions
+      .get(INVITATION)
+      ?.kv.get<{ photo: { sha256: string } | null }>('meta');
+    expect(stored?.photo?.sha256).toBe(await sha256HexBytes(later));
+    // The photo step is closed for good once the start went through (SEC-1).
+    expect(h.otp.kvs.get(INVITATION)?.get('photo:closed')).toBe(true);
+  });
+
+  it('a drive first start asks the DO window check before closePhotos; D1 starts and resumes do not ask it', async () => {
+    const h = await driveHarness();
+    const lobby = await lobbyThen(h);
+    const sessionBefore = h.session.calls.length;
+    expect((await start(h, lobby)).status).toBe(200);
+    expect(h.session.calls.slice(sessionBefore).map((c) => c.method)).toEqual([
+      'peek',
+      'canStart',
+      'start',
+    ]);
+    // A resume (the object holds the session; api sends no sw).
+    h.clock.ms += 30_000;
+    const resumeBefore = h.session.calls.length;
+    expect((await start(h, await h.login())).status).toBe(200);
+    expect(h.session.calls.slice(resumeBefore).map((c) => c.method)).toEqual(['peek', 'start']);
+    // A D1 row.
+    const d1 = await sessionHarness();
+    const d1Lobby = await d1.login();
+    const d1Before = d1.session.calls.length;
+    expect((await start(d1, d1Lobby)).status).toBe(200);
+    expect(d1.session.calls.slice(d1Before).map((c) => c.method)).toEqual(['peek', 'start']);
+  });
+
+  it('a failed window check fails closed (503): the photo step stays open and no session is created', async () => {
+    const h = await driveHarness();
+    const lobby = await lobbyThen(h);
+    const ns = h.session.ns;
+    ns.get(ns.idFromName(INVITATION));
+    const stored = h.session.sessions.get(INVITATION);
+    if (stored === undefined) throw new Error('no fake session');
+    stored.core.canStart = () => Promise.reject(new Error('object reset'));
+    const res = await start(h, lobby);
+    expect(res.status).toBe(503);
+    expect(h.otp.kvs.get(INVITATION)?.get('photo:closed')).toBeUndefined();
+    expect(meta(h)).toBeUndefined();
+  });
+});
+
+describe('SessionDO.canStart is read only and mirrors the first-start window check (decision b)', () => {
+  const sw = (h: { clock: { ms: number } }) => ({
+    nb: new Date(h.clock.ms + 10 * MIN).toISOString(),
+    na: new Date(h.clock.ms + 25 * MIN).toISOString(),
+  });
+
+  it('an empty object: false before nb and after na, true inside and at both ends; writes nothing', async () => {
+    const h = await coreHarness();
+    const window = sw(h);
+    const t0 = h.clock.ms;
+    for (const [at, expected] of [
+      [t0 + 10 * MIN - 1, false],
+      [t0 + 10 * MIN, true],
+      [t0 + 20 * MIN, true],
+      [t0 + 25 * MIN, true],
+      [t0 + 25 * MIN + 1, false],
+    ] as const) {
+      h.clock.ms = at;
+      expect(await h.core.canStart({ sw: window, grantStartedAt: null })).toBe(expected);
+    }
+    expect(h.kv.map.size).toBe(0);
+    expect(h.alarm.at).toBeNull();
+  });
+
+  it('true without a window (D1), with a stored api start (a resume), and once the object holds a session', async () => {
+    const h = await coreHarness();
+    const window = sw(h);
+    h.clock.ms += 30 * MIN; // after na
+    expect(await h.core.canStart({ sw: null, grantStartedAt: null })).toBe(true);
+    expect(
+      await h.core.canStart({ sw: window, grantStartedAt: new Date(h.clock.ms).toISOString() }),
+    ).toBe(true);
+    expect(await h.core.canStart({ sw: window, grantStartedAt: null })).toBe(false);
+    expect((await h.core.start(startInput(h.sha256))).ok).toBe(true);
+    const before = JSON.stringify([...h.kv.map.entries()]);
+    expect(await h.core.canStart({ sw: window, grantStartedAt: null })).toBe(true);
+    expect(JSON.stringify([...h.kv.map.entries()])).toBe(before);
+  });
+
+  it('a window whose times do not parse is never inside (fail closed, as start)', async () => {
+    const h = await coreHarness();
+    expect(await h.core.canStart({ sw: { nb: 'x', na: 'y' }, grantStartedAt: null })).toBe(false);
   });
 });
 

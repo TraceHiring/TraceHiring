@@ -305,9 +305,10 @@ export const fakeSession = (parts: SessionParts): FakeSession => {
 
 /**
  * A fake SESSION namespace: one fake session per name. `calls` records every method called through a stub, in order.
- * `names` records the object a stub addressed, once per stub, at its first call other than the read-only `peek`
- * (M2 R5-66 c: the edge peeks before a grant, a lobby mint and an OTP send; a peek reads and changes nothing, so a
- * request that only peeked has not reached the session). `peeks` records the name of every peek.
+ * `names` records the object a stub addressed, once per stub, at its first call other than the read-only `peek` and
+ * `canStart` (M2 R5-66 c: the edge peeks before a grant, a lobby mint and an OTP send; build-notes "B4 first
+ * reviews" b: it asks `canStart` before the photo step closes; both read and change nothing, so a request that only
+ * asked them has not reached the session). `peeks` records the name of every peek.
  */
 export const fakeSessionNamespace = (parts: SessionParts) => {
   const sessions = new Map<string, FakeSession>();
@@ -329,7 +330,7 @@ export const fakeSessionNamespace = (parts: SessionParts) => {
         calls.push({ name: id.name, method });
         if (method === 'peek') {
           peeks.push(id.name);
-        } else if (!addressed) {
+        } else if (method !== 'canStart' && !addressed) {
           addressed = true;
           names.push(id.name);
         }
