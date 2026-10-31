@@ -101,14 +101,51 @@ describe('verifyCandidateToken (AT-D23)', () => {
     ['session on a lobby route', 'session', 'lobby'],
     ['portal on a lobby route', 'portal', 'lobby'],
     ['portal on a session route', 'portal', 'session'],
+    // M2 (R5-19, ADR-030 amendment 1): the portal routes take typ `portal` only.
+    ['lobby on a portal route', 'lobby', 'portal'],
+    ['session on a portal route', 'session', 'portal'],
   ] as const)('rejects typ %s', async (_label, claimTyp, routeTyp) => {
     const token = await signToken(key, lobbyClaims(NOW, { typ: claimTyp, exp: NOW + 600 }));
     expect(await verify(token, routeTyp)).toBe('token_invalid');
   });
 
-  it('rejects a lobby lifetime over 1800 s', async () => {
-    const token = await signToken(key, lobbyClaims(NOW, { exp: NOW + 1801 }));
-    expect(await verify(token)).toBe('token_invalid');
+  // M2 R5-66 f, AT-M2-25 (edge verifier part): the lobby verifier cap is 5,460 s (lobby up to 60 min early + start
+  // window up to 30 min + 60 s); the tighter na + 60 s and 1,800 s limits are mint-side rules in api lobbyMint.
+  it('accepts a lobby lifetime of exactly 5,460 s and rejects 5,461 s (R5-66 f)', async () => {
+    const atCap = await signToken(key, lobbyClaims(NOW, { exp: NOW + 5460 }));
+    expect(await verify(atCap)).toBe('passed');
+    const over = await signToken(key, lobbyClaims(NOW, { exp: NOW + 5461 }));
+    expect(await verify(over)).toBe('token_invalid');
+  });
+
+  it('a D1-length lobby token (1,800 s) and one between the old and new caps both pass', async () => {
+    for (const life of [1800, 1801, 3000, 5459]) {
+      const token = await signToken(key, lobbyClaims(NOW, { exp: NOW + life }));
+      expect({ life, code: await verify(token) }).toEqual({ life, code: 'passed' });
+    }
+  });
+
+  it('accepts a portal token up to 1,800 s and rejects 1,801 s (R5-19, ADR-030 amendment 1)', async () => {
+    const atCap = await signToken(key, lobbyClaims(NOW, { typ: 'portal', exp: NOW + 1800 }));
+    expect(await verify(atCap, 'portal')).toBe('passed');
+    const over = await signToken(key, lobbyClaims(NOW, { typ: 'portal', exp: NOW + 1801 }));
+    expect(await verify(over, 'portal')).toBe('token_invalid');
+  });
+
+  it('a portal token expires like any other: exp == now is token_expired', async () => {
+    const token = await signToken(key, lobbyClaims(NOW - 1800, { typ: 'portal', exp: NOW }));
+    expect(await verify(token, 'portal')).toBe('token_expired');
+    expect(await verify(token, 'portal', NOW - 1)).toBe('passed');
+  });
+
+  it('the session cap is unchanged at 10,800 s and the kid pattern still refuses another shape', async () => {
+    const atCap = await signToken(key, lobbyClaims(NOW, { typ: 'session', exp: NOW + 10_800 }));
+    expect(await verify(atCap, 'session')).toBe('passed');
+    const m2Kid = await makeKey('m2-2026-10');
+    const other = { ...env, CANDIDATE_TOKEN_PUBLIC_JWK: publicVar(m2Kid) } as Env;
+    expect(await verify(await signToken(m2Kid, lobbyClaims(NOW)), 'lobby', NOW, other)).toBe(
+      'unavailable',
+    );
   });
 
   it('rejects a session lifetime over 10 800 s', async () => {

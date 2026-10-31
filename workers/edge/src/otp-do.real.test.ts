@@ -54,6 +54,23 @@ describe('InviteOtpDO (real class, SQLite-backed storage)', () => {
     expect(await fresh.issue()).toMatchObject({ ok: false, error: 'otp_locked' });
   });
 
+  it('M2 R5-19: a manage code stores the portal nonce, which passes portalGate after eviction; lobbyGate refuses it', async () => {
+    const name = crypto.randomUUID();
+    const stub = otpStub(name);
+    const { code } = issued(await stub.issue('manage'));
+    const verified = await stub.verify(code);
+    if (!verified.ok) throw new Error('verify refused');
+    expect(verified.purpose).toBe('manage');
+
+    await evictDurableObject(stub);
+    const fresh = otpStub(name);
+    expect(await fresh.portalGate(verified.nonce, 'portal_slots')).toEqual({ ok: true });
+    expect(await fresh.lobbyGate(verified.nonce, 'age')).toEqual({
+      ok: false,
+      error: 'token_invalid',
+    });
+  });
+
   it('closePhotos is set-once: takePhotoSlot is refused afterwards, also after eviction and a fresh stub', async () => {
     const name = crypto.randomUUID();
     const stub = otpStub(name);

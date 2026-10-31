@@ -17,7 +17,7 @@ import {
   testJpeg,
   type Harness,
 } from './edge.test-helpers.js';
-import type { CandidateMethod } from './rpc.js';
+import type { EdgeMethod } from './rpc.js';
 import {
   installPackage,
   makePackage,
@@ -96,7 +96,7 @@ const noisyHeaders = () => ({ 'x-contact': SECRETS.email, 'x-mobile': SECRETS.mo
 const boom = () => new Error(`failed for ${Object.values(SECRETS).join(' ')}`);
 
 /** Every CandidateRpc method failing with a message full of planted values. */
-const failing = (methods: CandidateMethod[]) =>
+const failing = (methods: EdgeMethod[]) =>
   Object.fromEntries(methods.map((m) => [m, () => Promise.reject(boom())]));
 
 const events = (lines: readonly string[]) =>
@@ -273,6 +273,74 @@ describe('edge log lines carry no payload, token or code (AT-D32, edge half)', (
     }
     expect(events(h.lines)).toEqual(Array(4).fill('candidate_rpc.unavailable'));
     expectClean(h.lines, [...tokenParts(token), ...loginCodes, photoSha]);
+  });
+
+  // M2 (AT-M2-19, R5-19, R5-24): the purpose and portal paths log the method only, never a code, token or slot.
+  it('a manage OTP whose send fails logs the method only, never the code or the link', async () => {
+    const h = await createHarness(failing(['messagingSend']));
+    const res = await h.request('POST', '/v1/otp/request' + query(), {
+      json: { token: SECRETS.link, purpose: 'manage' },
+      headers: noisyHeaders(),
+    });
+    expect(res.status).toBe(503);
+    expect(h.calls.find((c) => c.method === 'messagingSend')?.input.purpose).toBe('manage');
+    expect(events(h.lines)).toEqual(['candidate_rpc.unavailable']);
+    expect(JSON.parse(h.lines[0] ?? '{}')).toMatchObject({ data: { method: 'messagingSend' } });
+    expectClean(h.lines, h.codes());
+  });
+
+  it('a manage verify whose portal mint fails logs the method only, never the code or nonce', async () => {
+    const h = await createHarness(failing(['portalMint']));
+    const sent = await h.request('POST', '/v1/otp/request', {
+      json: { token: SECRETS.link, purpose: 'manage' },
+    });
+    expect(sent.status).toBe(200);
+    const code = h.codes()[0] ?? '';
+    const res = await h.request('POST', '/v1/otp/verify' + query(), {
+      json: { token: SECRETS.link, code },
+      headers: noisyHeaders(),
+    });
+    expect(res.status).toBe(503);
+    const nonce = String(h.calls.find((c) => c.method === 'portalMint')?.input.nonce);
+    expect(events(h.lines)).toEqual(['candidate_rpc.unavailable']);
+    expect(JSON.parse(h.lines[0] ?? '{}')).toMatchObject({ data: { method: 'portalMint' } });
+    expectClean(h.lines, [code, nonce]);
+  });
+
+  it('portal routes: api failures log the method only, never the portal token, slot id or body', async () => {
+    const h = await createHarness(failing(['portalSlots', 'portalReschedule']));
+    const portal = await h.loginPortal();
+    const loginCodes = h.codes();
+    const slotId = '9a9a9a9a-9a9a-49a9-89a9-9a9a9a9a9a9a';
+    const slots = await h.request('GET', '/v1/portal/slots' + query(), {
+      token: portal,
+      headers: noisyHeaders(),
+    });
+    const moved = await h.request('POST', '/v1/portal/reschedule' + query(), {
+      token: portal,
+      json: { toSlotId: slotId },
+      headers: noisyHeaders(),
+    });
+    expect([slots.status, moved.status]).toEqual([503, 503]);
+    expect(events(h.lines)).toEqual(['candidate_rpc.unavailable', 'candidate_rpc.unavailable']);
+    for (const line of h.lines) {
+      const data = (JSON.parse(line) as { data: Record<string, unknown> }).data;
+      expect(Object.keys(data)).toEqual(['method']);
+    }
+    expectClean(h.lines, [...tokenParts(portal), ...loginCodes, slotId]);
+  });
+
+  it('a lobby-shaped, session-shaped or forged Bearer on a portal route is refused without a log line', async () => {
+    const h = await createHarness();
+    const lobby = await h.login();
+    for (const bearer of [lobby, SECRETS.sessionToken, SECRETS.jwt]) {
+      const res = await h.request('GET', '/v1/portal/slots' + query(), {
+        token: bearer,
+        headers: noisyHeaders(),
+      });
+      expect(res.status).toBe(401);
+    }
+    expect(h.lines).toEqual([]);
   });
 
   it('a session-shaped or forged Bearer is refused without a log line', async () => {

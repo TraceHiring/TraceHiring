@@ -9,7 +9,7 @@ import { createLogger } from '@trace/shared/log';
 import { createApp } from './app.js';
 import { OtpCore } from './otp-core.js';
 import { SessionCore, type SessionKv } from './session-core.js';
-import type { CandidateMethod } from './rpc.js';
+import type { EdgeMethod } from './rpc.js';
 import {
   CANDIDATE,
   INVITATION,
@@ -96,14 +96,38 @@ export interface Clock {
   ms: number;
 }
 
+/** One method call on a fake Durable Object: the object's name and the method. */
+export interface ObjectCall {
+  name: string;
+  method: string;
+}
+
+/**
+ * A stub over `target` that records every method call (`onCall(method)`) and runs it on the target itself (the cores
+ * keep private fields, so `this` must be the core, never the proxy).
+ */
+const recordingStub = <T extends object>(target: T, onCall: (method: string) => void): T =>
+  new Proxy(target, {
+    get(obj, prop) {
+      const value: unknown = Reflect.get(obj, prop, obj);
+      if (typeof value !== 'function' || typeof prop !== 'string') return value;
+      return (...args: unknown[]) => {
+        onCall(prop);
+        return (value as (...a: unknown[]) => unknown).apply(obj, args);
+      };
+    },
+  });
+
 /**
  * A fake DurableObjectNamespace: one OtpCore per name, on the shared clock. `names` records every id asked for;
- * `kvs` holds each object's storage so a test can check what was (not) written.
+ * `kvs` holds each object's storage so a test can check what was (not) written; `calls` records every method called
+ * through a stub, in order (M2 AT-M2-10: the start makes no `issue` or `verify` call).
  */
 export const fakeOtpNamespace = (clock: Clock) => {
   const cores = new Map<string, OtpCore>();
   const kvs = new Map<string, MapKv>();
   const names: string[] = [];
+  const calls: ObjectCall[] = [];
   const ns = {
     idFromName(name: string) {
       names.push(name);
@@ -117,10 +141,10 @@ export const fakeOtpNamespace = (clock: Clock) => {
         cores.set(id.name, core);
         kvs.set(id.name, kv);
       }
-      return core;
+      return recordingStub(core, (method) => calls.push({ name: id.name, method }));
     },
   };
-  return { ns, cores, kvs, names };
+  return { ns, cores, kvs, names, calls };
 };
 
 export interface StoredObject {
@@ -279,13 +303,19 @@ export const fakeSession = (parts: SessionParts): FakeSession => {
   return { core, kv, alarm };
 };
 
-/** A fake SESSION namespace: one fake session per name. `names` records every id asked for. */
+/**
+ * A fake SESSION namespace: one fake session per name. `calls` records every method called through a stub, in order.
+ * `names` records the object a stub addressed, once per stub, at its first call other than the read-only `peek`
+ * (M2 R5-66 c: the edge peeks before a grant, a lobby mint and an OTP send; a peek reads and changes nothing, so a
+ * request that only peeked has not reached the session). `peeks` records the name of every peek.
+ */
 export const fakeSessionNamespace = (parts: SessionParts) => {
   const sessions = new Map<string, FakeSession>();
   const names: string[] = [];
+  const peeks: string[] = [];
+  const calls: ObjectCall[] = [];
   const ns = {
     idFromName(name: string) {
-      names.push(name);
       return { name, toString: () => name };
     },
     get(id: { name: string }) {
@@ -294,10 +324,19 @@ export const fakeSessionNamespace = (parts: SessionParts) => {
         session = fakeSession(parts);
         sessions.set(id.name, session);
       }
-      return session.core;
+      let addressed = false;
+      return recordingStub(session.core, (method) => {
+        calls.push({ name: id.name, method });
+        if (method === 'peek') {
+          peeks.push(id.name);
+        } else if (!addressed) {
+          addressed = true;
+          names.push(id.name);
+        }
+      });
     },
   };
-  return { ns, sessions, names };
+  return { ns, sessions, names, peeks, calls };
 };
 
 /** How the fake rate limiter answers its next calls. */
@@ -339,10 +378,16 @@ export const fakeLimiter = (apiCalls: () => number) => {
   return { limiter, calls, state, keys };
 };
 
-export type ApiCall = { method: CandidateMethod; input: Record<string, unknown> };
-type ApiImpl = Partial<
-  Record<CandidateMethod, (input: Record<string, unknown>) => Promise<unknown>>
+export type ApiCall = { method: EdgeMethod; input: Record<string, unknown> };
+export type ApiImpl = Partial<
+  Record<EdgeMethod, (input: Record<string, unknown>) => Promise<unknown>>
 >;
+
+/** Two synthetic slots of the test drive (M2 portal); B has no seat left. */
+export const SLOT_A = 'abababab-abab-4bab-8bab-000000000001';
+export const SLOT_B = 'abababab-abab-4bab-8bab-000000000002';
+/** The portal token lifetime the fake api mints (ADR-030 amendment 1). */
+export const PORTAL_TTL = 1800;
 
 export interface Harness {
   key: TestKey;
@@ -369,6 +414,8 @@ export interface Harness {
   ) => Promise<Response>;
   /** OTP request + verify; returns the lobby token. */
   login: () => Promise<string>;
+  /** OTP request with purpose `manage` + verify (M2 R5-19); returns the portal token. */
+  loginPortal: () => Promise<string>;
 }
 
 export const NOW_MS = Date.UTC(2026, 9, 18, 9, 0, 0);
@@ -394,7 +441,7 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
   const nowSec = () => Math.floor(clock.ms / 1000);
   const limiter = fakeLimiter(() => calls.length);
 
-  const defaults: Record<CandidateMethod, (input: Record<string, unknown>) => Promise<unknown>> = {
+  const defaults: Record<EdgeMethod, (input: Record<string, unknown>) => Promise<unknown>> = {
     inviteResolve: async () => ({
       invitationId: INVITATION,
       orgId: ORG,
@@ -433,9 +480,34 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
     sessionStarted: async () => {
       throw new Error('unavailable');
     },
+    // M2 portal (R5-19, R5-24): a portal token on the edge's nonce, 1,800 s; two slots, availability only.
+    portalMint: async (input) => {
+      const iat = nowSec();
+      const portalToken = await signToken(key, {
+        sub: CANDIDATE,
+        candidate_id: CANDIDATE,
+        invitation_id: input.invitationId,
+        org_id: input.orgId,
+        typ: 'portal',
+        nonce: input.nonce,
+        iat,
+        exp: iat + PORTAL_TTL,
+      });
+      return { portalToken, expiresAt: new Date((iat + PORTAL_TTL) * 1000).toISOString() };
+    },
+    portalSlots: async () => ({
+      slots: [
+        { slotId: SLOT_A, startsAt: new Date(NOW_MS + 86_400_000).toISOString(), available: true },
+        { slotId: SLOT_B, startsAt: new Date(NOW_MS + 90_000_000).toISOString(), available: false },
+      ],
+    }),
+    portalReschedule: async () => ({
+      ok: true,
+      slotStartsAt: new Date(NOW_MS + 86_400_000).toISOString(),
+    }),
   };
   const api = Object.fromEntries(
-    (Object.keys(defaults) as CandidateMethod[]).map((method) => [
+    (Object.keys(defaults) as EdgeMethod[]).map((method) => [
       method,
       async (input: Record<string, unknown>) => {
         calls.push({ method, input });
@@ -490,6 +562,17 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
     return ((await verified.json()) as { lobbyToken: string }).lobbyToken;
   };
 
+  const loginPortal = async () => {
+    const sent = await request('POST', '/v1/otp/request', {
+      json: { token: LINK(), purpose: 'manage' },
+    });
+    if (sent.status !== 200) throw new Error(`otp request ${sent.status}`);
+    const code = codes().at(-1) ?? '';
+    const verified = await request('POST', '/v1/otp/verify', { json: { token: LINK(), code } });
+    if (verified.status !== 200) throw new Error(`otp verify ${verified.status}`);
+    return ((await verified.json()) as { portalToken: string }).portalToken;
+  };
+
   return {
     key,
     clock,
@@ -507,5 +590,6 @@ export const createHarness = async (overrides: ApiImpl = {}): Promise<Harness> =
     codes,
     request,
     login,
+    loginPortal,
   };
 };
