@@ -12,7 +12,9 @@
 // M2 (specs/m2-scheduling-invites.md R5-63, R5-66 c, AT-M2-10): the path stays D1's for every invitation. Before the
 // grant the edge peeks the invitation's SessionDO (read only) and passes `sessionLive`; a drive row's first-start grant
 // carries `sw { nb, na }`, which `SessionDO.start` re-checks by its own clock only when it creates the session (409
-// `outside_start_window`). The start makes no OTP issue or verify and no messagingSend call.
+// `outside_start_window`). Before `closePhotos` such a start asks the object's read-only `canStart` (build-notes "B4
+// first reviews" b), so a start the object refuses for its window never closes the photo step (no reopen path exists,
+// SEC-1 set-once). The start makes no OTP issue or verify and no messagingSend call.
 //
 // `attach`, `items/:pos`, `events`, `submit` (session token): verified at the edge, then the invitation's SessionDO
 // (the id from verified claims only) checks the token's nonce. Ids in the URL, query or body are never used.
@@ -203,6 +205,16 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
       ) {
         return fail('unavailable');
       }
+      const session = sessionFor(c, claims.invitation_id);
+      const sw = grant.sw ?? null;
+      // Build-notes "B4 first reviews" b: a drive row's first start asks the object's read-only window check before
+      // the photo step closes, so a start the object refuses for its window (a clock edge api let through) leaves the
+      // step open for an in-window retry. `start` below keeps the authoritative check. D1 rows and resumes carry no
+      // `sw` and skip it. A failed check fails closed (503) before anything is closed.
+      if (sw !== null) {
+        const ok = await otpCall(() => session.canStart({ sw, grantStartedAt: grant.startedAt }));
+        if (ok !== true) return fail('outside_start_window');
+      }
       // Close the photo step for good before the photo is read (C1a SEC-1): no upload can take a slot after this, so
       // the photo checked below is the session's. Only after a granted start (a refused grant must not lock uploads),
       // and on the skip path too. Set-once, so a retried start closes again harmlessly. If the close fails the start
@@ -213,7 +225,6 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
         'sha256' in body.photo
           ? await verifiedPhoto(c, claims.org_id, grant.sessionId, body.photo.sha256)
           : null;
-      const session = sessionFor(c, claims.invitation_id);
       const started = await otpCall(() =>
         session.start({
           sessionId: grant.sessionId,
@@ -231,7 +242,7 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
           photo: photo?.ref ?? null,
           photoSkippedReason: 'skippedReason' in body.photo ? body.photo.skippedReason : null,
           // M2 R5-63: a drive row's first-start window; the object re-checks it only when it creates the session.
-          sw: grant.sw ?? null,
+          sw,
         }),
       );
       if (!started.ok) {

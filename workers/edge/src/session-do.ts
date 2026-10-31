@@ -20,6 +20,7 @@ import {
   type SessionAuth,
   type StartInput,
   type StartResult,
+  type StartWindowCheck,
   type SubmitResult,
 } from './session-core.js';
 
@@ -80,6 +81,11 @@ export class SessionDO extends DurableObject<Env> implements SessionApi {
   /** M2 R5-66 c: read only; whether this invitation's object holds a session. */
   peek(): Promise<SessionPeekRes> {
     return this.#core.peek();
+  }
+
+  /** Build-notes "B4 first reviews" b: read only; whether a first start would pass the window check now. */
+  canStart(input: StartWindowCheck): Promise<boolean> {
+    return this.#core.canStart(input);
   }
 
   start(input: StartInput): Promise<StartResult> {

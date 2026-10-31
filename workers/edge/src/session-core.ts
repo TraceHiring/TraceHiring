@@ -178,6 +178,9 @@ export interface StartInput {
   sw?: { nb: string; na: string } | null;
 }
 
+/** What `canStart` reads from a grant: the same two fields `start` uses for its first-start window check. */
+export type StartWindowCheck = Pick<StartInput, 'sw' | 'grantStartedAt'>;
+
 /** Every session-token request presents the token's nonce and org (both from verified claims). */
 export interface SessionAuth {
   nonce: string;
@@ -229,6 +232,8 @@ export type SubmitResult = { ok: true; receipt: Receipt } | Refusal;
 export interface SessionApi {
   /** M2 R5-66 c: read only, whether the object holds a session (live or finished). */
   peek(): Promise<SessionPeekRes>;
+  /** Build-notes "B4 first reviews" b: read only, whether `start` would pass its first-start window check now. */
+  canStart(input: StartWindowCheck): Promise<boolean>;
   start(input: StartInput): Promise<StartResult>;
   attach(auth: SessionAuth): Promise<AttachResult>;
   item(auth: SessionAuth, position: number, afterSeq?: number): Promise<ItemResult>;
@@ -735,6 +740,18 @@ export class SessionCore implements SessionApi {
    */
   peek(): Promise<SessionPeekRes> {
     return Promise.resolve({ live: this.#meta() !== undefined });
+  }
+
+  /**
+   * Build-notes "B4 first reviews" b: whether `start` would pass its first-start window check at this instant, by
+   * this object's own clock and the same rule: true when the object holds a session (a resume), when api holds a
+   * stored start, or when there is no window (a D1 row); else whether now is inside `[nb, na]` (an unparsable window
+   * is never inside). Reads one key and writes nothing. The route asks it before the photo step closes, so a start
+   * refused for the window never closes it; `start` keeps the authoritative check.
+   */
+  canStart(input: StartWindowCheck): Promise<boolean> {
+    if (this.#meta() !== undefined || input.grantStartedAt !== null) return Promise.resolve(true);
+    return Promise.resolve(insideWindow(input.sw, this.#now()));
   }
 
   /**
