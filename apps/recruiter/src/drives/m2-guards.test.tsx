@@ -12,7 +12,7 @@ import { ROW_REFUSAL_REASONS } from '@trace/shared/contracts/m2';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import type { ReactNode } from 'react';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { failure, fakeApi, info } from '../bank/testing/api.test-helpers';
 import { mountScreen } from '../bank/testing/dom.test-helpers';
 import { ApiContext, OrgInfoContext } from '../api/runtime';
@@ -152,7 +152,24 @@ const uploadScreens = (): Record<string, Screen> => ({
     ]),
   ),
   'upload run no held': { kind: 'run', run: run({ held: [] }) },
+  'upload run busy': { kind: 'run', run: run({ phase: 'ready', busy: true }) },
 });
+
+/** Finds the row of `label` and presses its `action` button; throws (never skips) when either is missing. */
+async function pressRow(
+  el: Awaited<ReturnType<typeof mountScreen>>,
+  label: string,
+  action: string,
+) {
+  const row = [...el.container.querySelectorAll('tr')].find(
+    (tr) => tr.querySelector('th')?.textContent.trim() === label,
+  );
+  const button = [...(row?.querySelectorAll('button') ?? [])].find((b) =>
+    (b.getAttribute('aria-label') ?? b.textContent).startsWith(action),
+  );
+  if (button === undefined) throw new Error(`no ${action} button for ${label}`);
+  await el.click(button);
+}
 
 // ---- Every screen, rendered ----------------------------------------------------------------------------------------
 
@@ -160,7 +177,15 @@ const screens: Record<string, string> = {};
 /** Screen names whose page is a drive page in the given status (for the revoke-all checks). */
 const drivePages: { name: string; status: string }[] = [];
 
+afterAll(() => {
+  vi.useRealTimers();
+});
+
 beforeAll(async () => {
+  // "Now" is fixed (only Date is faked): the move picker's future slots and the reminder plans do not depend on the day.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-11-01T00:00:00.000Z'));
+
   // The four routes, as the route table mounts them, for a signed-in staff member with no api yet.
   for (const routePath of ['drives', 'drives/new', 'drives/:driveId', 'drives/:driveId/upload']) {
     screens[`route ${routePath}`] = renderToString(
@@ -194,6 +219,30 @@ beforeAll(async () => {
     screens[name] = el.container.innerHTML;
     el.unmount();
   };
+
+  // The refused-rows table on its second page.
+  await capture(
+    'upload refused page 2',
+    <UploadView
+      driveId={uid(101)}
+      screen={{
+        kind: 'checked',
+        rowsInFile: 250,
+        sendable: 0,
+        issues: Array.from({ length: 250 }, (_, i) => ({
+          rowNo: i + 1,
+          reason: i % 2 === 0 ? ('invalid_email' as const) : ('minor' as const),
+        })),
+      }}
+      handlers={handlers}
+    />,
+    fakeApi(() => undefined).api,
+    `/drives/${uid(101)}/upload`,
+    '/drives/:driveId/upload',
+    async (el) => {
+      await el.click(el.button('Next rows'));
+    },
+  );
 
   // The list: rows of every mode and status, a second page, nothing, and a failure.
   await capture(
@@ -243,11 +292,41 @@ beforeAll(async () => {
         invitationCount: 0,
         createdAt: '2026-11-02T04:30:00.000Z',
       },
+      {
+        id: uid(12),
+        name: '[synthetic] Published test',
+        status: 'published',
+        versionNo: 3,
+        invitationCount: 0,
+        createdAt: '2026-11-02T04:30:00.000Z',
+      },
     ],
   };
   const newApi = () =>
     fakeApi((call) => {
       if (call.path === '/tests') return { body: tests };
+      if (call.method === 'POST' && call.path === '/drives') return failure(400, 'bad_request');
+      if (call.path === `/tests/${uid(12)}`) {
+        return {
+          body: {
+            test: {
+              id: uid(12),
+              workspaceId: uid(3),
+              name: '[synthetic] Published test',
+              createdAt: '2026-11-02T04:30:00.000Z',
+            },
+            version: {
+              id: uid(23),
+              versionNo: 3,
+              status: 'published',
+              durationMinutes: 30,
+              qualityCutoff: 40,
+              publishedAt: '2026-11-02T04:30:00.000Z',
+              sections: [],
+            },
+          },
+        };
+      }
       if (call.path === `/tests/${uid(11)}`) {
         return {
           body: {
@@ -284,6 +363,33 @@ beforeAll(async () => {
       await el.choose(el.field('Mode'), 'open_window');
       await el.choose(el.field('Lab mode'), 'on');
       await el.click(el.button('Add reminder'));
+      await el.click(el.button('Create drive'));
+    },
+  );
+
+  await capture(
+    'new published version',
+    <NewDriveRoute />,
+    newApi(),
+    '/drives/new',
+    '/drives/new',
+    async (el) => {
+      await el.choose(el.field('Test'), uid(12));
+      await el.settle();
+    },
+  );
+  await capture(
+    'new api error',
+    <NewDriveRoute />,
+    newApi(),
+    '/drives/new',
+    '/drives/new',
+    async (el) => {
+      await el.type(el.field('Drive name'), '[synthetic] November drive');
+      await el.choose(el.field('Test'), uid(12));
+      await el.settle();
+      await el.type(el.field('Opens (IST)'), '2026-11-02T10:00');
+      await el.type(el.field('Deadline (IST)'), '2026-11-09T18:00');
       await el.click(el.button('Create drive'));
     },
   );
@@ -332,6 +438,14 @@ beforeAll(async () => {
   ) =>
     fakeApi((call) => {
       const base = `/drives/${drive(1).id}`;
+      if (call.method === 'POST') {
+        if (call.path.endsWith('/move'))
+          return { body: invitation(1, { status: 'sent', slotStartsAt: slot(1).startsAt }) };
+        if (call.path.endsWith('/revoke')) return { body: invitation(1, { status: 'revoked' }) };
+        if (call.path === `${base}/slots`)
+          return { status: 201, body: { slots: [slot(7), slot(8), slot(9)] } };
+        if (call.path === `${base}/publish`) return failure(409, 'conflict');
+      }
       if (call.path === base)
         return {
           body: drive(1, {
@@ -374,22 +488,34 @@ beforeAll(async () => {
     await el.click(el.button('Cancel drive'));
   });
   await drivePage('drive revoke panel', 'scheduled', 'scheduled', null, async (el) => {
-    const row = [...el.container.querySelectorAll('tr')].find(
-      (tr) => tr.querySelector('th')?.textContent.trim() === 'Candidate 1',
-    );
-    const revoke = [...(row?.querySelectorAll('button') ?? [])].find((b) =>
-      (b.getAttribute('aria-label') ?? b.textContent).startsWith('Revoke'),
-    );
-    if (revoke !== undefined) await el.click(revoke);
+    await pressRow(el, 'Candidate 1', 'Revoke');
   });
   await drivePage('drive move picker', 'scheduled', 'scheduled', null, async (el) => {
-    const row = [...el.container.querySelectorAll('tr')].find(
-      (tr) => tr.querySelector('th')?.textContent.trim() === 'Candidate 1',
-    );
-    const move = [...(row?.querySelectorAll('button') ?? [])].find((b) =>
-      (b.getAttribute('aria-label') ?? b.textContent).startsWith('Move to slot'),
-    );
-    if (move !== undefined) await el.click(move);
+    await pressRow(el, 'Candidate 1', 'Move to slot');
+  });
+  await drivePage('drive moved', 'scheduled', 'scheduled', null, async (el) => {
+    await pressRow(el, 'Candidate 1', 'Move to slot');
+    await el.choose(el.field('Move to'), slot(1).id);
+    await el.click(el.button('Move'));
+  });
+  await drivePage('drive revoked', 'scheduled', 'scheduled', null, async (el) => {
+    await pressRow(el, 'Candidate 1', 'Revoke');
+    await el.click(el.button('Yes, revoke'));
+  });
+  await drivePage('drive slots created', 'draft', 'scheduled', null, async (el) => {
+    await el.choose(el.field('Add slots by'), 'generator');
+    await el.type(el.field('First slot (IST)'), '2026-11-03T10:00');
+    await el.type(el.field('Number of slots'), '3');
+    await el.type(el.field('Minutes between slots'), '60');
+    await el.type(el.field('Seats per slot'), '40');
+    await el.click(el.button('Create slots'));
+  });
+  await drivePage('drive publish refused', 'draft', 'scheduled', null, async (el) => {
+    await el.click(el.button('Publish drive'));
+  });
+  await drivePage('drive page 2', 'scheduled', 'scheduled', null, async (el) => {
+    await el.click(el.button('Next page of slots'));
+    await el.click(el.button('Next page of invitations'));
   });
   await drivePage('drive slot generator', 'draft', 'scheduled', null, async (el) => {
     await el.choose(el.field('Add slots by'), 'generator');
@@ -400,6 +526,13 @@ beforeAll(async () => {
     await el.type(el.field('Slot times (one per line, IST)'), 'nonsense');
     await el.click(el.button('Create slots'));
   });
+  await capture(
+    'drive load failed',
+    <DriveRoute />,
+    fakeApi(() => failure(404, 'not_found')).api,
+    `/drives/${drive(1).id}`,
+    '/drives/:driveId',
+  );
   await drivePage('drive revoke-all result', 'cancelled', 'scheduled', null, async (el) => {
     await el.click(el.button('Revoke all invitations not yet started'));
     await el.click(el.button('Yes, revoke them'));
@@ -428,6 +561,28 @@ describe('M2 drive screens never show what the product never builds (AT-M2-22, R
     );
     expect(text(screens['list rows'] ?? '')).toContain('[synthetic] Drive 1');
     expect(text(screens['upload run ready'] ?? '')).toContain('Mark as different people');
+  });
+
+  it('reaches every state it claims to render (no capture skips silently)', () => {
+    const has = (name: string, words: string) => {
+      expect(Object.keys(screens), name).toContain(name);
+      expect(text(screens[name] ?? ''), name).toContain(words);
+    };
+    has('drive revoke panel', 'Revoke the invitation of Candidate 1?');
+    has('drive move picker', 'Move to');
+    expect(screens['drive move picker'] ?? '', 'move picker').toContain(`value="${slot(1).id}"`);
+    has('drive moved', 'Moved. A new invite is queued.');
+    has('drive revoked', 'Invitation revoked.');
+    has('drive slots created', '3 slots created.');
+    has('drive publish refused', 'That change is no longer possible. Reload the page.');
+    has('drive load failed', 'Not found, or you do not have access.');
+    has('drive page 2', 'Previous page of slots');
+    has('drive page 2', 'Previous page of invitations');
+    has('drive scheduled', 'Reminders (IST)');
+    has('new published version', 'Version 3 (published)');
+    expect(screens['new api error'] ?? '', 'new api error').toContain('role="alert"');
+    has('upload run busy', 'Sending the held rows again...');
+    has('upload refused page 2', 'Showing rows 101 to 200 of 250');
   });
 
   it('has no control or label for reject, decline, shortlist, decision, confirm, overturn, notice, appeal', () => {
