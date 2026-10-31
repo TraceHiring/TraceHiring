@@ -118,6 +118,16 @@ describe('before a file is chosen', () => {
     expect(calls).toEqual([]);
   });
 
+  it('says how rows are numbered, before a file is chosen and next to the rows not sent', async () => {
+    const sentence = 'Row 1 is the first row under the column names; blank lines are not counted.';
+    const { api } = uploadApi();
+    mounted = await mountUpload(api);
+    expect(mounted.text()).toContain(sentence);
+    await pickFile(mounted, csvOf(HEADER, '', csvRow(1), 'Asha Rao,asha@example.test,,maybe,,'));
+    expect(mounted.text()).toContain(ROW_REASON_TEXT.bad_adult_value);
+    expect(mounted.text()).toContain(sentence);
+  });
+
   it('renders with no api client (no sign-in yet) without touching the network', async () => {
     mounted = await mountUpload(null);
     expect(mounted.text()).toContain('Invite candidates');
