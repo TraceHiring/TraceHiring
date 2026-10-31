@@ -35,7 +35,8 @@ const SES_ENVS: readonly string[] = ['staging'];
 const SIMPLE_ADDRESS = /^[a-z0-9._+-]{1,64}@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 const CONFIGURATION_SET = /^[A-Za-z0-9_-]{1,64}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
-const MESSAGE_ID = /^[\x21-\x7e]{1,256}$/;
+/** Printable ASCII, 1–255 characters: outbound_messages.provider_message_id's CHECK is {1,255} (B1 fix 4). */
+const MESSAGE_ID = /^[\x21-\x7e]{1,255}$/;
 
 export interface SesEmailOptions extends AwsCredentials {
   traceEnv: unknown;
