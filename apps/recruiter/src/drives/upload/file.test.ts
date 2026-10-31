@@ -80,7 +80,7 @@ describe('a spreadsheet is not a CSV (R5-20)', () => {
 
 describe('the columns', () => {
   it('reads the six columns, whatever the case and order, and a byte order mark', () => {
-    const text = `\u{FEFF}Email,FULL_NAME,Language,18_or_older,PHONE,Slot_Starts_At\r\nb@example.test,Ada B,hi,no,9876543210,2026-11-03 10:00\r\n`;
+    const text = `\u{FEFF}Email,FULL_NAME,Language,18_or_older,PHONE,Slot_Starts_At\r\nb@example.test,Ada B,hi,yes,9876543210,2026-11-03 10:00\r\n`;
     const result = good(text);
     expect(result.rows).toEqual([
       {
@@ -88,7 +88,7 @@ describe('the columns', () => {
         fullName: 'Ada B',
         email: 'b@example.test',
         phone: '9876543210',
-        adult18: 'no',
+        adult18: 'yes',
         slotStartsAt: '2026-11-03T10:00:00+05:30',
         language: 'hi',
       },
@@ -166,12 +166,12 @@ describe('the 18_or_older column (R2-5)', () => {
     return row === undefined ? result.issues[0]?.reason : row.adult18;
   };
 
-  it('maps yes, no and blank to yes, no and null, in any case', () => {
+  it('maps yes and blank to yes and null, and no to the minor refusal, in any case', () => {
     expect(adult('yes')).toBe('yes');
     expect(adult('YES')).toBe('yes');
     expect(adult(' Yes ')).toBe('yes');
-    expect(adult('no')).toBe('no');
-    expect(adult('No')).toBe('no');
+    expect(adult('no')).toBe('minor');
+    expect(adult('No')).toBe('minor');
     expect(adult('')).toBeNull();
   });
 
@@ -285,17 +285,39 @@ describe('the rows', () => {
     expect(JSON.stringify(result.issues)).not.toContain('example.test');
   });
 
-  it('leaves the api to decide duplicates, phone sharing, minors and slot space', () => {
+  it('leaves the api to decide duplicates, phone sharing and slot space', () => {
     const result = good(
       csvOf(
         'full_name,email,phone,18_or_older',
         'Asha Rao,a@example.test,9876543210,yes',
         'Asha Rao,a@example.test,9876543210,yes',
-        'Ravi Rao,r@example.test,9876543210,no',
+        'Ravi Rao,r@example.test,9876543210,',
       ),
     );
     expect(result.rows).toHaveLength(3);
     expect(result.issues).toEqual([]);
-    expect(result.rows[2]?.adult18).toBe('no');
+  });
+
+  // Lead decision (rule 9, minimisation): replaces the test that left minors to the api. A row the file marks as under
+  // 18 is refused here as `minor` and never becomes a row to send; the api stays the authority for what it receives.
+  it('refuses a row whose 18_or_older is no as minor, in any case, and never sends it', () => {
+    const result = good(
+      csvOf(
+        'full_name,email,phone,18_or_older',
+        'Asha Rao,a@example.test,9876543210,yes',
+        'Ravi Rao,r@example.test,9876543211,no',
+        'Mira Rao,m@example.test,, No ',
+        'Kiran Rao,k@example.test,,',
+      ),
+    );
+    expect(result.rowsInFile).toBe(4);
+    expect(result.rows.map((row) => row.rowNo)).toEqual([1, 4]);
+    expect(result.rows.map((row) => row.adult18)).toEqual(['yes', null]);
+    expect(result.issues).toEqual([
+      { rowNo: 2, reason: 'minor' },
+      { rowNo: 3, reason: 'minor' },
+    ]);
+    expect(JSON.stringify(result)).not.toContain('r@example.test');
+    expect(JSON.stringify(result)).not.toContain('"no"');
   });
 });

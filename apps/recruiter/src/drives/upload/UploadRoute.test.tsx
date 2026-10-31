@@ -210,6 +210,37 @@ describe('sending a file', () => {
     expect(text).not.toContain('bad_adult_value');
   });
 
+  it('refuses a row marked under 18 in this browser as minor and never posts it (rule 9)', async () => {
+    const { api, calls } = uploadApi();
+    mounted = await mountUpload(api);
+    await pickFile(
+      mounted,
+      csvOf(
+        HEADER,
+        csvRow(1),
+        'Person B,person2@example.test,,no,,',
+        csvRow(3),
+        'Person D,person4@example.test,,NO,,',
+      ),
+    );
+    expect(mounted.text()).toContain('Ready to send: 2');
+    expect(mounted.text()).toContain(ROW_REASON_TEXT.minor);
+    await mounted.click(mounted.button('Start upload'));
+    const posted = calls.filter((c) => c.method === 'POST');
+    expect(posted.length).toBeGreaterThan(0);
+    for (const call of posted) {
+      expect(JSON.stringify(call.body)).not.toMatch(/"adult18":"no"/);
+      expect(JSON.stringify(call.body)).not.toContain('person2@example.test');
+      expect(JSON.stringify(call.body)).not.toContain('person4@example.test');
+    }
+    const rows = calls.filter((c) => c.path.endsWith('/rows'));
+    expect(rows.flatMap((c) => (c.body as InviteBatchRequest).rows.map((r) => r.rowNo))).toEqual([
+      1, 3,
+    ]);
+    expect(mounted.text()).toMatch(/Invited: 2/);
+    expect(mounted.text()).toContain(ROW_REASON_TEXT.minor);
+  });
+
   it('holds phone-shared rows, then re-sends exactly those rows with the flag on "Mark as different people"', async () => {
     const { api, calls } = uploadApi((row, request) =>
       request.confirmPhoneDuplicate === true || row.rowNo !== 2 ? 'invited' : 'phone_shared',
