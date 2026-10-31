@@ -16,5 +16,15 @@ declare global {
     CANDIDATE_TOKEN_PRIVATE_JWK?: string;
     /** HMAC-SHA-256 key for the 5-minute media links (spec §6.2 R3-4). */
     MEDIA_LINK_HMAC_KEY?: string;
+    // M2 (specs/m2-scheduling-invites.md R5-27; build-notes "Wave 1 lead part" g). The AWS pair is the IAM user of the
+    // founder's F-2 (SES and KMS over HTTPS, SigV4); none is set before F-2, and the adapters fail closed.
+    /** F-2 access key id of the Workers IAM user (SES SendEmail, KMS GenerateDataKey/Decrypt). */
+    AWS_WORKERS_ACCESS_KEY_ID?: string;
+    /** F-2 secret access key of the Workers IAM user. */
+    AWS_WORKERS_SECRET_ACCESS_KEY?: string;
+    /** HMAC key of the SES test-inbox allow-list (the var SES_ALLOWED_TEST_RECIPIENT_HMAC holds the digest). */
+    SES_TEST_RECIPIENT_HMAC_KEY?: string;
+    /** DevKeyManager's key-encryption key (dev and staging only; at least 32 bytes; refused in production). */
+    KEY_MANAGER_DEV_KEK?: string;
   }
 }

@@ -42,5 +42,17 @@ declare global {
     SUPABASE_SECRET_KEY_JOBS?: string;
     /** The Supabase project URL of this environment (the Auth admin API base). */
     SUPABASE_URL?: string;
+    // M2 (specs/m2-scheduling-invites.md R5-27; build-notes "Wave 1 lead part" g): the messaging consumer's AWS pair
+    // (F-2), the SES test-inbox HMAC key, DevKeyManager's key-encryption key and the SES smoke-route token.
+    /** F-2 access key id of the Workers IAM user (SES SendEmail, KMS Decrypt). */
+    AWS_WORKERS_ACCESS_KEY_ID?: string;
+    /** F-2 secret access key of the Workers IAM user. */
+    AWS_WORKERS_SECRET_ACCESS_KEY?: string;
+    /** HMAC key of the SES test-inbox allow-list (the var SES_ALLOWED_TEST_RECIPIENT_HMAC holds the digest). */
+    SES_TEST_RECIPIENT_HMAC_KEY?: string;
+    /** DevKeyManager's key-encryption key (dev and staging only; at least 32 bytes; refused in production). */
+    KEY_MANAGER_DEV_KEK?: string;
+    /** The bearer token of the staging SES smoke route (R2-9); set only with the staging go-ahead. */
+    JOBS_SMOKE_TOKEN?: string;
   }
 }
