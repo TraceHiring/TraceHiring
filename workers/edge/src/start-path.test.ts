@@ -6,7 +6,10 @@
 // still valid at `na`; a started row resumes with a fresh lobby token (no `sw` check, also after a lost DO); a reload,
 // a device switch, an open-window return and a return after a reschedule all reach the start through OTP → lobby
 // token; a session created at `na − 10 s` whose `sessionStarted` failed resumes after `na` through the peek; a
-// submitted row re-entering start gets its receipt. Fakes stand for stream B2's api; synthetic data only.
+// submitted row re-entering start gets its receipt. Build-notes "B4 first reviews": (a) resolve and the portal honour a
+// live DO session (the edge re-asks api with `sessionLive`, so no `window_missed`; a reschedule is refused); (b) the
+// DO's read-only `canStart` runs before `closePhotos`, so a start it refuses for the window keeps the photo step open.
+// Fakes stand for stream B2's api; synthetic data only.
 import { InviteResolveRes, OkRes, SessionStartRes } from '@trace/shared/contracts/candidate';
 import { describe, expect, it } from 'vitest';
 import { sha256HexBytes } from './encoding.js';
