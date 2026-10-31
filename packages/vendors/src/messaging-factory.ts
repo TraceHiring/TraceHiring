@@ -47,6 +47,7 @@ export interface CreateMessagingV2Options {
   /** MESSAGING_WHATSAPP_ENABLED (parse with parseMessagingFlag). Default false. */
   whatsappEnabled?: boolean;
   outbox?: { store: OutboxStore };
+  /** With emailProvider 'loadsim', `scheduler` is required (bad_options without it; B1 fix 5). */
   loadSim?: LoadSimOptions;
   ses?: Omit<SesEmailOptions, 'traceEnv'>;
 }
@@ -74,9 +75,23 @@ function emailAdapter(
     case 'outbox':
       if (o.outbox === undefined) throw new MessagingConfigError('bad_options');
       return new OutboxMessagingV2(env, o.outbox.store);
-    case 'loadsim':
-      if (o.loadSim === undefined) throw new MessagingConfigError('bad_options');
-      return new LoadSimMessaging(env, o.loadSim);
+    case 'loadsim': {
+      // A Worker cancels plain timers once the handler returns, so the wiring must pass a scheduler (the jobs
+      // wiring backs it with ctx.waitUntil). The class's setTimeout default serves direct (test) construction only.
+      const loadSim: unknown = o.loadSim;
+      if (typeof loadSim !== 'object' || loadSim === null) {
+        throw new MessagingConfigError('bad_options');
+      }
+      const scheduler = (loadSim as { scheduler?: unknown }).scheduler;
+      if (
+        typeof scheduler !== 'object' ||
+        scheduler === null ||
+        typeof (scheduler as { schedule?: unknown }).schedule !== 'function'
+      ) {
+        throw new MessagingConfigError('bad_options');
+      }
+      return new LoadSimMessaging(env, loadSim as LoadSimOptions);
+    }
     case 'ses':
       if (o.ses === undefined) throw new MessagingConfigError('bad_options');
       return new SesEmailMessaging({ ...o.ses, traceEnv: env });

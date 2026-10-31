@@ -58,7 +58,10 @@ export interface LoadSimOptions {
   random?: () => number;
   /** Epoch milliseconds, for event timestamps. Default Date.now. */
   now?: () => number;
-  /** Default setTimeout. */
+  /**
+   * Default setTimeout, for direct (test) construction only: createMessagingV2 requires it, because a Worker
+   * cancels plain timers once the handler returns (the jobs wiring passes one backed by ctx.waitUntil; B1 fix 5).
+   */
   scheduler?: LoadSimScheduler;
   /** Default crypto.randomUUID. */
   newId?: () => string;

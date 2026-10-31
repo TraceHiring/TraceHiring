@@ -122,7 +122,7 @@ describe('createMessagingV2: env × provider matrix (§6.4)', () => {
   });
 
   it('loadsim needs an explicit scheduler (a Worker cancels plain timers; B1 fix 5)', async () => {
-    const { scheduler: _omitted, ...noScheduler } = adapterOptions().loadSim;
+    const noScheduler = without(adapterOptions().loadSim, 'scheduler');
     for (const traceEnv of ['dev', 'staging']) {
       expect(configError(() => create(traceEnv, 'loadsim', { loadSim: noScheduler })).code).toBe(
         'bad_options',

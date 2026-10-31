@@ -339,7 +339,7 @@ describe('SesEmailMessaging: recipient guard outside production (AT-M2-23)', () 
       String.fromCharCode(c.charCodeAt(0) + 0xfee0),
     );
     expect(fullWidth).not.toBe('success@simulator.amazonses.com');
-    expect(/^[\x00-\x7f]*$/.test(fullWidth)).toBe(false);
+    expect([...fullWidth].every((c) => c.charCodeAt(0) > 0x7f)).toBe(true);
     const rec = okFetch();
     await new SesEmailMessaging(options({ fetch: rec.fetch })).send(message({ to: fullWidth }));
     expect(rec.calls).toHaveLength(1);
