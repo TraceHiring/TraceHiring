@@ -17,7 +17,30 @@ export const hmacSha256Hex = async (key: string, message: string): Promise<strin
     false,
     ['sign'],
   );
-  return toHex(await crypto.subtle.sign('HMAC', k, enc.encode(message)));
+  return hmacSha256HexKey(k, message);
+};
+
+/** WebCrypto's key type as `crypto.subtle.sign` takes it (the same under node, DOM and Workers typings). */
+export type SigningKey = Parameters<typeof crypto.subtle.sign>[1];
+
+/** The constant error for a key that is not an HMAC SHA-256 signing key. */
+export const SIGNING_KEY_INVALID = 'signing_key_invalid';
+
+/**
+ * The same digest with an HMAC SHA-256 CryptoKey (M2 blind indexes: the per-org key comes from KeyManager as a
+ * CryptoKey, never as text; specs/m2-scheduling-invites.md R5-36, build-notes 2026-10-31 "Wave 1 lead part" a).
+ */
+export const hmacSha256HexKey = async (key: SigningKey, message: string): Promise<string> => {
+  const algorithm = key.algorithm as { name?: string; hash?: { name?: string } };
+  if (
+    key.type !== 'secret' ||
+    algorithm.name !== 'HMAC' ||
+    algorithm.hash?.name !== 'SHA-256' ||
+    !key.usages.includes('sign')
+  ) {
+    throw new Error(SIGNING_KEY_INVALID);
+  }
+  return toHex(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message)));
 };
 
 /** The constant error for a missing or empty pepper. */

@@ -4,8 +4,10 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
+  SIGNING_KEY_INVALID,
   hexEqual,
   hmacSha256Hex,
+  hmacSha256HexKey,
   inviteEmailHmac,
   normaliseInviteEmail,
   PEPPER_MIN_BYTES,
@@ -17,6 +19,36 @@ describe('invite email HMAC (shared by the api and the jobs, A3b lead ask)', () 
     expect(await hmacSha256Hex('key', 'The quick brown fox jumps over the lazy dog')).toBe(
       'f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8',
     );
+  });
+
+  // M2 Wave 1 lead decision (build-notes 2026-10-31 "Wave 1 lead part" a): the blind-index key arrives from
+  // KeyManager as a CryptoKey (HMAC, SHA-256), never as text; same digest as the string-key form for the same bytes.
+  it('hmacSha256HexKey signs with an HMAC CryptoKey and equals hmacSha256Hex for the same key bytes', async () => {
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode('key'),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    const message = 'The quick brown fox jumps over the lazy dog';
+    expect(await hmacSha256HexKey(key, message)).toBe(await hmacSha256Hex('key', message));
+    expect(await hmacSha256HexKey(key, message)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('hmacSha256HexKey refuses a key that is not an HMAC SHA-256 signing key', async () => {
+    const aes = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+      'encrypt',
+    ]);
+    await expect(hmacSha256HexKey(aes, 'x')).rejects.toThrow(SIGNING_KEY_INVALID);
+    const sha1 = await crypto.subtle.importKey(
+      'raw',
+      new Uint8Array(32),
+      { name: 'HMAC', hash: 'SHA-1' },
+      false,
+      ['sign'],
+    );
+    await expect(hmacSha256HexKey(sha1, 'x')).rejects.toThrow(SIGNING_KEY_INVALID);
   });
 
   it('normalises by trimming and lower-casing the whole address', () => {

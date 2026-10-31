@@ -2,7 +2,8 @@
 // §5.3). Each interface arrives with the milestone that first needs it; D1 pulls LlmGrader and Messaging forward,
 // M1 adds LlmDrafter (specs/m1-test-authoring.md R5-3), M2 KeyManager (KMS envelope keys for contact data;
 // specs/m2-scheduling-invites.md R5-22: its interface and mock arrive with stream B1, whose exports the lead adds
-// here at merge). No vendor SDK; this package imports only @trace/shared.
+// here at merge). No vendor SDK; this package imports only @trace/shared and, for SigV4 signing of the SES and KMS
+// HTTPS calls, aws4fetch (ADR-034).
 export const VENDOR_INTERFACES: readonly string[] = [
   'KeyManager',
   'LlmDrafter',

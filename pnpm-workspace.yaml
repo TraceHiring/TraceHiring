@@ -56,6 +56,9 @@ catalog:
   # Zip reader for the item import Web Worker (ADR-033, specs/m1-test-authoring.md R5-48): apps/recruiter only,
   # streaming Unzip + UnzipInflate only; exactly 0.8.3 (published 2026-05-16).
   fflate: 0.8.3
+  # SigV4 signing for SES and KMS over HTTPS from Workers (ADR-034, specs/m2-scheduling-invites.md M2-16): packages/vendors
+  # only, exactly 1.0.20 (published 2024-08-28, MIT, no dependencies).
+  aws4fetch: 1.0.20
 
 # Build-script allow-list (pnpm 12 key, checked in S1.0).
 allowBuilds:
