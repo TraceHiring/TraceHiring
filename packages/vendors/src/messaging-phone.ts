@@ -20,6 +20,8 @@ export interface PhoneMockRecord {
 }
 
 const RECORD_MAX = 1000;
+/** The idempotency memory is bounded (oldest key forgotten first), like the load-sim adapter's (B1 fix 8). */
+export const PHONE_MOCK_IDEMPOTENCY_KEYS_MAX = 10_000;
 
 export class PhoneChannelCore {
   readonly #env: 'dev' | 'staging';
@@ -56,6 +58,10 @@ export class PhoneChannelCore {
       let id = this.#byKey.get(key);
       if (id === undefined) {
         id = `${this.#provider}-${crypto.randomUUID()}`;
+        if (this.#byKey.size >= PHONE_MOCK_IDEMPOTENCY_KEYS_MAX) {
+          const oldest = this.#byKey.keys().next();
+          if (oldest.done !== true) this.#byKey.delete(oldest.value);
+        }
         this.#byKey.set(key, id);
         this.#records.push({
           orgId: m.orgId,
