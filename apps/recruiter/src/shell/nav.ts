@@ -27,6 +27,8 @@ export const hasAccess = (roles: readonly string[]): boolean => isStaff(roles) |
 export function navFor(roles: readonly string[], extra: NavItem | null): NavItem[] {
   if (!hasAccess(roles)) return [];
   const items: NavItem[] = [{ to: '/tests', label: 'Tests' }];
+  // M2 (specs/m2-scheduling-invites.md §2, R5-59): drives for staff, right after Tests.
+  if (isStaff(roles)) items.push({ to: '/drives', label: 'Drives' });
   if (isStaff(roles)) items.push({ to: '/bank', label: 'Item bank' });
   if (canReadBank(roles)) items.push({ to: '/bank/approvals', label: 'Item approvals' });
   if (isStaff(roles)) items.push({ to: '/library', label: 'Library' });

@@ -1,6 +1,6 @@
-// Typed calls for the D1 org endpoints (specs/d1-demo-slice.md §6.2) and, below them, the M1 authoring endpoints
-// (specs/m1-test-authoring.md §6.11). Each one names its request and response contract from
-// @trace/shared/contracts/d1 or /m1. The demo outbox call lives in outbox/ so that a production build,
+// Typed calls for the D1 org endpoints (specs/d1-demo-slice.md §6.2), below them the M1 authoring endpoints
+// (specs/m1-test-authoring.md §6.11), and last the M2 drive endpoints (specs/m2-scheduling-invites.md §6.1, §6.2).
+// Each one names its request and response contract from @trace/shared/contracts/d1, /m1 or /m2. The demo outbox call lives in outbox/ so that a production build,
 // which drops that module, holds no trace of its path (AT-D18).
 import {
   AssignmentListResponse,
@@ -60,6 +60,23 @@ import {
   SettingKey,
   TestDraftView,
 } from '@trace/shared/contracts/m1';
+import {
+  CreateDriveRequest,
+  DriveDetail,
+  DriveInvitationPage,
+  DriveListResponse,
+  InvitationRow,
+  InviteBatchRequest,
+  InviteBatchResponse,
+  InviteUploadCreateRequest,
+  InviteUploadView,
+  PageQuery,
+  RescheduleRequest,
+  RevokeNotStartedResponse,
+  SlotListResponse,
+  SlotsCreateRequest,
+  SlotsCreateResponse,
+} from '@trace/shared/contracts/m2';
 import type { ApiClient, ApiResult, CallOptions, ImportImageType } from './client';
 
 const id = (value: string): string => encodeURIComponent(value);
@@ -561,3 +578,163 @@ export const saveTestDraft = (
   if (path === null) return refused<TestDraftView>();
   return send(api, 'PUT', path, SaveTestDraftRequest, body, TestDraftView);
 };
+
+// ---- M2 drives (specs/m2-scheduling-invites.md §6.1, §6.2; the route list heads the drive section of
+// @trace/shared/contracts/m2). Staff only; the server decides every request. -------------------------------------------
+
+const drivePath = (driveId: string): string => `/drives/${id(driveId)}`;
+
+export const listDrives = (
+  api: ApiClient,
+  query?: PageQuery,
+): Promise<ApiResult<DriveListResponse>> =>
+  list(api, '/drives', PageQuery, query, DriveListResponse);
+
+export const createDrive = (
+  api: ApiClient,
+  body: CreateDriveRequest,
+): Promise<ApiResult<DriveDetail>> =>
+  send(api, 'POST', '/drives', CreateDriveRequest, body, DriveDetail);
+
+export const getDrive = (api: ApiClient, driveId: string): Promise<ApiResult<DriveDetail>> =>
+  api.call({ method: 'GET', path: drivePath(driveId), schema: DriveDetail });
+
+/** `draft → scheduled` (§4; the api runs the pool-ratio check for scheduled drives, M2-17). */
+export const publishDrive = (api: ApiClient, driveId: string): Promise<ApiResult<DriveDetail>> =>
+  api.call({ method: 'POST', path: `${drivePath(driveId)}/publish`, schema: DriveDetail });
+
+export const closeDrive = (api: ApiClient, driveId: string): Promise<ApiResult<DriveDetail>> =>
+  api.call({ method: 'POST', path: `${drivePath(driveId)}/close`, schema: DriveDetail });
+
+/** Cancels the drive and its planned messages; invitations change only by an explicit revoke (E24, R5-13). */
+export const cancelDrive = (api: ApiClient, driveId: string): Promise<ApiResult<DriveDetail>> =>
+  api.call({ method: 'POST', path: `${drivePath(driveId)}/cancel`, schema: DriveDetail });
+
+export const listSlots = (
+  api: ApiClient,
+  driveId: string,
+  query?: PageQuery,
+): Promise<ApiResult<SlotListResponse>> =>
+  list(api, `${drivePath(driveId)}/slots`, PageQuery, query, SlotListResponse);
+
+export const createSlots = (
+  api: ApiClient,
+  driveId: string,
+  body: SlotsCreateRequest,
+): Promise<ApiResult<SlotsCreateResponse>> =>
+  send(api, 'POST', `${drivePath(driveId)}/slots`, SlotsCreateRequest, body, SlotsCreateResponse);
+
+export const createInviteUpload = (
+  api: ApiClient,
+  driveId: string,
+  body: InviteUploadCreateRequest,
+): Promise<ApiResult<InviteUploadView>> =>
+  send(
+    api,
+    'POST',
+    `${drivePath(driveId)}/uploads`,
+    InviteUploadCreateRequest,
+    body,
+    InviteUploadView,
+  );
+
+/**
+ * One batch of 1 to 200 parsed rows (M2-7). The path's upload id is the body's `uploadId`, so the two never differ;
+ * a held phone-shared row is re-sent with `confirmPhoneDuplicate: true` (R2-12), never through another route.
+ */
+export const postInviteRows = (
+  api: ApiClient,
+  driveId: string,
+  body: InviteBatchRequest,
+): Promise<ApiResult<InviteBatchResponse>> => {
+  if (!InviteBatchRequest.safeParse(body).success) return refused();
+  return api.call({
+    method: 'POST',
+    path: `${drivePath(driveId)}/uploads/${id(body.uploadId)}/rows`,
+    schema: InviteBatchResponse,
+    body,
+  });
+};
+
+export const completeInviteUpload = (
+  api: ApiClient,
+  driveId: string,
+  uploadId: string,
+): Promise<ApiResult<InviteUploadView>> =>
+  api.call({
+    method: 'POST',
+    path: `${drivePath(driveId)}/uploads/${id(uploadId)}/complete`,
+    schema: InviteUploadView,
+  });
+
+export const cancelInviteUpload = (
+  api: ApiClient,
+  driveId: string,
+  uploadId: string,
+): Promise<ApiResult<InviteUploadView>> =>
+  api.call({
+    method: 'POST',
+    path: `${drivePath(driveId)}/uploads/${id(uploadId)}/cancel`,
+    schema: InviteUploadView,
+  });
+
+export const listDriveInvitations = (
+  api: ApiClient,
+  driveId: string,
+  query?: PageQuery,
+): Promise<ApiResult<DriveInvitationPage>> =>
+  list(api, `${drivePath(driveId)}/invitations`, PageQuery, query, DriveInvitationPage);
+
+const invitationPath = (driveId: string, invitationId: string): string =>
+  `${drivePath(driveId)}/invitations/${id(invitationId)}`;
+
+/** "Move to slot" (M2-11): unlimited for staff, audited; the move queues a reschedule message. */
+export const moveInvitation = (
+  api: ApiClient,
+  driveId: string,
+  invitationId: string,
+  body: RescheduleRequest,
+): Promise<ApiResult<InvitationRow>> =>
+  send(
+    api,
+    'POST',
+    `${invitationPath(driveId, invitationId)}/move`,
+    RescheduleRequest,
+    body,
+    InvitationRow,
+  );
+
+/** "Resend invite" (R2-4): queues a new invite message with a new link. */
+export const resendInvitation = (
+  api: ApiClient,
+  driveId: string,
+  invitationId: string,
+): Promise<ApiResult<InvitationRow>> =>
+  api.call({
+    method: 'POST',
+    path: `${invitationPath(driveId, invitationId)}/resend`,
+    schema: InvitationRow,
+  });
+
+/** One explicit, audited staff revoke (R5-13); nothing revokes automatically (rule 2). */
+export const revokeInvitation = (
+  api: ApiClient,
+  driveId: string,
+  invitationId: string,
+): Promise<ApiResult<InvitationRow>> =>
+  api.call({
+    method: 'POST',
+    path: `${invitationPath(driveId, invitationId)}/revoke`,
+    schema: InvitationRow,
+  });
+
+/** "Revoke all invitations not yet started" on a cancelled drive: counts revoked and skipped (R5-59, R5-64 f). */
+export const revokeNotStarted = (
+  api: ApiClient,
+  driveId: string,
+): Promise<ApiResult<RevokeNotStartedResponse>> =>
+  api.call({
+    method: 'POST',
+    path: `${drivePath(driveId)}/revoke-not-started`,
+    schema: RevokeNotStartedResponse,
+  });

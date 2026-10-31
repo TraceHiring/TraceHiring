@@ -4,17 +4,26 @@ import { describe, expect, it } from 'vitest';
 import {
   CreateDriveRequest,
   DriveDetail,
+  DriveInvitationPage,
+  DriveListResponse,
+  DriveSummary,
   IngestInviteDbRow,
   InvitationRow,
   InviteBatchRequest,
   InviteBatchResponse,
   InviteRow,
+  InviteUploadCreateRequest,
+  InviteUploadView,
   MESSAGE_STATUSES,
   MessagesQueueMessage,
+  PageQuery,
   RescheduleRequest,
+  RevokeNotStartedResponse,
   ROW_REFUSAL_REASONS,
+  SlotListResponse,
   SlotView,
   SlotsCreateRequest,
+  SlotsCreateResponse,
 } from './contracts-m2.js';
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -265,5 +274,106 @@ describe('InvitationRow, reschedule and messages (§5, M2-14, R5-9)', () => {
     expect(MessagesQueueMessage.parse(m)).toEqual(m);
     expect(MessagesQueueMessage.safeParse({ ...m, to: `a${at}example.test` }).success).toBe(false);
     expect(MessagesQueueMessage.safeParse({ ...m, token: 'x' }).success).toBe(false);
+  });
+});
+
+// ---- Recruiter drive API surface (Wave 1 lead part; the routes B2 builds, the screens B5 builds) ------------------
+
+const fill = <T>(n: number, v: T): T[] => Array.from({ length: n }, () => v);
+
+describe('drive API surface: lists with a cursor (R5-31, R5-44: keyset pages, never a 500-row cap)', () => {
+  const summary = {
+    id: id(3),
+    name: 'Campus drive',
+    testId: id(1),
+    mode: 'scheduled',
+    status: 'draft',
+    opensAt: '2026-11-01T09:00:00+05:30',
+    deadlineAt: '2026-11-10T18:00:00+05:30',
+    createdAt: '2026-10-31T10:00:00Z',
+  };
+  it('lists drives in pages of at most 200 with an opaque cursor', () => {
+    const page = { drives: [summary], nextCursor: 'eyJhIjoxfQ' };
+    expect(DriveListResponse.parse(page)).toEqual(page);
+    expect(DriveListResponse.parse({ drives: [], nextCursor: null })).toEqual({
+      drives: [],
+      nextCursor: null,
+    });
+    const tooMany = { drives: fill(201, summary), nextCursor: null };
+    expect(DriveListResponse.safeParse(tooMany).success).toBe(false);
+    expect(DriveSummary.safeParse({ ...summary, status: 'rejected' }).success).toBe(false);
+    expect(DriveSummary.safeParse({ ...summary, score: 1 }).success).toBe(false);
+  });
+  it('a cursor is url-safe text of at most 256 characters', () => {
+    expect(PageQuery.parse({})).toEqual({});
+    expect(PageQuery.parse({ cursor: 'abc_-09' })).toEqual({ cursor: 'abc_-09' });
+    for (const cursor of ['', 'a b', 'a/b', 'x'.repeat(257)]) {
+      expect(PageQuery.safeParse({ cursor }).success, cursor).toBe(false);
+    }
+    expect(PageQuery.safeParse({ cursor: 'a', limit: '10' }).success).toBe(false);
+  });
+  it('lists slots in pages and answers a slot creation with the new slots', () => {
+    const slot = {
+      id: id(4),
+      startsAt: '2026-11-02T10:00:00Z',
+      capacity: 50,
+      booked: 0,
+      startWindowMinutes: 15,
+      lobbyOpensMinutes: 30,
+      status: 'open',
+    };
+    expect(SlotListResponse.parse({ slots: [slot], nextCursor: null }).slots).toHaveLength(1);
+    const tooMany = { slots: fill(201, slot), nextCursor: null };
+    expect(SlotListResponse.safeParse(tooMany).success).toBe(false);
+    expect(SlotsCreateResponse.parse({ slots: fill(500, slot) }).slots).toHaveLength(500);
+    expect(SlotsCreateResponse.safeParse({ slots: fill(501, slot) }).success).toBe(false);
+  });
+  it('pages a drive invitation list of InvitationRow', () => {
+    const inv = {
+      invitationId: id(7),
+      label: 'Candidate 12',
+      status: 'created',
+      delivery: { invite: 'planned', reminder: null, reschedule: null },
+    };
+    const page = DriveInvitationPage.parse({ invitations: [inv], nextCursor: 'c1' });
+    expect(page.invitations).toHaveLength(1);
+    const tooMany = { invitations: fill(201, inv), nextCursor: null };
+    expect(DriveInvitationPage.safeParse(tooMany).success).toBe(false);
+  });
+});
+
+describe('drive API surface: uploads (§6.2, M2-7, R5-20, R5-64 f)', () => {
+  it('opens an upload with the file hash and its row count (CSV only, at most 5,000 rows)', () => {
+    const req = { fileSha256: hex('a'), rowsInFile: 2000 };
+    expect(InviteUploadCreateRequest.parse(req)).toEqual(req);
+    expect(InviteUploadCreateRequest.safeParse({ ...req, rowsInFile: 5001 }).success).toBe(false);
+    expect(InviteUploadCreateRequest.safeParse({ ...req, rowsInFile: 0 }).success).toBe(false);
+    const upper = { ...req, fileSha256: 'A'.repeat(64) };
+    expect(InviteUploadCreateRequest.safeParse(upper).success).toBe(false);
+    expect(InviteUploadCreateRequest.safeParse({ ...req, sourceKind: 'xlsx' }).success).toBe(false);
+  });
+  it('an upload view counts rows invited, refused and held; no cell value, no file', () => {
+    const view = {
+      uploadId: id(5),
+      driveId: id(3),
+      status: 'open',
+      rowsInFile: 2000,
+      rowsInvited: 1990,
+      rowsRefused: 8,
+      rowsHeld: 2,
+      reuploadWarning: false,
+      createdAt: '2026-10-31T10:00:00Z',
+      completedAt: null,
+    };
+    expect(InviteUploadView.parse(view)).toEqual(view);
+    expect(InviteUploadView.safeParse({ ...view, status: 'failed' }).success).toBe(false);
+    expect(InviteUploadView.safeParse({ ...view, fileName: 'x' }).success).toBe(false);
+    expect(Object.keys(InviteUploadView.shape).some((k) => /reject|total/i.test(k))).toBe(false);
+  });
+  it('revoking every not-started invitation of a cancelled drive answers counts only (R5-64 f)', () => {
+    const counts = { revoked: 3, skipped: 1 };
+    expect(RevokeNotStartedResponse.parse(counts)).toEqual(counts);
+    expect(RevokeNotStartedResponse.safeParse({ revoked: -1, skipped: 0 }).success).toBe(false);
+    expect(RevokeNotStartedResponse.safeParse({ ...counts, ids: [] }).success).toBe(false);
   });
 });

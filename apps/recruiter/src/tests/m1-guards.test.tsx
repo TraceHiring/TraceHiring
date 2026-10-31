@@ -182,15 +182,17 @@ describe('M1 nav (UX only; the server decides)', () => {
   const labels = (roles: string[]) => navFor(roles, null).map((item) => item.label);
   const links = (roles: string[]) => navFor(roles, null).map((item) => item.to);
 
+  // M2 (R5-59): staff also get Drives, right after Tests.
   it('staff get the bank, the approval queue and the library; owners and recruiters no settings', () => {
     for (const role of ['org_owner', 'recruiter']) {
-      expect(labels([role])).toEqual(['Tests', 'Item bank', 'Item approvals', 'Library']);
+      expect(labels([role])).toEqual(['Tests', 'Drives', 'Item bank', 'Item approvals', 'Library']);
     }
   });
 
   it('only an admin gets Integrity settings and Members', () => {
     expect(labels(['admin'])).toEqual([
       'Tests',
+      'Drives',
       'Item bank',
       'Item approvals',
       'Library',
@@ -199,6 +201,7 @@ describe('M1 nav (UX only; the server decides)', () => {
     ]);
     expect(links(['admin'])).toEqual([
       '/tests',
+      '/drives',
       '/bank',
       '/bank/approvals',
       '/library',

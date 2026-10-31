@@ -27,10 +27,11 @@ const html = (roles: string[]) =>
   );
 
 describe('navFor', () => {
-  it('staff: Tests and the M1 bank screens, then the demo outbox when the build has it', () => {
+  it('staff: Tests, the M2 drives and the M1 bank screens, then the demo outbox when the build has it', () => {
     for (const role of ['org_owner', 'recruiter'])
       expect(labels([role])).toEqual([
         'Tests',
+        'Drives',
         'Item bank',
         'Item approvals',
         'Library',
@@ -38,6 +39,7 @@ describe('navFor', () => {
       ]);
     expect(labels(['admin'])).toEqual([
       'Tests',
+      'Drives',
       'Item bank',
       'Item approvals',
       'Library',
@@ -47,6 +49,7 @@ describe('navFor', () => {
     ]);
     expect(navFor(['recruiter'], null).map((i) => i.label)).toEqual([
       'Tests',
+      'Drives',
       'Item bank',
       'Item approvals',
       'Library',
