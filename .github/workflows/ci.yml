@@ -18,6 +18,11 @@ on:
         description: Run the e2e jobs
         type: boolean
         default: true
+      # M2 R5-28: the bulk-invite E2E job runs only when this is turned on.
+      run_m2_bulk:
+        description: Run the M2 bulk-invite E2E job (AT-M2-01)
+        type: boolean
+        default: false
 
 # Read-only token for every job. A job that needs more must ask for it explicitly.
 permissions:
@@ -154,6 +159,39 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: e2e-local-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
+
+  # Not a required check. M2 R5-28: the local stack with the jobs Worker's scheduled route (DC-M2-6) for
+  # AT-M2-01's bulk run (times in e2e/test-results/m2-at01.json), only on a manual dispatch with run_m2_bulk.
+  # No secret, no environment; synthetic data only.
+  e2e-m2-bulk:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_m2_bulk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up toolchain and install
+        uses: ./.github/actions/setup
+      - name: Cache the Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: pnpm --filter @trace/e2e exec playwright install --with-deps chromium
+      - name: Local E2E stack with the scheduled route
+        run: node scripts/e2e-local.mjs --ci --test-scheduled
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-m2-bulk-report
           path: |
             e2e/playwright-report
             e2e/test-results

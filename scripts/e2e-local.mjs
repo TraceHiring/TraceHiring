@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The local E2E stack (specs/d1-demo-slice.md §7.1, §7.2; day-one checks DC-D9 and the Linux half
 // of DC-D6, §8). Lead-only: it starts and resets the shared local Supabase stack.
-//   node scripts/e2e-local.mjs [--ci] [--stop]
+//   node scripts/e2e-local.mjs [--ci] [--stop] [--test-scheduled]
 // 1. Docker check, the test-rls lock, `supabase start -x …` and `supabase db reset` (withLocalStack).
 // 2. Reads the local stack's URLs and publishable key (`supabase status`) and builds both apps
 //    (`pnpm --filter @trace/candidate --filter @trace/recruiter build`) with the demo outbox on
@@ -36,6 +36,10 @@
 // Every value is local and synthetic; nothing reads a repository secret. Child output is redacted
 // before it is printed or written (it can hold the local stack's keys or a connection URL).
 // --ci marks the run as the CI job's in the manifest; --stop runs `supabase stop` at the end.
+// --test-scheduled (M2 R5-28, the e2e-m2-bulk CI job) starts the edge+jobs session with wrangler's
+// --test-scheduled and allows that job's 40-minute limit. DC-M2-6 (2026-10-31, wrangler 4.149.0): in the
+// multi-config session the plain /__scheduled route reaches only edge, the session's first Worker; the jobs
+// Worker's scheduled handler is invoked by name through JOBS_SCHEDULED_PATH, so jobs needs no process of its own.
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -67,6 +71,14 @@ import {
 import { defaultDeps as stackDefaults, redact, withLocalStack } from './test-rls.mjs';
 
 export const LIMIT_MS = 25 * 60 * 1000;
+/** The e2e-m2-bulk job's limit (M2 R5-28), used with --test-scheduled. */
+export const BULK_LIMIT_MS = 40 * 60 * 1000;
+/**
+ * DC-M2-6: POST here (JSON body with `cron`) on the edge+jobs session's origin runs the jobs Worker's scheduled
+ * handler; the plain /__scheduled route would reach the edge Worker only.
+ */
+export const JOBS_SCHEDULED_PATH =
+  '/cdn-cgi/local/explorer/api/local/scheduled?worker=trace-jobs-dev';
 export const READY_TIMEOUT_MS = 3 * 60 * 1000;
 export const POLL_MS = 500;
 export const STOP_GRACE_MS = 10 * 1000;
@@ -150,7 +162,7 @@ export const WRANGLER_CHILD_ENV = Object.freeze({
 });
 const WRANGLER = 'node_modules/wrangler/bin/wrangler.js';
 const VITE = (app) => `apps/${app}/node_modules/vite/bin/vite.js`;
-const USAGE = 'usage: node scripts/e2e-local.mjs [--ci] [--stop]';
+const USAGE = 'usage: node scripts/e2e-local.mjs [--ci] [--stop] [--test-scheduled]';
 const TAIL_LINES = 20;
 const TOOL = 'e2e-local';
 
@@ -170,9 +182,10 @@ export function configPaths(stateDir) {
 /**
  * The long-running processes, in start order. `script` is repo-relative and runs under the current
  * node (no shell, so stopping the process stops what it started). `names` are the Worker names a
- * wrangler session must report starting. `config` is configPaths() of the run.
+ * wrangler session must report starting. `config` is configPaths() of the run. `testScheduled` adds wrangler's
+ * --test-scheduled to the edge+jobs session (M2 R5-28).
  */
-export function stackProcesses(persistDir, config) {
+export function stackProcesses(persistDir, config, { testScheduled = false } = {}) {
   const common = ['--env', 'dev', '--ip', '127.0.0.1', '--persist-to', persistDir];
   return [
     {
@@ -197,7 +210,8 @@ export function stackProcesses(persistDir, config) {
       script: WRANGLER,
       args: ['dev', '-c', 'workers/edge/wrangler.jsonc', '-c', config.jobsConfig]
         .concat(common)
-        .concat(['--port', '8787', '--inspector-port', '9230', '--env-file', config.edgeEnvFile]),
+        .concat(['--port', '8787', '--inspector-port', '9230', '--env-file', config.edgeEnvFile])
+        .concat(testScheduled ? ['--test-scheduled'] : []),
       ready: `${E2E_ENV.E2E_EDGE_URL}/health`,
       names: ['trace-edge-dev', 'trace-jobs-dev'],
     },
@@ -579,7 +593,7 @@ export function defaultDeps(overrides) {
 export async function main(options) {
   const deps = { ...defaultDeps(options), tool: TOOL };
   const { argv = [], root, run, now, sleep, log, error, start, fetch, env } = deps;
-  if (!argv.every((a) => a === '--ci' || a === '--stop')) {
+  if (!argv.every((a) => a === '--ci' || a === '--stop' || a === '--test-scheduled')) {
     error(USAGE);
     return 2;
   }
@@ -591,6 +605,8 @@ export async function main(options) {
     return 1;
   }
   const ci = argv.includes('--ci');
+  const testScheduled = argv.includes('--test-scheduled');
+  const limitMs = testScheduled ? BULK_LIMIT_MS : LIMIT_MS;
   const t0 = now();
   const phases = {};
   let playwright = null;
@@ -636,7 +652,7 @@ export async function main(options) {
     const config = configPaths(stateDir);
     let rolesTouched = false;
     try {
-      const specs = stackProcesses(toPosix(stateDir), config);
+      const specs = stackProcesses(toPosix(stateDir), config, { testScheduled });
       // An earlier, interrupted run may still hold a port: then the new process (strictPort)
       // would fail while the old one answers, and the run would test a stale build (L2).
       for (const spec of specs) {
@@ -744,21 +760,22 @@ export async function main(options) {
     problems.unshift(
       'Docker is not running: the local E2E stack cannot start. Start Docker Desktop.',
     );
-  if (totalMs > LIMIT_MS) {
+  if (totalMs > limitMs) {
     problems.push(
-      `the run took ${Math.round(totalMs / 1000)} s, over the ${LIMIT_MS / 60000}-minute CI job limit (DC-D9)`,
+      `the run took ${Math.round(totalMs / 1000)} s, over the ${limitMs / 60000}-minute CI job limit (${testScheduled ? 'e2e-m2-bulk' : 'DC-D9'})`,
     );
   }
   const manifest = {
     check: 'DC-D9',
     ci,
+    test_scheduled: testScheduled,
     sha: env.GITHUB_SHA ?? null,
     platform: process.platform,
     node: process.version,
     phases,
     total_ms: totalMs,
-    limit_ms: LIMIT_MS,
-    within_limit: totalMs <= LIMIT_MS,
+    limit_ms: limitMs,
+    within_limit: totalMs <= limitMs,
     playwright_exit: playwright,
     result: problems.length === 0 ? 'pass' : 'fail',
   };

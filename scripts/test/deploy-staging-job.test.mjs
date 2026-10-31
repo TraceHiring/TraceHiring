@@ -168,12 +168,13 @@ describe('deploy-staging: the whole workflow', () => {
     expect(runChecks(REPO)).toEqual([]);
   });
 
-  it('comes after the four required jobs, which stay as they are, and e2e-local; only e2e-staging follows it', () => {
-    // e2e-local (d1 §7.1, DC-D9) is not required and deploy-staging does not need it. e2e-staging
-    // (d1 §7.1, AT-D1) needs deploy-staging and nothing else, and deploy-staging never waits for it.
+  it('comes after the four required jobs, which stay as they are, e2e-local and e2e-m2-bulk; only e2e-staging follows it', () => {
+    // e2e-local (d1 §7.1, DC-D9) and e2e-m2-bulk (M2 R5-28) are not required and deploy-staging does not need them.
+    // e2e-staging (d1 §7.1, AT-D1) needs deploy-staging and nothing else, and deploy-staging never waits for it.
     expect(Object.keys(CI.jobs)).toEqual([
       ...REQUIRED_JOBS,
       'e2e-local',
+      'e2e-m2-bulk',
       'deploy-staging',
       'e2e-staging',
     ]);
@@ -216,11 +217,19 @@ describe('deploy-staging: gate (§7.2; d1 §7.1, D1-16)', () => {
 
   it('can be dispatched by hand, with no input a run could read as text', () => {
     expect(Object.hasOwn(CI.on, 'workflow_dispatch')).toBe(true);
-    // The one input is the d1 §7.1 boolean run_e2e (DC-D9): no string a dispatcher could inject.
+    // Two boolean inputs: the d1 §7.1 run_e2e (DC-D9) and the M2 R5-28 run_m2_bulk: no string a dispatcher could
+    // inject.
     expect(CI.on.workflow_dispatch).toEqual({
-      inputs: { run_e2e: { description: 'Run the e2e jobs', type: 'boolean', default: true } },
+      inputs: {
+        run_e2e: { description: 'Run the e2e jobs', type: 'boolean', default: true },
+        run_m2_bulk: {
+          description: 'Run the M2 bulk-invite E2E job (AT-M2-01)',
+          type: 'boolean',
+          default: false,
+        },
+      },
     });
-    // Only the e2e-local job's if: reads it; no step, and nothing in deploy-staging, reads an input.
+    // Only the e2e jobs' if: lines read them; no step, and nothing in deploy-staging, reads an input.
     expect(JSON.stringify(JOB)).not.toMatch(/inputs\./);
     for (const job of Object.values(CI.jobs)) {
       for (const s of job.steps ?? []) expect(JSON.stringify(s)).not.toMatch(/inputs\./);

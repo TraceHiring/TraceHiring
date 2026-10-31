@@ -10,6 +10,9 @@ import {
   E2E_IF,
   E2E_JOB,
   E2E_MAX_MINUTES,
+  E2E_M2_BULK_IF,
+  E2E_M2_BULK_JOB,
+  E2E_M2_BULK_MAX_MINUTES,
   E2E_STAGING_ARTIFACT_PATHS,
   E2E_STAGING_IF,
   E2E_STAGING_JOB,
@@ -151,6 +154,7 @@ describe('parseYaml (the subset GitHub workflows use)', () => {
     expect(Object.keys(d.jobs)).toEqual([
       ...REQUIRED_JOBS,
       'e2e-local',
+      'e2e-m2-bulk',
       'deploy-staging',
       'e2e-staging',
     ]);
@@ -163,7 +167,13 @@ describe('parseYaml (the subset GitHub workflows use)', () => {
       type: 'boolean',
       default: true,
     });
+    expect(d.on.workflow_dispatch.inputs.run_m2_bulk).toEqual({
+      description: 'Run the M2 bulk-invite E2E job (AT-M2-01)',
+      type: 'boolean',
+      default: false,
+    });
     expect(d.jobs['e2e-local']['timeout-minutes']).toBe(25);
+    expect(d.jobs['e2e-m2-bulk']['timeout-minutes']).toBe(40);
     expect(d.permissions).toEqual({ contents: 'read' });
     expect(d.jobs.static.steps[0].with['persist-credentials']).toBe(false);
     expect(d.jobs['deploy-staging'].if).toBe(DEPLOY_IF);
@@ -2391,9 +2401,105 @@ describe('e2e-local job (d1 §7.1, DC-D9)', () => {
     ],
     ['run_e2e as a string', (d) => (d.on.workflow_dispatch.inputs.run_e2e.type = 'string')],
     ['run_e2e off by default', (d) => (d.on.workflow_dispatch.inputs.run_e2e.default = false)],
+    [
+      'run_m2_bulk on by default',
+      (d) => (d.on.workflow_dispatch.inputs.run_m2_bulk.default = true),
+    ],
+    ['no run_m2_bulk', (d) => delete d.on.workflow_dispatch.inputs.run_m2_bulk],
   ])('requires the run_e2e dispatch input: rejects %s', (_label, edit) => {
     expect(check(edit)).toMatch(
-      /workflow_dispatch must declare exactly one input, run_e2e \(type: boolean, default: true\)/,
+      /workflow_dispatch must declare exactly two inputs, run_e2e \(type: boolean, default: true\) and run_m2_bulk \(type: boolean, default: false\)/,
+    );
+  });
+});
+
+// M2 R5-28 (specs/m2-scheduling-invites.md): AT-M2-01's 600 s run does not fit e2e-local's pinned 25 minutes, so it
+// runs in its own dispatch-only job: the local stack with the jobs Worker's scheduled route, 40 minutes, no secret,
+// no environment, never on a push or a pull request.
+describe('e2e-m2-bulk job (M2 R5-28)', () => {
+  const job = (d) => d.jobs[E2E_M2_BULK_JOB];
+  const step = (d, re) => job(d).steps.find((s) => re.test(s.run ?? s.uses ?? ''));
+  const check = (mutate) => {
+    const d = doc();
+    mutate(d);
+    return msgs(checkWorkflow(d, 'ci.yml', ctx));
+  };
+
+  it('pins the job id, the dispatch-only condition, the time limit and passes as committed', () => {
+    expect(E2E_M2_BULK_JOB).toBe('e2e-m2-bulk');
+    expect(E2E_M2_BULK_IF).toBe("github.event_name == 'workflow_dispatch' && inputs.run_m2_bulk");
+    expect(E2E_M2_BULK_MAX_MINUTES).toBe(40);
+    expect(job(doc()).if).toBe(E2E_M2_BULK_IF);
+    expect(check(() => {})).toBe('');
+  });
+
+  it.each([
+    ['no if', (j) => delete j.if],
+    ['every pull request', (j) => (j.if = "github.event_name == 'pull_request'")],
+    ['every dispatch', (j) => (j.if = "github.event_name == 'workflow_dispatch'")],
+    [
+      'the run_e2e input',
+      (j) => (j.if = "github.event_name == 'workflow_dispatch' && inputs.run_e2e"),
+    ],
+    ['always()', (j) => (j.if = 'always()')],
+  ])('rejects %s', (_label, edit) => {
+    expect(check((d) => edit(job(d)))).toMatch(/e2e-m2-bulk must have exactly if:/);
+  });
+
+  it.each([
+    ['no timeout', (j) => delete j['timeout-minutes']],
+    ['45 minutes', (j) => (j['timeout-minutes'] = 45)],
+    ['a string', (j) => (j['timeout-minutes'] = '40')],
+  ])('rejects a time limit with %s', (_label, edit) => {
+    expect(check((d) => edit(job(d)))).toMatch(/e2e-m2-bulk must set timeout-minutes: 1 to 40/);
+  });
+
+  it('rejects another runner, a container, an environment or a secret', () => {
+    expect(check((d) => (job(d)['runs-on'] = 'self-hosted'))).toMatch(
+      /e2e-m2-bulk must run on ubuntu-24.04/,
+    );
+    expect(check((d) => (job(d).container = 'node:22'))).toMatch(
+      /e2e-m2-bulk may not use container: or services:/,
+    );
+    expect(check((d) => (job(d).environment = 'staging'))).toMatch(/only deploy-staging may use/);
+    expect(
+      check((d) => (step(d, /e2e-local\.mjs/).env = { X: '${{ secrets.CLOUDFLARE_API_TOKEN }}' })),
+    ).toMatch(/not allowed outside deploy-staging/);
+  });
+
+  it.each([
+    [
+      'without --test-scheduled',
+      (d) => (step(d, /e2e-local\.mjs/).run = 'node scripts/e2e-local.mjs --ci'),
+    ],
+    [
+      'without --ci',
+      (d) => (step(d, /e2e-local\.mjs/).run = 'node scripts/e2e-local.mjs --test-scheduled'),
+    ],
+    [
+      'twice',
+      (d) =>
+        job(d).steps.push({
+          name: 'again',
+          run: 'node scripts/e2e-local.mjs --ci --test-scheduled',
+        }),
+    ],
+    ['a step if:', (d) => (step(d, /e2e-local\.mjs/).if = 'false')],
+  ])(
+    'requires one step running exactly the stack with the scheduled route: rejects %s',
+    (_l, edit) => {
+      expect(check(edit)).toMatch(
+        /e2e-m2-bulk must run exactly node scripts\/e2e-local\.mjs --ci --test-scheduled/,
+      );
+    },
+  );
+
+  it.each([
+    ['30 days', (w) => (w['retention-days'] = 30)],
+    ['the whole e2e folder', (w) => (w.path = 'e2e')],
+  ])('keeps the uploaded artifact small and synthetic: rejects %s', (_label, edit) => {
+    expect(check((d) => edit(step(d, /upload-artifact/).with))).toMatch(
+      /e2e-m2-bulk artifacts must be only e2e\/playwright-report and e2e\/test-results, kept at most 7 days/,
     );
   });
 });
@@ -2845,7 +2951,7 @@ describe('e2e-staging job (d1 §7.1, AT-D1, AT-D20)', () => {
           delete d.jobs['e2e-local'];
           d.on.workflow_dispatch = null;
         }),
-      ).toMatch(/workflow_dispatch must declare exactly one input, run_e2e/);
+      ).toMatch(/workflow_dispatch must declare exactly two inputs, run_e2e/);
     });
 
     // Security review SEC-W6-3: the browser cache is exactly e2e-local's (same path, same key), once.
@@ -2934,8 +3040,19 @@ describe('the real ci.yml deploy chain (d1 §7.1)', () => {
     expect(e2e.steps.some((s) => s.run === 'node scripts/e2e-local.mjs --ci')).toBe(true);
     expect(real.on.workflow_dispatch.inputs).toEqual({
       run_e2e: expect.objectContaining({ type: 'boolean', default: true }),
+      run_m2_bulk: expect.objectContaining({ type: 'boolean', default: false }),
     });
     expect(checkWorkflow(real, 'ci.yml', ctx)).toEqual([]);
+  });
+
+  // M2 R5-28: the bulk-invite job is dispatch-only, 40 minutes, the stack with the jobs scheduled route.
+  it('runs the M2 bulk-invite stack in its own dispatch-only job (M2 R5-28)', () => {
+    const bulk = real.jobs[E2E_M2_BULK_JOB];
+    expect(bulk.if).toBe(E2E_M2_BULK_IF);
+    expect(bulk['timeout-minutes']).toBe(E2E_M2_BULK_MAX_MINUTES);
+    expect(bulk.steps.filter((s) => /e2e-local\.mjs/.test(s.run ?? '')).map((s) => s.run)).toEqual([
+      'node scripts/e2e-local.mjs --ci --test-scheduled',
+    ]);
   });
 
   it('runs the slice spec against staging after the deploy, on a d1/** or milestone/** dispatch with run_e2e', () => {

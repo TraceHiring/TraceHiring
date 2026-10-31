@@ -14,6 +14,8 @@ import { runCheck } from '../check-no-demo-outbox.mjs';
 import {
   BUILD_ARGS,
   E2E_ENV,
+  BULK_LIMIT_MS,
+  JOBS_SCHEDULED_PATH,
   LIMIT_MS,
   LOG_DIR,
   MANIFEST,
@@ -281,6 +283,24 @@ describe('stackProcesses', () => {
     });
     expect(api.ready).toBe('http://127.0.0.1:8788/health');
     expect(edge.ready).toBe('http://127.0.0.1:8787/health');
+  });
+
+  // M2 R5-28: --test-scheduled adds wrangler's flag to the edge+jobs session only (the jobs cron runs there).
+  it('with testScheduled adds --test-scheduled to the edge+jobs session and nowhere else', () => {
+    const plain = stackProcesses(STATE, CONFIG);
+    const sched = stackProcesses(STATE, CONFIG, { testScheduled: true });
+    expect(sched[1].args).toEqual([...plain[1].args, '--test-scheduled']);
+    for (const i of [0, 2, 3]) expect(sched[i]).toEqual(plain[i]);
+    expect(plain.some((p) => p.args.includes('--test-scheduled'))).toBe(false);
+  });
+
+  // DC-M2-6 (2026-10-31, wrangler 4.149.0, Windows): in the multi-config session the plain /__scheduled route
+  // reaches only the first Worker (edge); this explorer route invokes the jobs Worker's scheduled handler by name.
+  it('names the explorer route that reaches the jobs Worker scheduled handler (DC-M2-6)', () => {
+    expect(JOBS_SCHEDULED_PATH).toBe(
+      '/cdn-cgi/local/explorer/api/local/scheduled?worker=trace-jobs-dev',
+    );
+    expect(stackProcesses(STATE, CONFIG)[1].names).toContain('trace-jobs-dev');
   });
 
   it('keeps every generated file inside the state folder', () => {
@@ -941,5 +961,33 @@ describe('main', () => {
     expect(await main(h.deps)).toBe(1);
     expect(h.lines.join('\n')).toMatch(/over the 25-minute CI job limit/);
     expect(manifestOf(h).within_limit).toBe(false);
+    expect(manifestOf(h).test_scheduled).toBe(false);
+  });
+
+  // M2 R5-28: the e2e-m2-bulk job runs the stack with --test-scheduled inside its own 40-minute limit.
+  it('with --test-scheduled allows the 40-minute e2e-m2-bulk limit and records it', async () => {
+    expect(BULK_LIMIT_MS).toBe(40 * 60 * 1000);
+    const within = harness({
+      argv: ['--ci', '--test-scheduled'],
+      answer: (cmd, args, state) => {
+        if (args.includes('build')) state.clock += LIMIT_MS + 1;
+        return ok;
+      },
+    });
+    expect(await main(within.deps)).toBe(0);
+    expect(manifestOf(within)).toMatchObject({
+      test_scheduled: true,
+      limit_ms: BULK_LIMIT_MS,
+      within_limit: true,
+    });
+    const over = harness({
+      argv: ['--ci', '--test-scheduled'],
+      answer: (cmd, args, state) => {
+        if (args.includes('build')) state.clock += BULK_LIMIT_MS + 1;
+        return ok;
+      },
+    });
+    expect(await main(over.deps)).toBe(1);
+    expect(over.lines.join('\n')).toMatch(/over the 40-minute CI job limit \(e2e-m2-bulk\)/);
   });
 });

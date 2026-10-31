@@ -572,6 +572,17 @@ export const E2E_ARTIFACT_MAX_DAYS = 7;
 const E2E_RUN = /^\s*node scripts\/e2e-local\.mjs --ci\s*$/;
 
 /**
+ * M2 R5-28 (specs/m2-scheduling-invites.md): AT-M2-01 (a 600 s bulk run) does not fit e2e-local's 25 minutes, so the
+ * local stack with the jobs Worker's scheduled route (`--test-scheduled`, DC-M2-6) runs in its own job, only on a
+ * manual dispatch with run_m2_bulk (never a push, never a pull request), with the same rules as e2e-local otherwise:
+ * no secret, no environment, no container, the same artifact paths kept at most 7 days.
+ */
+export const E2E_M2_BULK_JOB = 'e2e-m2-bulk';
+export const E2E_M2_BULK_IF = "github.event_name == 'workflow_dispatch' && inputs.run_m2_bulk";
+export const E2E_M2_BULK_MAX_MINUTES = 40;
+const E2E_M2_BULK_RUN = /^\s*node scripts\/e2e-local\.mjs --ci --test-scheduled\s*$/;
+
+/**
  * d1 §7.1, AT-D1, AT-D20 (stream R5): the slice spec against staging. It runs after deploy-staging,
  * only on a manual dispatch from d1/** or milestone/** in this repository with run_e2e (the dispatch
  * half of DEPLOY_IF: never a push, never a pull request), in the staging environment, which holds
@@ -1472,7 +1483,11 @@ export function checkWorkflow(doc, file, ctx = {}) {
   }
   checkE2eLocal(doc, file, out);
   checkE2eStaging(doc, file, out);
-  if (isObj(doc.jobs[E2E_JOB]) || isObj(doc.jobs[E2E_STAGING_JOB]))
+  if (
+    isObj(doc.jobs[E2E_JOB]) ||
+    isObj(doc.jobs[E2E_STAGING_JOB]) ||
+    isObj(doc.jobs[E2E_M2_BULK_JOB])
+  )
     checkRunE2eInput(doc, file, out);
   checkBuildOnlyEnv(doc, file, out);
   checkE2eStagingOnlyEnv(doc, file, out);
@@ -1802,43 +1817,60 @@ function checkDeployChain(d, where, file, out) {
 }
 
 /**
- * The e2e-local job (E2E_JOB; DC-D9): its exact if:, runner and time limit, no container or
- * services, one unconditional step running exactly `node scripts/e2e-local.mjs --ci`, artifacts
- * only from E2E_ARTIFACT_PATHS and kept at most E2E_ARTIFACT_MAX_DAYS (checkRunE2eInput pins the
- * run_e2e dispatch input it reads). Secrets and environments are already refused for every job but
- * deploy-staging and e2e-staging.
+ * A job that runs the local E2E stack: e2e-local (DC-D9) and e2e-m2-bulk (M2 R5-28). Its exact if:, runner and
+ * time limit, no container or services, one unconditional step running exactly its scripts/e2e-local.mjs command,
+ * artifacts only from E2E_ARTIFACT_PATHS and kept at most E2E_ARTIFACT_MAX_DAYS (checkRunE2eInput pins the dispatch
+ * inputs they read). Secrets and environments are already refused for every job but deploy-staging and e2e-staging.
  */
+const LOCAL_STACK_JOBS = Object.freeze([
+  Object.freeze({
+    job: E2E_JOB,
+    if: E2E_IF,
+    maxMinutes: E2E_MAX_MINUTES,
+    limitNote: ' (DC-D9)',
+    run: E2E_RUN,
+    cmd: 'node scripts/e2e-local.mjs --ci',
+  }),
+  Object.freeze({
+    job: E2E_M2_BULK_JOB,
+    if: E2E_M2_BULK_IF,
+    maxMinutes: E2E_M2_BULK_MAX_MINUTES,
+    limitNote: ' (M2 R5-28)',
+    run: E2E_M2_BULK_RUN,
+    cmd: 'node scripts/e2e-local.mjs --ci --test-scheduled',
+  }),
+]);
+
 function checkE2eLocal(doc, file, out) {
-  const j = doc.jobs[E2E_JOB];
+  for (const spec of LOCAL_STACK_JOBS) checkLocalStackJob(doc, file, out, spec);
+}
+
+function checkLocalStackJob(doc, file, out, spec) {
+  const name = spec.job;
+  const j = doc.jobs[name];
   if (!isObj(j)) return;
-  const where = `jobs.${E2E_JOB}`;
-  if (typeof j.if !== 'string' || normExpr(j.if) !== normExpr(E2E_IF)) {
-    out.push(v(file, where, `${E2E_JOB} must have exactly if: ${E2E_IF}`));
+  const where = `jobs.${name}`;
+  if (typeof j.if !== 'string' || normExpr(j.if) !== normExpr(spec.if)) {
+    out.push(v(file, where, `${name} must have exactly if: ${spec.if}`));
   }
   if (j['runs-on'] !== E2E_RUNNER) {
-    out.push(v(file, where, `${E2E_JOB} must run on ${E2E_RUNNER}`));
+    out.push(v(file, where, `${name} must run on ${E2E_RUNNER}`));
   }
   const t = j['timeout-minutes'];
-  if (typeof t !== 'number' || !Number.isInteger(t) || t < 1 || t > E2E_MAX_MINUTES) {
+  if (typeof t !== 'number' || !Number.isInteger(t) || t < 1 || t > spec.maxMinutes) {
     out.push(
-      v(file, where, `${E2E_JOB} must set timeout-minutes: 1 to ${E2E_MAX_MINUTES} (DC-D9)`),
+      v(file, where, `${name} must set timeout-minutes: 1 to ${spec.maxMinutes}${spec.limitNote}`),
     );
   }
   if (j.container !== undefined || j.services !== undefined) {
-    out.push(v(file, where, `${E2E_JOB} may not use container: or services:`));
+    out.push(v(file, where, `${name} may not use container: or services:`));
   }
   const steps = Array.isArray(j.steps) ? j.steps : [];
   const runs = steps.filter(
     (s) => isObj(s) && typeof s.run === 'string' && /e2e-local\.mjs/.test(s.run),
   );
-  if (runs.length !== 1 || !E2E_RUN.test(runs[0].run) || runs[0].if !== undefined) {
-    out.push(
-      v(
-        file,
-        where,
-        `${E2E_JOB} must run exactly node scripts/e2e-local.mjs --ci in one step with no if:`,
-      ),
-    );
+  if (runs.length !== 1 || !spec.run.test(runs[0].run) || runs[0].if !== undefined) {
+    out.push(v(file, where, `${name} must run exactly ${spec.cmd} in one step with no if:`));
   }
   steps.forEach((s, i) => {
     if (!isObj(s) || typeof s.uses !== 'string' || !/^actions\/upload-artifact@/i.test(s.uses)) {
@@ -1865,30 +1897,38 @@ function checkE2eLocal(doc, file, out) {
         v(
           file,
           `${where}.steps[${i}]`,
-          `${E2E_JOB} artifacts must be only ${E2E_ARTIFACT_PATHS.join(' and ')}, kept at most ${E2E_ARTIFACT_MAX_DAYS} days (retention-days; synthetic data only)`,
+          `${name} artifacts must be only ${E2E_ARTIFACT_PATHS.join(' and ')}, kept at most ${E2E_ARTIFACT_MAX_DAYS} days (retention-days; synthetic data only)`,
         ),
       );
     }
   });
 }
 
-/** The e2e jobs read inputs.run_e2e; the dispatch declares exactly that one input. */
+/**
+ * The e2e jobs read inputs.run_e2e (on by default) and e2e-m2-bulk reads inputs.run_m2_bulk (off by default, M2
+ * R5-28); the dispatch declares exactly those two boolean inputs.
+ */
 function checkRunE2eInput(doc, file, out) {
   const wd = isObj(doc.on) ? doc.on.workflow_dispatch : undefined;
   const inputs = isObj(wd) && isObj(wd.inputs) ? wd.inputs : undefined;
-  const runE2e = inputs !== undefined && isObj(inputs.run_e2e) ? inputs.run_e2e : undefined;
+  const input = (key) => (inputs !== undefined && isObj(inputs[key]) ? inputs[key] : undefined);
+  const runE2e = input('run_e2e');
+  const runBulk = input('run_m2_bulk');
   if (
     inputs === undefined ||
-    Object.keys(inputs).length !== 1 ||
+    Object.keys(inputs).length !== 2 ||
     runE2e === undefined ||
     runE2e.type !== 'boolean' ||
-    runE2e.default !== true
+    runE2e.default !== true ||
+    runBulk === undefined ||
+    runBulk.type !== 'boolean' ||
+    runBulk.default !== false
   ) {
     out.push(
       v(
         file,
         'on.workflow_dispatch',
-        'workflow_dispatch must declare exactly one input, run_e2e (type: boolean, default: true)',
+        'workflow_dispatch must declare exactly two inputs, run_e2e (type: boolean, default: true) and run_m2_bulk (type: boolean, default: false)',
       ),
     );
   }

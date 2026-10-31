@@ -14,6 +14,10 @@ on:
         description: Run the e2e jobs
         type: boolean
         default: true
+      run_m2_bulk:
+        description: Run the M2 bulk-invite E2E job (AT-M2-01)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -96,6 +100,34 @@ jobs:
         uses: actions/upload-artifact@1111111111111111111111111111111111111111
         with:
           name: e2e-local-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
+
+  e2e-m2-bulk:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_m2_bulk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@1111111111111111111111111111111111111111
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Cache the Playwright browsers
+        uses: actions/cache@1111111111111111111111111111111111111111
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: pnpm --filter @trace/e2e exec playwright install --with-deps chromium
+      - name: Local E2E stack with the scheduled route
+        run: node scripts/e2e-local.mjs --ci --test-scheduled
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@1111111111111111111111111111111111111111
+        with:
+          name: e2e-m2-bulk-report
           path: |
             e2e/playwright-report
             e2e/test-results
