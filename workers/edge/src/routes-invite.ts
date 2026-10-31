@@ -16,10 +16,12 @@
 // - `otp/request` takes an optional `purpose` (`lobby` when absent, so the D1 app keeps working), binds it to the
 //   challenge at issue and passes it to `messagingSend` (the manage email copy). `otp/verify` mints by the purpose the
 //   object stored: `lobby` → api `lobbyMint` → `OtpVerifyRes`; `manage` → api `portalMint` → `OtpVerifyPortalRes`.
-// - The peek's `sessionLive` goes to `messagingSend`, `lobbyMint` and `portalMint`. When api's own phase says the lobby is not open and the object holds no session, purpose `lobby` is
-//   refused (409 `lobby_closed`) before a code is issued (so no send budget is used) and at verify before the code is
-//   compared (nothing consumed); api applies the same refusal at send and at mint, and its answer wins. A started row
-//   has no `schedule` (R5-64 b): api alone decides it (`session_grant_exp`, R5-53). D1 rows keep the D1 path exactly.
+// - The peek's `sessionLive` goes to `messagingSend`, `lobbyMint` and `portalMint`. When api's own phase says the
+//   lobby is not open and the object holds no session, purpose `lobby` is refused (409 `lobby_closed`) before a code
+//   is issued (so no send budget is used), and at verify a correct lobby code is refused and not consumed (a wrong
+//   code is `otp_wrong` and counted as always, so the answer is no pending-code oracle; "B4 first reviews" c); api
+//   applies the same refusal at send and at mint, and its answer wins. A started row has no `schedule` (R5-64 b): api
+//   alone decides it (`session_grant_exp`, R5-53). D1 rows keep the D1 path exactly.
 import {
   InviteResolveReq,
   InviteResolveRes,

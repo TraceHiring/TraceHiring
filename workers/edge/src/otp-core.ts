@@ -220,9 +220,10 @@ export class OtpCore {
 
   /**
    * Checks a code against the current challenge. A success rotates the nonce of the challenge's stored purpose and
-   * returns the raw nonce with that purpose. With `allowed` (M2: the route closes `lobby` outside the lobby window), a
-   * live challenge of another purpose answers `lobby_closed` before the code is compared: nothing is consumed or
-   * counted, so the code still works once its purpose is allowed again.
+   * returns the raw nonce with that purpose. With `allowed` (M2: the route closes `lobby` outside the lobby window), the
+   * code is compared first (build-notes "B4 first reviews" c: no pending-code oracle): a wrong code is `otp_wrong` and
+   * counted like any wrong code; only a correct code of another purpose answers `lobby_closed`, and it is not
+   * consumed, so it still works once its purpose is allowed again.
    */
   async verify(code: string, allowed?: readonly OtpPurpose[]): Promise<VerifyResult> {
     if (typeof code !== 'string' || !/^[0-9]{6}$/.test(code))
@@ -244,10 +245,11 @@ export class OtpCore {
       return { ok: false, error: 'otp_wrong' };
     }
     const purpose = purposeOf(challenge);
-    if (allowed !== undefined && !allowed.includes(purpose)) {
-      return { ok: false, error: 'lobby_closed' };
-    }
     if (constantTimeEqual(candidate, challenge.hash)) {
+      // A correct code of a purpose not allowed now: refused, not consumed (it still works once allowed again).
+      if (allowed !== undefined && !allowed.includes(purpose)) {
+        return { ok: false, error: 'lobby_closed' };
+      }
       this.#kv.delete(K.challenge);
       this.#kv.delete(K.failures);
       this.#kv.put(nonceKey(purpose), nonceHash);
