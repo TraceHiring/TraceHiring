@@ -11,6 +11,7 @@
 // synthetic users (random ids), so a re-run never collides. Output: one line per scenario, OK or the
 // failed step; never SQL text, server output, a URL or an id.
 // M2 (AT-M2-08): two bookings on the last seat of a one-seat slot; the second waits and is refused as full.
+// M2 (DC-M2-4): two messaging-worker claims at once; the second skips the rows the first holds, without waiting.
 // Rows are committed and left behind until the next db reset: per run a running count-1 drafting job with
 // one in_review AI draft, a cancelled import job, and a seat drive with one invitation and its planned messages,
 // each in its own org-conc-* org. Nothing later in
@@ -386,6 +387,61 @@ export function bookSql({ owner, orgId, driveId, slotId, candidateId, marker: m 
   ].join('\n');
 }
 
+// M2 DC-M2-4 (specs/m2-scheduling-invites.md §8, R5-9; ADR-031 amendment 1): two cron claims at once. The first
+// holds its claim open; the second, run meanwhile under a statement timeout, must take none of the org's due rows and
+// must not wait (FOR UPDATE SKIP LOCKED), so overlapping ticks never double-send. Each claim is one transaction of
+// simple-protocol statements (psql sends no prepared statement), the shape postgres.js uses with prepare: false through
+// Hyperdrive. It connects as WORKER_USER only to SET ROLE to trace_messaging_worker (as jobs_messaging_login does).
+
+/** M2 claim: one committed booking on the seat drive, so the planner leaves the org one due invite message. */
+export function claimBookSql(ids) {
+  return [bookSql({ ...ids, marker: 'BOOKED' }), 'commit;'].join('\n');
+}
+
+/** The first claim, as the messaging worker, left open after the marker; prints HELD <rows of the org>. */
+export function claimHoldSql({ orgId, marker: m }) {
+  return [
+    'begin isolation level read committed;',
+    'set local role trace_messaging_worker;',
+    "select 'HELD ' || count(*) from private.claim_due_messages(now(), 1000) as c",
+    `  where c.org_id = ${uuid(orgId)};`,
+    `\\echo ${marker(m)}`,
+  ].join('\n');
+}
+
+/** The second claim while the first holds: a wait would hit the statement timeout. Prints PROBE <rows>. */
+export function claimProbeSql({ orgId }) {
+  return [
+    "set statement_timeout = '5s';",
+    'begin isolation level read committed;',
+    'set local role trace_messaging_worker;',
+    "select 'PROBE ' || count(*) from private.claim_due_messages(now(), 1000) as c",
+    `  where c.org_id = ${uuid(orgId)};`,
+    'commit;',
+  ].join('\n');
+}
+
+/** due planned|queued|distinct claim ids of the org's messages, read as the operator. */
+export const claimStateSql = (orgId) =>
+  [
+    "select count(*) filter (where m.status = 'planned' and m.scheduled_for <= now()) || '|' ||",
+    "  count(*) filter (where m.status = 'queued') || '|' || count(distinct m.claim_id)",
+    `from public.outbound_messages as m where m.org_id = ${uuid(orgId)};`,
+  ].join('\n');
+
+/** DC-M2-4 verdict: the first claim took every due row, the second none and did not wait; one claim id per row. */
+export function claimVerdict({ dueBefore, held, probe, probeErrored, state }) {
+  if (!(Number(dueBefore) >= 1)) return 'the booking planned no due message';
+  if (probeErrored) return 'the second claim waited or failed';
+  if (String(held) !== String(dueBefore))
+    return `the first claim took ${held} of ${dueBefore} due messages`;
+  if (String(probe) !== '0') return `the second claim took ${probe} messages the first held`;
+  const [due, queued, claims] = String(state).split('|');
+  if (due !== '0' || queued !== String(held) || claims !== String(held))
+    return `after both claims: due ${due}, queued ${queued}, claim ids ${claims}`;
+  return null;
+}
+
 /** booked|live invitations of the slot, read as the operator. */
 export const seatsSql = (slotId) =>
   [
@@ -634,11 +690,48 @@ async function seatScenario() {
   });
 }
 
+async function claimScenario() {
+  const owner = randomUUID();
+  const setup = runOnce(seatSetupSql({ owner, suffix: randomBytes(4).toString('hex') }));
+  const pick = (k) => (setup.out.match(new RegExp(`^${k} (\\S+)$`, 'm')) || [])[1] ?? '';
+  const [orgId, driveId, slotId, candA] = ['ORG', 'DRIVE', 'SLOT', 'CANDA'].map(pick);
+  if (setup.status !== 0 || ![orgId, driveId, slotId, candA].every(isUuid)) return 'setup failed';
+  const booked = runOnce(claimBookSql({ owner, orgId, driveId, slotId, candidateId: candA }));
+  if (booked.status !== 0) return 'the booking failed';
+  const dueBefore = runOnce(claimStateSql(orgId)).out.split('|')[0];
+  const a = openSession(WORKER_USER);
+  try {
+    a.send(claimHoldSql({ orgId, marker: 'A_CLAIMED' }));
+    if (!(await until(() => a.out.includes('A_CLAIMED') || /ERROR/.test(a.err))))
+      return 'the first claim did not run';
+    if (/ERROR/.test(a.err)) return 'the first claim failed';
+    const b = runOnce(claimProbeSql({ orgId }), WORKER_USER);
+    a.send('commit;\n\\echo A_DONE');
+    if (!(await until(() => a.out.includes('A_DONE')))) return 'the first commit did not finish';
+    const held = (a.out.match(/^HELD (\d+)$/m) || [])[1];
+    const probe = (b.out.match(/^PROBE (\d+)$/m) || [])[1];
+    return claimVerdict({
+      dueBefore,
+      held,
+      probe,
+      probeErrored: b.status !== 0 || probe === undefined,
+      state: runOnce(claimStateSql(orgId)).out,
+    });
+  } finally {
+    await a.close();
+  }
+}
+
 export const M2_SCENARIOS = Object.freeze([
   {
     name: 'last seat of a slot',
     run: seatScenario,
     ok: 'the second booking waited and was refused as full',
+  },
+  {
+    name: 'two messaging claims at once',
+    run: claimScenario,
+    ok: 'the second claim skipped the held rows without waiting',
   },
 ]);
 

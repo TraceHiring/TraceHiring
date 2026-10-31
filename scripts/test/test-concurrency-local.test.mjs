@@ -23,6 +23,11 @@ import {
   setupSql,
   M2_SCENARIOS,
   bookSql,
+  claimBookSql,
+  claimHoldSql,
+  claimProbeSql,
+  claimStateSql,
+  claimVerdict,
   seatSetupSql,
   seatVerdict,
   seatsSql,
@@ -192,7 +197,10 @@ describe('test-concurrency-local: two deliveries of a count-1 drafting job (M1 D
 
 describe('test-concurrency-local: two bookings on the last seat (M2 AT-M2-08, I-M2-3)', () => {
   it('runs after the M1 scenarios', () => {
-    expect(M2_SCENARIOS.map((s) => s.name)).toEqual(['last seat of a slot']);
+    expect(M2_SCENARIOS.map((s) => s.name)).toEqual([
+      'last seat of a slot',
+      'two messaging claims at once',
+    ]);
   });
 
   it('builds the setup from a validated owner and suffix: a published 10x pool version, a one-seat slot', () => {
@@ -239,5 +247,54 @@ describe('test-concurrency-local: two bookings on the last seat (M2 AT-M2-08, I-
       /not refused as full/,
     );
     expect(seatVerdict({ ...ok, seats: '1|2' })).toMatch(/booked 1, invitations 2/);
+  });
+});
+
+// DC-M2-4 (specs/m2-scheduling-invites.md §8, R5-9; ADR-031 amendment 1): the cron claim is FOR UPDATE SKIP LOCKED
+// in one transaction with unprepared statements, so a second claim during a first never waits and never takes a row
+// the first holds.
+describe('test-concurrency-local: two messaging claims at once (M2 DC-M2-4)', () => {
+  const ids = () => ({
+    owner: randomUUID(),
+    orgId: randomUUID(),
+    driveId: randomUUID(),
+    slotId: randomUUID(),
+    candidateId: randomUUID(),
+  });
+
+  it('commits one booking, so the planner leaves the org one due invite message', () => {
+    const sql = claimBookSql(ids());
+    expect(sql).toContain('begin isolation level read committed;');
+    expect(sql.trimEnd().endsWith('commit;')).toBe(true);
+    expect(() => claimBookSql({ ...ids(), slotId: 'nope' })).toThrow();
+  });
+
+  it('claims as the messaging worker in one transaction, the first held open after its marker', () => {
+    const { orgId } = ids();
+    const hold = claimHoldSql({ orgId, marker: 'A_CLAIMED' });
+    expect(hold).toContain('begin isolation level read committed;');
+    expect(hold).toContain('set local role trace_messaging_worker;');
+    expect(hold).toContain('private.claim_due_messages(now(), 1000)');
+    expect(hold).toContain(`'${orgId}'`);
+    expect(hold).toContain('\\echo A_CLAIMED');
+    expect(hold).not.toMatch(/^\s*(commit|rollback|end)\s*;/im);
+    const probe = claimProbeSql({ orgId });
+    expect(probe).toContain("set statement_timeout = '5s';");
+    expect(probe).toContain('set local role trace_messaging_worker;');
+    expect(probe.trimEnd().endsWith('commit;')).toBe(true);
+    expect(() => claimHoldSql({ orgId, marker: 'a;b' })).toThrow();
+    expect(() => claimProbeSql({ orgId: "'; drop table x; --" })).toThrow();
+    expect(claimStateSql(orgId)).toContain('from public.outbound_messages as m');
+    expect(() => claimStateSql('x')).toThrow();
+  });
+
+  it('passes only when the first took every due row, the second took none without waiting, each row has its claim', () => {
+    const ok = { dueBefore: '1', held: '1', probe: '0', probeErrored: false, state: '0|1|1' };
+    expect(claimVerdict(ok)).toBeNull();
+    expect(claimVerdict({ ...ok, dueBefore: '0' })).toMatch(/no due message/);
+    expect(claimVerdict({ ...ok, probeErrored: true })).toMatch(/waited or failed/);
+    expect(claimVerdict({ ...ok, held: '0' })).toMatch(/first claim took 0 of 1/);
+    expect(claimVerdict({ ...ok, probe: '1' })).toMatch(/second claim took 1/);
+    expect(claimVerdict({ ...ok, state: '0|1|0' })).toMatch(/claim ids 0/);
   });
 });
