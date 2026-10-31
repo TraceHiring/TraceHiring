@@ -57,6 +57,10 @@ export const ROW_REASONS: readonly RowReason[] = ALL;
 /** Why a run stopped or could not start, in words. Falls back to the drive screens' fixed error text. */
 export const failureText = (code: string): string => driveErrorText(code);
 
+/** How the row numbers on this screen count (the same numbers the api reports). */
+export const ROW_NUMBER_NOTE =
+  'Row 1 is the first row under the column names; blank lines are not counted.';
+
 /** What each column of the file is, in order (shown as text; the template is not a download, R5-59). */
 export const COLUMN_HELP: readonly { name: string; need: string; help: string }[] = [
   { name: 'full_name', need: 'Required', help: 'The candidate’s name, up to 200 characters.' },

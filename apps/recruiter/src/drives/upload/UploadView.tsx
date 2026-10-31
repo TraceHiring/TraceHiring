@@ -7,7 +7,13 @@ import { Link } from 'react-router';
 import ui from '../../common/Ui.module.css';
 import { MAX_FILE_BYTES, MAX_ROWS } from './limits';
 import type { RunState } from './run';
-import { COLUMN_HELP, FILE_REFUSAL_TEXT, ROW_REASON_TEXT, failureText } from './texts';
+import {
+  COLUMN_HELP,
+  FILE_REFUSAL_TEXT,
+  ROW_NUMBER_NOTE,
+  ROW_REASON_TEXT,
+  failureText,
+} from './texts';
 import type { FileRefusal, RowIssue } from './types';
 
 export const REFUSED_PER_PAGE = 100;
@@ -38,6 +44,7 @@ export function RefusedTable({ issues }: { issues: readonly RowIssue[] }) {
   const shown = issues.slice(from, from + REFUSED_PER_PAGE);
   return (
     <div className={ui.stack}>
+      <p className={ui.note}>{ROW_NUMBER_NOTE}</p>
       <table className={ui.table}>
         <thead>
           <tr>
@@ -162,6 +169,7 @@ function ExpectedColumns() {
           ))}
         </tbody>
       </table>
+      <p className={ui.note}>{ROW_NUMBER_NOTE}</p>
     </div>
   );
 }
