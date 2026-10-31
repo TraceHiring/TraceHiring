@@ -464,3 +464,99 @@ describe('no row outlives the upload (security finding 5)', () => {
     expect(dump(early)).not.toContain('@example.test');
   });
 });
+
+describe('a held-row re-send in flight when Cancel is pressed (finding 6)', () => {
+  /** Rows 1 and 2 are held; a re-send waits until `release` is called. */
+  function heldFake() {
+    let open: (() => void) | null = null;
+    const posts: InviteBatchRequest[] = [];
+    const calls: string[] = [];
+    const api: UploadApi = {
+      create: () => Promise.resolve({ ok: true, data: uploadView() }),
+      postRows: async (request) => {
+        posts.push(request);
+        const again = request.confirmPhoneDuplicate === true;
+        if (again) {
+          calls.push('resend sent');
+          await new Promise<void>((resolve) => {
+            open = resolve;
+          });
+          calls.push('resend answered');
+        }
+        return {
+          ok: true,
+          data: {
+            results: request.rows.map((row) =>
+              again || ![1, 2].includes(row.rowNo)
+                ? { rowNo: row.rowNo, invitationId: uid(9000 + row.rowNo) }
+                : { rowNo: row.rowNo, reason: 'phone_shared' as const, held: true },
+            ),
+          },
+        };
+      },
+      complete: () => {
+        calls.push('complete');
+        return Promise.resolve({ ok: true, data: uploadView({ status: 'completed' }) });
+      },
+      cancel: () => {
+        calls.push('cancel');
+        return Promise.resolve({ ok: true, data: uploadView({ status: 'cancelled' }) });
+      },
+    };
+    return {
+      api,
+      posts,
+      calls,
+      release: () => {
+        open?.();
+      },
+    };
+  }
+  const tick = () =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, 2);
+    });
+
+  it('posts no chunk after Cancel, and tells the api only after the re-send has its answer', async () => {
+    const f = heldFake();
+    const r = new InviteUploadRun(
+      f.api,
+      { fileSha256: SHA, rowsInFile: 3, rows: rows(3), issues: [] },
+      { sleep: noSleep },
+    );
+    await r.start();
+    expect(r.getState().held).toEqual([1, 2]);
+    const marking = r.markDifferentPerson(1);
+    await tick();
+    expect(r.getState().busy).toBe(true);
+    const cancelling = r.cancel();
+    await r.markDifferentPerson(2);
+    await tick();
+    expect(f.calls).not.toContain('cancel');
+    f.release();
+    await Promise.all([marking, cancelling]);
+    expect(f.posts.filter((p) => p.confirmPhoneDuplicate === true)).toHaveLength(1);
+    expect(f.calls).toEqual(['resend sent', 'resend answered', 'cancel']);
+    expect(r.getState().phase).toBe('cancelled');
+  });
+
+  it('counts no row as both invited and not invited', async () => {
+    const f = heldFake();
+    const r = new InviteUploadRun(
+      f.api,
+      { fileSha256: SHA, rowsInFile: 3, rows: rows(3), issues: [] },
+      { sleep: noSleep },
+    );
+    await r.start();
+    const marking = r.markDifferentPerson(1);
+    await tick();
+    const cancelling = r.cancel();
+    f.release();
+    await Promise.all([marking, cancelling]);
+    const s = r.getState();
+    expect(s.invited).toBe(2);
+    expect(s.refused).toEqual([{ rowNo: 2, reason: 'phone_shared' }]);
+    expect(s.held).toEqual([]);
+    expect(s.invited + s.refused.length + s.held.length).toBe(3);
+  });
+});

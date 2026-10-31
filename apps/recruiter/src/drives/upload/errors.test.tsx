@@ -213,6 +213,21 @@ describe('the results of a run', () => {
     expect(body).toContain('Mark as different people');
   });
 
+  it('disables Cancel, Finish and every row button while a held row is being sent again', () => {
+    const html = render({ kind: 'run', run: run({ busy: true }) });
+    const buttons = [...html.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)].map((m) => ({
+      attrs: m[1] ?? '',
+      label: text(m[2] ?? '').trim(),
+    }));
+    for (const label of ['Cancel upload', 'Finish upload', 'Mark as different people']) {
+      const found = buttons.filter((b) => b.label === label);
+      expect(found.length, label).toBeGreaterThan(0);
+      for (const b of found) expect(b.attrs, label).toContain('disabled=""');
+    }
+    const idle = render({ kind: 'run', run: run({ busy: false }) });
+    expect(idle).not.toMatch(/<button[^>]*disabled=""[^>]*>Cancel upload/);
+  });
+
   it('offers no way to mark rows once the upload is finished and none were held', () => {
     const html = render({ kind: 'run', run: run({ phase: 'completed', held: [] }) });
     expect(text(html)).not.toContain('Mark as different people');
