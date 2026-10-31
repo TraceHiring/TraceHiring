@@ -7,9 +7,9 @@
 // a device switch, an open-window return and a return after a reschedule all reach the start through OTP → lobby
 // token; a session created at `na − 10 s` whose `sessionStarted` failed resumes after `na` through the peek; a
 // submitted row re-entering start gets its receipt. Fakes stand for stream B2's api; synthetic data only.
-import { OkRes, SessionStartRes } from '@trace/shared/contracts/candidate';
+import { InviteResolveRes, OkRes, SessionStartRes } from '@trace/shared/contracts/candidate';
 import { describe, expect, it } from 'vitest';
-import { LINK, NOTICE_ID, NOTICE_SHA } from './edge.test-helpers.js';
+import { LINK, NOTICE_ID, NOTICE_SHA, SLOT_A } from './edge.test-helpers.js';
 import {
   coreHarness,
   driveHarness,
@@ -31,6 +31,21 @@ const apiCalls = (h: SessionRouteHarness, method: string) =>
 
 const meta = (h: SessionRouteHarness) =>
   h.session.sessions.get(INVITATION)?.kv.get<{ startedAt: number; state: string }>('meta');
+
+/**
+ * A first start at `na − 10 s` that the DO accepts but whose `sessionStarted` fails (503): the object holds a live
+ * session while api still holds a not-started row. Returns the DO's `startedAt`; `sessionStarted` works again after.
+ */
+const failedStartAtNaMinus10s = async (h: DriveHarness): Promise<number | undefined> => {
+  h.drive.failStarted = true;
+  const lobby = await lobbyThen(h, h.lobbyOpensAt() + MIN);
+  h.clock.ms = h.na() - 10_000;
+  const failed = await start(h, lobby);
+  expect(failed.status).toBe(503);
+  expect(h.drive.state).toBe('otp_verified');
+  h.drive.failStarted = false;
+  return meta(h)?.startedAt;
+};
 
 /** Logs in inside the lobby and moves the clock to `at` (default: one minute into the window). */
 const lobbyThen = async (h: DriveHarness, at?: number) => {
@@ -255,6 +270,91 @@ describe('a live DO session counts as started (R5-66 c) and a submitted row gets
     expect(apiCalls(h, 'sessionGrant').at(-1)?.input).toMatchObject({ sessionLive: true });
     expect(meta(h)?.startedAt).toBe(startedAt);
     expect(h.drive.state).toBe('started');
+  });
+
+  it('resolve after a failed sessionStarted: the edge peeks, re-asks with sessionLive, answers no window_missed; OTP then start resumes (decision a)', async () => {
+    const h = await driveHarness();
+    const startedAt = await failedStartAtNaMinus10s(h);
+    h.clock.ms = h.na() + 5 * MIN;
+    const before = apiCalls(h, 'inviteResolve').length;
+    const res = await h.request('POST', '/v1/invite/resolve', { json: { token: LINK() } });
+    expect(res.status).toBe(200);
+    const body = InviteResolveRes.parse(await res.json());
+    expect(body.schedule).toBeNull();
+    expect(JSON.stringify(body)).not.toContain('window_missed');
+    // The api's first answer had a schedule; the edge peeked and asked again with sessionLive, never editing it.
+    expect(
+      apiCalls(h, 'inviteResolve')
+        .slice(before)
+        .map((c) => c.input),
+    ).toEqual([{ token: LINK() }, { token: LINK(), sessionLive: true }]);
+    const again = await start(h, await h.login());
+    expect(again.status).toBe(200);
+    expect(meta(h)?.startedAt).toBe(startedAt);
+    expect(h.drive.state).toBe('started');
+  });
+
+  it('resolve of a drive row whose object holds no session asks api once and copies its schedule (no sessionLive)', async () => {
+    const h = await driveHarness();
+    h.clock.ms = h.na() + MIN;
+    const res = await h.request('POST', '/v1/invite/resolve', { json: { token: LINK() } });
+    expect(res.status).toBe(200);
+    expect(InviteResolveRes.parse(await res.json()).schedule?.phase).toBe('window_missed');
+    expect(apiCalls(h, 'inviteResolve').map((c) => c.input)).toEqual([{ token: LINK() }]);
+    expect(h.session.peeks).toEqual([INVITATION]);
+  });
+
+  it('resolve: a failed peek fails closed (503) and nothing is answered from the first api answer', async () => {
+    const h = await driveHarness();
+    const ns = h.session.ns;
+    ns.get(ns.idFromName(INVITATION));
+    const stored = h.session.sessions.get(INVITATION);
+    if (stored === undefined) throw new Error('no fake session');
+    stored.core.peek = () => Promise.reject(new Error('object reset'));
+    const res = await h.request('POST', '/v1/invite/resolve', { json: { token: LINK() } });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'unavailable' });
+  });
+
+  it('resolve of a D1 row or a started row never peeks', async () => {
+    const d1 = await sessionHarness();
+    expect(
+      (await d1.request('POST', '/v1/invite/resolve', { json: { token: LINK() } })).status,
+    ).toBe(200);
+    const started = await driveHarness({ state: 'started' });
+    expect(
+      (await started.request('POST', '/v1/invite/resolve', { json: { token: LINK() } })).status,
+    ).toBe(200);
+    expect([...d1.session.peeks, ...started.session.peeks]).toEqual([]);
+  });
+
+  it('a portal login and reschedule with a live DO session pass sessionLive true; api refuses 409 too_late_to_reschedule', async () => {
+    const h = await driveHarness();
+    await failedStartAtNaMinus10s(h);
+    h.clock.ms = h.na() + 5 * MIN;
+    const slot = h.drive.slotStartsAt;
+    const portal = await h.loginPortal();
+    expect(apiCalls(h, 'portalMint').at(-1)?.input).toMatchObject({ sessionLive: true });
+    const res = await h.request('POST', '/v1/portal/reschedule', {
+      token: portal,
+      json: { toSlotId: SLOT_A },
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'too_late_to_reschedule' });
+    expect(apiCalls(h, 'portalReschedule').at(-1)?.input).toMatchObject({ sessionLive: true });
+    expect(h.drive.slotStartsAt).toBe(slot);
+  });
+
+  it('a portal reschedule with no session in the object passes sessionLive false', async () => {
+    const h = await driveHarness();
+    h.clock.ms = h.na() + MIN;
+    const portal = await h.loginPortal();
+    const res = await h.request('POST', '/v1/portal/reschedule', {
+      token: portal,
+      json: { toSlotId: SLOT_A },
+    });
+    expect(res.status).toBe(200);
+    expect(apiCalls(h, 'portalReschedule').at(-1)?.input).toMatchObject({ sessionLive: false });
   });
 
   it('a submitted drive row re-entering start gets its receipt and no token', async () => {

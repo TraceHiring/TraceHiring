@@ -541,7 +541,9 @@ export interface DriveHarness extends SessionRouteHarness {
  * `lobby_closed` outside the lobby window for a row not started unless `sessionLive` is true (R5-19, R5-66 c), and
  * after `sessionGrantExp` for a started row (R5-53); `lobbyMint` mints a not-started row's lobby token to
  * `min(iat + 5,460 s, na + 60 s)` and a resume's to 1,800 s (R5-63, R5-66 f); `sessionGrant` refuses a first start
- * outside `[nb, na]` and returns `sw` (R5-63); `sessionStarted` marks the row started.
+ * outside `[nb, na]` and returns `sw` (R5-63); `sessionStarted` marks the row started. A live DO session counts as
+ * started (R5-66 c, build-notes "B4 first reviews" a): `inviteResolve` with `sessionLive` true answers
+ * `schedule: null`, and `portalReschedule` with `sessionLive` true refuses `too_late_to_reschedule`.
  */
 export const driveHarness = async (
   row: Partial<DriveRow> = {},
@@ -583,22 +585,23 @@ export const driveHarness = async (
   const h = await sessionHarness({
     pkg,
     overrides: {
-      inviteResolve: async () => ({
+      inviteResolve: async (input) => ({
         invitationId: INVITATION,
         orgId: ORG,
         candidateId: CANDIDATE,
         state: drive.state,
         title: 'Demo assessment',
         durationMinutes: DURATION_SECONDS / 60,
-        schedule: notStarted()
-          ? {
-              mode: drive.mode,
-              phase: phase(),
-              slotStartsAt: iso(drive.slotStartsAt),
-              lobbyOpensAt: iso(lobbyOpensAt()),
-              startWindowEndsAt: iso(na()),
-            }
-          : null,
+        schedule:
+          notStarted() && input.sessionLive !== true
+            ? {
+                mode: drive.mode,
+                phase: phase(),
+                slotStartsAt: iso(drive.slotStartsAt),
+                lobbyOpensAt: iso(lobbyOpensAt()),
+                startWindowEndsAt: iso(na()),
+              }
+            : null,
       }),
       messagingSend: async (input) => {
         if ((input.purpose ?? 'lobby') === 'lobby' && lobbyRefused(input.sessionLive)) {
@@ -628,7 +631,8 @@ export const driveHarness = async (
         });
         return { lobbyToken, expiresAt: iso(exp * 1000), next: 'age' };
       },
-      portalReschedule: async () => {
+      portalReschedule: async (input) => {
+        if (input.sessionLive === true) throw new Error('too_late_to_reschedule');
         if (!notStarted()) throw new Error('closed');
         drive.slotStartsAt = drive.nextSlotStartsAt;
         return { ok: true, slotStartsAt: iso(drive.slotStartsAt) };

@@ -82,7 +82,8 @@ describe('POST /v1/portal/reschedule (R5-24, M2-11, E10, E11)', () => {
     const body = PortalRescheduleRes.parse(await res.json());
     expect(Object.keys(body).sort()).toEqual(['ok', 'slotStartsAt']);
     const call = h.calls.find((c) => c.method === 'portalReschedule');
-    expect(call?.input).toEqual({ portalToken: portal, toSlotId: SLOT_A });
+    // The object's peek rides along (R5-66 c, decision a): no session in it here.
+    expect(call?.input).toEqual({ portalToken: portal, toSlotId: SLOT_A, sessionLive: false });
   });
 
   it('identity keys in the body are discarded; any other extra key or a bad slot id is 400 before api', async () => {
@@ -96,6 +97,7 @@ describe('POST /v1/portal/reschedule (R5-24, M2-11, E10, E11)', () => {
     expect(h.calls.find((c) => c.method === 'portalReschedule')?.input).toEqual({
       portalToken: portal,
       toSlotId: SLOT_A,
+      sessionLive: false,
     });
     const before = h.calls.length;
     for (const json of [{ toSlotId: SLOT_A, reason: 'x' }, { toSlotId: 'slot-1' }, {}]) {
