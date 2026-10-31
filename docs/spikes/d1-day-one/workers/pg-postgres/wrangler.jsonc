@@ -1,0 +1,8 @@
+{
+  "name": "d1-spike-pg-postgres",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "send_metrics": false,
+}

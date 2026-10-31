@@ -4,6 +4,7 @@ packages:
   - packages/*
   - workers/*
   - services/*
+  - e2e
 
 # Shared versions (spec §4). Dependabot groups updates by catalog entry.
 catalog:
@@ -15,7 +16,8 @@ catalog:
   eslint-plugin-react-hooks: 7.1.1
   eslint-plugin-boundaries: 7.2.0
   prettier: 3.9.10
-  vitest: 4.1.11
+  # 4.1.12 (published 2026-10-15) fixes GHSA-qxg6-89mg-rqv8 and GHSA-xp26-3454-mjgp in @vitest/mocker 4.1.11.
+  vitest: 4.1.12
   '@cloudflare/vitest-pool-workers': 0.23.0
   wrangler: 4.149.0
   vite: 8.3.4
@@ -26,7 +28,10 @@ catalog:
   '@types/react-dom': 19.3.0
   react-router: 8.4.0
   hono: 4.13.13
-  zod: 4.6.5
+  # Security bump (2026-10-24): GHSA-mrhx-c7xc-m3w5 (high, memory exhaustion on large arrays, < 4.6.6). 4.6.6
+  # (published 2026-10-11) was 13 days old: a one-day exception to the two-week rule because the api parses
+  # untrusted request bodies with zod (docs/build-notes.md "Autopilot changes", 2026-10-24).
+  zod: 4.6.6
   '@supabase/supabase-js': 2.117.2
   supabase: 2.120.0
   lefthook: 2.2.1
@@ -35,6 +40,25 @@ catalog:
   '@types/node': 22.20.5
   globals: 17.13.0
   fast-check: 4.10.2
+  # Dev tooling for e2e/ (specs/d1-demo-slice.md §7.2, no ADR): the newest release older than two weeks
+  # (1.63.0, published 2026-09-04; 1.64.0 came out 2026-10-07).
+  '@playwright/test': 1.63.0
+  # DOM test runtime for apps/candidate (d1 AT-D30 behavioural test, AT-D36; dev tooling, no ADR). 20.14.6
+  # (published 2026-10-08) fixes GHSA-5fpq-26gf-qwcr; the 21.x major is due by the osv-scanner.toml expiry. Not
+  # jsdom: jsdom 30 needs undici 8, which the undici security override below pins to 7.
+  happy-dom: 20.14.6
+  # Sentry adapter (m0-foundations §9.2, d1 AT-D22): recruiter app, workers/jobs, services/api only.
+  '@sentry/cloudflare': 11.1.0
+  '@sentry/react': 11.1.0
+  # Workers -> Postgres driver (ADR-031, DC-D7): services/api and workers/jobs only, exactly 3.4.9
+  # (published 2026-04-05).
+  postgres: 3.4.9
+  # Zip reader for the item import Web Worker (ADR-033, specs/m1-test-authoring.md R5-48): apps/recruiter only,
+  # streaming Unzip + UnzipInflate only; exactly 0.8.3 (published 2026-05-16).
+  fflate: 0.8.3
+  # SigV4 signing for SES and KMS over HTTPS from Workers (ADR-034, specs/m2-scheduling-invites.md M2-16): packages/vendors
+  # only, exactly 1.0.20 (published 2024-08-28, MIT, no dependencies).
+  aws4fetch: 1.0.20
 
 # Build-script allow-list (pnpm 12 key, checked in S1.0).
 allowBuilds:
@@ -52,11 +76,19 @@ minimumReleaseAgeExclude:
 #   critical, GHSA-xw65-4hp5-5hc7 moderate; pnpm audit).
 # - sharp, undici: @cloudflare/vitest-pool-workers 0.23.0 brings its own older miniflare with sharp 0.35.2
 #   (GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w) and undici 7.29.0 (ten advisories; osv-scanner). The
-#   wrangler catalog version already uses sharp 0.35.5 and undici 7.29.1.
+#   wrangler catalog version already uses sharp 0.35.5. undici 7.30.1 (published 2026-10-15, past the
+#   two-week rule on 2026-10-29) fixes the eight 7.29.1 advisories of 2026-10-23 and 2026-10-30.
 overrides:
   handlebars: 4.7.10
   sharp: 0.35.5
-  undici: 7.29.1
+  undici: 7.30.1
+  # Release-age pin (d1 AT-D22, 2026-10-14): @sentry/browser-utils 11.1.0 asks for web-vitals ^6.1.1,
+  # whose newest, 6.2.3, was 9 days old; 6.2.2 (2026-09-14) is past the two-week rule. Remove once
+  # a newer release is two weeks old.
+  web-vitals: 6.2.2
+  # GHSA-mrhx-c7xc-m3w5 (2026-10-24): @cloudflare/vitest-pool-workers 0.23.0 pins zod 4.4.3 exactly (dev tooling).
+  # Remove once it no longer pins a version below 4.6.6.
+  zod: 4.6.6
 
 # braces <= 3.0.3 (GHSA-vfj7-8cjw-p6xm, high: stack exhaustion on deeply nested brace patterns) has no
 # fixed release. It is reached only through eslint-plugin-boundaries > micromatch at lint time, with

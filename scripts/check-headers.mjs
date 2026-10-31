@@ -33,13 +33,30 @@ export const CSP_DIRECTIVES = {
 };
 
 /**
+ * Directives one app adds to CSP_DIRECTIVES, with exact sources. recruiter: the item import Web Worker (ADR-033 §4,
+ * specs/m1-test-authoring.md R5-48) is a same-origin module bundled by Vite; no blob: worker, no unsafe-eval.
+ */
+export const APP_CSP_DIRECTIVES = {
+  candidate: {},
+  recruiter: { 'worker-src': ["'self'"] },
+};
+
+/**
  * Origins an app may add to connect-src (§10.3): exact https origins only, never a wildcard.
- * candidate: the staging edge Worker. recruiter: the Supabase staging project (M0b). The Sentry
- * ingest host joins the recruiter list with the adapter, before D1 (revision 10).
+ * candidate: the staging edge Worker. recruiter: the Supabase staging project (M0b) and, from D1, the
+ * staging api Worker (d1 §7.1) and the Sentry ingest host (d1 AT-D22, L-24). Each entry is one regular
+ * expression, and a CSP may hold at most one origin per entry (see checkCsp).
  */
 export const CONNECT_SRC_EXTRAS = {
   candidate: [/^https:\/\/trace-edge-staging\.[a-z0-9-]+\.workers\.dev$/],
-  recruiter: [/^https:\/\/[a-z0-9]{20}\.supabase\.co$/],
+  recruiter: [
+    /^https:\/\/[a-z0-9]{20}\.supabase\.co$/,
+    // The staging api Worker (d1 §7.1): the recruiter's API calls and the start-photo fetch. Staging only: the
+    // production api is a tracehiring.tech custom domain and needs its own entry (and a spec change).
+    /^https:\/\/trace-api-staging\.[a-z0-9-]+\.workers\.dev$/,
+    // The Sentry ingest origin of VITE_SENTRY_DSN (d1 AT-D22, L-24); EU (H6) or US host.
+    /^https:\/\/o[0-9]+\.ingest(?:\.[a-z]{2})?\.sentry\.io$/,
+  ],
 };
 
 export const COMMON_HEADERS = {
@@ -123,7 +140,8 @@ export function checkCsp(app, value) {
   const out = [];
   const { directives, duplicates } = parseCsp(value);
   for (const d of duplicates) out.push(`CSP directive ${d} appears more than once`);
-  for (const [name, expected] of Object.entries(CSP_DIRECTIVES)) {
+  const wanted = { ...CSP_DIRECTIVES, ...(APP_CSP_DIRECTIVES[app] ?? {}) };
+  for (const [name, expected] of Object.entries(wanted)) {
     const got = directives[name];
     if (!got) {
       out.push(`CSP is missing ${name}`);
@@ -147,7 +165,7 @@ export function checkCsp(app, value) {
     }
   }
   for (const name of Object.keys(directives)) {
-    if (!Object.hasOwn(CSP_DIRECTIVES, name)) out.push(`CSP has an unexpected directive ${name}`);
+    if (!Object.hasOwn(wanted, name)) out.push(`CSP has an unexpected directive ${name}`);
   }
   return out;
 }

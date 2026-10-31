@@ -1,0 +1,58 @@
+// Hand-written Env augmentation for the workers/jobs secrets (security review bindings F6; spec §5.1, L-29). They
+// are Worker secrets set by an operator, never vars and never in git, so `wrangler types` does not list them. Every
+// one is optional: code guards each and fails closed (the stage throws a constant error and is retried), never `!`.
+export {};
+
+declare global {
+  interface Env {
+    // Staging: one Hyperdrive binding per login role (wrangler.jsonc env.staging; ADR-031 amendment 1). Each wins
+    // over the URL secret of the same login, which is for the local stack only (a loopback host; refused elsewhere).
+    /** jobs_mirror_login through Hyperdrive (mirror stage and sweep). */
+    JOBS_MIRROR_DB?: Hyperdrive;
+    /** jobs_quality_login through Hyperdrive. */
+    JOBS_QUALITY_DB?: Hyperdrive;
+    /** jobs_integrity_login through Hyperdrive. */
+    JOBS_INTEGRITY_DB?: Hyperdrive;
+    // M1 R5-11 (DC-M1-6): bound in env.staging once the founder has created their configs (PENDING_BINDINGS in
+    // scripts/lib/hyperdrive.mjs); until then absent, and their jobs fail closed.
+    /** jobs_authoring_login through Hyperdrive (AI drafting job). */
+    JOBS_AUTHORING_DB?: Hyperdrive;
+    /** jobs_admin_login through Hyperdrive (member provisioning job). */
+    JOBS_ADMIN_DB?: Hyperdrive;
+    // M2 R5-9: bound in env.staging once the founder has created its config (PENDING_BINDINGS), as the M1 two.
+    /** jobs_messaging_login through Hyperdrive (messaging claim stage and trace-messages consumer). */
+    JOBS_MESSAGING_DB?: Hyperdrive;
+    /** Login role jobs_mirror_login; every use runs `SET LOCAL ROLE trace_worker` (mirror stage and sweep). */
+    JOBS_MIRROR_DB_URL?: string;
+    /** Login role jobs_quality_login; every use runs `SET LOCAL ROLE trace_quality_worker`. */
+    JOBS_QUALITY_DB_URL?: string;
+    /** Login role jobs_integrity_login; every use runs `SET LOCAL ROLE trace_integrity_worker`. */
+    JOBS_INTEGRITY_DB_URL?: string;
+    /** Login role jobs_authoring_login; every use runs `SET LOCAL ROLE trace_authoring_worker`. Local only. */
+    JOBS_AUTHORING_DB_URL?: string;
+    /** Login role jobs_admin_login; every use runs `SET LOCAL ROLE trace_admin_worker`. Local only. */
+    JOBS_ADMIN_DB_URL?: string;
+    /** Login role jobs_messaging_login; every use runs `SET LOCAL ROLE trace_messaging_worker`. Local only. */
+    JOBS_MESSAGING_DB_URL?: string;
+    // M1-20, R5-12 (DC-M1-5): member provisioning (the admin job only). The pepper checks the invite's email HMAC;
+    // the secret key and URL reach the Supabase Auth admin API outside any transaction. Never logged.
+    /** HMAC pepper of member_invites.email_hmac (same value on trace-api). */
+    MEMBER_INVITE_PEPPER?: string;
+    /** The Supabase secret key of this environment, for the Auth admin API only. */
+    SUPABASE_SECRET_KEY_JOBS?: string;
+    /** The Supabase project URL of this environment (the Auth admin API base). */
+    SUPABASE_URL?: string;
+    // M2 (specs/m2-scheduling-invites.md R5-27; build-notes "Wave 1 lead part" g): the messaging consumer's AWS pair
+    // (F-2), the SES test-inbox HMAC key, DevKeyManager's key-encryption key and the SES smoke-route token.
+    /** F-2 access key id of the Workers IAM user (SES SendEmail, KMS Decrypt). */
+    AWS_WORKERS_ACCESS_KEY_ID?: string;
+    /** F-2 secret access key of the Workers IAM user. */
+    AWS_WORKERS_SECRET_ACCESS_KEY?: string;
+    /** HMAC key of the SES test-inbox allow-list (the var SES_ALLOWED_TEST_RECIPIENT_HMAC holds the digest). */
+    SES_TEST_RECIPIENT_HMAC_KEY?: string;
+    /** DevKeyManager's key-encryption key: base64 of at least 32 bytes (dev and staging only; refused in production). */
+    KEY_MANAGER_DEV_KEK?: string;
+    /** The bearer token of the staging SES smoke route (R2-9); set only with the staging go-ahead. */
+    JOBS_SMOKE_TOKEN?: string;
+  }
+}

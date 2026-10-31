@@ -17,7 +17,7 @@ const sources: [string, string][] = (
   readdirSync(path.join(appDir, 'src'), { recursive: true, encoding: 'utf8' }) as string[]
 )
   .map((file) => file.split(path.sep).join('/'))
-  .filter((file) => /\.(?:ts|tsx|css)$/.test(file) && !/\.test\.tsx?$/.test(file))
+  .filter((file) => /\.(?:ts|tsx|css)$/.test(file) && !/\.test(?:-helpers)?\.tsx?$/.test(file))
   .map((file) => [file, read('src', file)]);
 
 /** Inline style or script in markup or code. */
@@ -67,9 +67,22 @@ describe(`${APP} public/_headers`, () => {
       }
   });
 
-  it("limits connect-src to 'self' until the staging edge origin is known (H4)", () => {
-    expect(directives.get('connect-src')).toEqual(["'self'"]);
-    expect(text).toContain('TODO(H4)');
+  it("limits connect-src to 'self' and exactly the staging edge origin (d1 §4.7, H4)", () => {
+    expect(directives.get('connect-src')).toEqual([
+      "'self'",
+      'https://trace-edge-staging.abhayraj.workers.dev',
+    ]);
+    expect(text).not.toContain('TODO');
+  });
+
+  it('keeps the camera to this origin only, and no geolocation (d1 §4.7)', () => {
+    const policy = /^\s+Permissions-Policy:\s*(.+)$/im.exec(text)?.[1] ?? '';
+    expect(policy.trim()).toBe('camera=(self), microphone=(self), geolocation=()');
+  });
+
+  it('allows no blob: source anywhere (the photo preview is a canvas)', () => {
+    for (const [name, sources] of directives)
+      for (const source of sources) expect(source, `${name} ${source}`).not.toMatch(/^blob:/);
   });
 });
 
@@ -99,6 +112,12 @@ describe(`${APP} sources`, () => {
 
   it('have no inline style or script (no style= attribute, no eval)', () => {
     expect(sources.filter(([, code]) => INLINE_CODE.test(code)).map(([file]) => file)).toEqual([]);
+  });
+
+  it('never make a blob: URL (CSP has no blob: source; d1 §4.5)', () => {
+    expect(
+      sources.filter(([, code]) => /createObjectURL|['"`]blob:/.test(code)).map(([file]) => file),
+    ).toEqual([]);
   });
 
   it('load no font or stylesheet from another origin (fonts are self-hosted in M3b)', () => {

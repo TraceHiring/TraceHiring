@@ -1,0 +1,69 @@
+// member_invites.email_hmac (specs/m1-test-authoring.md R2-14, §3.2, R5-56 c): HMAC-SHA-256 of the normalised address
+// (trimmed, lower case) keyed with the UTF-8 bytes of MEMBER_INVITE_PEPPER, as 64 lower-case hex. One definition for
+// the api (writes the invite) and the jobs member provisioning (checks it). The address and the pepper never leave
+// these functions in any form but the digest.
+
+export const normaliseInviteEmail = (email: string): string => email.trim().toLowerCase();
+
+const toHex = (buf: ArrayBuffer): string =>
+  Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+
+export const hmacSha256Hex = async (key: string, message: string): Promise<string> => {
+  const enc = new TextEncoder();
+  const k = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(key),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  return hmacSha256HexKey(k, message);
+};
+
+/** WebCrypto's key type as `crypto.subtle.sign` takes it (the same under node, DOM and Workers typings). */
+export type SigningKey = Parameters<typeof crypto.subtle.sign>[1];
+
+/** The constant error for a key that is not an HMAC SHA-256 signing key. */
+export const SIGNING_KEY_INVALID = 'signing_key_invalid';
+
+/**
+ * The same digest with an HMAC SHA-256 CryptoKey (M2 blind indexes: the per-org key comes from KeyManager as a
+ * CryptoKey, never as text; specs/m2-scheduling-invites.md R5-36, build-notes 2026-10-31 "Wave 1 lead part" a).
+ */
+export const hmacSha256HexKey = async (key: SigningKey, message: string): Promise<string> => {
+  const algorithm = key.algorithm as { name?: string; hash?: { name?: string } };
+  if (
+    key.type !== 'secret' ||
+    algorithm.name !== 'HMAC' ||
+    algorithm.hash?.name !== 'SHA-256' ||
+    !key.usages.includes('sign')
+  ) {
+    throw new Error(SIGNING_KEY_INVALID);
+  }
+  return toHex(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message)));
+};
+
+/** The constant error for a missing or empty pepper. */
+export const PEPPER_EMPTY = 'member_invite_pepper_empty';
+
+export const inviteEmailHmac = async (email: string, pepper: string): Promise<string> => {
+  if (pepper.length === 0) throw new Error(PEPPER_EMPTY);
+  return hmacSha256Hex(pepper, normaliseInviteEmail(email));
+};
+
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/** Constant-time equality of two 64-character lower-case hex digests; false for anything else. */
+export const hexEqual = (a: string, b: string): boolean => {
+  if (!HEX64.test(a) || !HEX64.test(b)) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+};
+
+/** The pepper's minimum length in UTF-8 bytes: one rule for the api (writes the invite) and the jobs (check it). */
+export const PEPPER_MIN_BYTES = 32;
+
+/** True when the pepper is set and at least PEPPER_MIN_BYTES UTF-8 bytes long; anything else fails closed. */
+export const pepperStrongEnough = (pepper: string | undefined): boolean =>
+  pepper !== undefined && new TextEncoder().encode(pepper).length >= PEPPER_MIN_BYTES;

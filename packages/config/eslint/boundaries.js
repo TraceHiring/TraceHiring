@@ -17,11 +17,16 @@ export const workspacePackages = {
   '@trace/shared': 'packages/shared',
   '@trace/ui': 'packages/ui',
   '@trace/vendors': 'packages/vendors',
+  '@trace/band-engine': 'packages/band-engine',
+  '@trace/item-variants': 'packages/item-variants',
+  '@trace/item-delivery': 'packages/item-delivery',
+  '@trace/pii-crypto': 'packages/pii-crypto',
   '@trace/db-types': 'packages/db-types',
   '@trace/workers-http': 'packages/workers-http',
   '@trace/edge': 'workers/edge',
   '@trace/jobs': 'workers/jobs',
   '@trace/api': 'services/api',
+  '@trace/e2e': 'e2e',
 };
 
 const resolverPath = require.resolve('./resolver.cjs');
@@ -35,6 +40,20 @@ const elements = [
   { type: 'shared', pattern: 'packages/shared' },
   { type: 'vendors', pattern: 'packages/vendors' },
   { type: 'db-types', pattern: 'packages/db-types' },
+  // Pure integrity band engine (specs/d1-demo-slice.md §5.2): imports nothing, not even @trace/shared. Only
+  // integrity files, services/api and the recruiter app may import it; quality files never (rule 1).
+  { type: 'band-engine', pattern: 'packages/band-engine' },
+  // M1 pure packages (specs/m1-test-authoring.md §11.3 A1): parameterised variants (§6.3; the api generates them)
+  // and section draws (§6.5; the edge SessionDO and the api's publish check). They import only @trace/shared; the
+  // candidate app never draws (the server holds the truth).
+  { type: 'item-variants', pattern: 'packages/item-variants' },
+  { type: 'item-delivery', pattern: 'packages/item-delivery' },
+  // M2 contact-data crypto (specs/m2-scheduling-invites.md R5-36, stream B1): normalise, encrypt/decrypt, blind
+  // index, hints. Imports only @trace/shared; only services/api and workers/jobs import it, so plaintext contact data
+  // exists only in their memory (never the edge, an app or another package).
+  { type: 'pii-crypto', pattern: 'packages/pii-crypto' },
+  // Playwright end-to-end package (specs/d1-demo-slice.md §7.2): imports no workspace code; nothing imports it.
+  { type: 'e2e', pattern: 'e2e' },
   // Workers-only HTTP helpers (specs/m0b-tenancy.md §1.1 item 9b): never imported by an app or a package.
   { type: 'workers-http', pattern: 'packages/workers-http' },
   { type: 'config', pattern: 'packages/config' },
@@ -56,8 +75,18 @@ const RULE1_ROOTS = '{services/api/src/modules,workers/jobs/src}';
 const CONFIG_EXT = '{,.{js,mjs,cjs,ts,mts,cts}}';
 
 const files = [
-  { category: 'quality', pattern: `${RULE1_ROOTS}/**/quality/**` },
-  { category: 'integrity', pattern: `${RULE1_ROOTS}/**/integrity/**` },
+  // The api's two report card modules are the two sides as well (d1 §6.2, L-19): report-quality and
+  // report-integrity import neither each other nor any neutral module.
+  {
+    category: 'quality',
+    pattern: [`${RULE1_ROOTS}/**/quality/**`, 'services/api/src/modules/report-quality/**'],
+  },
+  {
+    category: 'integrity',
+    pattern: [`${RULE1_ROOTS}/**/integrity/**`, 'services/api/src/modules/report-integrity/**'],
+  },
+  // The recruiter app reads the rule table labels, so it may import @trace/band-engine (d1 §7.4, R-19).
+  { category: 'recruiter-app', pattern: 'apps/recruiter/**' },
   // Build tooling: root config files (classified only by this category; elements match folders)
   // and each workspace's vite/vitest/eslint config.
   {
@@ -79,6 +108,17 @@ const internal = { relationship: { to: 'internal' } };
  * @param {'quality' | 'integrity'} side
  */
 const rule1 = (side) => [
+  // Integrity code may use the band engine; quality code never may, even inside services/api where the
+  // element-level allow above would otherwise let it through (d1 §5.1: the quality/** wall).
+  ...(side === 'quality'
+    ? [
+        {
+          from: fileIn('quality'),
+          disallow: { to: element('band-engine') },
+          message: 'Rule 1: quality code may not import @trace/band-engine.',
+        },
+      ]
+    : [{ from: fileIn('integrity'), allow: { to: element('band-engine') } }]),
   {
     from: fileIn(side),
     disallow: { to: element(['api', 'jobs']) },
@@ -101,7 +141,16 @@ const policies = [
   { from: element('workers-http'), allow: { to: element('shared') } },
   { from: element('ui'), allow: { to: element('shared') } },
   { from: element('vendors'), allow: { to: element('shared') } },
-  // shared, db-types, config, scripts and supabase import no other element.
+  // band-engine: services/api and the recruiter app read it; workers/jobs only through integrity files
+  // (rule1('integrity') below), so neutral jobs code, edge and the other apps cannot.
+  { from: element('api'), allow: { to: element('band-engine') } },
+  { from: fileIn('recruiter-app'), allow: { to: element('band-engine') } },
+  { from: element(['item-variants', 'item-delivery']), allow: { to: element('shared') } },
+  { from: element('api'), allow: { to: element(['item-variants', 'item-delivery']) } },
+  { from: element('edge'), allow: { to: element('item-delivery') } },
+  { from: element('pii-crypto'), allow: { to: element('shared') } },
+  { from: element(['api', 'jobs']), allow: { to: element('pii-crypto') } },
+  // shared, db-types, band-engine, e2e, config, scripts and supabase import no other element.
   // Nothing allows importing an app, a Worker or a service.
   ...rule1('quality'),
   ...rule1('integrity'),

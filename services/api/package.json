@@ -12,10 +12,15 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@sentry/cloudflare": "catalog:",
+    "@trace/item-delivery": "workspace:*",
+    "@trace/item-variants": "workspace:*",
+    "@trace/pii-crypto": "workspace:*",
     "@trace/shared": "workspace:*",
     "@trace/vendors": "workspace:*",
     "@trace/workers-http": "workspace:*",
     "hono": "catalog:",
+    "postgres": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

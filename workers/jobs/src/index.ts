@@ -1,10 +1,48 @@
-// Worker entrypoint: a thin adapter over createApp (spec §2). M0a reports errors to the no-op
-// reporter; the Sentry adapter replaces it here, and only here, before D1 (spec §9.2).
-import { noopErrorReporter } from '@trace/shared/log';
+// Worker entrypoint: a thin adapter over createApp (fetch: /health), the queue consumers (queue) and the sweep cron
+// (scheduled); lead-wired (spec d1 §11; specs/m1-test-authoring.md R5-13).
+// Errors from all three go to Sentry through the shared adapter, and only when SENTRY_DSN_WORKERS
+// holds a DSN (spec m0-foundations §9.2; d1 AT-D22).
+// queue() dispatches on the batch's queue (queue/wiring.ts dispatchQueue): the session mirror (v1 and v2), the AI
+// drafting job (§6.4) and member provisioning (M1-20), each on its own worker role (stream A3b, wired by the lead at
+// merge); any other queue is an error. M2 R5-9: the trace-messages consumer is a stub until stream B3
+// (messaging/stub.ts); B3 also wires the cron claim stage (createQueueHandlers' messagesClaim), absent until then.
+// The stages (stream R2) are built per invocation from its env (queue/wiring.ts): each runs in its own
+// transaction as its own worker role; a missing secret or binding fails closed, so the message is retried and
+// then dead-lettered, never acked without its results. The sweep runs private.sweep_pending as trace_worker; the same
+// cron fails stranded queued drafting jobs as the authoring worker (drafting/sweep.ts, R5-64 m).
 import { createApp } from './app.js';
+import { createDraftingConsumer } from './drafting/consumer.js';
+import { draftSweepFor } from './drafting/sweep.js';
+import { draftingDepsFor } from './drafting/wiring.js';
+import { sentryReporter, withErrorReporting } from './error-reporting.js';
+import { createMembersConsumer } from './members/consumer.js';
+import { membersDepsFor } from './members/wiring.js';
+import { messagesConsumer } from './messaging/stub.js';
+import { createQueueHandlers } from './queue/handlers.js';
+import { dispatchQueue, pendingStagesFor, stagesFor } from './queue/wiring.js';
 
-const app = createApp({ reporter: noopErrorReporter });
+const app = createApp({ reporter: sentryReporter });
 
-export default {
-  fetch: app.fetch,
-} satisfies ExportedHandler<Env>;
+const { queue: mirrorQueue, scheduled } = createQueueHandlers({
+  reporter: sentryReporter,
+  stages: (env) => stagesFor(env),
+  pendingStages: (limit, env) => pendingStagesFor(limit, env),
+  draftSweep: (env) => draftSweepFor(env),
+});
+
+const queue = dispatchQueue({
+  mirror: mirrorQueue,
+  drafting: createDraftingConsumer((env) =>
+    draftingDepsFor(env, undefined, { reporter: sentryReporter }),
+  ),
+  members: createMembersConsumer((env) =>
+    membersDepsFor(env, undefined, { reporter: sentryReporter }),
+  ),
+  messages: messagesConsumer,
+});
+
+export default withErrorReporting({
+  fetch: (request, env, ctx) => app.fetch(request, env, ctx),
+  queue,
+  scheduled,
+}) satisfies ExportedHandler<Env>;

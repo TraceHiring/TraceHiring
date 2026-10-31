@@ -12,7 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@trace/shared": "workspace:*"
+    "@trace/shared": "workspace:*",
+    "aws4fetch": "catalog:"
   },
   "devDependencies": {
     "@trace/config": "workspace:*",

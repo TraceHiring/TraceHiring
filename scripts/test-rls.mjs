@@ -25,7 +25,16 @@
 //      stdout lines are printed on failure; its stderr never is.
 //   5c. `node scripts/test-concurrency-local.mjs` (M0b review M0B-DB-5): two connections demote the two
 //      owners of one org at once, under READ COMMITTED and REPEATABLE READ; the second must be refused.
+//      M1 (R5-51 b): a cancel waits for a running import batch and counts it (DB H1); two deliveries of a
+//      count-1 drafting job take turns and the second is refused (DB M1). M2 (AT-M2-08): two bookings on the
+//      last seat of a slot; the second waits and is refused as full.
 //      Only its `test-concurrency-local: ` stdout lines are printed on failure; its stderr never is.
+//   5d. `node scripts/test-staging-roles-local.mjs` (d1 Chat E spec review SR-E-5): the real staging
+//      login-role SQL of scripts/ops/staging-worker-secrets.mjs, run in one rolled-back transaction.
+//      Only its `test-staging-roles-local: ` stdout lines are printed on failure; its stderr never is.
+//   5e. `node scripts/test-catalog-hosted-local.mjs` (d1 revision 4m, MT-9 hosted allow-list): the local stack made
+//      to look like hosted Supabase in rolled-back superuser transactions, then MT-9 and MT-7 run as postgres.
+//      Only its `test-catalog-hosted-local: ` stdout lines are printed on failure; its stderr never is.
 //   6. db-types drift: `supabase gen types typescript --local --schema public` goes to a temp
 //      file, compared byte for byte with packages/db-types/src/database.ts (never overwritten;
 //      `pnpm db:types` regenerates it on purpose).
@@ -85,6 +94,20 @@ export const EXCLUDED_SERVICES = Object.freeze(
 export const AUTH_TEST_ARGS = Object.freeze(['scripts/test-auth-local.mjs']);
 /** M0B-DB-5: two connections demote an org's two owners at once, run with node after AT-B8. */
 export const CONCURRENCY_TEST_ARGS = Object.freeze(['scripts/test-concurrency-local.mjs']);
+/** d1 SR-E-5: the staging login-role SQL against the local stack, rolled back, run with node after M0B-DB-5. */
+export const STAGING_ROLES_TEST_ARGS = Object.freeze(['scripts/test-staging-roles-local.mjs']);
+/** d1 revision 4m: MT-9's hosted allow-list on a local stack made to look hosted, run with node after SR-E-5. */
+export const CATALOG_HOSTED_TEST_ARGS = Object.freeze(['scripts/test-catalog-hosted-local.mjs']);
+/** d1 AT-D16 (stream R2): the jobs stages against the real schema, grants and card guard (Node, local DB). */
+export const JOBS_DB_TEST_ARGS = Object.freeze([
+  '--filter',
+  '@trace/jobs',
+  'exec',
+  'vitest',
+  'run',
+  '-c',
+  'vitest.db.config.ts',
+]);
 
 export const START_ARGS = Object.freeze([
   'exec',
@@ -172,10 +195,11 @@ export function windowsCommandLine(cmd, args) {
 }
 
 /**
- * Runs a command and captures its output as bytes. Never throws and never rejects:
+ * Runs a command and captures its output as bytes. Never throws and never rejects. `env`, when
+ * given, is merged over the parent's environment (the child keeps PATH and the rest).
  * @returns {Promise<{ status: number|null, stdout: Buffer, stderr: Buffer, error: Error|null }>}
  */
-export function spawnRun(cmd, args, { cwd, timeoutMs } = {}) {
+export function spawnRun(cmd, args, { cwd, timeoutMs, env } = {}) {
   return new Promise((resolve) => {
     let settled = false;
     let timedOut = false;
@@ -189,6 +213,7 @@ export function spawnRun(cmd, args, { cwd, timeoutMs } = {}) {
       resolve({ status, stdout: Buffer.concat(out), stderr: Buffer.concat(err), error });
     };
     let child;
+    const childEnv = env === undefined ? {} : { env: { ...process.env, ...env } };
     try {
       // pnpm is a .cmd shim on Windows, which Node only starts through a shell.
       child =
@@ -198,8 +223,14 @@ export function spawnRun(cmd, args, { cwd, timeoutMs } = {}) {
               shell: true,
               stdio: ['ignore', 'pipe', 'pipe'],
               windowsHide: true,
+              ...childEnv,
             })
-          : spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+          : spawn(cmd, args, {
+              cwd,
+              stdio: ['ignore', 'pipe', 'pipe'],
+              windowsHide: true,
+              ...childEnv,
+            });
     } catch (e) {
       resolve({ status: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error: e });
       return;
@@ -725,7 +756,9 @@ export async function main(options) {
       );
     }
     // M0B-DB-5: its stdout holds only fixed messages; stderr is never printed.
-    log('test-rls: running the two-connection owner-demotion test (M0B-DB-5)');
+    log(
+      'test-rls: running the two-connection tests (M0B-DB-5 owner demotion; M1 import cancel, draft cap)',
+    );
     const conc = await run('node', CONCURRENCY_TEST_ARGS, { cwd: root });
     if (conc.status !== 0) {
       const lines = toText(conc.stdout)
@@ -734,6 +767,45 @@ export async function main(options) {
         .map((l) => `  | ${redact(l)}`);
       problems.push(
         `the two-connection owner-demotion test failed (M0B-DB-5${conc.error ? `, ${conc.error.code ?? 'error'}` : ''})`,
+        ...lines,
+      );
+    }
+    // d1 SR-E-5: its stdout holds only fixed messages; stderr is never printed.
+    log('test-rls: running the staging login-role SQL test (d1 SR-E-5)');
+    const roles = await run('node', STAGING_ROLES_TEST_ARGS, { cwd: root });
+    if (roles.status !== 0) {
+      const lines = toText(roles.stdout)
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('test-staging-roles-local: '))
+        .map((l) => `  | ${redact(l)}`);
+      problems.push(
+        `the staging login-role SQL test failed (d1 SR-E-5${roles.error ? `, ${roles.error.code ?? 'error'}` : ''})`,
+        ...lines,
+      );
+    }
+    // d1 revision 4m: its stdout holds only fixed messages; stderr is never printed.
+    log('test-rls: running the MT-9 hosted allow-list test (d1 revision 4m)');
+    const hosted = await run('node', CATALOG_HOSTED_TEST_ARGS, { cwd: root });
+    if (hosted.status !== 0) {
+      const lines = toText(hosted.stdout)
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('test-catalog-hosted-local: '))
+        .map((l) => `  | ${redact(l)}`);
+      problems.push(
+        `the MT-9 hosted allow-list test failed (d1 revision 4m${hosted.error ? `, ${hosted.error.code ?? 'error'}` : ''})`,
+        ...lines,
+      );
+    }
+    // d1 AT-D16: only vitest's summary lines are printed (redacted); a stack could name a connection URL.
+    log('test-rls: running the jobs real-database tests (d1 AT-D16)');
+    const jobs = await run('pnpm', JOBS_DB_TEST_ARGS, { cwd: root });
+    if (jobs.status !== 0) {
+      const lines = toText(jobs.stdout)
+        .split(/\r?\n/)
+        .filter((l) => /^\s*(?:Test Files|Tests|FAIL)\b/.test(l))
+        .map((l) => `  | ${redact(l)}`);
+      problems.push(
+        `the jobs real-database tests failed (d1 AT-D16${jobs.error ? `, ${jobs.error.code ?? 'error'}` : ''})`,
         ...lines,
       );
     }

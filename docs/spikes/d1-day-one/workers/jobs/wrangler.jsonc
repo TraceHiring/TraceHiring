@@ -1,0 +1,22 @@
+{
+  "name": "d1-spike-jobs",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": false,
+  "send_metrics": false,
+  "durable_objects": { "bindings": [{ "name": "STATS", "class_name": "StatsDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StatsDO"] }],
+  "queues": {
+    "consumers": [
+      {
+        "queue": "d1-spike-main",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 5,
+        "retry_delay": 1,
+        "dead_letter_queue": "d1-spike-dlq",
+      },
+      { "queue": "d1-spike-dlq", "max_batch_size": 1, "max_batch_timeout": 1 },
+    ],
+  },
+}

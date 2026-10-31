@@ -1,0 +1,16 @@
+{
+  "name": "d1-spike-edge",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": false,
+  "send_metrics": false,
+  "durable_objects": { "bindings": [{ "name": "SESSION", "class_name": "SessionDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SessionDO"] }],
+  "queues": { "producers": [{ "binding": "MAIN_QUEUE", "queue": "d1-spike-main" }] },
+  "services": [
+    { "binding": "API", "service": "d1-spike-api", "entrypoint": "CandidateRpc" },
+    { "binding": "API_HTTP", "service": "d1-spike-api" },
+    { "binding": "JOBS", "service": "d1-spike-jobs" },
+  ],
+  "triggers": { "crons": ["* * * * *"] },
+}

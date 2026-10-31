@@ -9,7 +9,11 @@
   separate results (CLAUDE.md rule 1). `quality/**` and `integrity/**` may not import each other,
   here or in `workers/jobs/src/` (spec `specs/m0-foundations.md` §10.1, enforced by ESLint
   boundaries). No code path combines the two, and an integrity decision never edits a quality score.
-- **Allowed package imports:** `@trace/shared`, `@trace/vendors`, `@trace/db-types` only (§10.1).
+- **Allowed package imports:** `@trace/shared`, `@trace/vendors`, `@trace/db-types` (§10.1), plus the
+  later edges of `packages/config/eslint/boundaries.js`: `@trace/workers-http` (M0b), `@trace/band-engine`
+  (D1, report metadata only), `@trace/item-variants` and `@trace/item-delivery` (M1), and
+  `@trace/pii-crypto` (M2 R5-36: contact normalisation, encryption, blind index and hints; plaintext
+  contact data exists only in api and `workers/jobs` memory and is never logged). Nothing else.
 - **Vendors behind interfaces.** Modules call `@trace/vendors` interfaces, never a vendor SDK
   directly (CLAUDE.md engineering rules).
 - **Credentials come from the Worker's environment**, never from code or config in git. This

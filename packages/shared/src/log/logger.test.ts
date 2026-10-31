@@ -178,10 +178,28 @@ describe('ErrorReporter (AT-9)', () => {
     expect(() => noopErrorReporter.capture({ name: 'Error' }, { release: 'dev' })).not.toThrow();
   });
 
-  it('has no Sentry package in any lockfile importer (revision 10)', () => {
+  it('has Sentry packages only in the recruiter app, api and jobs importers (d1 AT-D22)', () => {
+    // M0a (revision 10) had none at all. From D1 only the three reporting consumers hold one; the
+    // candidate app, workers/edge and the shared packages never do (spec §9.2, build-notes Q17).
     const lock = readFileSync(path.join(workspaceRoot(), 'pnpm-lock.yaml'), 'utf8');
-    expect(lock).toMatch(/^importers:/m);
-    expect(lock).not.toMatch(/@sentry\//);
+    expect(lock).toMatch(/^importers:$/m);
+    // pnpm 12 writes more than one YAML document, each may have an importers section: read them all.
+    const sentry: Record<string, string[]> = {};
+    let inImporters = false;
+    let importer = '';
+    for (const line of lock.split('\n')) {
+      if (/^\S/.test(line)) inImporters = line === 'importers:';
+      if (!inImporters) continue;
+      const header = /^ {2}(\S+):$/.exec(line);
+      if (header) importer = header[1] ?? '';
+      const dep = /^ {6}'?(@sentry\/[^':]+)'?:/.exec(line);
+      if (dep) (sentry[importer] ??= []).push(dep[1] ?? '');
+    }
+    expect(sentry).toEqual({
+      'apps/recruiter': ['@sentry/react'],
+      'services/api': ['@sentry/cloudflare'],
+      'workers/jobs': ['@sentry/cloudflare'],
+    });
   });
 });
 

@@ -75,7 +75,7 @@ describe('planChecks', () => {
   it('plans every MT-*.sql of the real catalog, in manifest order, and the count equals the manifest', () => {
     const { plan, problems, manifestCount } = planChecks(REPO);
     expect(problems).toEqual([]);
-    expect(manifestCount).toBe(18);
+    expect(manifestCount).toBe(19);
     expect(plan.map((p) => p.id)).toEqual([
       'MT-1',
       'MT-2',
@@ -95,6 +95,7 @@ describe('planChecks', () => {
       'MT-12',
       'MT-13',
       'MT-14',
+      'MT-15',
     ]);
     for (const p of plan) {
       expect(p.file).toBe(`supabase/catalog-checks/${p.id}.sql`);
@@ -212,13 +213,13 @@ describe('runCatalogChecks', () => {
     const { run, calls } = fakeRunner();
     const r = runCatalogChecks({ root: REPO, dbUrl: DB_URL, run });
     expect(r.violations).toEqual([]);
-    expect(calls).toHaveLength(18);
+    expect(calls).toHaveLength(19);
     for (const c of calls) {
       expect(c.args).toEqual([...PSQL_ARGS, '-d', DB_URL]);
       expect(c.input.startsWith('begin;\nset transaction read only;\n')).toBe(true);
       expect(c.input.endsWith('rollback;\n')).toBe(true);
     }
-    expect(r.report.at(-1)).toBe('18 check(s) run, 18 in manifest.json, all clean');
+    expect(r.report.at(-1)).toBe('19 check(s) run, 19 in manifest.json, all clean');
   });
 
   it('fails on any output line and prints the rows (redacted), not the URL', () => {
@@ -235,7 +236,7 @@ describe('runCatalogChecks', () => {
   it('fails on stderr output even with exit 0 (any output line fails)', () => {
     const { run } = fakeRunner(() => ({ ...ok(), stderr: 'WARNING:  something\n' }));
     const r = runCatalogChecks({ root: REPO, dbUrl: DB_URL, run });
-    expect(r.violations.filter((v) => /: 1 output line\(s\)/.test(v))).toHaveLength(18);
+    expect(r.violations.filter((v) => /: 1 output line\(s\)/.test(v))).toHaveLength(19);
     expect(r.violations).toContain('  WARNING:  something');
   });
 
@@ -294,7 +295,7 @@ describe('main', () => {
     expect(code).toBe(0);
     expect(calls).toHaveLength(0);
     const text = c.lines.out.join('\n');
-    expect(text).toMatch(/18 check\(s\), manifest\.json lists 18/);
+    expect(text).toMatch(/19 check\(s\), manifest\.json lists 19/);
     expect(text).toMatch(
       /MT-12: psql -X -v ON_ERROR_STOP=1 -q -At -d "\$SUPABASE_STAGING_DB_URL" < begin; set transaction read only; supabase\/catalog-checks\/MT-12\.sql; rollback;/,
     );
@@ -380,7 +381,7 @@ describe('main', () => {
       const { run, calls } = fakeRunner();
       const env = { [DB_URL_ENV]: `${DB_BASE}${q}` };
       expect(main({ argv: [], env, root: REPO, run, ...c }), q).toBe(0);
-      expect(calls).toHaveLength(18);
+      expect(calls).toHaveLength(19);
     }
   });
 

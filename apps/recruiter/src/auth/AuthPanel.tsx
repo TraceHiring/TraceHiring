@@ -7,6 +7,8 @@ import styles from './AuthPanel.module.css';
 import type { AuthErrorKind, AuthSnapshot } from './flow';
 
 export const UNCONFIGURED_MESSAGE = 'Sign-in is not configured for this build';
+/** The email-code step says this whether or not the address has an account (founder, 2026-10-15). */
+export const CODE_SENT_MESSAGE = 'If this address has an account, a code is on its way';
 
 /** The only error texts the sign-in screens show (§4.2: generic, never the server's). */
 export const ERROR_MESSAGES: Readonly<Record<AuthErrorKind, string>> = {
@@ -226,7 +228,7 @@ export function AuthView({
       return (
         <section className={styles.panel}>
           <h2 className={styles.heading}>Check your email</h2>
-          <p>We sent a 6-digit code to {state.email}.</p>
+          <p>{CODE_SENT_MESSAGE}</p>
           <ErrorLine error={state.error} />
           <CodeForm busy={busy} label="Code" submit="Verify code" onSubmit={forms.otp} />
           {signOut('Start again')}

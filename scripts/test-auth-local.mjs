@@ -10,6 +10,8 @@
 //      → TOTP enrol + verify → aal2, amr [password, totp], sees exactly its org through PostgREST.
 //   3. Recruiter: email OTP, the 6-digit code read from mailpit → aal1, amr [otp], sees its org.
 //   4. audit_log: one auth.sign_in per sign-in and one auth.step_up after the TOTP verification.
+//   5. DC-M1-1 (specs/m1-test-authoring.md §8): the owner calls the INVOKER public.import_item_batch
+//      through PostgREST; aal1 is refused (RLS hides the job), aal2 is accepted and the guards apply.
 // amr is compared as a set of methods (GoTrue orders it newest first). Output: one line, OK or the
 // failed step with an HTTP status or a short reason; never a body, token, key, password, code or id.
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -294,7 +296,83 @@ async function run(deps) {
       'checking the sign-in audit events',
       `${got.length} event group(s), expected 3 exact ones`,
     );
-  return 'password, TOTP and email-code sign-ins, claims and audit events';
+
+  // 5. DC-M1-1 (specs/m1-test-authoring.md §8): PostgREST runs a public SECURITY INVOKER function with the
+  //    caller's JWT, so RLS and the guards apply inside it. The operator opens an import job in the org; the
+  //    owner's batch is refused at aal1 (RLS hides the job from a privileged role below aal2) and accepted at
+  //    aal2; the operator then reads what the guards wrote.
+  const job = runSql(
+    {
+      url: stack.DB_URL,
+      sql: [
+        'insert into public.import_jobs (org_id, workspace_id, source_kind, template_version, created_by)',
+        "select w.org_id, w.id, 'xlsx', 'trace-items-v1', :'owner_id' from public.workspaces as w",
+        "where w.org_id = :'org_id' and w.is_default returning id;\n",
+      ].join('\n'),
+      vars: { org_id: orgId, owner_id: ownerId },
+    },
+    deps,
+  );
+  const jobId = job.ok ? job.out.trim() : '';
+  if (!isUuid(jobId))
+    fail('opening an import job', job.sqlstate ? `SQLSTATE ${job.sqlstate}` : 'no job id');
+  const rpc = (bearer) =>
+    http(deps, 'POST', `${api}/rest/v1/rpc/import_item_batch`, {
+      headers: { apikey: key, Authorization: `Bearer ${bearer}` },
+      body: { p_job: jobId, p_rows: INVOKER_ROWS },
+    });
+  const low = await rpc(t1);
+  const high = await rpc(t2);
+  const after = runSql(
+    {
+      url: stack.DB_URL,
+      sql: "select j.status || ' ' || (select count(*) from public.import_row_errors as e where e.import_job_id = j.id) from public.import_jobs as j where j.id = :'job_id';\n",
+      vars: { job_id: jobId },
+    },
+    deps,
+  );
+  const problem = invokerVerdict({
+    low: low.status,
+    lowData: low.data,
+    high: high.status,
+    highData: high.data,
+    after: after.ok ? after.out.trim() : null,
+  });
+  if (problem !== null) fail('calling an INVOKER function through PostgREST (DC-M1-1)', problem);
+  return 'password, TOTP and email-code sign-ins, claims, audit events and an INVOKER rpc';
+}
+
+/** DC-M1-1: one error-only import row (no item content needed); the batch stores it as an import_row_errors row. */
+export const INVOKER_ROWS = Object.freeze([
+  Object.freeze({
+    rowNo: 2,
+    errors: Object.freeze([Object.freeze({ field: 'stem', code: 'missing_field' })]),
+  }),
+]);
+
+/**
+ * DC-M1-1 verdict, or null. aal2 must be accepted with exactly the error row back; aal1 must be refused with 409
+ * (23503 'import job not found': RLS hid the job inside the INVOKER function); the job must be validating with one
+ * stored error row. Never echoes a body (the refusal body is compared, not printed).
+ */
+export function invokerVerdict({ low, lowData, high, highData, after }) {
+  if (high !== 200) return `the aal2 call returned HTTP ${high ?? 'network error'}`;
+  const e = Array.isArray(highData?.errors) ? highData.errors : [];
+  if (
+    highData?.accepted !== 0 ||
+    e.length !== 1 ||
+    e[0]?.rowNo !== 2 ||
+    e[0]?.field !== 'stem' ||
+    e[0]?.code !== 'missing_field'
+  )
+    return 'the aal2 call returned an unexpected result';
+  if (low !== 409)
+    return `the aal1 call returned HTTP ${low ?? 'network error'}, expected 409 (RLS hides the job)`;
+  // PostgREST answers 409 for 23505 too: the code and the guard's message must both be the hidden job's.
+  if (lowData?.code !== '23503' || lowData?.message !== 'TRACE_GUARD: import job not found')
+    return 'the aal1 call was refused for another reason (expected 23503, job not found)';
+  if (after !== 'validating 1') return 'the job is not validating with one stored error row';
+  return null;
 }
 
 /** Returns the exit code: 0 ok, 1 failure. */

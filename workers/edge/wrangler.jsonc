@@ -1,5 +1,13 @@
-// Placeholder Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
-// No secrets, no credential vars and no Queue, R2, Durable Object or cron bindings in M0a.
+// Worker config (specs/m0-foundations.md §2, §3 D5/D6, §14 S1).
+// D1 bindings (specs/d1-demo-slice.md §4.2, §7.1): Durable Objects, R2, the mirror Queue producer and
+// the CandidateRpc service binding, repeated in each env block (bindings and vars are not
+// inherited). The edge holds no secret and no TRACE_ENV (L-10, L-11); every var is public.
+// M1 R5-10: the ITEM_MEDIA bucket (item images), read with get/head only (check-boundaries rule 11).
+// OPEN-13 (spec §11, C1a review SEC-2): the Workers Rate Limiting binding LINK_LIMITER caps the three link-token
+// routes (invite/resolve, otp/request, otp/verify) at 300 calls per 10 s per route key per Cloudflare location, a
+// database guard and never an integrity signal (rule 7). Its namespace_id is unique per env (a shared id would share
+// counters). The top level binds nothing but VERSION (the `edge` test pool relies on it).
+// Deploy order: services/api, workers/jobs, then workers/edge (a service-binding target first).
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "trace-edge",
@@ -36,12 +44,74 @@
   "env": {
     "dev": {
       "name": "trace-edge-dev",
-      "vars": { "VERSION": "dev" },
+      "vars": {
+        "VERSION": "dev",
+        // One public JWK, or two during rotation, each with a kid (spec §4.3). Empty until the
+        // operator publishes the key; token verification fails closed on an empty value.
+        "CANDIDATE_TOKEN_PUBLIC_JWK": "",
+        "CANDIDATE_APP_ORIGIN": "http://localhost:5173",
+        "MIRROR_TRANSPORT": "queue",
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "SESSION", "class_name": "SessionDO" },
+          { "name": "OTP", "class_name": "InviteOtpDO" },
+        ],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SessionDO", "InviteOtpDO"] }],
+      "r2_buckets": [
+        // Edge code only calls get/head on PACKAGES and ITEM_MEDIA (scripts/check-boundaries.mjs rule 11).
+        { "binding": "PACKAGES", "bucket_name": "trace-packages-dev" },
+        { "binding": "EVIDENCE", "bucket_name": "trace-evidence-dev" },
+        // M1 R5-10: item images, served to a session only for its served items (GET /v1/session/media/:hash).
+        { "binding": "ITEM_MEDIA", "bucket_name": "trace-item-media-dev" },
+      ],
+      "queues": {
+        "producers": [{ "binding": "MIRROR_QUEUE", "queue": "trace-session-mirror-dev" }],
+      },
+      "services": [{ "binding": "API", "service": "trace-api-dev", "entrypoint": "CandidateRpc" }],
+      "ratelimits": [
+        {
+          "name": "LINK_LIMITER",
+          "namespace_id": "1101",
+          "simple": { "limit": 300, "period": 10 },
+        },
+      ],
     },
     "staging": {
       "name": "trace-edge-staging",
       "workers_dev": true,
-      "vars": { "VERSION": "dev" },
+      "vars": {
+        "VERSION": "dev",
+        "CANDIDATE_TOKEN_PUBLIC_JWK": "",
+        "CANDIDATE_APP_ORIGIN": "https://trace-candidate-staging.pages.dev",
+        "MIRROR_TRANSPORT": "queue",
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "SESSION", "class_name": "SessionDO" },
+          { "name": "OTP", "class_name": "InviteOtpDO" },
+        ],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SessionDO", "InviteOtpDO"] }],
+      "r2_buckets": [
+        { "binding": "PACKAGES", "bucket_name": "trace-packages-staging" },
+        { "binding": "EVIDENCE", "bucket_name": "trace-evidence-staging" },
+        { "binding": "ITEM_MEDIA", "bucket_name": "trace-item-media-staging" },
+      ],
+      "queues": {
+        "producers": [{ "binding": "MIRROR_QUEUE", "queue": "trace-session-mirror-staging" }],
+      },
+      "services": [
+        { "binding": "API", "service": "trace-api-staging", "entrypoint": "CandidateRpc" },
+      ],
+      "ratelimits": [
+        {
+          "name": "LINK_LIMITER",
+          "namespace_id": "1102",
+          "simple": { "limit": 300, "period": 10 },
+        },
+      ],
     },
   },
 }

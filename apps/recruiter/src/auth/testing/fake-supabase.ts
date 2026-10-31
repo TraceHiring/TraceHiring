@@ -3,6 +3,7 @@
 // gives it (the rows RLS would return). Failures carry `ERROR_MARKER` in their text so tests can
 // prove server error text is never rendered or logged. Synthetic data only.
 import type {
+  AuthEventListener,
   ClientStorage,
   EnrolData,
   Outcome,
@@ -70,6 +71,7 @@ export class FakeSupabase {
   private session: { methods: string[]; aal: 'aal1' | 'aal2' } | null;
   private options: FakeOptions;
   private readonly gates = new Map<FakeCall, Promise<void>>();
+  private readonly authListeners = new Set<AuthEventListener>();
 
   constructor(options: FakeOptions = {}) {
     this.options = options;
@@ -95,6 +97,16 @@ export class FakeSupabase {
       }),
     );
     return () => release();
+  }
+
+  /** How many `onAuthStateChange` subscriptions are live (M1 AT-M1-27). */
+  get authListenerCount(): number {
+    return this.authListeners.size;
+  }
+
+  /** Delivers a supabase-js auth event to every live subscription, as supabase-js would. */
+  emit(event: string, session: { user: { id: string } } | null): void {
+    for (const listener of [...this.authListeners]) listener(event, session);
   }
 
   get signedIn(): boolean {
@@ -158,9 +170,23 @@ export class FakeSupabase {
         this.calls.push({ call: 'signOut', args: [] });
         await Promise.resolve();
         this.session = null;
+        // supabase-js removes the local session and emits SIGNED_OUT even when the server call fails.
+        this.emit('SIGNED_OUT', null);
         const mode = this.options.fail?.signOut;
         if (mode === 'throw') throw new Error(markerError('signOut').message);
         return { error: mode === 'error' ? markerError('signOut') : null };
+      },
+      onAuthStateChange: (callback) => {
+        this.authListeners.add(callback);
+        return {
+          data: {
+            subscription: {
+              unsubscribe: () => {
+                this.authListeners.delete(callback);
+              },
+            },
+          },
+        };
       },
       mfa: {
         getAuthenticatorAssuranceLevel: () =>

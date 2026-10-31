@@ -2,9 +2,35 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   LEVELS,
+  WORKER_USER,
+  cancelSql,
+  cancelVerdict,
   demoteSql,
+  draftInsertSql,
+  draftSetupSql,
+  draftVerdict,
+  draftWorkerSetupSql,
+  draftsSql,
+  importBatchSql,
+  importCountsSql,
+  importSetupSql,
   ownersSql,
+  pasteDraftSaveSql,
+  pasteRulesSql,
+  pasteSettingsSql,
+  pasteSetupSql,
+  pasteVerdict,
   setupSql,
+  M2_SCENARIOS,
+  bookSql,
+  claimBookSql,
+  claimHoldSql,
+  claimProbeSql,
+  claimStateSql,
+  claimVerdict,
+  seatSetupSql,
+  seatVerdict,
+  seatsSql,
   upFrontVerdict,
   verdict,
   waitingSql,
@@ -54,5 +80,221 @@ describe('test-concurrency-local (M0B-DB-5)', () => {
     expect(verdict({ firstErrored: false, secondErrored: true, owners: 0 })).toMatch(
       /0 active owners/,
     );
+  });
+});
+
+describe('test-concurrency-local: a draft save during a settings write (M1 R5-71, M1-p review)', () => {
+  it('builds SQL only from validated ids and markers', () => {
+    const owner = randomUUID();
+    const versionId = randomUUID();
+    const rulesetId = randomUUID();
+    const setup = pasteSetupSql({ owner, suffix: '0a1b2c3d' });
+    expect(setup).toMatch(/p-conc-paste-0a1b2c3d@example\.test/);
+    expect(setup).toContain("preset_key = 'standard'");
+    expect(() => pasteSetupSql({ owner, suffix: "x'" })).toThrow();
+    const settings = pasteSettingsSql({ owner, rulesetId, marker: 'A_SETTINGS' });
+    expect(settings).toContain('begin isolation level read committed;');
+    expect(settings).toContain(`'${rulesetId}'`);
+    expect(settings).toContain("p.preset_key = 'strict'");
+    expect(settings).toContain('\\echo A_SETTINGS');
+    expect(() => pasteSettingsSql({ owner, rulesetId: "x' or true", marker: 'x' })).toThrow();
+    const save = pasteDraftSaveSql({ owner, versionId, marker: 'B_SAVED' });
+    expect(save).toContain('public.save_test_draft');
+    expect(save).toContain(`'${versionId}'`);
+    expect(() => pasteDraftSaveSql({ owner, versionId, marker: "x'" })).toThrow();
+    expect(() => pasteRulesSql("'; drop table x; --")).toThrow();
+  });
+
+  it('passes only when the save waited, both committed and the written section follows the new setting', () => {
+    const ok = { waited: true, settingsErrored: false, saveErrored: false, rules: 'blocked' };
+    expect(pasteVerdict(ok)).toBeNull();
+    expect(pasteVerdict({ ...ok, waited: false })).toMatch(/did not wait/);
+    expect(pasteVerdict({ ...ok, settingsErrored: true })).toMatch(/settings write failed/);
+    expect(pasteVerdict({ ...ok, saveErrored: true })).toMatch(/save failed/);
+    expect(pasteVerdict({ ...ok, rules: 'allowed_logged' })).toMatch(/stale/);
+  });
+});
+
+describe('test-concurrency-local: import cancel during a batch (M1 DB review H1)', () => {
+  it('builds SQL only from validated ids, row numbers and markers', () => {
+    const owner = randomUUID();
+    const jobId = randomUUID();
+    const setup = importSetupSql({ owner, suffix: '0a1b2c3d' });
+    expect(setup).toMatch(/p-conc-imp-0a1b2c3d@example\.test/);
+    expect(setup).toContain('public.import_item_batch');
+    expect(() => importSetupSql({ owner, suffix: "x'" })).toThrow();
+    const batch = importBatchSql({ owner, jobId, rowNo: 3, marker: 'A_BATCHED' });
+    expect(batch).toContain('begin isolation level read committed;');
+    expect(batch).toContain(`'${jobId}'`);
+    expect(batch).toContain('"rowNo": 3');
+    expect(batch).toContain('\\echo A_BATCHED');
+    expect(() => importBatchSql({ owner, jobId, rowNo: '3; drop', marker: 'x' })).toThrow();
+    expect(() => importBatchSql({ owner, jobId, rowNo: 3, marker: "x'" })).toThrow();
+    expect(cancelSql({ owner, jobId, marker: 'B_CANCELLED' })).toContain(
+      "set status = 'cancelled'",
+    );
+    expect(() => cancelSql({ owner: "x' or true --", jobId, marker: 'x' })).toThrow();
+    expect(() => importCountsSql("'; drop table x; --")).toThrow();
+  });
+
+  it('passes only when the cancel waited, both committed and the counts match the stored rows', () => {
+    const ok = { waited: true, batchErrored: false, cancelErrored: false, counts: 'cancelled|2|2' };
+    expect(cancelVerdict(ok)).toBeNull();
+    expect(cancelVerdict({ ...ok, waited: false })).toMatch(/did not wait/);
+    expect(cancelVerdict({ ...ok, batchErrored: true })).toMatch(/batch failed/);
+    expect(cancelVerdict({ ...ok, cancelErrored: true })).toMatch(/cancel failed/);
+    expect(cancelVerdict({ ...ok, counts: 'cancelled|1|2' })).toMatch(
+      /1 error rows .* 2 are stored/,
+    );
+    expect(cancelVerdict({ ...ok, counts: 'validating|0|2' })).toMatch(/not cancelled/);
+  });
+});
+
+describe('test-concurrency-local: two deliveries of a count-1 drafting job (M1 DB review M1)', () => {
+  it('builds SQL only from validated ids and markers', () => {
+    const owner = randomUUID();
+    const setup = draftSetupSql({ owner, suffix: '0a1b2c3d' });
+    expect(setup).toMatch(/p-conc-draft-0a1b2c3d@example\.test/);
+    expect(setup).toMatch(/'mcq', 'verbal', 0\.50, 1,/);
+    expect(setup).not.toContain('trace_authoring_worker');
+    expect(() => draftSetupSql({ owner, suffix: 'zz' })).toThrow();
+    const worker = draftWorkerSetupSql({
+      orgId: randomUUID(),
+      wsId: randomUUID(),
+      jobId: randomUUID(),
+    });
+    expect(worker).toContain("set_config('role', 'trace_authoring_worker', true)");
+    expect(worker).toContain("set status = 'running'");
+    expect(() =>
+      draftWorkerSetupSql({ orgId: 'x', wsId: randomUUID(), jobId: randomUUID() }),
+    ).toThrow();
+    expect(WORKER_USER).toBe('supabase_admin');
+    const ids = { orgId: randomUUID(), jobId: randomUUID(), itemId: randomUUID() };
+    const insert = draftInsertSql({ ...ids, shaChar: 'c', marker: 'A_DRAFTED' });
+    expect(insert).toContain('begin isolation level read committed;');
+    expect(insert).toContain("set_config('role', 'trace_authoring_worker', true)");
+    expect(insert).toContain(`'${ids.itemId}'`);
+    expect(insert).toContain("repeat('c', 64)");
+    expect(() => draftInsertSql({ ...ids, shaChar: "c'", marker: 'x' })).toThrow();
+    expect(() => draftInsertSql({ ...ids, itemId: 'nope', shaChar: 'c', marker: 'x' })).toThrow();
+    expect(() => draftsSql("'; drop table x; --")).toThrow();
+  });
+
+  it('passes only when the second delivery waited, was refused, one draft is stored and the job still runs', () => {
+    const ok = { waited: true, firstErrored: false, secondErrored: true, state: 'running|1' };
+    expect(draftVerdict(ok)).toBeNull();
+    expect(draftVerdict({ ...ok, waited: false })).toMatch(/did not wait/);
+    expect(draftVerdict({ ...ok, firstErrored: true })).toMatch(/first delivery failed/);
+    expect(draftVerdict({ ...ok, secondErrored: false, state: 'running|2' })).toMatch(
+      /was not refused/,
+    );
+    expect(draftVerdict({ ...ok, state: 'running|2' })).toMatch(/2 drafts, not 1/);
+    // Database review L3: the refusal text is shared with "job not running"; a job that ended is a failure.
+    expect(draftVerdict({ ...ok, state: 'completed|1' })).toBe('the job is completed, not running');
+    expect(draftsSql(randomUUID())).toContain('from public.ai_draft_jobs as j');
+  });
+});
+
+describe('test-concurrency-local: two bookings on the last seat (M2 AT-M2-08, I-M2-3)', () => {
+  it('runs after the M1 scenarios', () => {
+    expect(M2_SCENARIOS.map((s) => s.name)).toEqual([
+      'last seat of a slot',
+      'two messaging claims at once',
+    ]);
+  });
+
+  it('builds the setup from a validated owner and suffix: a published 10x pool version, a one-seat slot', () => {
+    const owner = randomUUID();
+    const setup = seatSetupSql({ owner, suffix: '0a1b2c3d' });
+    expect(setup).toMatch(/p-conc-seat-0a1b2c3d@example\.test/);
+    expect(setup).toContain('generate_series(1, 10)');
+    expect(setup).toContain("'scheduled'");
+    expect(setup).toMatch(
+      /capacity\) values \(:'org_id', :'drive_id', now\(\) \+ interval '2 days', 1\)/,
+    );
+    for (const k of ['ORG', 'SLOT', 'CANDA', 'CANDB']) expect(setup).toContain(`'${k} ' ||`);
+    expect(setup).not.toMatch(/@(?!example\.test)/);
+    expect(() => seatSetupSql({ owner, suffix: 'zz' })).toThrow();
+    expect(() => seatSetupSql({ owner: 'x', suffix: '0a1b2c3d' })).toThrow();
+  });
+
+  it('books as the org owner under READ COMMITTED, from validated ids and a marker', () => {
+    const ids = {
+      owner: randomUUID(),
+      orgId: randomUUID(),
+      driveId: randomUUID(),
+      slotId: randomUUID(),
+      candidateId: randomUUID(),
+    };
+    const sql = bookSql({ ...ids, marker: 'A_BOOKED' });
+    expect(sql).toContain('begin isolation level read committed;');
+    expect(sql).toContain("set_config('role', 'authenticated', true)");
+    expect(sql).toContain(`'${ids.slotId}'`);
+    expect(sql).toContain(`'${ids.candidateId}'`);
+    expect(sql).toContain('\\echo A_BOOKED');
+    expect(() => bookSql({ ...ids, slotId: 'nope', marker: 'A_BOOKED' })).toThrow();
+    expect(() => bookSql({ ...ids, marker: 'a;b' })).toThrow();
+    expect(seatsSql(ids.slotId)).toContain('from public.slots as s');
+    expect(() => seatsSql("'; drop table x; --")).toThrow();
+  });
+
+  it('passes only when the second booking waited, was refused as full, and the slot holds one booking', () => {
+    const ok = { waited: true, firstErrored: false, secondRefusedFull: true, seats: '1|1' };
+    expect(seatVerdict(ok)).toBeNull();
+    expect(seatVerdict({ ...ok, waited: false })).toMatch(/did not wait/);
+    expect(seatVerdict({ ...ok, firstErrored: true })).toMatch(/first booking failed/);
+    expect(seatVerdict({ ...ok, secondRefusedFull: false, seats: '2|2' })).toMatch(
+      /not refused as full/,
+    );
+    expect(seatVerdict({ ...ok, seats: '1|2' })).toMatch(/booked 1, invitations 2/);
+  });
+});
+
+// DC-M2-4 (specs/m2-scheduling-invites.md §8, R5-9; ADR-031 amendment 1): the cron claim is FOR UPDATE SKIP LOCKED
+// in one transaction with unprepared statements, so a second claim during a first never waits and never takes a row
+// the first holds.
+describe('test-concurrency-local: two messaging claims at once (M2 DC-M2-4)', () => {
+  const ids = () => ({
+    owner: randomUUID(),
+    orgId: randomUUID(),
+    driveId: randomUUID(),
+    slotId: randomUUID(),
+    candidateId: randomUUID(),
+  });
+
+  it('commits one booking, so the planner leaves the org one due invite message', () => {
+    const sql = claimBookSql(ids());
+    expect(sql).toContain('begin isolation level read committed;');
+    expect(sql.trimEnd().endsWith('commit;')).toBe(true);
+    expect(() => claimBookSql({ ...ids(), slotId: 'nope' })).toThrow();
+  });
+
+  it('claims as the messaging worker in one transaction, the first held open after its marker', () => {
+    const { orgId } = ids();
+    const hold = claimHoldSql({ orgId, marker: 'A_CLAIMED' });
+    expect(hold).toContain('begin isolation level read committed;');
+    expect(hold).toContain('set local role trace_messaging_worker;');
+    expect(hold).toContain('private.claim_due_messages(now(), 1000)');
+    expect(hold).toContain(`'${orgId}'`);
+    expect(hold).toContain('\\echo A_CLAIMED');
+    expect(hold).not.toMatch(/^\s*(commit|rollback|end)\s*;/im);
+    const probe = claimProbeSql({ orgId });
+    expect(probe).toContain("set statement_timeout = '5s';");
+    expect(probe).toContain('set local role trace_messaging_worker;');
+    expect(probe.trimEnd().endsWith('commit;')).toBe(true);
+    expect(() => claimHoldSql({ orgId, marker: 'a;b' })).toThrow();
+    expect(() => claimProbeSql({ orgId: "'; drop table x; --" })).toThrow();
+    expect(claimStateSql(orgId)).toContain('from public.outbound_messages as m');
+    expect(() => claimStateSql('x')).toThrow();
+  });
+
+  it('passes only when the first took every due row, the second took none without waiting, each row has its claim', () => {
+    const ok = { dueBefore: '1', held: '1', probe: '0', probeErrored: false, state: '0|1|1' };
+    expect(claimVerdict(ok)).toBeNull();
+    expect(claimVerdict({ ...ok, dueBefore: '0' })).toMatch(/no due message/);
+    expect(claimVerdict({ ...ok, probeErrored: true })).toMatch(/waited or failed/);
+    expect(claimVerdict({ ...ok, held: '0' })).toMatch(/first claim took 0 of 1/);
+    expect(claimVerdict({ ...ok, probe: '1' })).toMatch(/second claim took 1/);
+    expect(claimVerdict({ ...ok, state: '0|1|0' })).toMatch(/claim ids 0/);
   });
 });
