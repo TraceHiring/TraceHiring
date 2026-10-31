@@ -2,19 +2,32 @@
 // keys (CANDIDATE_TOKEN_PUBLIC_JWK: a JSON array of one or two public JWKs, the signing key first) and verifies, in
 // this order, rejecting on the first failure: `alg` is ES256 (anything else, `none` included, before the signature);
 // the `kid` is in the var; the signature (Web Crypto); the strict claim shape; `typ` is the route's; the lifetime cap;
-// `iat <= now + 60 s` and `exp > now`. The nonce check (InviteOtpDO for `lobby`, SessionDO for `session`) follows in
-// the caller. A missing, empty or malformed key var, or one holding a private member, fails closed with 503.
+// `iat <= now + 60 s` and `exp > now`. The nonce check (InviteOtpDO for `lobby` and `portal`, SessionDO for `session`)
+// follows in the caller. A missing, empty or malformed key var, or one holding a private member, fails closed with 503.
 import { CandidateTokenClaims } from '@trace/shared/contracts/candidate';
 import { z } from 'zod';
 import { base64UrlDecode, utf8 } from './encoding.js';
 import { fail } from './http.js';
 
-export const LOBBY_TTL_SECONDS = 1800;
+/**
+ * The verifier's lifetime cap per `typ` (ADR-030 amendment 1; M2 R5-19, R5-66 f): `lobby` 5,460 s (lobby up to 60 min
+ * early + start window up to 30 min + 60 s; the tighter `na + 60 s` and D1's 1,800 s are mint-side rules in api
+ * `lobbyMint`, since no claim tells a verifier the row kind), `session` 10,800 s (unchanged), `portal` 1,800 s.
+ */
+export const LOBBY_TTL_CAP_SECONDS = 5460;
 export const SESSION_TTL_CAP_SECONDS = 10_800;
+export const PORTAL_TTL_CAP_SECONDS = 1800;
 /** Allowed clock skew on `iat` (§4.3). */
 export const IAT_SKEW_SECONDS = 60;
 
-export type TokenTyp = 'lobby' | 'session';
+/** `portal` is accepted only on the two portal routes (R5-24), which are the only callers that ask for it. */
+export type TokenTyp = 'lobby' | 'session' | 'portal';
+
+const CAP_SECONDS: Record<TokenTyp, number> = {
+  lobby: LOBBY_TTL_CAP_SECONDS,
+  session: SESSION_TTL_CAP_SECONDS,
+  portal: PORTAL_TTL_CAP_SECONDS,
+};
 
 const KID = /^d1-\d{4}-(0[1-9]|1[0-2])$/;
 const COORD = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
@@ -138,8 +151,7 @@ export const verifyCandidateToken = async (
   const claims = CandidateTokenClaims.safeParse(decodeJson(p));
   if (!claims.success || claims.data.typ !== typ) return invalid();
   const { iat, exp } = claims.data;
-  const cap = typ === 'lobby' ? LOBBY_TTL_SECONDS : SESSION_TTL_CAP_SECONDS;
-  if (exp - iat > cap) return invalid();
+  if (exp - iat > CAP_SECONDS[typ]) return invalid();
   if (iat > nowSec + IAT_SKEW_SECONDS) return invalid();
   if (exp <= nowSec) return fail('token_expired');
   return claims.data;

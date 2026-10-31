@@ -4,7 +4,11 @@
 // (get only), the evidence bucket and the mirror queue (tested on fakes: the test pool has no SESSION binding).
 // The object never reads Postgres and holds no secret.
 import { DurableObject } from 'cloudflare:workers';
-import type { ClientEvent, SessionMirrorMessage } from '@trace/shared/contracts/candidate';
+import type {
+  ClientEvent,
+  SessionMirrorMessage,
+  SessionPeekRes,
+} from '@trace/shared/contracts/candidate';
 import { edgeLogger } from './route-support.js';
 import {
   SessionCore,
@@ -71,6 +75,11 @@ export class SessionDO extends DurableObject<Env> implements SessionApi {
 
   override async alarm(): Promise<void> {
     await this.#core.alarm();
+  }
+
+  /** M2 R5-66 c: read only; whether this invitation's object holds a session. */
+  peek(): Promise<SessionPeekRes> {
+    return this.#core.peek();
   }
 
   start(input: StartInput): Promise<StartResult> {

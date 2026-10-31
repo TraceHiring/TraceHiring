@@ -134,6 +134,7 @@ describe('the portal token is accepted on exactly the two portal routes (R5-19, 
   it('a lobby token and a session token are refused on both portal routes (401 token_invalid)', async () => {
     const h = await sessionHarness();
     const lobby = await h.login();
+    h.clock.ms += 30_000; // the resend wait before the next login
     const session = await h.startSession();
     for (const token of [lobby, session.token]) {
       for (const res of [await slots(h, token), await reschedule(h, token)]) {

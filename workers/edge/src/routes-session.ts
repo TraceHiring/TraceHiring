@@ -9,6 +9,11 @@
 // Postgres; a retry re-grants and the DO answers its stored `startedAt`. Only when all of that succeeded is the lobby
 // nonce cleared, the working copy removed and the session token returned. A finished session answers its receipt.
 //
+// M2 (specs/m2-scheduling-invites.md R5-63, R5-66 c, AT-M2-10): the path stays D1's for every invitation. Before the
+// grant the edge peeks the invitation's SessionDO (read only) and passes `sessionLive`; a drive row's first-start grant
+// carries `sw { nb, na }`, which `SessionDO.start` re-checks by its own clock only when it creates the session (409
+// `outside_start_window`). The start makes no OTP issue or verify and no messagingSend call.
+//
 // `attach`, `items/:pos`, `events`, `submit` (session token): verified at the edge, then the invitation's SessionDO
 // (the id from verified claims only) checks the token's nonce. Ids in the URL, query or body are never used.
 import {
@@ -50,6 +55,7 @@ import {
   otpFor,
   rpc,
   sessionFor,
+  sessionLive,
   type RouteDeps,
 } from './route-support.js';
 import { mountItemMediaRoute } from './item-media.js';
@@ -174,10 +180,13 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
     handle(async (c) => {
       const { lobbyToken, claims } = await lobbyAuth(c, deps, 'start');
       const body = await readJson(c, SessionStartReq);
+      // M2 R5-66 c: a session the object already holds makes this a resume for a drive row (api skips the window).
+      const live = await sessionLive(c, claims.invitation_id);
       const grant = await rpc(c, deps, 'sessionGrant', {
         lobbyToken,
         rulesAcknowledged: true,
         photo: body.photo,
+        sessionLive: live,
       });
       // The token api minted must be a session token of this invitation carrying the grant's nonce.
       let granted: CandidateTokenClaims;
@@ -221,6 +230,8 @@ export const mountSessionRoutes = (app: Hono<EdgeEnv>, deps: RouteDeps): void =>
           adultConfirmed: grant.adultConfirmed,
           photo: photo?.ref ?? null,
           photoSkippedReason: 'skippedReason' in body.photo ? body.photo.skippedReason : null,
+          // M2 R5-63: a drive row's first-start window; the object re-checks it only when it creates the session.
+          sw: grant.sw ?? null,
         }),
       );
       if (!started.ok) {

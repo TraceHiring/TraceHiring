@@ -72,7 +72,7 @@ describe('drive rows: OTP purpose `lobby` only inside the lobby window (R5-19, R
 
   it('the window closing between request and verify: verify is 409 lobby_closed, nothing consumed or counted', async () => {
     const h = await driveHarness();
-    h.clock.ms = h.lobbyOpensAt() + MIN;
+    h.clock.ms = h.na() - 2 * MIN; // the code (valid 10 min) is still live when the window closes
     expect((await otpRequest(h)).status).toBe(200);
     const code = h.codes().at(-1) ?? '';
     const kv = h.otp.kvs.get(INVITATION);

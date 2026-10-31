@@ -6,6 +6,13 @@
 // of a fresh lobby nonce, so a new login kills the previous lobby token. Lobby requests check that hash and count
 // against a per-route limit here too. Storage is the object's synchronous SQLite-backed KV; every decision is made in
 // one synchronous block after the async hashing, so concurrent calls cannot interleave a read and a write.
+//
+// M2 (specs/m2-scheduling-invites.md R5-19, R5-24): the OTP purpose (`lobby`, or `manage` for the self-reschedule
+// portal) is stored in the challenge at issue, and a verify answers that stored purpose; the route mints by it, never by
+// anything sent at verify. A `manage` success stores its nonce hash under its own key (`portal:nonce_hash`), so a
+// manage login and a lobby login never supersede each other. The resend wait, the 3-per-10-min budget and the lock
+// are shared across purposes. Portal requests check the portal nonce and count against their own per-route limits.
+import type { OtpPurpose } from '@trace/shared/contracts/candidate';
 import { base64UrlEncode, constantTimeEqual, sha256Hex } from './encoding.js';
 
 export const CODE_TTL_MS = 10 * 60 * 1000;
@@ -28,6 +35,16 @@ export const LOBBY_LIMITS = {
 } as const;
 export type LobbyBucket = keyof typeof LOBBY_LIMITS;
 
+/**
+ * Per-invitation portal request limits per minute (M2 R5-24): the slot list 10/min, like a lobby step; the reschedule
+ * write 6/min, like the session start (api allows one self-reschedule anyway, M2-11).
+ */
+export const PORTAL_LIMITS = {
+  portal_slots: 10,
+  portal_reschedule: 6,
+} as const;
+export type PortalBucket = keyof typeof PORTAL_LIMITS;
+
 /** The slice of `ctx.storage.kv` this logic uses (a Map-backed fake implements it in tests). */
 export interface SyncKvLike {
   get<T = unknown>(key: string): T | undefined;
@@ -41,6 +58,8 @@ interface Challenge {
   hash: string;
   issuedAt: number;
   expiresAt: number;
+  /** M2: absent on a challenge stored before M2, which is a `lobby` one. */
+  purpose?: OtpPurpose;
 }
 
 interface RateWindow {
@@ -54,10 +73,18 @@ const K = {
   lockUntil: 'otp:lock_until',
   failures: 'otp:failures',
   lobbyNonce: 'lobby:nonce_hash',
+  portalNonce: 'portal:nonce_hash',
   photoUploads: 'photo:uploads',
   photosClosed: 'photo:closed',
-  rate: (bucket: LobbyBucket) => `rate:${bucket}`,
+  rate: (bucket: LobbyBucket | PortalBucket) => `rate:${bucket}`,
 } as const;
+
+/** The nonce key a verified purpose writes: a manage login never touches the lobby nonce, or the reverse. */
+const nonceKey = (purpose: OtpPurpose): string =>
+  purpose === 'manage' ? K.portalNonce : K.lobbyNonce;
+
+const purposeOf = (challenge: Challenge): OtpPurpose =>
+  challenge.purpose === 'manage' ? 'manage' : 'lobby';
 
 export type Refusal =
   | {
@@ -65,7 +92,7 @@ export type Refusal =
       error: 'otp_locked' | 'resend_too_soon' | 'rate_limited';
       retryAfterSeconds: number;
     }
-  | { ok: false; error: 'otp_wrong' | 'token_invalid' | 'superseded' };
+  | { ok: false; error: 'otp_wrong' | 'token_invalid' | 'superseded' | 'lobby_closed' };
 
 export type IssueResult =
   | {
@@ -78,7 +105,7 @@ export type IssueResult =
   | Refusal;
 /** `lockedNow` is set only on the wrong attempt that creates the lock (the route logs `otp.locked` once, SR-7). */
 export type VerifyResult =
-  | { ok: true; nonce: string }
+  | { ok: true; nonce: string; purpose: OtpPurpose }
   | Refusal
   | { ok: false; error: 'otp_locked'; retryAfterSeconds: number; lockedNow: true };
 export type GateResult = { ok: true } | Refusal;
@@ -126,8 +153,12 @@ export class OtpCore {
     return null;
   }
 
-  /** Issues a new challenge (the old one stops working), or refuses with the wait. */
-  async issue(): Promise<IssueResult> {
+  /**
+   * Issues a new challenge for `purpose` (default `lobby`; the old challenge stops working, whatever its purpose), or
+   * refuses with the wait. The budget is shared across purposes.
+   */
+  async issue(purpose: OtpPurpose = 'lobby'): Promise<IssueResult> {
+    const bound: OtpPurpose = purpose === 'manage' ? 'manage' : 'lobby';
     const code = this.#newCode();
     const salt = this.#token(16);
     const id = this.#token(16);
@@ -161,6 +192,7 @@ export class OtpCore {
       hash,
       issuedAt: now,
       expiresAt: now + CODE_TTL_MS,
+      purpose: bound,
     };
     this.#kv.put(K.challenge, challenge);
     this.#kv.put(K.issues, [...issues, now]);
@@ -186,8 +218,13 @@ export class OtpCore {
     if (at !== -1) this.#kv.put(K.issues, [...issues.slice(0, at), ...issues.slice(at + 1)]);
   }
 
-  /** Checks a code against the current challenge. A success rotates the lobby nonce and returns the raw nonce. */
-  async verify(code: string): Promise<VerifyResult> {
+  /**
+   * Checks a code against the current challenge. A success rotates the nonce of the challenge's stored purpose and
+   * returns the raw nonce with that purpose. With `allowed` (M2: the route closes `lobby` outside the lobby window), a
+   * live challenge of another purpose answers `lobby_closed` before the code is compared: nothing is consumed or
+   * counted, so the code still works once its purpose is allowed again.
+   */
+  async verify(code: string, allowed?: readonly OtpPurpose[]): Promise<VerifyResult> {
     if (typeof code !== 'string' || !/^[0-9]{6}$/.test(code))
       return { ok: false, error: 'otp_wrong' };
     const before = this.#kv.get<Challenge>(K.challenge);
@@ -206,11 +243,15 @@ export class OtpCore {
       this.#kv.delete(K.challenge);
       return { ok: false, error: 'otp_wrong' };
     }
+    const purpose = purposeOf(challenge);
+    if (allowed !== undefined && !allowed.includes(purpose)) {
+      return { ok: false, error: 'lobby_closed' };
+    }
     if (constantTimeEqual(candidate, challenge.hash)) {
       this.#kv.delete(K.challenge);
       this.#kv.delete(K.failures);
-      this.#kv.put(K.lobbyNonce, nonceHash);
-      return { ok: true, nonce };
+      this.#kv.put(nonceKey(purpose), nonceHash);
+      return { ok: true, nonce, purpose };
     }
     // Wrong code: counted per invitation, across codes (SEC-3).
     const failures = (this.#kv.get<number>(K.failures) ?? 0) + 1;
@@ -230,12 +271,30 @@ export class OtpCore {
    */
   async lobbyGate(nonce: string, bucket: LobbyBucket): Promise<GateResult> {
     if (!Object.hasOwn(LOBBY_LIMITS, bucket)) return { ok: false, error: 'token_invalid' };
+    return this.#gate(K.lobbyNonce, nonce, bucket, LOBBY_LIMITS[bucket]);
+  }
+
+  /**
+   * One portal request (M2 R5-24): the portal token's nonce must be the current manage login's (a newer one answers
+   * `superseded`, none answers `token_invalid`); then the route's per-minute limit counts it. Lobby nonces never pass.
+   */
+  async portalGate(nonce: string, bucket: PortalBucket): Promise<GateResult> {
+    if (!Object.hasOwn(PORTAL_LIMITS, bucket)) return { ok: false, error: 'token_invalid' };
+    return this.#gate(K.portalNonce, nonce, bucket, PORTAL_LIMITS[bucket]);
+  }
+
+  async #gate(
+    nonceKeyName: string,
+    nonce: string,
+    bucket: LobbyBucket | PortalBucket,
+    limit: number,
+  ): Promise<GateResult> {
     if (typeof nonce !== 'string' || nonce.length < 16 || nonce.length > 128) {
       return { ok: false, error: 'token_invalid' };
     }
     const presented = await sha256Hex(nonce);
     const now = this.#now();
-    const stored = this.#kv.get<string>(K.lobbyNonce);
+    const stored = this.#kv.get<string>(nonceKeyName);
     if (stored === undefined) return { ok: false, error: 'token_invalid' };
     if (!constantTimeEqual(presented, stored)) return { ok: false, error: 'superseded' };
     const key = K.rate(bucket);
@@ -244,7 +303,7 @@ export class OtpCore {
       window !== undefined && now >= window.start && now - window.start < RATE_WINDOW_MS
         ? window
         : { start: now, n: 0 };
-    if (current.n >= LOBBY_LIMITS[bucket]) {
+    if (current.n >= limit) {
       return {
         ok: false,
         error: 'rate_limited',
