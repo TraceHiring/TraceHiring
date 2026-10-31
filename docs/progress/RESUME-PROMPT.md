@@ -8,7 +8,25 @@ earlier chats is available or needed. Updated 2026-10-12 12:35 IST: M0b spec app
   the 9 non-negotiable product rules (a violation is a blocking bug) and the engineering rules.
 - Build: milestones M0a → M13 in `docs/build-order.md`. Each milestone goes SPEC → BUILD → REVIEW → FIX → CLOSE
   (`docs/AUTOPILOT.md` §2, exactly ONE phase per session).
-- **Update 2026-10-27 09:05 IST, M1 FIX done (newest):** M1-REV-1, -2, -6, -7, -8 fixed one commit each, red first
+- **Update 2026-10-31 07:55 IST (newest):** candidate contract changes `937da1b` (R5-23) on `m2/integration` (tip
+  `937da1b`); the winnat restart did not free 54282-54381 (see HANDOFF). **Update 2026-10-31 00:35 IST, Wave 0b
+  part 1:** on `m2/integration` (tip `e9df567`): red pgTAP
+  `0387440`, migration M2-c `83185ff` (wip: pgTAP green via docker exec; `db-types` not regenerated, `.claude/allow-red`),
+  AT-M2-08 race `494ab5a`, `contracts-m2.ts` `c3c00e2`, build-notes `e9df567`. Local blocker: Windows reserved TCP
+  54282-54381 (the stack's host ports); founder frees it with `net stop winnat` / `net start winnat` (admin). Next chat:
+  HANDOFF "Next step" 1 (db-types, test:rls) then the Wave 0b remainder.
+- **Update 2026-10-27 12:55 IST, M2 BUILD 1 Wave 0a done:** on `m2/integration` (tip `2d5d98a`): red pgTAP
+  first, migrations M2-a (`20261027040000_m2_contacts.sql`) and M2-b (`20261027050000_m2_drives.sql`), MT-15, floors
+  catalog 153 / rls 4249, ADR-034 (`aws4fetch`), ADR-030 amendment 1; local serial gate green; draft CI PR
+  TraceHiring/TraceHiring#16 (`m2/integration` → `main`, never merge) opened, CI pending at handoff. Next chat:
+  **Wave 0b** (M2-c messaging, contracts, wiring, CI job, day-one checks), HANDOFF "Next step".
+- **Update 2026-10-27 11:30 IST, M2 SPEC refresh done:** `specs/m2-scheduling-invites.md` revision 5 is
+  **approved by autopilot reviewers** (binding rows R5-1…R5-66; three Opus audits + three Opus review rounds) on the new
+  branch **`m2/integration`** (cut from `m1/integration` @ `7c33f48`, tip `7b73de0`). Key choices: D1's start path
+  kept plus a start-window check (R5-63); CSV-only invites until founder Q-M2-4; `aws4fetch` = ADR-034; M2
+  migrations provisional. M1 CLOSE still waits for the D1 CLOSE + go-ahead. Next chat: **M2 BUILD 1 = Wave 0** on
+  `m2/integration` (M2 spec §11.2). HANDOFF "Next step".
+- **Update 2026-10-27 09:05 IST, M1 FIX done:** M1-REV-1, -2, -6, -7, -8 fixed one commit each, red first
   (migrations M1-t, M1-u, M1-v; spec R5-72); M1-REV-3 → M10, M1-REV-4/-5 and two re-review Lows → M5; Opus database +
   security re-reviews all CONFIRMED; serial gate green on `3cfbea8` (rls 3919 = floor); CI 40443964937 green. **M1
   CLOSE waits for the D1 CLOSE and the founder's go-ahead.** Next unblocked chat: **M2 SPEC refresh** (R5-1) on a new
@@ -219,18 +237,24 @@ D1 is PAUSED, not closed (founder, 2026-10-22): its remaining steps are in HANDO
 chat, not this one. Never commit to d1/integration or main. M1 merges to main only after the D1 CLOSE and with the
 founder's go-ahead.
 
-THIS CHAT = HANDOFF "In flight" first, then HANDOFF "Next step" in order (as of 2026-10-27: M1 FIX is done and
-M1 CLOSE waits for the D1 CLOSE and the founder's go-ahead; the next unblocked phase is the M2 SPEC refresh of
-specs/m2-scheduling-invites.md per M1 spec R5-1, on a new branch m2/integration cut from m1/integration; M1 spec
-specs/m1-test-authoring.md revision 5, binding rows §1.8 R5-n; reviews in docs/reviews/M1.md).
-Writers use the common brief docs/progress/m1-writer-brief-common.md plus a self-contained stream brief, their own
-worktree (Agent isolation "worktree") and `git reset --hard <exact SHA>`; each stream gets Opus first reviews (spec,
-security, database), fixes test first, a confirming re-review, a merge with the lead mounts, test:rls, a full verify
-and Linux CI on PR #14 (TraceHiring/TraceHiring#14, draft, never merged).
+THIS CHAT = HANDOFF "In flight" first, then HANDOFF "Next step" in order (as of 2026-10-31 07:55 IST: M1 CLOSE
+waits for the D1 CLOSE and the founder's go-ahead; M2 BUILD 1 Wave 0a and Wave 0b part 1 are done on m2/integration
+(tip 937da1b; draft CI PR TraceHiring/TraceHiring#16, its rls job is red on db-types until HANDOFF Next step 1); if
+`docker port supabase_db_trace` shows no 54322, Windows still reserves the stack's ports (HANDOFF "LOCAL BLOCKER"); the
+next step is HANDOFF Next step 1 (db-types, test:rls), then the Wave 0b remainder on m2/integration
+(worktree .claude/worktrees/m2-integration, enter it with EnterWorktree; on a new machine `git worktree add -b
+m2/integration .claude/worktrees/m2-integration trace/m2/integration`), lead only, per specs/m2-scheduling-invites.md
+§11.2 and binding rows §1.8 R5-1…R5-66).
+M2 writers (later waves) use the common brief docs/progress/m1-writer-brief-common.md adapted to m2 (branches
+m2/<stream>) plus a self-contained stream brief, their own worktree (Agent isolation "worktree") and
+`git reset --hard <exact SHA>`; each stream gets Opus first reviews (spec, security, database), fixes test first, a
+confirming re-review, a merge with the lead mounts, test:rls, a full verify and Linux CI on a draft PR
+m2/integration → main (TraceHiring/TraceHiring#16, opened in Wave 0, never merged). M1 CI stays on PR #14 (TraceHiring/TraceHiring#14, draft).
 
 RULES (never break): CLAUDE.md rules 1-9; tests first; Opus first reviews, fixes test first, a confirming
 re-review, full pnpm verify (pnpm -r --workspace-concurrency=1 test plus vitest run --root scripts; this machine may
-be short of RAM; never run workspace tests while writers run) and Linux CI before any merge into m1/integration. If
+be short of RAM; never run workspace tests while writers run) and Linux CI before any merge into m1/integration or
+m2/integration. If
 something touching rules 1-9 is ambiguous, do not guess: add a FOUNDER-QUEUE row, leave that part out, keep working
 on the rest. Founder gates (AUTOPILOT §3) go to FOUNDER-QUEUE; do not wait. No staging dispatch unless HANDOFF says
 the founder approved it. Never force-push; never move or delete branches, tags (cp/*, m*-reviewed,
@@ -240,12 +264,14 @@ supabase start/stop, db reset, test:rls, gen types (scripts/db-types.mjs and tes
 never while a writer runs db-tests) and pnpm verify. Commit at every green step (conventional commits, lowercase
 subject, body lines <= 100 chars, messages via git commit -F <uniquely named scratchpad file>, merges
 `chore: merge …`; one plain git command per shell call, the worktree guard refuses compound ones). Push
-m1/integration and every stream branch after each merge or green lead step, so any account can resume from trace.
+m1/integration, m2/integration and every stream branch after each merge or green lead step, so any account can
+resume from trace.
 
 Wrap-up (trace-handoff skill, on m1/integration): commit everything (a partial step as `wip(...)` with
 .claude/allow-red and a note); overwrite HANDOFF.md (< 150 lines, keep its "Paused: D1" section, exact SHAs, every
 stream branch and its state, an "In flight" list, the exact next action); append a LOG row; update RESUME-PROMPT §1
-with a dated line; scripts/backup.sh; plain push of m1/integration, every stream branch with new commits, and tags
+with a dated line; scripts/backup.sh; plain push of m1/integration, m2/integration, every stream branch with new
+commits, and tags
 (the pre-push hook runs the full-history gitleaks scan; it must pass). Do not start another session or a scheduled
 task. Last, print this §4 prompt exactly as it stands in docs/progress/RESUME-PROMPT.md on trace/m1/integration, for
 the founder to paste into any account.

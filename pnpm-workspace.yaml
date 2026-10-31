@@ -16,7 +16,8 @@ catalog:
   eslint-plugin-react-hooks: 7.1.1
   eslint-plugin-boundaries: 7.2.0
   prettier: 3.9.10
-  vitest: 4.1.11
+  # 4.1.12 (published 2026-10-15) fixes GHSA-qxg6-89mg-rqv8 and GHSA-xp26-3454-mjgp in @vitest/mocker 4.1.11.
+  vitest: 4.1.12
   '@cloudflare/vitest-pool-workers': 0.23.0
   wrangler: 4.149.0
   vite: 8.3.4
@@ -42,10 +43,10 @@ catalog:
   # Dev tooling for e2e/ (specs/d1-demo-slice.md §7.2, no ADR): the newest release older than two weeks
   # (1.63.0, published 2026-09-04; 1.64.0 came out 2026-10-07).
   '@playwright/test': 1.63.0
-  # DOM test runtime for apps/candidate (d1 AT-D30 behavioural test, AT-D36; dev tooling, no ADR): the newest
-  # release older than two weeks (20.14.5, published 2026-09-12; 20.14.6 came out 2026-10-08). Not jsdom: jsdom
-  # 30 needs undici 8, which the undici security override below pins to 7.
-  happy-dom: 20.14.5
+  # DOM test runtime for apps/candidate (d1 AT-D30 behavioural test, AT-D36; dev tooling, no ADR). 20.14.6
+  # (published 2026-10-08) fixes GHSA-5fpq-26gf-qwcr; the 21.x major is due by the osv-scanner.toml expiry. Not
+  # jsdom: jsdom 30 needs undici 8, which the undici security override below pins to 7.
+  happy-dom: 20.14.6
   # Sentry adapter (m0-foundations §9.2, d1 AT-D22): recruiter app, workers/jobs, services/api only.
   '@sentry/cloudflare': 11.1.0
   '@sentry/react': 11.1.0
@@ -72,11 +73,12 @@ minimumReleaseAgeExclude:
 #   critical, GHSA-xw65-4hp5-5hc7 moderate; pnpm audit).
 # - sharp, undici: @cloudflare/vitest-pool-workers 0.23.0 brings its own older miniflare with sharp 0.35.2
 #   (GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w) and undici 7.29.0 (ten advisories; osv-scanner). The
-#   wrangler catalog version already uses sharp 0.35.5 and undici 7.29.1.
+#   wrangler catalog version already uses sharp 0.35.5. undici 7.30.1 (published 2026-10-15, past the
+#   two-week rule on 2026-10-29) fixes the eight 7.29.1 advisories of 2026-10-23 and 2026-10-30.
 overrides:
   handlebars: 4.7.10
   sharp: 0.35.5
-  undici: 7.29.1
+  undici: 7.30.1
   # Release-age pin (d1 AT-D22, 2026-10-14): @sentry/browser-utils 11.1.0 asks for web-vitals ^6.1.1,
   # whose newest, 6.2.3, was 9 days old; 6.2.2 (2026-09-14) is past the two-week rule. Remove once
   # a newer release is two weeks old.
