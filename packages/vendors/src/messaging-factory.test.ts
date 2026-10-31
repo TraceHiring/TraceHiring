@@ -120,6 +120,38 @@ describe('createMessagingV2: env × provider matrix (§6.4)', () => {
       configError(() => createMessagingV2({ traceEnv: 'staging', emailProvider: 'ses' })).code,
     ).toBe('bad_options');
   });
+
+  it('loadsim needs an explicit scheduler (a Worker cancels plain timers; B1 fix 5)', async () => {
+    const { scheduler: _omitted, ...noScheduler } = adapterOptions().loadSim;
+    for (const traceEnv of ['dev', 'staging']) {
+      expect(configError(() => create(traceEnv, 'loadsim', { loadSim: noScheduler })).code).toBe(
+        'bad_options',
+      );
+      expect(
+        configError(() =>
+          create(traceEnv, 'loadsim', {
+            loadSim: { ...noScheduler, scheduler: undefined as never },
+          }),
+        ).code,
+      ).toBe('bad_options');
+    }
+    const delays: number[] = [];
+    const m = create('dev', 'loadsim', {
+      loadSim: {
+        ...noScheduler,
+        scheduler: {
+          schedule: (d: number, fn: () => void) => {
+            delays.push(d);
+            fn();
+          },
+        },
+      },
+    });
+    await m.send(email());
+    expect(delays.length).toBeGreaterThanOrEqual(2); // the latency and the delivery event
+    // Direct construction (tests) keeps the class default.
+    expect(new LoadSimMessaging('dev', noScheduler).provider).toBe('loadsim');
+  });
 });
 
 describe('production refuses every provider and every mock until M8 (founder gate)', () => {
