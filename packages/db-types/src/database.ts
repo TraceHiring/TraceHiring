@@ -1155,6 +1155,78 @@ isOneToOne: false
       referencedColumns: ["org_id","id"]
     }
                   ]
+                },"message_events": {
+                  Row: {
+                    "bounce_kind": string | null,"event": string,"id": string,"occurred_at": string,"org_id": string,"outbound_message_id": string,"provider": string,"provider_event_id": string,"received_at": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "bounce_kind"?: string | null,"event": string,"id"?: string,"occurred_at": string,"org_id": string,"outbound_message_id": string,"provider": string,"provider_event_id": string,"received_at"?: string,"workspace_id": string
+                  }
+                  Update: {
+                    "bounce_kind"?: string | null,"event"?: string,"id"?: string,"occurred_at"?: string,"org_id"?: string,"outbound_message_id"?: string,"provider"?: string,"provider_event_id"?: string,"received_at"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "message_events_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "message_events_org_id_outbound_message_id_fkey"
+      columns: ["org_id","outbound_message_id"]
+isOneToOne: false
+      referencedRelation: "outbound_messages"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "message_events_org_id_workspace_id_fkey"
+      columns: ["org_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "workspaces"
+      referencedColumns: ["org_id","id"]
+    }
+                  ]
+                },"message_events_unmatched": {
+                  Row: {
+                    "bounce_kind": string | null,"event": string,"id": string,"occurred_at": string,"org_id": string,"provider": string,"provider_event_id": string,"provider_message_id": string,"received_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "bounce_kind"?: string | null,"event": string,"id"?: string,"occurred_at": string,"org_id": string,"provider": string,"provider_event_id": string,"provider_message_id": string,"received_at"?: string
+                  }
+                  Update: {
+                    "bounce_kind"?: string | null,"event"?: string,"id"?: string,"occurred_at"?: string,"org_id"?: string,"provider"?: string,"provider_event_id"?: string,"provider_message_id"?: string,"received_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "message_events_unmatched_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"message_templates": {
+                  Row: {
+                    "body_sha256": string,"body_template": string,"channel": string,"created_at": string,"id": string,"language": string,"org_id": string,"provider_template_ref": string | null,"purpose": string,"subject_template": string | null,"version": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "body_sha256": string,"body_template": string,"channel": string,"created_at"?: string,"id"?: string,"language": string,"org_id": string,"provider_template_ref"?: string | null,"purpose": string,"subject_template"?: string | null,"version": number
+                  }
+                  Update: {
+                    "body_sha256"?: string,"body_template"?: string,"channel"?: string,"created_at"?: string,"id"?: string,"language"?: string,"org_id"?: string,"provider_template_ref"?: string | null,"purpose"?: string,"subject_template"?: string | null,"version"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "message_templates_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"notice_versions": {
                   Row: {
                     "body_template": string,"id": string,"language": string,"notice_key": string,"org_id": string,"published_at": string,"template_sha256": string,"version": number
@@ -1228,6 +1300,44 @@ isOneToOne: false
                   }
                   Relationships: [
                     
+                  ]
+                },"outbound_messages": {
+                  Row: {
+                    "attempts": number,"channel": string,"claim_id": string | null,"created_at": string,"delivered_at": string | null,"drive_id": string,"id": string,"idempotency_key": string,"invitation_id": string,"last_error_code": string | null,"org_id": string,"provider": string | null,"provider_message_id": string | null,"purpose": string,"queued_at": string | null,"scheduled_for": string,"sent_at": string | null,"status": string,"template_id": string,"workspace_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "attempts"?: number,"channel": string,"claim_id"?: string | null,"created_at"?: string,"delivered_at"?: string | null,"drive_id": string,"id"?: string,"idempotency_key": string,"invitation_id": string,"last_error_code"?: string | null,"org_id": string,"provider"?: string | null,"provider_message_id"?: string | null,"purpose": string,"queued_at"?: string | null,"scheduled_for": string,"sent_at"?: string | null,"status"?: string,"template_id": string,"workspace_id": string
+                  }
+                  Update: {
+                    "attempts"?: number,"channel"?: string,"claim_id"?: string | null,"created_at"?: string,"delivered_at"?: string | null,"drive_id"?: string,"id"?: string,"idempotency_key"?: string,"invitation_id"?: string,"last_error_code"?: string | null,"org_id"?: string,"provider"?: string | null,"provider_message_id"?: string | null,"purpose"?: string,"queued_at"?: string | null,"scheduled_for"?: string,"sent_at"?: string | null,"status"?: string,"template_id"?: string,"workspace_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "outbound_messages_org_id_drive_id_workspace_id_fkey"
+      columns: ["org_id","drive_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "drives"
+      referencedColumns: ["org_id","id","workspace_id"]
+    },{
+      foreignKeyName: "outbound_messages_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "orgs"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "outbound_messages_org_id_invitation_id_workspace_id_fkey"
+      columns: ["org_id","invitation_id","workspace_id"]
+isOneToOne: false
+      referencedRelation: "invitations"
+      referencedColumns: ["org_id","id","workspace_id"]
+    },{
+      foreignKeyName: "outbound_messages_template_id_fkey"
+      columns: ["template_id"]
+isOneToOne: false
+      referencedRelation: "message_templates"
+      referencedColumns: ["id"]
+    }
                   ]
                 },"platform_staff": {
                   Row: {

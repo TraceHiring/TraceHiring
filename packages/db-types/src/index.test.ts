@@ -98,6 +98,11 @@ describe('@trace/db-types', () => {
       | 'invite_uploads'
       | 'invite_upload_errors'
       | 'reschedule_events'
+      // M2 migration M2-c (specs/m2-scheduling-invites.md §3.4)
+      | 'message_templates'
+      | 'outbound_messages'
+      | 'message_events'
+      | 'message_events_unmatched'
     >();
     expectTypeOf<keyof Database['public']['Views']>().toEqualTypeOf<
       // M1-m (R5-64 d): per-pool counts.
