@@ -140,12 +140,11 @@ describe('OtpCore: the purpose is stored at issue (R5-19)', () => {
     });
   });
 
-  it('verify with an allowed list refuses another stored purpose (lobby_closed): nothing consumed or counted', async () => {
+  it('verify with an allowed list: a correct code of another stored purpose is lobby_closed and not consumed', async () => {
     const { core, kv, clock } = setup();
     const lobby = issued(await core.issue('lobby'));
     const before = kv.get('otp:challenge');
     expect(await core.verify(lobby.code, ['manage'])).toEqual({ ok: false, error: 'lobby_closed' });
-    expect(await core.verify('000000', ['manage'])).toEqual({ ok: false, error: 'lobby_closed' });
     expect(kv.get('otp:challenge')).toEqual(before);
     expect(kv.get('otp:failures')).toBeUndefined();
     expect(kv.get('lobby:nonce_hash')).toBeUndefined();
@@ -154,6 +153,31 @@ describe('OtpCore: the purpose is stored at issue (R5-19)', () => {
     clock.ms += RESEND_AFTER_MS;
     const manage = issued(await core.issue('manage'));
     expect(verifiedNonce(await core.verify(manage.code, ['manage'])).purpose).toBe('manage');
+  });
+
+  it('no pending-code oracle (decision c): a wrong code with a closed purpose is otp_wrong and counted, as any wrong code', async () => {
+    const { core, kv } = setup();
+    const lobby = issued(await core.issue('lobby'));
+    const wrong = lobby.code === '000000' ? '000001' : '000000';
+    // The answer is the same as for a wrong code with no closed purpose: it says nothing about a pending lobby code.
+    expect(await core.verify(wrong, ['manage'])).toEqual({ ok: false, error: 'otp_wrong' });
+    expect(kv.get('otp:failures')).toBe(1);
+    for (let i = 2; i < 5; i += 1) {
+      expect(await core.verify(wrong, ['manage'])).toEqual({ ok: false, error: 'otp_wrong' });
+    }
+    expect(await core.verify(wrong, ['manage'])).toMatchObject({
+      ok: false,
+      error: 'otp_locked',
+      lockedNow: true,
+    });
+    // The lock drops the challenge: the pending code is gone, as after any five wrong codes.
+    expect(kv.get('otp:challenge')).toBeUndefined();
+    expect(await core.verify(lobby.code)).toMatchObject({ ok: false, error: 'otp_locked' });
+  });
+
+  it('with no pending challenge a closed purpose answers otp_wrong, as without one', async () => {
+    const { core } = setup();
+    expect(await core.verify('123456', ['manage'])).toEqual({ ok: false, error: 'otp_wrong' });
   });
 
   it('a manage issue replaces a pending lobby code (one challenge per invitation)', async () => {

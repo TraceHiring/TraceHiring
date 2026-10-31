@@ -87,6 +87,22 @@ describe('drive rows: OTP purpose `lobby` only inside the lobby window (R5-19, R
     expect(kv?.get('lobby:nonce_hash')).toBeUndefined();
   });
 
+  it('the window closed: a wrong code at verify is 401 otp_wrong and counted, not lobby_closed (decision c)', async () => {
+    const h = await driveHarness();
+    h.clock.ms = h.na() - 2 * MIN;
+    expect((await otpRequest(h)).status).toBe(200);
+    const code = h.codes().at(-1) ?? '';
+    const wrong = code === '000000' ? '000001' : '000000';
+    h.clock.ms = h.na() + 1000;
+    const verify = await h.request('POST', '/v1/otp/verify', {
+      json: { token: LINK(), code: wrong },
+    });
+    expect(verify.status).toBe(401);
+    expect(await verify.json()).toEqual({ error: 'otp_wrong' });
+    expect(h.otp.kvs.get(INVITATION)?.get('otp:failures')).toBe(1);
+    expect(apiCalls(h, 'lobbyMint')).toEqual([]);
+  });
+
   it('after a missed window a pending manage code still verifies (only `lobby` is closed)', async () => {
     const h = await driveHarness();
     h.clock.ms = h.na() + MIN;
