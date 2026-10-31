@@ -110,7 +110,7 @@ export function UploadRoute() {
       if (current === null) return;
       void (current.getState().phase === 'failed' ? current.start() : current.retry());
     },
-    onMarkDifferent: () => void run.current?.markDifferentPeople(),
+    onMarkDifferent: (rowNo) => void run.current?.markDifferentPerson(rowNo),
     onFinish: () => void run.current?.finish(),
   };
 

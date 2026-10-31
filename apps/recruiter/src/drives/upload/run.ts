@@ -1,7 +1,7 @@
 // One invite upload against the api (specs/m2-scheduling-invites.md §6.2, M2-7, R2-12, R5-59). Order: open the upload
 // with the file's SHA-256, send the rows in batches of at most 200 (two at a time), then finish it. Rows the api holds
-// as `phone_shared` stay here, in memory only, until the recruiter marks them as different people; they are then re-sent
-// once with `confirmPhoneDuplicate: true`. Cancel keeps whoever was already invited. Every failure ends in one constant
+// as `phone_shared` stay here, in memory only, until the recruiter marks one as a different person; that one row is then
+// re-sent once with `confirmPhoneDuplicate: true`. Cancel keeps whoever was already invited. Every failure ends in one constant
 // code the screen turns into fixed text; nothing here logs, stores or keeps a value beyond the rows still to send.
 import type {
   InviteBatchRequest,
@@ -298,26 +298,28 @@ export class InviteUploadRun {
     return true;
   }
 
-  /** Re-sends exactly the held rows once, with the flag, then finishes (R2-12). */
-  async markDifferentPeople(): Promise<void> {
+  /**
+   * Re-sends exactly one held row, once, with the flag (R2-12; M2-5: the recruiter decides each person, so there is
+   * one action per held row, never a selection). The other held rows stay held. Once no row is held, the upload ends.
+   */
+  async markDifferentPerson(rowNo: number): Promise<void> {
     const uploadId = this.state.uploadId;
-    if (this.state.phase !== 'ready' || uploadId === null || this.heldRows.size === 0) return;
+    const row = this.heldRows.get(rowNo);
+    if (this.state.phase !== 'ready' || this.state.busy || uploadId === null || row === undefined)
+      return;
     this.set({ busy: true, failure: null });
-    const rows = [...this.heldRows.values()].sort((a, b) => a.rowNo - b.rowNo);
-    for (let at = 0; at < rows.length; at += BATCH_SIZE) {
-      const chunk = rows.slice(at, at + BATCH_SIZE);
-      const answer = await this.post(uploadId, chunk, true);
-      if (!answer.ok) {
-        this.set({ busy: false, failure: answer.code });
-        return;
-      }
-      if (!this.absorbResent(chunk, answer.data)) {
-        this.set({ busy: false, failure: 'invalid_response' });
-        return;
-      }
+    const chunk = [row];
+    const answer = await this.post(uploadId, chunk, true);
+    if (!answer.ok) {
+      this.set({ busy: false, failure: answer.code });
+      return;
+    }
+    if (!this.absorbResent(chunk, answer.data)) {
+      this.set({ busy: false, failure: 'invalid_response' });
+      return;
     }
     this.set({ busy: false });
-    await this.finish();
+    if (this.heldRows.size === 0) await this.finish();
   }
 
   /** The answer to a re-sent chunk: a row that is still held (it should not be) is refused as phone_shared. */

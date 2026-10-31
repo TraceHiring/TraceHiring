@@ -1,7 +1,7 @@
 // The invite upload screens (specs/m2-scheduling-invites.md §6.2, M2-6, M2-7, R2-12, R5-20, R5-59, AT-M2-32): choose a
 // CSV (the columns are listed as text, there is no template to fetch), see the rows in the file, watch the batches go,
 // then see who was invited, which rows were not (row number and reason in plain words, never the cell value) and the
-// held phone-shared rows with the one action that frees exactly them. Pure view: the route owns the state.
+// held phone-shared rows, each with its own action that frees exactly that row. Pure view: the route owns the state.
 import { useState } from 'react';
 import { Link } from 'react-router';
 import ui from '../../common/Ui.module.css';
@@ -23,7 +23,8 @@ export interface UploadHandlers {
   onChooseAnother(): void;
   onCancel(): void;
   onRetry(): void;
-  onMarkDifferent(): void;
+  /** Re-sends the one held row with this number (one button per held row, R5-59). */
+  onMarkDifferent(rowNo: number): void;
   onFinish(): void;
 }
 
@@ -84,7 +85,7 @@ export function RefusedTable({ issues }: { issues: readonly RowIssue[] }) {
   );
 }
 
-/** Held rows (phone_shared) and the one action that sends exactly them again (R2-12, R5-59). */
+/** Held rows (phone_shared), each with its own button that sends exactly that row again (R2-12, M2-5, R5-59). */
 export function HeldTable({
   rowNos,
   busy,
@@ -92,17 +93,22 @@ export function HeldTable({
 }: {
   rowNos: readonly number[];
   busy: boolean;
-  onMarkDifferent(): void;
+  onMarkDifferent(rowNo: number): void;
 }) {
   if (rowNos.length === 0) return null;
   return (
     <div className={ui.stack}>
       <h4 className={ui.subtitle}>Rows on hold</h4>
+      <p className={ui.note}>
+        Use a row’s button only when that row is a different person from the one already invited
+        with the same phone number. Only that row is sent again; nothing else changes.
+      </p>
       <table className={ui.table}>
         <thead>
           <tr>
             <th scope="col">Row</th>
             <th scope="col">Reason</th>
+            <th scope="col">Action</th>
           </tr>
         </thead>
         <tbody>
@@ -110,19 +116,23 @@ export function HeldTable({
             <tr key={rowNo}>
               <th scope="row">{rowNo}</th>
               <td>{ROW_REASON_TEXT.phone_shared}</td>
+              <td>
+                <button
+                  type="button"
+                  className={ui.button}
+                  aria-label={`Mark as different people, row ${String(rowNo)}`}
+                  disabled={busy}
+                  onClick={() => {
+                    onMarkDifferent(rowNo);
+                  }}
+                >
+                  Mark as different people
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
-      <p className={ui.note}>
-        Use this only when these rows are different people who share a phone number. Exactly these
-        rows are sent again; nothing else changes.
-      </p>
-      <p>
-        <button type="button" className={ui.button} disabled={busy} onClick={onMarkDifferent}>
-          Mark as different people
-        </button>
-      </p>
     </div>
   );
 }
