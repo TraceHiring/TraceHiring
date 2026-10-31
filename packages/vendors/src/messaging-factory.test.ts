@@ -284,19 +284,51 @@ describe('SMS and WhatsApp: mocks behind flags, off by default (M2-2)', () => {
 });
 
 describe('OutboxMessagingV2 (D1 outbox behind v2)', () => {
-  it('maps invite and otp onto the D1 outbox and refuses other purposes and channels', async () => {
+  it.each(['invite', 'reminder', 'reschedule', 'otp'] as const)(
+    'accepts purpose %s and stores kind = purpose (lead decision, B1 fix 1)',
+    async (purpose) => {
+      const store = new InMemoryOutboxStore();
+      const m = new OutboxMessagingV2('dev', store);
+      const r = await m.send(email({ purpose, idempotencyKey: `${purpose}-1` }));
+      expect(r).toEqual({
+        provider: 'outbox',
+        providerMessageId: r.providerMessageId,
+        status: 'accepted',
+      });
+      const rows = await store.list(ORG_A, 10);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        id: r.providerMessageId,
+        orgId: ORG_A,
+        kind: purpose,
+        to: 'candidate.1@example.test',
+        subject: 'Invitation [synthetic]',
+        bodyText: 'Synthetic body.',
+        idempotencyKey: `${purpose}-1`,
+      });
+    },
+  );
+
+  it('refuses other channels and a missing subject before the store', async () => {
     const store = new InMemoryOutboxStore();
     const m = new OutboxMessagingV2('dev', store);
-    const r1 = await m.send(email({ purpose: 'invite' }));
-    const r2 = await m.send(email({ purpose: 'otp', idempotencyKey: 'otp-1' }));
-    expect(r1.provider).toBe('outbox');
-    const rows = await store.list(ORG_A, 10);
-    expect(rows.map((r) => r.kind).sort()).toEqual(['invite', 'otp']);
-    expect(rows.find((r) => r.kind === 'otp')?.id).toBe(r2.providerMessageId);
-    for (const purpose of ['reminder', 'reschedule'] as const) {
-      const e = await m.send(email({ purpose })).catch((err: unknown) => err);
-      expect((e as MessagingSendError).code).toBe('purpose_refused');
+    for (const channel of ['sms', 'whatsapp'] as const) {
+      const e = await m.send(email({ channel })).catch((err: unknown) => err);
+      expect((e as MessagingSendError).code).toBe('channel_refused');
     }
+    const e = await m.send(without(email(), 'subject')).catch((err: unknown) => err);
+    expect((e as MessagingSendError).code).toBe('bad_subject');
+    expect(await store.list(ORG_A, 10)).toEqual([]);
+  });
+
+  it('a store failure is the retryable provider_unavailable', async () => {
+    const m = new OutboxMessagingV2('dev', {
+      append: () => Promise.reject(new Error('do unreachable')),
+      list: () => Promise.resolve([]),
+    });
+    const e = await m.send(email({ purpose: 'reminder' })).catch((err: unknown) => err);
+    expect((e as MessagingSendError).code).toBe('provider_unavailable');
+    expect((e as MessagingSendError).retryable).toBe(true);
   });
 
   it('keeps the D1 @example.test recipient guard and idempotency', async () => {
