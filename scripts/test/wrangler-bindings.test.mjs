@@ -75,7 +75,11 @@ const EXPECTED = {
     durableObjects: {},
     migrations: undefined,
     r2: { EVIDENCE: 'trace-evidence-<env>' },
-    producers: { MIRROR_QUEUE: 'trace-session-mirror-<env>' },
+    // M2 R5-9: the cron claim stage enqueues ids to trace-messages-<env>; the same Worker consumes them.
+    producers: {
+      MIRROR_QUEUE: 'trace-session-mirror-<env>',
+      MESSAGES_QUEUE: 'trace-messages-<env>',
+    },
     consumers: [
       {
         queue: 'trace-session-mirror-<env>',
@@ -95,6 +99,13 @@ const EXPECTED = {
         max_batch_size: 1,
         max_retries: 5,
         dead_letter_queue: 'trace-admin-dlq-<env>',
+      },
+      // M2 R5-9: max_retries 7 = 8 attempts (spec §6.3), then the DLQ.
+      {
+        queue: 'trace-messages-<env>',
+        max_batch_size: 10,
+        max_retries: 7,
+        dead_letter_queue: 'trace-messages-dlq-<env>',
       },
     ],
     services: [],
@@ -267,7 +278,10 @@ describe('cross-Worker wiring', () => {
   it.each(ENVS)('env %s: producers and the consumer share one queue and one DLQ', (env) => {
     const queue = `trace-session-mirror-${env}`;
     expect(block('edge', env).queues.producers).toEqual([{ binding: 'MIRROR_QUEUE', queue }]);
-    expect(block('jobs', env).queues.producers).toEqual([{ binding: 'MIRROR_QUEUE', queue }]);
+    expect(block('jobs', env).queues.producers).toEqual([
+      { binding: 'MIRROR_QUEUE', queue },
+      { binding: 'MESSAGES_QUEUE', queue: `trace-messages-${env}` },
+    ]);
     expect(block('jobs', env).queues.consumers[0]).toEqual({
       queue,
       max_batch_size: 10,
@@ -296,6 +310,18 @@ describe('cross-Worker wiring', () => {
       }
     },
   );
+
+  // M2 R5-9: jobs alone produces (the cron claim) and consumes trace-messages-<env>; 8 attempts, then the DLQ.
+  it.each(ENVS)('env %s: only jobs produces and consumes the messages queue', (env) => {
+    const queue = `trace-messages-${env}`;
+    expect(block('jobs', env).queues.consumers.filter((c) => c.queue === queue)).toEqual([
+      { queue, max_batch_size: 10, max_retries: 7, dead_letter_queue: `trace-messages-dlq-${env}` },
+    ]);
+    for (const worker of ['edge', 'api']) {
+      expect(names(block(worker, env).queues?.producers, 'queue')).not.toContain(queue);
+      expect(names(block(worker, env).queues?.consumers, 'queue')).not.toContain(queue);
+    }
+  });
 
   it.each(ENVS)('env %s: the same packages and evidence buckets back edge, api and jobs', (env) => {
     for (const worker of ['edge', 'api']) {

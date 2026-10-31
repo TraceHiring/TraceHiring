@@ -5,6 +5,7 @@ import type { SqlTx } from '@trace/shared/jobs';
 import { describe, expect, it } from 'vitest';
 import { DRAFTING_NOT_IMPLEMENTED, draftingConsumer } from '../drafting/stub.js';
 import { MEMBERS_NOT_IMPLEMENTED, membersConsumer } from '../members/stub.js';
+import { MESSAGES_NOT_IMPLEMENTED, messagesConsumer } from '../messaging/stub.js';
 import { BINDING_UNAVAILABLE } from './handlers.js';
 import { ORG_ID, fakeBatch, fakeMessage, validMessage } from './test-fixtures.js';
 import type { StageDbName } from './stage-db.js';
@@ -146,15 +147,17 @@ describe('dispatchQueue', () => {
         mirror: consumer('mirror'),
         drafting: consumer('drafting'),
         members: consumer('members'),
+        messages: consumer('messages'),
       }),
     };
   };
 
-  it('names exactly the three queues of R5-13, each with its own consumer', () => {
+  it('names exactly the three queues of R5-13 and the M2 messages queue (R5-9), each with its own consumer', () => {
     expect(QUEUE_KINDS).toEqual({
       'trace-session-mirror': 'mirror',
       'trace-authoring': 'drafting',
       'trace-admin': 'members',
+      'trace-messages': 'messages',
     });
     expect(Object.isFrozen(QUEUE_KINDS)).toBe(true);
   });
@@ -167,6 +170,8 @@ describe('dispatchQueue', () => {
     ['trace-authoring-staging', 'drafting'],
     ['trace-admin-dev', 'members'],
     ['trace-admin-staging', 'members'],
+    ['trace-messages-dev', 'messages'],
+    ['trace-messages-staging', 'messages'],
   ] as const)('hands a batch of %s to the %s consumer only', async (queue, kind) => {
     expect(queueKindOf(queue)).toBe(kind);
     const r = recorded();
@@ -179,6 +184,8 @@ describe('dispatchQueue', () => {
     'trace-session-mirror-dlq-staging',
     'trace-authoring-dlq-staging',
     'trace-admin-dlq-dev',
+    'trace-messages-dlq-staging',
+    'trace-messages',
     'trace-authoring',
     'trace-admin-staging-old',
     'TRACE-ADMIN-STAGING',
@@ -209,6 +216,7 @@ describe('dispatchQueue', () => {
       mirror,
       drafting: draftingConsumer,
       members: membersConsumer,
+      messages: messagesConsumer,
     });
     const { batch } = batchOn('trace-session-mirror-staging');
     const e = env();
@@ -229,6 +237,7 @@ describe('dispatchQueue', () => {
         mirror: () => Promise.reject(new Error('mirror must not run')),
         drafting: draftingConsumer,
         members: membersConsumer,
+        messages: messagesConsumer,
       });
       const { batch, messages, counts } = batchOn(queue);
       await expect(dispatch(batch, env(), ctx)).rejects.toThrow(code);
@@ -240,4 +249,22 @@ describe('dispatchQueue', () => {
       expect(counts).toEqual({ ackAll: 0, retryAll: 0 });
     },
   );
+
+  // M2 R5-9: the trace-messages consumer is a stub until stream B3; nothing produces to the queue before then.
+  it('the trace-messages stub acks nothing and throws, so every message goes to retry and then the DLQ', async () => {
+    const dispatch = dispatchQueue({
+      mirror: () => Promise.reject(new Error('mirror must not run')),
+      drafting: draftingConsumer,
+      members: membersConsumer,
+      messages: messagesConsumer,
+    });
+    const { batch, messages, counts } = batchOn('trace-messages-staging');
+    await expect(dispatch(batch, env(), ctx)).rejects.toThrow(MESSAGES_NOT_IMPLEMENTED);
+    expect(MESSAGES_NOT_IMPLEMENTED).toBe('messages_not_implemented_until_stream_b3');
+    expect(messages.map((m) => [m.acked(), m.retried()])).toEqual([
+      [0, 0],
+      [0, 0],
+    ]);
+    expect(counts).toEqual({ ackAll: 0, retryAll: 0 });
+  });
 });

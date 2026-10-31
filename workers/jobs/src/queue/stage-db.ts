@@ -15,25 +15,36 @@ import { connect as cfConnect } from 'cloudflare:sockets';
 import postgres from 'postgres';
 
 export type StageDbName =
-  'mirror' | 'quality' | 'integrity' | 'sweep' | 'authoring' | 'admin' | 'authoring_sweep';
+  | 'mirror'
+  | 'quality'
+  | 'integrity'
+  | 'sweep'
+  | 'authoring'
+  | 'admin'
+  | 'authoring_sweep'
+  | 'messaging'
+  | 'messaging_claim';
 type Secret =
   | 'JOBS_MIRROR_DB_URL'
   | 'JOBS_QUALITY_DB_URL'
   | 'JOBS_INTEGRITY_DB_URL'
   | 'JOBS_AUTHORING_DB_URL'
-  | 'JOBS_ADMIN_DB_URL';
+  | 'JOBS_ADMIN_DB_URL'
+  | 'JOBS_MESSAGING_DB_URL';
 type Binding =
   | 'JOBS_MIRROR_DB'
   | 'JOBS_QUALITY_DB'
   | 'JOBS_INTEGRITY_DB'
   | 'JOBS_AUTHORING_DB'
-  | 'JOBS_ADMIN_DB';
+  | 'JOBS_ADMIN_DB'
+  | 'JOBS_MESSAGING_DB';
 type WorkerRole =
   | 'trace_worker'
   | 'trace_quality_worker'
   | 'trace_integrity_worker'
   | 'trace_authoring_worker'
-  | 'trace_admin_worker';
+  | 'trace_admin_worker'
+  | 'trace_messaging_worker';
 
 /**
  * The login of each stage, as a Hyperdrive binding (staging) and a local-stack URL secret, and its worker role; no
@@ -69,6 +80,18 @@ export const STAGE_DB: Readonly<
     secret: 'JOBS_AUTHORING_DB_URL',
     role: 'trace_authoring_worker',
   },
+  // M2 R5-9: the trace-messages consumer (one org per message) and the cron claim stage (claim_due_messages and
+  // close_due_drives read every org), both on the messaging login as trace_messaging_worker.
+  messaging: {
+    binding: 'JOBS_MESSAGING_DB',
+    secret: 'JOBS_MESSAGING_DB_URL',
+    role: 'trace_messaging_worker',
+  },
+  messaging_claim: {
+    binding: 'JOBS_MESSAGING_DB',
+    secret: 'JOBS_MESSAGING_DB_URL',
+    role: 'trace_messaging_worker',
+  },
 });
 
 const SET_ROLE_SQL: Readonly<Record<WorkerRole, string>> = Object.freeze({
@@ -77,12 +100,16 @@ const SET_ROLE_SQL: Readonly<Record<WorkerRole, string>> = Object.freeze({
   trace_integrity_worker: 'set local role trace_integrity_worker',
   trace_authoring_worker: 'set local role trace_authoring_worker',
   trace_admin_worker: 'set local role trace_admin_worker',
+  trace_messaging_worker: 'set local role trace_messaging_worker',
 });
 
 export const SET_CONTEXT_SQL =
   "select set_config('trace.job_org_id', $1, true), set_config('trace.request_id', $2, true)";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** The stages that may run without an org (`withOrg(null)`): each reads across orgs and returns ids only. */
+const CROSS_ORG_STAGES: readonly StageDbName[] = ['sweep', 'authoring_sweep', 'messaging_claim'];
 
 /** The driver surface a stage session needs: run `cb` inside BEGIN … COMMIT, rolling back if it throws. */
 export type BeginTx = <T>(
@@ -102,9 +129,9 @@ export const createStageDb = (
   newRequestId: () => string = () => crypto.randomUUID(),
 ): StageDb => ({
   withOrg: (orgId, fn) => {
-    // Only the two sweeps read across orgs (sweep_pending, fail_stranded_ai_draft_jobs); every other stage is bound
-    // to one org.
-    if (orgId === null ? stage !== 'sweep' && stage !== 'authoring_sweep' : !UUID.test(orgId)) {
+    // Only the two sweeps and the messaging claim read across orgs (sweep_pending, fail_stranded_ai_draft_jobs,
+    // claim_due_messages and close_due_drives; M2 R5-9); every other stage is bound to one org.
+    if (orgId === null ? !CROSS_ORG_STAGES.includes(stage) : !UUID.test(orgId)) {
       return Promise.reject(new Error('bad_org'));
     }
     return begin(async (run) => {

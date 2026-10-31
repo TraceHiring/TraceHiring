@@ -31,6 +31,11 @@ export interface QueueHandlerDeps {
    * bindings. Absent: not run.
    */
   draftSweep?: ((env: Env) => Promise<unknown>) | undefined;
+  /**
+   * The messaging claim stage (M2 R5-9: claim_due_messages and close_due_drives, then the ids to trace-messages),
+   * run on every tick beside the sweeps. Absent: not run (stream B3 wires it).
+   */
+  messagesClaim?: ((env: Env) => Promise<unknown>) | undefined;
   /** Where log lines go. Defaults to the logger's own sink (console). Tests inject their own. */
   sink?: ((line: string) => void) | undefined;
 }
@@ -79,12 +84,13 @@ export const createQueueHandlers = (deps: QueueHandlerDeps): QueueHandlers => ({
         log,
       });
     };
-    const draftSweep = deps.draftSweep;
+    const { draftSweep, messagesClaim } = deps;
     const run = allOrFirstError([
       mirrorSweep(),
       ...(draftSweep === undefined ? [] : [draftSweep(env)]),
+      ...(messagesClaim === undefined ? [] : [messagesClaim(env)]),
     ]);
-    // The invocation stays alive until both sweeps end. The rejection is not swallowed: awaiting
+    // The invocation stays alive until every task ends. The rejection is not swallowed: awaiting
     // `run` hands it to the error-reporting wrapper, so a failed sweep is reported once.
     ctx.waitUntil(run.catch(() => undefined));
     await run;

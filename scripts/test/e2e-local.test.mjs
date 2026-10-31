@@ -524,6 +524,7 @@ describe('main', () => {
       'JOBS_ADMIN_DB_URL',
       'JOBS_AUTHORING_DB_URL',
       'JOBS_INTEGRITY_DB_URL',
+      'JOBS_MESSAGING_DB_URL',
       'JOBS_MIRROR_DB_URL',
       'JOBS_QUALITY_DB_URL',
     ]);
@@ -535,6 +536,7 @@ describe('main', () => {
       [jobs, 'JOBS_INTEGRITY_DB_URL', 'jobs_integrity_login'],
       [jobs, 'JOBS_AUTHORING_DB_URL', 'jobs_authoring_login'],
       [jobs, 'JOBS_ADMIN_DB_URL', 'jobs_admin_login'],
+      [jobs, 'JOBS_MESSAGING_DB_URL', 'jobs_messaging_login'],
     ]) {
       const u = new URL(file[name]);
       expect(u.username).toBe(login);

@@ -84,6 +84,9 @@ describe('the resource names', () => {
       'trace-authoring-staging',
       'trace-admin-dlq-staging',
       'trace-admin-staging',
+      // M2 R5-9: the messaging queue (max_retries 7 = 8 attempts, then its DLQ).
+      'trace-messages-dlq-staging',
+      'trace-messages-staging',
     ]);
   });
 
@@ -146,6 +149,8 @@ describe('ensureResources', () => {
       ['exec', 'wrangler', 'queues', 'create', 'trace-authoring-staging'],
       ['exec', 'wrangler', 'queues', 'create', 'trace-admin-dlq-staging'],
       ['exec', 'wrangler', 'queues', 'create', 'trace-admin-staging'],
+      ['exec', 'wrangler', 'queues', 'create', 'trace-messages-dlq-staging'],
+      ['exec', 'wrangler', 'queues', 'create', 'trace-messages-staging'],
     ]);
     expect(report).toHaveLength(N_ALL);
     expect(report.join('\n')).toMatch(/created/);
@@ -176,6 +181,8 @@ describe('ensureResources', () => {
       ['exec', 'wrangler', 'queues', 'info', 'trace-authoring-staging'],
       ['exec', 'wrangler', 'queues', 'info', 'trace-admin-dlq-staging'],
       ['exec', 'wrangler', 'queues', 'info', 'trace-admin-staging'],
+      ['exec', 'wrangler', 'queues', 'info', 'trace-messages-dlq-staging'],
+      ['exec', 'wrangler', 'queues', 'info', 'trace-messages-staging'],
     ]);
   });
 

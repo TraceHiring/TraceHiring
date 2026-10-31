@@ -3,7 +3,8 @@
 // worker role (withStageConnection) with the message's org as the job org; the sweep runs as trace_worker with no
 // org (private.sweep_pending reads every org and returns ids only). Every missing binding or secret fails closed with
 // a constant error, so the message is retried and then dead-lettered, never acked without its results.
-// M1 R5-13: dispatchQueue routes each batch to the consumer of its queue (mirror, AI drafting, member provisioning).
+// M1 R5-13: dispatchQueue routes each batch to the consumer of its queue (mirror, AI drafting, member provisioning);
+// M2 R5-9 adds the messaging queue.
 import type { EvidenceReader, SqlTx } from '@trace/shared/jobs';
 import { MockLlmGrader, type LlmGrader } from '@trace/vendors';
 import { createStages } from '../mirror/pipeline.js';
@@ -57,8 +58,11 @@ export const pendingStagesFor = (
 
 // ---- queue dispatch (specs/m1-test-authoring.md R5-13) ----
 
-/** The consumers of the jobs Worker: the D1 session mirror, the M1 AI drafting job and member provisioning. */
-export type QueueKind = 'mirror' | 'drafting' | 'members';
+/**
+ * The consumers of the jobs Worker: the D1 session mirror, the M1 AI drafting job and member provisioning, and the
+ * M2 messaging consumer (R5-9).
+ */
+export type QueueKind = 'mirror' | 'drafting' | 'members' | 'messages';
 
 /** One queue's consumer: the same signature as the Worker's queue() handler. */
 export type QueueConsumer = (
@@ -75,6 +79,7 @@ export const QUEUE_KINDS: Readonly<Record<string, QueueKind>> = Object.freeze({
   'trace-session-mirror': 'mirror',
   'trace-authoring': 'drafting',
   'trace-admin': 'members',
+  'trace-messages': 'messages',
 });
 
 /** The constant error for a batch from a queue this Worker does not consume. */

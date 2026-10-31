@@ -14,6 +14,9 @@ export const LOGIN_ROLES = Object.freeze([
   // NOLOGIN roles come from migration M1-a; the logins are generated here, never by a migration.
   Object.freeze({ login: 'jobs_authoring_login', role: 'trace_authoring_worker' }),
   Object.freeze({ login: 'jobs_admin_login', role: 'trace_admin_worker' }),
+  // M2 R5-9 (specs/m2-scheduling-invites.md): the messaging worker (cron claim stage and trace-messages consumer).
+  // Its NOLOGIN role comes from migration M2-a.
+  Object.freeze({ login: 'jobs_messaging_login', role: 'trace_messaging_worker' }),
 ]);
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -139,6 +142,7 @@ export function workerSecrets({ stack, passwords, keys, hmacKey }) {
       JOBS_INTEGRITY_DB_URL: url('jobs_integrity_login'),
       JOBS_AUTHORING_DB_URL: url('jobs_authoring_login'),
       JOBS_ADMIN_DB_URL: url('jobs_admin_login'),
+      JOBS_MESSAGING_DB_URL: url('jobs_messaging_login'),
     },
   };
 }

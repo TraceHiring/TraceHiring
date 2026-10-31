@@ -6,7 +6,8 @@
 // by the founder on 2026-10-22); the local stack instead gets the three loopback URL secrets
 // (scripts/e2e-local.mjs). Deploy order: services/api, then workers/jobs, then workers/edge.
 // M1 R5-13: consumer of trace-authoring-<env> and trace-admin-<env> too (5 tries, then their DLQs); src/index.ts
-// dispatches each batch on its queue name.
+// dispatches each batch on its queue name. M2 R5-9: producer (the cron claim stage) and consumer of
+// trace-messages-<env> (max_retries 7 = 8 attempts, then trace-messages-dlq-<env>).
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "trace-jobs",
@@ -48,7 +49,10 @@
       "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "trace-evidence-dev" }],
       "queues": {
         // Consumer, and producer for the cron sweep re-enqueue, of one queue (spec §7.1, L-18).
-        "producers": [{ "binding": "MIRROR_QUEUE", "queue": "trace-session-mirror-dev" }],
+        "producers": [
+          { "binding": "MIRROR_QUEUE", "queue": "trace-session-mirror-dev" },
+          { "binding": "MESSAGES_QUEUE", "queue": "trace-messages-dev" },
+        ],
         "consumers": [
           {
             "queue": "trace-session-mirror-dev",
@@ -69,6 +73,13 @@
             "max_retries": 5,
             "dead_letter_queue": "trace-admin-dlq-dev",
           },
+          // M2 R5-9: the messaging consumer, 8 attempts (spec §6.3).
+          {
+            "queue": "trace-messages-dev",
+            "max_batch_size": 10,
+            "max_retries": 7,
+            "dead_letter_queue": "trace-messages-dlq-dev",
+          },
         ],
       },
       "triggers": { "crons": ["* * * * *"] },
@@ -79,7 +90,10 @@
       "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "", "TRACE_ENV": "staging" },
       "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "trace-evidence-staging" }],
       "queues": {
-        "producers": [{ "binding": "MIRROR_QUEUE", "queue": "trace-session-mirror-staging" }],
+        "producers": [
+          { "binding": "MIRROR_QUEUE", "queue": "trace-session-mirror-staging" },
+          { "binding": "MESSAGES_QUEUE", "queue": "trace-messages-staging" },
+        ],
         "consumers": [
           {
             "queue": "trace-session-mirror-staging",
@@ -99,13 +113,20 @@
             "max_retries": 5,
             "dead_letter_queue": "trace-admin-dlq-staging",
           },
+          {
+            "queue": "trace-messages-staging",
+            "max_batch_size": 10,
+            "max_retries": 7,
+            "dead_letter_queue": "trace-messages-dlq-staging",
+          },
         ],
       },
       "triggers": { "crons": ["* * * * *"] },
       // Configs trace-staging-jobs-{mirror,quality,integrity}-login (scripts/lib/hyperdrive.mjs); public ids.
       // M1 R5-11: JOBS_AUTHORING_DB and JOBS_ADMIN_DB (trace-staging-jobs-{authoring,admin}-login) follow, last
       // and in that order, once the founder has created the configs; until then they are PENDING_BINDINGS and
-      // check-deploy-vars refuses a staging deploy.
+      // check-deploy-vars refuses a staging deploy. M2 R5-9: JOBS_MESSAGING_DB (trace-staging-jobs-messaging-login)
+      // is appended after them, pending the same way.
       "hyperdrive": [
         { "binding": "JOBS_MIRROR_DB", "id": "784e4dee7f0c4119b482340d48f6089d" },
         { "binding": "JOBS_QUALITY_DB", "id": "29d5817a3e7f42c5ab5433f56ce0e4d5" },

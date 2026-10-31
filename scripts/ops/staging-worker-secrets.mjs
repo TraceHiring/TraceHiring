@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Operator script: the six staging database login roles, the six staging Hyperdrive configs that hold them, and
+// Operator script: the seven staging database login roles, the seven staging Hyperdrive configs that hold them, and
 // the one database-free api secret (specs/d1-demo-slice.md §3 "Roles", §7.1 secrets and the check-staging-secrets
 // allow-list, §8 DC-D7; ADR-031 amendment 1, d1 revision 4o; scripts/lib/hyperdrive.mjs). M1 R5-11 (DC-M1-6) added
-// jobs_authoring_login and jobs_admin_login: a run after M1 creates their two configs and rotates the D1 four.
+// jobs_authoring_login and jobs_admin_login; M2 R5-9 (specs/m2-scheduling-invites.md) adds jobs_messaging_login: a
+// run after M1 and M2 creates their three configs and rotates the D1 four.
 //   TRACE_OPERATOR_DB_URL=... node scripts/ops/staging-worker-secrets.mjs --env staging \
 //     --ca-certificate-id <id> [--sslmode verify-full|verify-ca] [--dry-run | --yes]
 // Why Hyperdrive: a Worker's own TLS client trusts only public roots, and Supabase Postgres presents a certificate
@@ -126,8 +127,8 @@ export const PLAN = Object.freeze([
 
 /**
  * The database URL secrets retired on staging (ADR-031 amendment 1, d1 revision 4o): step 6 deletes each one the
- * Worker still holds, because check-staging-secrets refuses them. The two M1 twins (R5-11) were never a staging
- * secret; they are listed so that one set there by mistake is deleted the same way.
+ * Worker still holds, because check-staging-secrets refuses them. The two M1 twins (R5-11) and the M2 messaging
+ * twin (R5-9) were never a staging secret; they are listed so that one set there by mistake is deleted the same way.
  */
 export const RETIRED_SECRETS = Object.freeze({
   api: Object.freeze(['API_DB_URL']),
@@ -137,6 +138,7 @@ export const RETIRED_SECRETS = Object.freeze({
     'JOBS_INTEGRITY_DB_URL',
     'JOBS_AUTHORING_DB_URL',
     'JOBS_ADMIN_DB_URL',
+    'JOBS_MESSAGING_DB_URL',
   ]),
 });
 

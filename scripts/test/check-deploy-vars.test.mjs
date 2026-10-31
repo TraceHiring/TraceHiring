@@ -43,6 +43,8 @@ const GOOD_CONFIGS = () => ({
           // M1 R5-11 (DC-M1-6): the drafting and member provisioning logins.
           { binding: 'JOBS_AUTHORING_DB', id: hid(5) },
           { binding: 'JOBS_ADMIN_DB', id: hid(6) },
+          // M2 R5-9: the messaging login.
+          { binding: 'JOBS_MESSAGING_DB', id: hid(7) },
         ],
       },
     },
@@ -404,7 +406,7 @@ describe('main', () => {
     const errs = [];
     expect(main({ env: GOOD(), configs, out: () => {}, err: (l) => errs.push(l) })).toBe(1);
     expect(errs.join('\n')).toMatch(
-      /jobs: env.staging has no hyperdrive bindings \(JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB, JOBS_AUTHORING_DB, JOBS_ADMIN_DB\)/,
+      /jobs: env.staging has no hyperdrive bindings \(JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB, JOBS_AUTHORING_DB, JOBS_ADMIN_DB, JOBS_MESSAGING_DB\)/,
     );
   });
 
@@ -416,7 +418,7 @@ describe('main', () => {
     const errs = [];
     expect(main({ env: GOOD(), configs, out: () => {}, err: (l) => errs.push(l) })).toBe(1);
     expect(errs.join('\n')).toMatch(
-      /jobs: env.staging.hyperdrive must be exactly \[JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB, JOBS_AUTHORING_DB, JOBS_ADMIN_DB\] in this order$/m,
+      /jobs: env.staging.hyperdrive must be exactly \[JOBS_MIRROR_DB, JOBS_QUALITY_DB, JOBS_INTEGRITY_DB, JOBS_AUTHORING_DB, JOBS_ADMIN_DB, JOBS_MESSAGING_DB\] in this order$/m,
     );
   });
 

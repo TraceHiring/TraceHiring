@@ -19,7 +19,8 @@
 // blocks carry exactly the Hyperdrive bindings of scripts/lib/hyperdrive.mjs with well-formed, distinct config ids
 // (the Workers reach staging Postgres only through them; the ids are committed after the founder creates the
 // configs), so a dispatch without them stops before any Worker deploy. That includes the two M1 jobs logins
-// (JOBS_AUTHORING_DB, JOBS_ADMIN_DB; specs/m1-test-authoring.md R5-11): PENDING_BINDINGS never applies here.
+// (JOBS_AUTHORING_DB, JOBS_ADMIN_DB; specs/m1-test-authoring.md R5-11) and the M2 messaging login
+// (JOBS_MESSAGING_DB; specs/m2-scheduling-invites.md R5-9): PENDING_BINDINGS never applies here.
 // Two deploy steps (security review INF-1): `--vars` before the migrations, `--hyperdrive` after the migrations and
 // catalog checks. The M1 configs need the roles migration M1-a creates, so the deploy must apply it before it stops
 // for their missing ids. No argument runs both (a local run).

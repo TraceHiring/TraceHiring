@@ -26,7 +26,8 @@ export const BUCKETS = Object.freeze([
 /**
  * Each DLQ before its queue: the queue's consumer config names it. There is no quality or integrity queue. M1 R5-13
  * adds the AI drafting and member provisioning queues, named as the mirror queue (`<name>-<env>`, DLQ
- * `<name>-dlq-<env>`); the api produces to them and workers/jobs consumes them.
+ * `<name>-dlq-<env>`); the api produces to them and workers/jobs consumes them. M2 R5-9 adds the messaging queue,
+ * which workers/jobs both produces to (the cron claim stage) and consumes.
  */
 export const QUEUES = Object.freeze([
   'trace-session-mirror-dlq-staging',
@@ -35,6 +36,8 @@ export const QUEUES = Object.freeze([
   'trace-authoring-staging',
   'trace-admin-dlq-staging',
   'trace-admin-staging',
+  'trace-messages-dlq-staging',
+  'trace-messages-staging',
 ]);
 
 const BUCKET_LOCATION = 'apac';

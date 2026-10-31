@@ -19,6 +19,9 @@ declare global {
     JOBS_AUTHORING_DB?: Hyperdrive;
     /** jobs_admin_login through Hyperdrive (member provisioning job). */
     JOBS_ADMIN_DB?: Hyperdrive;
+    // M2 R5-9: bound in env.staging once the founder has created its config (PENDING_BINDINGS), as the M1 two.
+    /** jobs_messaging_login through Hyperdrive (messaging claim stage and trace-messages consumer). */
+    JOBS_MESSAGING_DB?: Hyperdrive;
     /** Login role jobs_mirror_login; every use runs `SET LOCAL ROLE trace_worker` (mirror stage and sweep). */
     JOBS_MIRROR_DB_URL?: string;
     /** Login role jobs_quality_login; every use runs `SET LOCAL ROLE trace_quality_worker`. */
@@ -29,6 +32,8 @@ declare global {
     JOBS_AUTHORING_DB_URL?: string;
     /** Login role jobs_admin_login; every use runs `SET LOCAL ROLE trace_admin_worker`. Local only. */
     JOBS_ADMIN_DB_URL?: string;
+    /** Login role jobs_messaging_login; every use runs `SET LOCAL ROLE trace_messaging_worker`. Local only. */
+    JOBS_MESSAGING_DB_URL?: string;
     // M1-20, R5-12 (DC-M1-5): member provisioning (the admin job only). The pepper checks the invite's email HMAC;
     // the secret key and URL reach the Supabase Auth admin API outside any transaction. Never logged.
     /** HMAC pepper of member_invites.email_hmac (same value on trace-api). */

@@ -149,6 +149,8 @@ describe('checkWorker', () => {
     // M1 R5-11: the two new local-only twins are never a staging secret.
     ['jobs', 'JOBS_AUTHORING_DB_URL'],
     ['jobs', 'JOBS_ADMIN_DB_URL'],
+    // M2 R5-9: the messaging login's local twin is never a staging secret either.
+    ['jobs', 'JOBS_MESSAGING_DB_URL'],
   ])('rejects the retired %s secret %s (now a Hyperdrive config)', (worker, name) => {
     expect(ALLOW_LIST[worker]).not.toContain(name);
     expect(checkWorker(worker, ok(listed(name)))).toEqual([

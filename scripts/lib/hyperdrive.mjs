@@ -51,16 +51,27 @@ export const HYPERDRIVE_PLAN = Object.freeze([
     login: 'jobs_admin_login',
     config: 'trace-staging-jobs-admin-login',
   }),
+  // M2 R5-9 (specs/m2-scheduling-invites.md): the messaging worker; 7 of the 10 Free configs.
+  Object.freeze({
+    worker: 'jobs',
+    binding: 'JOBS_MESSAGING_DB',
+    login: 'jobs_messaging_login',
+    config: 'trace-staging-jobs-messaging-login',
+  }),
 ]);
 
 /**
- * Planned bindings whose configs the founder has not created yet (M1 R5-11: scripts/ops/staging-worker-secrets.mjs
- * creates them at the next staging go-ahead and prints their ids). The committed wrangler.jsonc may leave out all of
+ * Planned bindings whose configs the founder has not created yet (M1 R5-11, M2 R5-9:
+ * scripts/ops/staging-worker-secrets.mjs creates them at the next staging go-ahead and prints their ids). The committed wrangler.jsonc may leave out all of
  * them (never a D1 binding, never only some), which the repository's bindings test accepts with `allowPending`; the
  * deploy (check-deploy-vars) never sets it, so a staging deploy stays refused until every id is committed. When the
  * ids land, empty this list (scripts/test/wrangler-bindings.test.mjs refuses a committed binding still listed here).
  */
-export const PENDING_BINDINGS = Object.freeze(['JOBS_AUTHORING_DB', 'JOBS_ADMIN_DB']);
+export const PENDING_BINDINGS = Object.freeze([
+  'JOBS_AUTHORING_DB',
+  'JOBS_ADMIN_DB',
+  'JOBS_MESSAGING_DB',
+]);
 
 /** A Hyperdrive config id as Cloudflare issues it. */
 export const HYPERDRIVE_ID_RE = /^[0-9a-f]{32}$/;

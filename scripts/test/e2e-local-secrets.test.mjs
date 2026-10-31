@@ -37,6 +37,8 @@ describe('LOGIN_ROLES', () => {
       // M1 R5-11 (DC-M1-6): the AI drafting job and the member provisioning job.
       { login: 'jobs_authoring_login', role: 'trace_authoring_worker' },
       { login: 'jobs_admin_login', role: 'trace_admin_worker' },
+      // M2 R5-9: the messaging worker (claim stage and consumer).
+      { login: 'jobs_messaging_login', role: 'trace_messaging_worker' },
     ]);
   });
 });
@@ -213,6 +215,7 @@ describe('workerSecrets', () => {
       'JOBS_ADMIN_DB_URL',
       'JOBS_AUTHORING_DB_URL',
       'JOBS_INTEGRITY_DB_URL',
+      'JOBS_MESSAGING_DB_URL',
       'JOBS_MIRROR_DB_URL',
       'JOBS_QUALITY_DB_URL',
     ]);
@@ -242,6 +245,8 @@ describe('workerSecrets', () => {
     expect(pass(s.jobs.JOBS_AUTHORING_DB_URL)).toBe(i.passwords.jobs_authoring_login);
     expect(user(s.jobs.JOBS_ADMIN_DB_URL)).toBe('jobs_admin_login');
     expect(pass(s.jobs.JOBS_ADMIN_DB_URL)).toBe(i.passwords.jobs_admin_login);
+    expect(user(s.jobs.JOBS_MESSAGING_DB_URL)).toBe('jobs_messaging_login');
+    expect(pass(s.jobs.JOBS_MESSAGING_DB_URL)).toBe(i.passwords.jobs_messaging_login);
   });
 
   it('refuses a short media-link key (the api needs at least 32 characters)', async () => {

@@ -68,18 +68,29 @@ describe('STAGE_DB: one login secret and one worker role per stage (MT-14, L-29)
         secret: 'JOBS_AUTHORING_DB_URL',
         role: 'trace_authoring_worker',
       },
+      // M2 R5-9: the messaging consumer (one org per message) and the cross-org claim stage, on their own login.
+      messaging: {
+        binding: 'JOBS_MESSAGING_DB',
+        secret: 'JOBS_MESSAGING_DB_URL',
+        role: 'trace_messaging_worker',
+      },
+      messaging_claim: {
+        binding: 'JOBS_MESSAGING_DB',
+        secret: 'JOBS_MESSAGING_DB_URL',
+        role: 'trace_messaging_worker',
+      },
     });
     const roles = new Set(
-      (['mirror', 'quality', 'integrity', 'authoring', 'admin'] as const).map(
+      (['mirror', 'quality', 'integrity', 'authoring', 'admin', 'messaging'] as const).map(
         (s) => STAGE_DB[s].role,
       ),
     );
-    expect(roles.size).toBe(5);
+    expect(roles.size).toBe(6);
   });
 });
 
 describe('createStageDb', () => {
-  it.each(['mirror', 'quality', 'integrity', 'sweep'] as StageDbName[])(
+  it.each(['mirror', 'quality', 'integrity', 'sweep', 'messaging'] as StageDbName[])(
     '%s: SET LOCAL ROLE, then the org and request settings, then the stage, in one transaction',
     async (stage) => {
       const rec = fresh();
@@ -124,6 +135,26 @@ describe('createStageDb', () => {
   it('the authoring stage itself still refuses a missing org', async () => {
     const rec = fresh();
     const db = createStageDb('authoring', fakeBegin(rec), () => REQ);
+    await expect(db.withOrg(null, async () => undefined)).rejects.toThrow('bad_org');
+    expect(rec.statements).toEqual([]);
+  });
+
+  it('the messaging claim may run without an org (claim_due_messages, close_due_drives; M2 R5-9)', async () => {
+    const rec = fresh();
+    const db = createStageDb('messaging_claim', fakeBegin(rec), () => REQ);
+    await db.withOrg(null, async () => undefined);
+    expect(rec.statements).toEqual([
+      { text: 'set local role trace_messaging_worker', params: [] },
+      {
+        text: "select set_config('trace.job_org_id', $1, true), set_config('trace.request_id', $2, true)",
+        params: ['', REQ],
+      },
+    ]);
+  });
+
+  it('the messaging consumer stage refuses a missing org (it runs withOrg(message.orgId), R5-9)', async () => {
+    const rec = fresh();
+    const db = createStageDb('messaging', fakeBegin(rec), () => REQ);
     await expect(db.withOrg(null, async () => undefined)).rejects.toThrow('bad_org');
     expect(rec.statements).toEqual([]);
   });

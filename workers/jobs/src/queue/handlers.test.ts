@@ -237,6 +237,74 @@ describe('scheduled(): the stranded drafting-job sweep (R5-64 m)', () => {
   });
 });
 
+// M2 R5-9: the messaging claim reuses the every-minute trigger as an optional dependency next to draftSweep.
+describe('scheduled(): the messaging claim (M2 R5-9)', () => {
+  it('runs on every tick with the env of the call, beside both sweeps', async () => {
+    const b = bindings();
+    const order: string[] = [];
+    const seen: Env[] = [];
+    const handlers = createQueueHandlers({
+      reporter: { capture() {} },
+      stages: okStages,
+      pendingStages: () => Promise.resolve([]),
+      draftSweep: () => {
+        order.push('draft');
+        return Promise.resolve(0);
+      },
+      messagesClaim: (env) => {
+        order.push('messages');
+        seen.push(env);
+        return Promise.resolve(0);
+      },
+    });
+    const env = envWith({ MIRROR_QUEUE: b.queue, EVIDENCE: b.evidence });
+    const { ctx, pending } = execution();
+
+    await handlers.scheduled(controller, env, ctx);
+
+    expect(seen).toEqual([env]);
+    expect(order.sort()).toEqual(['draft', 'messages']);
+    expect(pending).toHaveLength(1);
+  });
+
+  it('a failed claim rejects the tick after the other sweeps have run', async () => {
+    const message = validMessage();
+    const b = bindings({ [mirrorKey(ORG_ID, SESSION_ID)]: JSON.stringify(message) });
+    let drafted = 0;
+    const handlers = createQueueHandlers({
+      reporter: { capture() {} },
+      stages: okStages,
+      pendingStages: () => Promise.resolve([pendingRow]),
+      draftSweep: () => {
+        drafted += 1;
+        return Promise.resolve(0);
+      },
+      messagesClaim: () => Promise.reject(new Error('claim down')),
+    });
+    const { ctx, pending } = execution();
+
+    await expect(
+      handlers.scheduled(controller, envWith({ MIRROR_QUEUE: b.queue, EVIDENCE: b.evidence }), ctx),
+    ).rejects.toThrow('claim down');
+    expect(b.sent).toHaveLength(1);
+    expect(drafted).toBe(1);
+    await expect(Promise.all(pending)).resolves.toBeDefined();
+  });
+
+  it('absent, the tick runs only the sweeps (the claim stage arrives with stream B3)', async () => {
+    const b = bindings();
+    const handlers = createQueueHandlers({
+      reporter: { capture() {} },
+      stages: okStages,
+      pendingStages: () => Promise.resolve([]),
+    });
+    const { ctx } = execution();
+    await expect(
+      handlers.scheduled(controller, envWith({ MIRROR_QUEUE: b.queue, EVIDENCE: b.evidence }), ctx),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe('stages and the sweep database part built per invocation env (lead wiring, spec §11)', () => {
   it('a stages factory receives the env of the queue() call', async () => {
     const seen: Env[] = [];
