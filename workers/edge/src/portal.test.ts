@@ -4,6 +4,7 @@
 // refused on them. Each counts against a per-invitation InviteOtpDO bucket (`portal_slots`, `portal_reschedule`); the
 // ADR-032 link limiter is not involved. Availability is a boolean only: the edge answers exactly the contract's fields
 // and an api answer with a count is refused (rule 5). api refusals reach the client with the contract's status.
+// AT-M2-20 edge part: after a rotation the old link is 404 `invalid_link` (the spec's "not_found", decision d).
 import { PortalRescheduleRes, PortalSlotsRes } from '@trace/shared/contracts/candidate';
 import { describe, expect, it } from 'vitest';
 import {
@@ -275,8 +276,10 @@ describe('per-invitation portal buckets (R5-24) and no link limiter', () => {
   });
 });
 
-describe('a rotated link (AT-M2-20 edge part, R2-4): only the latest link works', () => {
-  it('after a reschedule rotates the link, the old link is 404 invalid_link on every link route', async () => {
+// AT-M2-20's "old link after rotation → `not_found`" reads `invalid_link` (404), the contract's code for a link that
+// matches no invitation (build-notes "B4 first reviews" d); `not_found` is the edge's answer for an unknown route only.
+describe('a rotated link (AT-M2-20 edge part, R2-4): only the latest link works; the old one is invalid_link (404)', () => {
+  it('AT-M2-20: after a reschedule rotates the link, the old link is 404 invalid_link (the spec\'s "not_found") on every link route', async () => {
     const link = { current: LINK() };
     const rotated = `${'R'.repeat(21)}${'n'.repeat(22)}`;
     const h = await createHarness({
