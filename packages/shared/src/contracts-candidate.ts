@@ -990,7 +990,15 @@ export type SessionMirrorMessage = z.infer<typeof SessionMirrorMessage>;
 // ---- CandidateRpc (service binding edge -> services/api; §4.2) --------------------------------------------------
 // Internal, validated inside api. Methods after lobbyMint receive the raw lobby token and re-verify it there.
 
-export const InviteResolveRpcIn = z.strictObject({ token: LinkToken });
+/**
+ * `sessionLive` (M2, R5-66 c; build-notes "B4 first reviews" a): the edge's `SessionDO.peek()` for a drive row the
+ * api answered with a schedule; when true the api treats the row as started (`schedule: null`), so a candidate whose
+ * `sessionStarted` failed is never shown `window_missed` and resumes through the lobby OTP.
+ */
+export const InviteResolveRpcIn = z.strictObject({
+  token: LinkToken,
+  sessionLive: z.boolean().optional(),
+});
 export const InviteResolveRpcOut = z
   .strictObject({
     invitationId: Uuid,
@@ -1137,13 +1145,19 @@ export type SessionPeekRes = z.infer<typeof SessionPeekRes>;
  * them, then merged into CandidateRpcSchemas in the same change (both sides type every method of that registry).
  */
 export const PortalRpcSchemas = {
+  // `sessionLive` (R5-66 c): a live DO session counts as started; the api refuses a self-reschedule while it is true.
   portalMint: {
-    in: z.strictObject({ invitationId: Uuid, orgId: Uuid, nonce: Nonce }),
+    in: z.strictObject({
+      invitationId: Uuid,
+      orgId: Uuid,
+      nonce: Nonce,
+      sessionLive: z.boolean().optional(),
+    }),
     out: OtpVerifyPortalRes,
   },
   portalSlots: { in: z.strictObject({ portalToken: Jws }), out: PortalSlotsRes },
   portalReschedule: {
-    in: z.strictObject({ portalToken: Jws, toSlotId: Uuid }),
+    in: z.strictObject({ portalToken: Jws, toSlotId: Uuid, sessionLive: z.boolean().optional() }),
     out: PortalRescheduleRes,
   },
 } as const;
