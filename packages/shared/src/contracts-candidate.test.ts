@@ -444,6 +444,12 @@ describe('CandidateError codes (§4.2)', () => {
     closed: 410,
     section_closed: 410, // M1 R5-20: an item GET for a closed or passed forward-only position
     out_of_order: 409,
+    // M2 R5-23: start window, lobby window and the one self-reschedule.
+    outside_start_window: 409,
+    lobby_closed: 409,
+    reschedule_used: 409,
+    too_late_to_reschedule: 409,
+    slot_full: 409,
     too_large: 413,
     bad_media: 415,
     otp_locked: 429,
@@ -839,6 +845,9 @@ describe('candidate-facing responses carry no score, band, grade, outcome, cutof
     ['ServedItemV2', ServedItemV2],
     ['SessionStartResV2', SessionStartResV2],
     ['SessionAttachResV2', SessionAttachResV2],
+    // M2 (R5-23, R5-24): the portal shapes the candidate reads.
+    ['PortalSlotsRes', Candidate.PortalSlotsRes],
+    ['PortalMintRes', Candidate.PortalRpcSchemas.portalMint.out],
   ];
   it.each(responses)('%s', (_name, schema) => {
     expect(keysMatching(schema, FORBIDDEN)).toEqual([]);
@@ -859,6 +868,9 @@ describe('candidate-facing responses carry no score, band, grade, outcome, cutof
       SessionMirrorMessage,
       TestPackageV2,
       ...Object.values(CandidateRpcSchemas).flatMap((pair) => [pair.in, pair.out]),
+      ...Object.values(Candidate.PortalRpcSchemas).flatMap((pair) => [pair.in, pair.out]),
+      Candidate.PortalRescheduleReq,
+      Candidate.SessionPeekRes,
     ];
     for (const schema of all) expect(allObjectsStrict(schema)).toBe(true);
   });
@@ -1024,7 +1036,10 @@ describe('FinalAnswers (final.json, §4.4)', () => {
 
 describe('exported types', () => {
   it('infer the wire shapes (compile-time; typecheck is the assertion)', () => {
-    expectTypeOf<Candidate.OtpRequestReq>().toEqualTypeOf<{ token: string }>();
+    expectTypeOf<Candidate.OtpRequestReq>().toEqualTypeOf<{
+      token: string;
+      purpose?: 'lobby' | 'manage' | undefined;
+    }>();
     expectTypeOf<Candidate.OtpVerifyReq>().toEqualTypeOf<{ token: string; code: string }>();
     expectTypeOf<Candidate.AgeDeclareReq>().toEqualTypeOf<{ adult: boolean }>();
     expectTypeOf<Candidate.SubmitReq>().toEqualTypeOf<{ streamId: string; finalSeq: number }>();
@@ -1051,6 +1066,7 @@ const SCALAR_EXPORTS = [
   'PhotoSkippedReason',
   'LobbyNext',
   'CandidateErrorCode',
+  'OtpPurpose', // M2 R5-19
 ];
 const candidateExports = (Object.entries(Candidate) as [string, unknown][]).filter(
   (entry): entry is [string, z.ZodType] => entry[1] instanceof z.ZodType,
@@ -1892,5 +1908,131 @@ describe('ItemGetQuery (R5-45)', () => {
   });
   it('refuses any other query key', () => {
     expect(ok(ItemGetQuery, { afterSeq: '1', position: '2' })).toBe(false);
+  });
+});
+
+// ---- M2 (specs/m2-scheduling-invites.md revision 5 §5; R5-19, R5-22, R5-23, R5-24, R5-63, R5-64 b, R5-66 c, e) ------
+
+describe('M2: the schedule on invite resolve (R5-23, R5-64 b)', () => {
+  const schedule = {
+    mode: 'scheduled',
+    phase: 'lobby_open',
+    slotStartsAt: T1,
+    lobbyOpensAt: T0,
+    startWindowEndsAt: T2,
+  };
+  it('carries the phase and times, and is optional so D1 answers still parse', () => {
+    expect(InviteResolveRes.parse({ state: 'sent', durationMinutes: 30, schedule })).toEqual({
+      state: 'sent',
+      durationMinutes: 30,
+      schedule,
+    });
+    expect(ok(InviteResolveRes, { state: 'sent', schedule: null })).toBe(true);
+    expect(ok(InviteResolveRes, { state: 'sent' })).toBe(true);
+  });
+  it('has the five phases and no next (that is LobbyNext)', () => {
+    for (const phase of [
+      'wait_lobby',
+      'lobby_open',
+      'window_missed',
+      'reschedule_offer',
+      'closed',
+    ]) {
+      expect(ok(Candidate.CandidateSchedule, { mode: 'open_window', phase }), phase).toBe(true);
+    }
+    expect(ok(Candidate.CandidateSchedule, { mode: 'open_window', phase: 'start' })).toBe(false);
+    expect(ok(InviteResolveRes, { state: 'sent', schedule, next: 'age' })).toBe(false);
+  });
+  it('is set only before the start: a started or submitted candidate never sees window_missed (R5-64 b)', () => {
+    for (const state of ['started', 'submitted', 'expired', 'revoked', 'blocked_age']) {
+      expect(ok(InviteResolveRes, { state, schedule }), state).toBe(false);
+      expect(ok(InviteResolveRes, { state, schedule: null }), state).toBe(true);
+    }
+    const rpc = {
+      invitationId: id(1),
+      orgId: id(2),
+      candidateId: id(3),
+      state: 'otp_verified',
+      schedule,
+    };
+    expect(InviteResolveRpcOut.parse(rpc)).toEqual(rpc);
+    expect(ok(InviteResolveRpcOut, { ...rpc, state: 'started' })).toBe(false);
+  });
+  it('never carries a seat count or another candidate (rule 5)', () => {
+    expect(
+      ok(Candidate.CandidateSchedule, { mode: 'scheduled', phase: 'lobby_open', booked: 3 }),
+    ).toBe(false);
+  });
+});
+
+describe('M2: OTP purpose, grant window and live session (R5-19, R5-22, R5-63, R5-66 c)', () => {
+  it('OTP request purpose is optional and lobby by default; manage is the portal login', () => {
+    expect(ok(OtpRequestReq, { token: LINK })).toBe(true);
+    expect(ok(OtpRequestReq, { token: LINK, purpose: 'manage' })).toBe(true);
+    expect(ok(OtpRequestReq, { token: LINK, purpose: 'portal' })).toBe(false);
+  });
+  it('the grant may carry the start window, first start only', () => {
+    const grant = {
+      resume: false,
+      startedAt: null,
+      durationSeconds: 1800,
+      sessionToken: FAKE_JWS,
+      nonce: NONCE,
+      packageKey: 'packages/x.json',
+      packageSha256: HEX,
+      testVersionId: id(1),
+      rulesetVersionId: id(2),
+      consentId: id(3),
+      adultConfirmed: true,
+      sessionId: id(4),
+    };
+    expect(ok(SessionGrantRpcOut, grant)).toBe(true);
+    expect(ok(SessionGrantRpcOut, { ...grant, sw: { nb: T0, na: T1 } })).toBe(true);
+    expect(ok(SessionGrantRpcOut, { ...grant, sw: { nb: T1, na: T0 } })).toBe(false);
+    expect(
+      ok(SessionGrantRpcOut, { ...grant, resume: true, startedAt: T0, sw: { nb: T0, na: T1 } }),
+    ).toBe(false);
+  });
+  it('sessionLive rides on sessionGrant, lobbyMint and messagingSend; messagingSend names its purpose', () => {
+    expect(
+      ok(SessionGrantRpcIn, {
+        lobbyToken: FAKE_JWS,
+        rulesAcknowledged: true,
+        photo: { sha256: HEX },
+        sessionLive: true,
+      }),
+    ).toBe(true);
+    expect(
+      ok(LobbyMintRpcIn, { invitationId: id(1), orgId: id(2), nonce: NONCE, sessionLive: false }),
+    ).toBe(true);
+    const send = { invitationId: id(1), orgId: id(2), code: '123456', idempotencyKey: 'k' };
+    expect(ok(MessagingSendRpcIn, send)).toBe(true);
+    expect(ok(MessagingSendRpcIn, { ...send, purpose: 'manage', sessionLive: true })).toBe(true);
+    expect(ok(MessagingSendRpcIn, { ...send, purpose: 'invite' })).toBe(false);
+    expect(Candidate.SessionPeekRes.parse({ live: true })).toEqual({ live: true });
+  });
+});
+
+describe('M2: the portal (R5-21, R5-24, E25, rule 5)', () => {
+  it('lists slots with an availability boolean, never a count', () => {
+    const res = { slots: [{ slotId: id(5), startsAt: T1, available: true }] };
+    expect(Candidate.PortalSlotsRes.parse(res)).toEqual(res);
+    const withCount = { slotId: id(5), startsAt: T1, available: true, booked: 2 };
+    expect(ok(Candidate.PortalSlotsRes, { slots: [withCount] })).toBe(false);
+  });
+  it('reschedules by slot id only', () => {
+    expect(Candidate.PortalRescheduleReq.parse({ toSlotId: id(6) })).toEqual({ toSlotId: id(6) });
+    expect(ok(Candidate.PortalRescheduleReq, { toSlotId: id(6), invitationId: id(7) })).toBe(false);
+  });
+  it('the portal RPCs are in/out pairs for B2 and B4 to add to CandidateRpcSchemas', () => {
+    const portal = Candidate.PortalRpcSchemas;
+    expect(Object.keys(portal).sort()).toEqual(['portalMint', 'portalReschedule', 'portalSlots']);
+    expect(ok(portal.portalMint.in, { invitationId: id(1), orgId: id(2), nonce: NONCE })).toBe(
+      true,
+    );
+    expect(ok(portal.portalMint.out, { portalToken: FAKE_JWS, expiresAt: T1 })).toBe(true);
+    expect(ok(portal.portalSlots.in, { portalToken: FAKE_JWS })).toBe(true);
+    expect(ok(portal.portalReschedule.in, { portalToken: FAKE_JWS, toSlotId: id(6) })).toBe(true);
+    expect(ok(portal.portalReschedule.out, { ok: true, slotStartsAt: T1 })).toBe(true);
   });
 });

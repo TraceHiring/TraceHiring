@@ -59,15 +59,42 @@ export const OkRes = z.strictObject({ ok: z.literal(true) });
 
 // ---- Link, OTP, lobby ------------------------------------------------------------------------------------------
 
-export const InviteResolveReq = z.strictObject({ token: LinkToken });
-export const InviteResolveRes = z.strictObject({
-  state: InvitationState,
-  title: z.string().min(1).max(200).optional(),
-  durationMinutes: z.int().min(1).max(120).optional(),
+/**
+ * M2 (specs/m2-scheduling-invites.md R5-23, §6.5): where a drive invitation stands against its slot or window. Times
+ * only, never a seat count or anything about another candidate (rule 5). There is no `next` here: that is `LobbyNext`.
+ */
+export const CandidateSchedule = z.strictObject({
+  mode: z.enum(['open_window', 'scheduled']),
+  phase: z.enum(['wait_lobby', 'lobby_open', 'window_missed', 'reschedule_offer', 'closed']),
+  slotStartsAt: Time.optional(),
+  lobbyOpensAt: Time.optional(),
+  startWindowEndsAt: Time.optional(),
+  deadlineAt: Time.optional(),
 });
+export type CandidateSchedule = z.infer<typeof CandidateSchedule>;
+/** R5-64 b: a schedule only before the start, so a started or submitted candidate is never told the window passed. */
+const SCHEDULED_STATES: readonly string[] = ['created', 'sent', 'otp_verified'];
+const scheduleFitsState = (res: {
+  state: string;
+  schedule?: CandidateSchedule | null | undefined;
+}) => res.schedule === undefined || res.schedule === null || SCHEDULED_STATES.includes(res.state);
+
+export const InviteResolveReq = z.strictObject({ token: LinkToken });
+export const InviteResolveRes = z
+  .strictObject({
+    state: InvitationState,
+    title: z.string().min(1).max(200).optional(),
+    durationMinutes: z.int().min(1).max(120).optional(),
+    // M2: null for D1 rows (no drive); optional so a D1 api answer still parses.
+    schedule: CandidateSchedule.nullable().optional(),
+  })
+  .refine(scheduleFitsState, { message: 'schedule_after_start' });
 export type InviteResolveRes = z.infer<typeof InviteResolveRes>;
 
-export const OtpRequestReq = z.strictObject({ token: LinkToken });
+/** M2 R5-19: the purpose is bound at issue; absent means `lobby` (the D1 app sends none). */
+export const OtpPurpose = z.enum(['lobby', 'manage']);
+export type OtpPurpose = z.infer<typeof OtpPurpose>;
+export const OtpRequestReq = z.strictObject({ token: LinkToken, purpose: OtpPurpose.optional() });
 export const OtpRequestRes = z.strictObject({
   resendAfterSeconds: z.int().min(0).max(3600),
   expiresInSeconds: z.int().min(1).max(3600),
@@ -370,6 +397,13 @@ export const CANDIDATE_ERROR_STATUS = {
   // section. An item GET is not an outbox event, so it never blocks the queue.
   section_closed: 410,
   out_of_order: 409,
+  // M2 (R5-23): outside the slot's start window, OTP outside the lobby window, the one self-reschedule used, a
+  // reschedule within 2 h of the slot, and a target slot with no seat left.
+  outside_start_window: 409,
+  lobby_closed: 409,
+  reschedule_used: 409,
+  too_late_to_reschedule: 409,
+  slot_full: 409,
   too_large: 413,
   bad_media: 415,
   otp_locked: 429,
@@ -957,26 +991,39 @@ export type SessionMirrorMessage = z.infer<typeof SessionMirrorMessage>;
 // Internal, validated inside api. Methods after lobbyMint receive the raw lobby token and re-verify it there.
 
 export const InviteResolveRpcIn = z.strictObject({ token: LinkToken });
-export const InviteResolveRpcOut = z.strictObject({
-  invitationId: Uuid,
-  orgId: Uuid,
-  candidateId: Uuid,
-  state: InvitationState,
-  title: z.string().min(1).max(200).optional(),
-  durationMinutes: z.int().min(1).max(120).optional(),
-});
+export const InviteResolveRpcOut = z
+  .strictObject({
+    invitationId: Uuid,
+    orgId: Uuid,
+    candidateId: Uuid,
+    state: InvitationState,
+    title: z.string().min(1).max(200).optional(),
+    durationMinutes: z.int().min(1).max(120).optional(),
+    schedule: CandidateSchedule.nullable().optional(),
+  })
+  .refine(scheduleFitsState, { message: 'schedule_after_start' });
 
-/** The edge hands api the OTP; api resolves the address itself, so no address crosses this boundary. */
+/**
+ * The edge hands api the OTP; api resolves the address itself, so no address crosses this boundary. M2: `purpose`
+ * picks the lobby or manage email copy (R5-22); `sessionLive` comes from `SessionDO.peek()` for a drive row (R5-66 c).
+ */
 export const MessagingSendRpcIn = z.strictObject({
   invitationId: Uuid,
   orgId: Uuid,
   code: OtpCode,
   idempotencyKey: z.string().min(1).max(200),
+  purpose: OtpPurpose.optional(),
+  sessionLive: z.boolean().optional(),
 });
 export const MessagingSendRpcOut = z.strictObject({ ok: z.literal(true) });
 
 /** The edge generates the lobby nonce at each OTP verify and keeps its hash; api puts the nonce in the token. */
-export const LobbyMintRpcIn = z.strictObject({ invitationId: Uuid, orgId: Uuid, nonce: Nonce });
+export const LobbyMintRpcIn = z.strictObject({
+  invitationId: Uuid,
+  orgId: Uuid,
+  nonce: Nonce,
+  sessionLive: z.boolean().optional(),
+});
 export const LobbyMintRpcOut = z.strictObject({
   lobbyToken: Jws,
   expiresAt: Time,
@@ -1009,7 +1056,12 @@ export const SessionGrantRpcIn = z.strictObject({
   lobbyToken: Jws,
   rulesAcknowledged: z.literal(true),
   photo: PhotoChoice,
+  sessionLive: z.boolean().optional(),
 });
+/** M2 R5-63: a drive row's start window, returned with a first start (never a resume); SessionDO re-checks it. */
+const StartWindow = z
+  .strictObject({ nb: Time, na: Time })
+  .refine((w) => Date.parse(w.na) > Date.parse(w.nb), { message: 'na_after_nb' });
 export const SessionGrantRpcOut = z
   .strictObject({
     resume: z.boolean(),
@@ -1024,11 +1076,13 @@ export const SessionGrantRpcOut = z
     consentId: Uuid,
     adultConfirmed: z.literal(true),
     sessionId: Uuid,
+    sw: StartWindow.optional(),
   })
   // `startedAt` is the stored, set-once start of a session that already began: only a resume has one.
   .refine((out) => out.startedAt === null || out.resume, {
     message: 'startedAt belongs to a resume only',
-  });
+  })
+  .refine((out) => out.sw === undefined || !out.resume, { message: 'sw belongs to a first start' });
 
 export const SessionStartedRpcIn = z.strictObject({
   invitationId: Uuid,
@@ -1048,6 +1102,37 @@ export const CandidateRpcSchemas = {
   photoPermit: { in: PhotoPermitRpcIn, out: PhotoPermitRpcOut },
   sessionGrant: { in: SessionGrantRpcIn, out: SessionGrantRpcOut },
   sessionStarted: { in: SessionStartedRpcIn, out: SessionStartedRpcOut },
+} as const;
+
+// ---- M2 portal (R5-19, R5-21, R5-24; E25, rule 5) ---------------------------------------------------------------
+// The portal token (typ `portal`, 1,800 s) is minted after an OTP with purpose `manage` and accepted only on
+// GET /v1/portal/slots and POST /v1/portal/reschedule. Availability is a boolean, never a count.
+
+export const PortalSlotsRes = z.strictObject({
+  slots: z.array(z.strictObject({ slotId: Uuid, startsAt: Time, available: z.boolean() })).max(500),
+});
+export type PortalSlotsRes = z.infer<typeof PortalSlotsRes>;
+export const PortalRescheduleReq = z.strictObject({ toSlotId: Uuid });
+export type PortalRescheduleReq = z.infer<typeof PortalRescheduleReq>;
+
+/** `SessionDO.peek()` (R5-66 c): read-only, whether the per-invitation DO already holds a session. */
+export const SessionPeekRes = z.strictObject({ live: z.boolean() });
+export type SessionPeekRes = z.infer<typeof SessionPeekRes>;
+
+/**
+ * The three portal CandidateRpc methods (R5-23). Kept apart until B2 (services/api) and B4 (workers/edge) implement
+ * them, then merged into CandidateRpcSchemas in the same change (both sides type every method of that registry).
+ */
+export const PortalRpcSchemas = {
+  portalMint: {
+    in: z.strictObject({ invitationId: Uuid, orgId: Uuid, nonce: Nonce }),
+    out: z.strictObject({ portalToken: Jws, expiresAt: Time }),
+  },
+  portalSlots: { in: z.strictObject({ portalToken: Jws }), out: PortalSlotsRes },
+  portalReschedule: {
+    in: z.strictObject({ portalToken: Jws, toSlotId: Uuid }),
+    out: z.strictObject({ ok: z.literal(true), slotStartsAt: Time }),
+  },
 } as const;
 
 // ---- Inferred types for every exported wire schema (the edge, the api and the candidate app import types only) -------

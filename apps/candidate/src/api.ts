@@ -61,6 +61,12 @@ export const ERROR_STATUS: Record<CandidateErrorCode, number> = {
   closed: 410,
   section_closed: 410,
   out_of_order: 409,
+  // M2 (R5-23); the screens for them come with B6.
+  outside_start_window: 409,
+  lobby_closed: 409,
+  reschedule_used: 409,
+  too_late_to_reschedule: 409,
+  slot_full: 409,
   too_large: 413,
   bad_media: 415,
   otp_locked: 429,
