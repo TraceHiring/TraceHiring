@@ -57,8 +57,8 @@ export function checkInviteBytes(name: string, bytes: Uint8Array): FileCheck {
   } catch {
     return { ok: false, refusal: 'not_csv' };
   }
-  // Blank lines count as records here, so the cap is a generous multiple of the row limit.
-  const parsed = parseCsv(text, MAX_ROWS * 2 + 2);
+  // Blank records are dropped while reading, so the cap is exactly the header and 5,000 rows that are not blank.
+  const parsed = parseCsv(text, MAX_ROWS + 1, { skipBlank: true });
   if (!parsed.ok) {
     return {
       ok: false,
@@ -82,7 +82,11 @@ function readRecords(all: string[][]): FileCheck {
   const header = records[0];
   if (header === undefined) return { ok: false, refusal: 'empty' };
 
-  const names = header.map(normalise);
+  // Trailing empty header cells (a sheet saved as CSV often has them) are ignored; a row with a value under one gets
+  // too_many_cells below. An empty cell between named columns is still a column this screen does not know.
+  let width = header.length;
+  while (width > 0 && (header[width - 1] ?? '').trim() === '') width -= 1;
+  const names = header.slice(0, width).map(normalise);
   if (names.some((name) => DOB_LIKE.test(name)))
     return { ok: false, refusal: 'date_of_birth_column' };
   const columns: Column[] = [];

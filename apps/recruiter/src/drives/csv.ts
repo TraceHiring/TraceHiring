@@ -8,11 +8,23 @@ export type CsvResult =
 
 const BOM = String.fromCodePoint(0xfeff);
 
+export interface CsvOptions {
+  /** Drop records whose every field is empty or spaces: they are not returned and do not count towards the limit. */
+  skipBlank?: boolean;
+}
+
+const isBlank = (record: readonly string[]): boolean => record.every((cell) => cell.trim() === '');
+
 /**
  * Splits `input` into records of fields. A final line break does not add an empty record; a blank line inside the text
- * is a record with one empty field (the caller decides to skip it). More than `maxRecords` records stop the read.
+ * is a record with one empty field (unless `skipBlank` drops it). More than `maxRecords` records stop the read.
  */
-export function parseCsv(input: string, maxRecords = Number.POSITIVE_INFINITY): CsvResult {
+export function parseCsv(
+  input: string,
+  maxRecords = Number.POSITIVE_INFINITY,
+  options: CsvOptions = {},
+): CsvResult {
+  const skipBlank = options.skipBlank === true;
   const text = input.startsWith(BOM) ? input.slice(1) : input;
   if (text.includes('\u0000')) return { ok: false, reason: 'malformed' };
   const n = text.length;
@@ -64,11 +76,11 @@ export function parseCsv(input: string, maxRecords = Number.POSITIVE_INFINITY): 
     } else {
       i += 1;
     }
-    records.push(record);
+    if (!skipBlank || !isBlank(record)) records.push(record);
     record = [];
     if (records.length > maxRecords) return { ok: false, reason: 'too_many_records' };
   }
-  if (record.length > 0) {
+  if (record.length > 0 && (!skipBlank || !isBlank(record))) {
     records.push(record);
     if (records.length > maxRecords) return { ok: false, reason: 'too_many_records' };
   }
