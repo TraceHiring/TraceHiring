@@ -309,6 +309,15 @@ describe('SesEmailMessaging: recipient guard outside production (AT-M2-23)', () 
     'success@simulator.amazonses.com, other@example.com',
     'success@simulator.amazonses.com\r\nbcc: other@example.com',
     '',
+    // B1 fix 7: confusables, quoting, display names and Unicode separators.
+    'evil﹫gmail.com@simulator.amazonses.com',
+    '"a@b.com"@simulator.amazonses.com',
+    'success@simulator.amazonses.com.',
+    'success@simulator.amazonses.com​',
+    'success@simulator。amazonses.com',
+    'Name <success@simulator.amazonses.com>',
+    'success@simulator.amazonses.com other@example.com',
+    'success @simulator.amazonses.com',
   ])('throws bad_recipient for %j before any network call', async (to) => {
     let called = 0;
     const ses = new SesEmailMessaging(
@@ -323,6 +332,20 @@ describe('SesEmailMessaging: recipient guard outside production (AT-M2-23)', () 
     expect(e.code).toBe('bad_recipient');
     expect(e.retryable).toBe(false);
     expect(called).toBe(0);
+  });
+
+  it('a full-width simulator address is normalised (NFKC) and goes on the wire as ASCII', async () => {
+    const fullWidth = 'success@simulator.amazonses.com'.replace(/[!-~]/g, (c) =>
+      String.fromCharCode(c.charCodeAt(0) + 0xfee0),
+    );
+    expect(fullWidth).not.toBe('success@simulator.amazonses.com');
+    expect(/^[\x00-\x7f]*$/.test(fullWidth)).toBe(false);
+    const rec = okFetch();
+    await new SesEmailMessaging(options({ fetch: rec.fetch })).send(message({ to: fullWidth }));
+    expect(rec.calls).toHaveLength(1);
+    const wire = JSON.parse(rec.calls[0]!.body).Destination.ToAddresses as string[];
+    expect(wire).toEqual(['success@simulator.amazonses.com']);
+    expect(/^[\x21-\x7e]+$/.test(wire[0]!)).toBe(true);
   });
 
   it('a different HMAC key does not match the configured digest', async () => {
