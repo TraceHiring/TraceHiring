@@ -18,6 +18,21 @@ const CONFIGS = {
 const ENVS = ['dev', 'staging'];
 const STAGING_SUBDOMAIN = 'abhayraj.workers.dev';
 
+/**
+ * M2 messaging and key vars on api and jobs (specs/m2-scheduling-invites.md M2-2, M2-3, §6.4, R5-27; names fixed by the
+ * build-notes row "M2 BUILD 2, Wave 1 lead part" g). The api also holds SES_SNS_TOPIC_ARN (the webhook's allow-list).
+ */
+const M2_MESSAGING_VARS = [
+  'MESSAGING_EMAIL_PROVIDER',
+  'MESSAGING_SMS_ENABLED',
+  'MESSAGING_WHATSAPP_ENABLED',
+  'SES_FROM_ADDRESS',
+  'SES_CONFIGURATION_SET',
+  'SES_ALLOWED_TEST_RECIPIENT_HMAC',
+  'KEY_MANAGER_PROVIDER',
+  'KMS_KEY_ARN',
+];
+
 /** §4.2 table, per Worker. `<env>` is substituted per env block. */
 const EXPECTED = {
   edge: {
@@ -63,6 +78,8 @@ const EXPECTED = {
       'SENTRY_DSN_WORKERS',
       'SUPABASE_URL',
       'SUPABASE_PUBLISHABLE_KEY',
+      ...M2_MESSAGING_VARS,
+      'SES_SNS_TOPIC_ARN',
     ],
     crons: undefined,
     // M1 R5-56 g: the per-user library read limit (60 a minute), shared by GET …/library/items and
@@ -109,7 +126,7 @@ const EXPECTED = {
       },
     ],
     services: [],
-    vars: ['VERSION', 'TRACE_ENV', 'SENTRY_DSN_WORKERS'],
+    vars: ['VERSION', 'TRACE_ENV', 'SENTRY_DSN_WORKERS', ...M2_MESSAGING_VARS],
     crons: ['* * * * *'],
     ratelimits: [],
   },
@@ -237,8 +254,15 @@ describe.each(Object.keys(EXPECTED))('%s wrangler.jsonc (spec §4.2)', (worker) 
     const SECRET_NAME = /PRIVATE|SECRET|PASSWORD|HMAC|DB_URL|SERVICE_ROLE|(?<!PUBLISHABLE)_KEY$/;
     const SECRET_VALUE =
       /postgres(ql)?:\/\/|sb_secret_|"d"\s*:|BEGIN [A-Z ]*PRIVATE KEY|eyJ[\w-]{20,}/;
+    // The one exact exemption (M2 R5-27): the SES test-inbox digest is a keyed HMAC of an address, public by design
+    // (the key is the Worker secret SES_TEST_RECIPIENT_HMAC_KEY); its value must still be empty or 64 hex.
+    const PUBLIC_DIGEST_VARS = new Set(['SES_ALLOWED_TEST_RECIPIENT_HMAC']);
     for (const scope of [CONFIGS[worker], ...ENVS.map((e) => block(worker, e))]) {
       for (const [name, value] of Object.entries(scope.vars ?? {})) {
+        if (PUBLIC_DIGEST_VARS.has(name)) {
+          expect(String(value), `value of ${name}`).toMatch(/^(?:|[0-9a-f]{64})$/);
+          continue;
+        }
         expect(name, `var ${name}`).not.toMatch(SECRET_NAME);
         expect(String(value), `value of ${name}`).not.toMatch(SECRET_VALUE);
       }
@@ -364,6 +388,30 @@ describe('cross-Worker wiring', () => {
     expect(block('jobs', 'dev').vars.TRACE_ENV).toBe('dev');
     expect(block('jobs', 'staging').vars.TRACE_ENV).toBe('staging');
     for (const env of ENVS) expect(block('api', env).vars.DEMO_OUTBOX).toBe('1');
+  });
+
+  // M2 (M2-2, M2-3, §6.4; build-notes "Wave 1 lead part" g): email goes to the demo outbox until the founder's SES
+  // gates, SMS and WhatsApp stay off, dev wraps keys with DevKeyManager and staging fails closed on KMS until F-2.
+  it('api and jobs carry the M2 messaging and key vars with safe values', () => {
+    for (const worker of ['api', 'jobs']) {
+      for (const env of ENVS) {
+        const vars = block(worker, env).vars;
+        expect(vars.MESSAGING_EMAIL_PROVIDER, `${worker} ${env}`).toBe('outbox');
+        expect(vars.MESSAGING_SMS_ENABLED, `${worker} ${env}`).toBe('0');
+        expect(vars.MESSAGING_WHATSAPP_ENABLED, `${worker} ${env}`).toBe('0');
+        expect(vars.KEY_MANAGER_PROVIDER, `${worker} ${env}`).toBe(env === 'dev' ? 'dev' : 'kms');
+        for (const name of [
+          'SES_FROM_ADDRESS',
+          'SES_CONFIGURATION_SET',
+          'SES_ALLOWED_TEST_RECIPIENT_HMAC',
+          'KMS_KEY_ARN',
+        ]) {
+          expect(vars[name], `${worker} ${env} ${name}`).toBe('');
+        }
+      }
+      for (const name of M2_MESSAGING_VARS) expect(CONFIGS[worker].vars?.[name]).toBeUndefined();
+    }
+    for (const env of ENVS) expect(block('api', env).vars.SES_SNS_TOPIC_ARN).toBe('');
   });
 
   it('every Worker has exactly the dev and staging env blocks and no top-level DEMO_OUTBOX (D1-SPEC-4)', () => {

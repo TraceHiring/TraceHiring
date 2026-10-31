@@ -12,6 +12,7 @@ import { InviteRoute } from './authoring/InvitePage';
 import { ReviewersRoute } from './authoring/ReviewersPanel';
 import { NewTestRoute, TestEditorRoute } from './authoring/TestEditorPage';
 import { TestsRoute } from './authoring/TestsListPage';
+import { DriveRoute, DriveUploadRoute, DrivesRoute, NewDriveRoute } from './drives/DriveRoutes';
 import { LibraryRoute } from './library/LibraryRoute';
 import { demoOutboxExtras, type DemoExtras } from './outbox/demo-extras';
 import { ReportRoute } from './reports/ReportPage';
@@ -77,6 +78,11 @@ export function buildRoutes(demo: DemoExtras | null): RouteObject[] {
             { path: 'library', element: gated(isStaff, <LibraryRoute />) },
             { path: 'settings/integrity', element: gated(isAdmin, <IntegrityLocksRoute />) },
             { path: 'settings/members', element: gated(isAdmin, <MembersRoute />) },
+            // M2 (specs/m2-scheduling-invites.md §2, §6.1, R5-59): drives, slots and bulk invites, staff only.
+            { path: 'drives', element: gated(isStaff, <DrivesRoute />) },
+            { path: 'drives/new', element: gated(isStaff, <NewDriveRoute />) },
+            { path: 'drives/:driveId', element: gated(isStaff, <DriveRoute />) },
+            { path: 'drives/:driveId/upload', element: gated(isStaff, <DriveUploadRoute />) },
             ...(demo === null ? [] : [demo.route]),
           ],
         },

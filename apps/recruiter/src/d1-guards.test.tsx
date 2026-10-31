@@ -467,7 +467,7 @@ describe('D1 route table (AT-D13)', () => {
     return (gate?.children ?? []).map((child) => child.path ?? '').sort();
   };
 
-  it('has exactly the D1 screens and the M1 screens (m1-guards.test.tsx) behind the signed-in gate', () => {
+  it('has exactly the D1, M1 (m1-guards.test.tsx) and M2 drive screens behind the signed-in gate', () => {
     expect(paths(buildRoutes(null))).toEqual(
       [
         'review',
@@ -489,6 +489,11 @@ describe('D1 route table (AT-D13)', () => {
         'library',
         'settings/integrity',
         'settings/members',
+        // M2 (specs/m2-scheduling-invites.md R5-59): the route list only; the word lists above are unchanged.
+        'drives',
+        'drives/new',
+        'drives/:driveId',
+        'drives/:driveId/upload',
       ].sort(),
     );
   });

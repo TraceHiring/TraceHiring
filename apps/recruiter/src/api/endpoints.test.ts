@@ -8,6 +8,11 @@ import {
   type ImportRow,
   type SaveTestDraftRequest,
 } from '@trace/shared/contracts/m1';
+import type {
+  CreateDriveRequest,
+  InviteBatchRequest,
+  SlotsCreateRequest,
+} from '@trace/shared/contracts/m2';
 import { describe, expect, it } from 'vitest';
 import { ApiClient, type ApiResult, type FetchLike } from './client';
 import * as m1 from './endpoints';
@@ -97,6 +102,32 @@ const IMPORT_ROW: ImportRow = {
   difficulty: 0.5,
   stem: 'Describe a synthetic situation.',
   rubricKey: 'clarity',
+};
+
+// M2 bodies (contracts-m2.ts).
+const DRIVE_BODY: CreateDriveRequest = {
+  name: 'Synthetic drive',
+  testId: uid(10),
+  defaultTestVersionId: uid(11),
+  mode: 'scheduled',
+  opensAt: '2026-11-01T09:00:00+05:30',
+  deadlineAt: '2026-11-10T18:00:00+05:30',
+  reminderOffsetsMinutes: [1440, 60],
+  selfRescheduleAllowed: true,
+  labMode: false,
+};
+const SLOTS_BODY: SlotsCreateRequest = {
+  generator: {
+    firstStartsAt: '2026-11-02T10:00:00+05:30',
+    count: 3,
+    intervalMinutes: 60,
+    capacity: 50,
+  },
+};
+const UPLOAD_BODY = { fileSha256: SHA, rowsInFile: 2 };
+const ROWS_BODY: InviteBatchRequest = {
+  uploadId: uid(21),
+  rows: [{ rowNo: 1, fullName: 'Synthetic Person', email: 'p1@example.test', adult18: 'yes' }],
 };
 
 // ---- Request shapes --------------------------------------------------------------------------------------------
@@ -417,6 +448,115 @@ const CASES: Case[] = [
     path: `/tests/${uid(3)}?version=${HEX_VERSION.toLowerCase()}`,
     body: D1_BODY,
   },
+  // ---- M2 drive API surface (specs/m2-scheduling-invites.md; the route list in contracts-m2.ts) -------------------
+  { name: 'listDrives', run: (api) => m1.listDrives(api), method: 'GET', path: '/drives' },
+  {
+    name: 'listDrives with a cursor',
+    run: (api) => m1.listDrives(api, { cursor: 'c_1-x' }),
+    method: 'GET',
+    path: '/drives?cursor=c_1-x',
+  },
+  {
+    name: 'createDrive',
+    run: (api) => m1.createDrive(api, DRIVE_BODY),
+    method: 'POST',
+    path: '/drives',
+    body: DRIVE_BODY,
+  },
+  {
+    name: 'getDrive',
+    run: (api) => m1.getDrive(api, uid(20)),
+    method: 'GET',
+    path: `/drives/${uid(20)}`,
+  },
+  {
+    name: 'publishDrive',
+    run: (api) => m1.publishDrive(api, uid(20)),
+    method: 'POST',
+    path: `/drives/${uid(20)}/publish`,
+  },
+  {
+    name: 'closeDrive',
+    run: (api) => m1.closeDrive(api, uid(20)),
+    method: 'POST',
+    path: `/drives/${uid(20)}/close`,
+  },
+  {
+    name: 'cancelDrive',
+    run: (api) => m1.cancelDrive(api, uid(20)),
+    method: 'POST',
+    path: `/drives/${uid(20)}/cancel`,
+  },
+  {
+    name: 'listSlots',
+    run: (api) => m1.listSlots(api, uid(20), { cursor: 'n2' }),
+    method: 'GET',
+    path: `/drives/${uid(20)}/slots?cursor=n2`,
+  },
+  {
+    name: 'createSlots',
+    run: (api) => m1.createSlots(api, uid(20), SLOTS_BODY),
+    method: 'POST',
+    path: `/drives/${uid(20)}/slots`,
+    body: SLOTS_BODY,
+  },
+  {
+    name: 'createInviteUpload',
+    run: (api) => m1.createInviteUpload(api, uid(20), UPLOAD_BODY),
+    method: 'POST',
+    path: `/drives/${uid(20)}/uploads`,
+    body: UPLOAD_BODY,
+  },
+  {
+    name: 'postInviteRows (the path id is the body upload id)',
+    run: (api) => m1.postInviteRows(api, uid(20), ROWS_BODY),
+    method: 'POST',
+    path: `/drives/${uid(20)}/uploads/${uid(21)}/rows`,
+    body: ROWS_BODY,
+  },
+  {
+    name: 'completeInviteUpload',
+    run: (api) => m1.completeInviteUpload(api, uid(20), uid(21)),
+    method: 'POST',
+    path: `/drives/${uid(20)}/uploads/${uid(21)}/complete`,
+  },
+  {
+    name: 'cancelInviteUpload',
+    run: (api) => m1.cancelInviteUpload(api, uid(20), uid(21)),
+    method: 'POST',
+    path: `/drives/${uid(20)}/uploads/${uid(21)}/cancel`,
+  },
+  {
+    name: 'listDriveInvitations',
+    run: (api) => m1.listDriveInvitations(api, uid(20)),
+    method: 'GET',
+    path: `/drives/${uid(20)}/invitations`,
+  },
+  {
+    name: 'moveInvitation',
+    run: (api) => m1.moveInvitation(api, uid(20), uid(22), { toSlotId: uid(23) }),
+    method: 'POST',
+    path: `/drives/${uid(20)}/invitations/${uid(22)}/move`,
+    body: { toSlotId: uid(23) },
+  },
+  {
+    name: 'resendInvitation',
+    run: (api) => m1.resendInvitation(api, uid(20), uid(22)),
+    method: 'POST',
+    path: `/drives/${uid(20)}/invitations/${uid(22)}/resend`,
+  },
+  {
+    name: 'revokeInvitation',
+    run: (api) => m1.revokeInvitation(api, uid(20), uid(22)),
+    method: 'POST',
+    path: `/drives/${uid(20)}/invitations/${uid(22)}/revoke`,
+  },
+  {
+    name: 'revokeNotStarted',
+    run: (api) => m1.revokeNotStarted(api, uid(20)),
+    method: 'POST',
+    path: `/drives/${uid(20)}/revoke-not-started`,
+  },
 ];
 
 describe('M1 endpoints: request shapes', () => {
@@ -519,6 +659,26 @@ describe('M1 endpoints: a bad request is refused before it is sent', () => {
         } as never),
     ],
     ['an empty id batch', (api) => m1.addPoolItems(api, uid(5), { itemVersionIds: [] })],
+    // M2: every drive call is checked against its contract first.
+    [
+      'a drive with five reminder offsets',
+      (api) =>
+        m1.createDrive(api, { ...DRIVE_BODY, reminderOffsetsMinutes: [15, 30, 60, 120, 240] }),
+    ],
+    ['a drive list cursor with a slash', (api) => m1.listDrives(api, { cursor: 'a/b' })],
+    [
+      'an invitation page cursor with a space',
+      (api) => m1.listDriveInvitations(api, uid(20), { cursor: 'a b' }),
+    ],
+    [
+      'an upload of 5,001 rows',
+      (api) => m1.createInviteUpload(api, uid(20), { ...UPLOAD_BODY, rowsInFile: 5001 }),
+    ],
+    [
+      'a row batch with an unknown key',
+      (api) => m1.postInviteRows(api, uid(20), { ...ROWS_BODY, extra: 1 } as never),
+    ],
+    ['a move without a slot id', (api) => m1.moveInvitation(api, uid(20), uid(22), {} as never)],
     // R5-70 a: a versioned PUT whose version or test id is not a uuid is never sent.
     [
       'a draft save whose expected version is not a uuid',

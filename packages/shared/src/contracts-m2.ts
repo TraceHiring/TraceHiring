@@ -259,6 +259,102 @@ export type InvitationRow = z.infer<typeof InvitationRow>;
 export const RescheduleRequest = z.strictObject({ toSlotId: uuid() });
 export type RescheduleRequest = z.infer<typeof RescheduleRequest>;
 
+// ---- Recruiter drive API surface (Wave 1 lead part, build-notes 2026-10-31; routes by B2, screens by B5) ---------
+// Every route sits under /v1/orgs/:orgId (R5-37) and is staff-only (owner, admin, recruiter; §2):
+//   GET  /drives                                   PageQuery            → DriveListResponse
+//   POST /drives                                   CreateDriveRequest   → DriveDetail
+//   GET  /drives/:driveId                                               → DriveDetail
+//   POST /drives/:driveId/{publish,close,cancel}                        → DriveDetail   (§4 drive transitions)
+//   GET  /drives/:driveId/slots                    PageQuery            → SlotListResponse
+//   POST /drives/:driveId/slots                    SlotsCreateRequest   → SlotsCreateResponse
+//   POST /drives/:driveId/uploads                  InviteUploadCreateRequest → InviteUploadView
+//   POST /drives/:driveId/uploads/:uploadId/rows   InviteBatchRequest   → InviteBatchResponse (path id = body uploadId)
+//   POST /drives/:driveId/uploads/:uploadId/{complete,cancel}           → InviteUploadView
+//   GET  /drives/:driveId/invitations              PageQuery            → DriveInvitationPage
+//   POST /drives/:driveId/invitations/:invitationId/move   RescheduleRequest → InvitationRow ("Move to slot", M2-11)
+//   POST /drives/:driveId/invitations/:invitationId/resend                   → InvitationRow ("Resend invite", R2-4)
+//   POST /drives/:driveId/invitations/:invitationId/revoke                   → InvitationRow (explicit, audited, R5-13)
+//   POST /drives/:driveId/revoke-not-started                                 → RevokeNotStartedResponse (R5-59, R5-64 f)
+// The phone-shared confirmation is the body flag `confirmPhoneDuplicate` on …/rows, never a route (R2-12, R5-37).
+
+/** An opaque keyset cursor (R5-31, R5-44): url-safe text, at most 256 characters. Pages hold at most 200 rows. */
+const cursor = () =>
+  z
+    .string()
+    .min(1)
+    .max(256)
+    .regex(/^[A-Za-z0-9_-]+$/);
+const PAGE = 200;
+
+/** The query of every paged list: an optional cursor from the previous page's `nextCursor`. */
+export const PageQuery = z.strictObject({ cursor: cursor().optional() });
+export type PageQuery = z.infer<typeof PageQuery>;
+
+/** One drive in the drive list. */
+export const DriveSummary = z.strictObject({
+  id: uuid(),
+  name: text(1, 200),
+  testId: uuid(),
+  mode: DriveMode,
+  status: DriveStatus,
+  opensAt: time(),
+  deadlineAt: time(),
+  createdAt: time(),
+});
+export type DriveSummary = z.infer<typeof DriveSummary>;
+export const DriveListResponse = z.strictObject({
+  drives: z.array(DriveSummary).max(PAGE),
+  nextCursor: cursor().nullable(),
+});
+export type DriveListResponse = z.infer<typeof DriveListResponse>;
+
+export const SlotListResponse = z.strictObject({
+  slots: z.array(SlotView).max(PAGE),
+  nextCursor: cursor().nullable(),
+});
+export type SlotListResponse = z.infer<typeof SlotListResponse>;
+/** The slots one SlotsCreateRequest made (1–500, in start order). */
+export const SlotsCreateResponse = z.strictObject({ slots: z.array(SlotView).max(500) });
+export type SlotsCreateResponse = z.infer<typeof SlotsCreateResponse>;
+
+export const InviteUploadStatus = z.enum(['open', 'completed', 'cancelled']);
+export type InviteUploadStatus = z.infer<typeof InviteUploadStatus>;
+/** Opens an upload: the file's SHA-256 (computed in the browser; only to warn about a re-upload) and its rows. */
+export const InviteUploadCreateRequest = z.strictObject({
+  fileSha256: sha256(),
+  rowsInFile: z.int().min(1).max(5000),
+});
+export type InviteUploadCreateRequest = z.infer<typeof InviteUploadCreateRequest>;
+const rowCount = () => z.int().min(0).max(5000);
+/** An upload's counts (invite_uploads). No file, file name or cell value is ever stored or returned (Q30). */
+export const InviteUploadView = z.strictObject({
+  uploadId: uuid(),
+  driveId: uuid(),
+  status: InviteUploadStatus,
+  rowsInFile: rowCount(),
+  rowsInvited: rowCount(),
+  rowsRefused: rowCount(),
+  rowsHeld: rowCount(),
+  /** True when an earlier upload of this drive had the same file hash. */
+  reuploadWarning: z.boolean(),
+  createdAt: time(),
+  completedAt: time().nullable(),
+});
+export type InviteUploadView = z.infer<typeof InviteUploadView>;
+
+export const DriveInvitationPage = z.strictObject({
+  invitations: z.array(InvitationRow).max(PAGE),
+  nextCursor: cursor().nullable(),
+});
+export type DriveInvitationPage = z.infer<typeof DriveInvitationPage>;
+
+/** "Revoke all invitations not yet started" on a cancelled drive: rows the guard refuses are skipped and counted. */
+export const RevokeNotStartedResponse = z.strictObject({
+  revoked: z.int().min(0),
+  skipped: z.int().min(0),
+});
+export type RevokeNotStartedResponse = z.infer<typeof RevokeNotStartedResponse>;
+
 // ---- Queue (R5-9) -------------------------------------------------------------------------------------------------
 
 /**

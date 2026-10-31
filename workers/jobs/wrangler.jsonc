@@ -45,7 +45,20 @@
   "env": {
     "dev": {
       "name": "trace-jobs-dev",
-      "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "", "TRACE_ENV": "dev" },
+      // M2 (specs/m2-scheduling-invites.md M2-2, M2-3, §6.4; build-notes "Wave 1 lead part" g): as services/api.
+      "vars": {
+        "VERSION": "dev",
+        "SENTRY_DSN_WORKERS": "",
+        "TRACE_ENV": "dev",
+        "MESSAGING_EMAIL_PROVIDER": "outbox",
+        "MESSAGING_SMS_ENABLED": "0",
+        "MESSAGING_WHATSAPP_ENABLED": "0",
+        "SES_FROM_ADDRESS": "",
+        "SES_CONFIGURATION_SET": "",
+        "SES_ALLOWED_TEST_RECIPIENT_HMAC": "",
+        "KEY_MANAGER_PROVIDER": "dev",
+        "KMS_KEY_ARN": "",
+      },
       "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "trace-evidence-dev" }],
       "queues": {
         // Consumer, and producer for the cron sweep re-enqueue, of one queue (spec §7.1, L-18).
@@ -87,7 +100,20 @@
     "staging": {
       "name": "trace-jobs-staging",
       "workers_dev": true,
-      "vars": { "VERSION": "dev", "SENTRY_DSN_WORKERS": "", "TRACE_ENV": "staging" },
+      // M2: staging fails closed on KMS until the founder's F-2 (KMS_KEY_ARN empty).
+      "vars": {
+        "VERSION": "dev",
+        "SENTRY_DSN_WORKERS": "",
+        "TRACE_ENV": "staging",
+        "MESSAGING_EMAIL_PROVIDER": "outbox",
+        "MESSAGING_SMS_ENABLED": "0",
+        "MESSAGING_WHATSAPP_ENABLED": "0",
+        "SES_FROM_ADDRESS": "",
+        "SES_CONFIGURATION_SET": "",
+        "SES_ALLOWED_TEST_RECIPIENT_HMAC": "",
+        "KEY_MANAGER_PROVIDER": "kms",
+        "KMS_KEY_ARN": "",
+      },
       "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "trace-evidence-staging" }],
       "queues": {
         "producers": [

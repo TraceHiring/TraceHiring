@@ -2063,4 +2063,19 @@ describe('M2: the portal (R5-21, R5-24, E25, rule 5)', () => {
     expect(Candidate.PortalRpcSchemas.portalReschedule.out).toBe(Candidate.PortalRescheduleRes);
     expect(Candidate.PortalRpcSchemas.portalMint.out).toBe(Candidate.OtpVerifyPortalRes);
   });
+
+  // B4 review decision (build-notes 2026-10-31 "B4 first reviews" a; R5-66 c): a live DO session counts as started
+  // on resolve and on the portal too, so the edge passes the peek result and the api answers accordingly.
+  it('resolve and the portal mint/reschedule RPCs take an optional sessionLive from SessionDO.peek()', () => {
+    const resolve = { token: 'A'.repeat(43) };
+    expect(ok(Candidate.InviteResolveRpcIn, resolve)).toBe(true);
+    expect(ok(Candidate.InviteResolveRpcIn, { ...resolve, sessionLive: true })).toBe(true);
+    expect(ok(Candidate.InviteResolveRpcIn, { ...resolve, sessionLive: 'yes' })).toBe(false);
+    const portal = Candidate.PortalRpcSchemas;
+    const mint = { invitationId: id(1), orgId: id(2), nonce: NONCE };
+    expect(ok(portal.portalMint.in, { ...mint, sessionLive: false })).toBe(true);
+    const move = { portalToken: FAKE_JWS, toSlotId: id(6) };
+    expect(ok(portal.portalReschedule.in, { ...move, sessionLive: true })).toBe(true);
+    expect(ok(portal.portalSlots.in, { portalToken: FAKE_JWS, sessionLive: true })).toBe(false);
+  });
 });
