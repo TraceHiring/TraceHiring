@@ -1,4 +1,5 @@
 // AT-21: scripts/check-bundle-size.mjs keeps the candidate app's initial JS ≤ 150 kB gzip (spec §3 D3).
+// d1 §7.1: the start-photo code is one lazy chunk (PhotoStep-*.js) of at most 60 kB gzip.
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +7,7 @@ import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CANDIDATE_BUDGET_BYTES,
+  PHOTO_CHUNK_BUDGET_BYTES,
   htmlEntries,
   measureInitialJs,
   runChecks,
@@ -256,5 +258,89 @@ describe('runChecks and the CLI', () => {
     const r = run(repo({ 'README.md': 'x' }));
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/apps\/candidate: dist\/index\.html is missing/);
+  });
+});
+
+describe('the start-photo chunk (d1 §7.1: a dynamic import of at most 60 kB gzip)', () => {
+  const app = (entryJs, extra = {}) => ({
+    'apps/candidate/dist/index.html': html(
+      '<script type="module" src="/assets/index.js"></script>',
+    ),
+    'apps/candidate/dist/assets/index.js': entryJs,
+    ...extra,
+  });
+  const CAMERA = 'navigator.mediaDevices.getUserMedia({video:!0,audio:!1});';
+
+  it('budget is 60 kB', () => {
+    expect(PHOTO_CHUNK_BUDGET_BYTES).toBe(60_000);
+  });
+
+  it('passes with no camera code and no photo chunk, and says so', () => {
+    const { violations, report } = runChecks(repo(app('export const a=1;')));
+    expect(violations).toEqual([]);
+    expect(report.join('\n')).toMatch(/no start-photo chunk/);
+  });
+
+  it('measures the PhotoStep chunk with its own static imports, not the initial chunks', () => {
+    const root = repo(
+      app('import"./shared.js";const l=()=>import("./PhotoStep-abc.js");', {
+        'apps/candidate/dist/assets/shared.js': heavy(40_000),
+        'apps/candidate/dist/assets/PhotoStep-abc.js': `import"./shared.js";import"./blur-x.js";${CAMERA}`,
+        'apps/candidate/dist/assets/blur-x.js': heavy(20_000),
+      }),
+    );
+    const { violations, report } = runChecks(root);
+    expect(violations).toEqual([]);
+    expect(report.join('\n')).toMatch(
+      /apps\/candidate start-photo chunk assets\/PhotoStep-abc\.js 2\d\.\d kB gzip \(budget 60\.0 kB, 2 file\(s\)\)/,
+    );
+  });
+
+  it('fails when the PhotoStep chunk is over 60 kB gzip', () => {
+    const root = repo(
+      app('const l=()=>import("./PhotoStep-abc.js");', {
+        'apps/candidate/dist/assets/PhotoStep-abc.js': `${CAMERA}${heavy(61_000)}`,
+      }),
+    );
+    expect(runChecks(root).violations.join('\n')).toMatch(/start-photo chunk .* is over budget/);
+  });
+
+  it('fails when camera code is in the initial JS', () => {
+    const root = repo(
+      app(`${CAMERA}const l=()=>import("./PhotoStep-abc.js");`, {
+        'apps/candidate/dist/assets/PhotoStep-abc.js': CAMERA,
+      }),
+    );
+    expect(runChecks(root).violations.join('\n')).toMatch(
+      /camera code \(getUserMedia\) is in the initial JS: assets\/index\.js/,
+    );
+  });
+
+  it('fails when camera code sits outside the PhotoStep chunk, or there is no PhotoStep chunk', () => {
+    const elsewhere = repo(
+      app('const l=()=>import("./PhotoStep-abc.js");const m=()=>import("./cam.js");', {
+        'apps/candidate/dist/assets/PhotoStep-abc.js': 'export const p=1;',
+        'apps/candidate/dist/assets/cam.js': CAMERA,
+      }),
+    );
+    expect(runChecks(elsewhere).violations.join('\n')).toMatch(
+      /camera code \(getUserMedia\) is outside the start-photo chunk: assets\/cam\.js/,
+    );
+    const none = repo(
+      app('const m=()=>import("./cam.js");', { 'apps/candidate/dist/assets/cam.js': CAMERA }),
+    );
+    expect(runChecks(none).violations.join('\n')).toMatch(
+      /camera code \(getUserMedia\) is outside the start-photo chunk: assets\/cam\.js/,
+    );
+  });
+
+  it('fails when there is more than one PhotoStep chunk', () => {
+    const root = repo(
+      app('export const a=1;', {
+        'apps/candidate/dist/assets/PhotoStep-a.js': CAMERA,
+        'apps/candidate/dist/assets/PhotoStep-b.js': CAMERA,
+      }),
+    );
+    expect(runChecks(root).violations.join('\n')).toMatch(/more than one start-photo chunk/);
   });
 });

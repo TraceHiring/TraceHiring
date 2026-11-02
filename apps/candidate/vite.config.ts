@@ -29,7 +29,17 @@ export function versionFilePlugin(app: 'candidate'): Plugin {
   };
 }
 
+/**
+ * The dev and preview port, pinned with `strictPort` (d1 security review F9): if it is taken, Vite fails
+ * to start instead of moving to the next port, which the Workers' dev origins would not allow. It is the
+ * port in `CANDIDATE_APP_ORIGIN` (env.dev) of services/api and workers/edge; scripts/test/app-dev-ports.test.mjs
+ * fails when the two drift apart. `vite preview` uses it too, so the local E2E run needs no other origin.
+ */
+const PORT = 5173;
+
 // No `define` that reads process.env, and envPrefix stays the default `VITE_` (spec §10.1).
 export default defineConfig({
   plugins: [forbidServerImports(), react(), versionFilePlugin('candidate')],
+  server: { port: PORT, strictPort: true },
+  preview: { port: PORT, strictPort: true },
 });

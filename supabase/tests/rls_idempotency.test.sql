@@ -1,4 +1,4 @@
--- rls_idempotency (spec specs/m0b-tenancy.md §6, row "rls_idempotency"; §3.8 idempotency_keys, ADR-029 worker-only
+-- rls_idempotency (spec specs/m0b-tenancy.md §6, row "rls_idempotency"; worker cases rewritten for D1 L-20, specs/d1-demo-slice.md; §3.8 idempotency_keys, ADR-029 worker-only
 -- ledger, §2.3 principals). Written from the spec, not from the migration. Personas are synthetic.
 -- try() returns 'OK <rows>' or '<sqlstate> <message>'.
 begin;
@@ -21,7 +21,7 @@ create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
 $f$;
 grant execute on function pg_temp.keys(jsonb) to public;
 grant usage on schema extensions to authenticated, anon, service_role;
-select plan(37);
+select plan(39);
 grant trace_worker to postgres with inherit false, set true;
 grant usage on schema extensions to trace_worker;
 grant trace_quality_worker to postgres with inherit false, set true;
@@ -111,23 +111,31 @@ insert into public.staff_access_grants (id, org_id, staff_user_id, ticket_ref, s
    '00000000-0000-4000-8000-00000000000f', 'TKT-001', 'support_read', now() + interval '1 hour',
    '00000000-0000-4000-8000-000000000010');
 
--- ===== trace_worker: S, I, U, D allowed =====
+-- ===== trace_worker after D1 L-20: S and I on its own scope (session_mirror) in its job org; no U or D =====
+-- Two other rows on the operator path: org B's session_mirror key and org A's quality_score key.
+insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000003', 'session_mirror', 'key-1', now() + interval '1 day');
+insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'quality_score', 'key-1', now() + interval '1 day');
 set local role trace_worker;
-select is(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'grade', 'key-1', now() + interval '1 day')$$), 'OK 1', 'I: trace_worker inserts a key');
-select is(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000003', 'grade', 'key-1', now() + interval '1 day')$$), 'OK 1', 'I: the same scope and key in another org is a different key');
-select is((select count(*)::int from public.idempotency_keys), 2, 'S: trace_worker reads the ledger rows of every org');
-select is(pg_temp.try($$update public.idempotency_keys set result_ref = 'result-1' where org_id = 'a1000000-0000-4000-8000-000000000001' and key = 'key-1'$$), 'OK 1', 'U: trace_worker updates a key');
-select is((select result_ref from public.idempotency_keys where org_id = 'a1000000-0000-4000-8000-000000000001' and key = 'key-1'), 'result-1', 'U: the update took effect');
-select matches(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'grade', 'key-1', now() + interval '1 day')$$), '^23505', 'I: a repeated (org, scope, key) is refused, which is the idempotency guarantee');
-select matches(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', repeat('s', 65), 'key-2', now() + interval '1 day')$$), '^23514', 'I: a scope longer than 64 characters is refused');
-select matches(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'grade', repeat('k', 201), now() + interval '1 day')$$), '^23514', 'I: a key longer than 200 characters is refused');
-select matches(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-0000000000ee', 'grade', 'key-3', now() + interval '1 day')$$), '^23503', 'I: a key for an org that does not exist is refused');
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select is(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'session_mirror', 'key-1', now() + interval '1 day')$$), 'OK 1', 'I: trace_worker inserts a session_mirror key in its job org');
+select matches(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000003', 'session_mirror', 'key-2', now() + interval '1 day')$$), '^42501 new row violates row-level security', 'I: a key for an org other than the job org is refused (L-20)');
+select matches(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'quality_score', 'key-2', now() + interval '1 day')$$), '^42501 new row violates row-level security', 'I: another job''s scope is refused (L-20)');
+select is((select count(*)::int from public.idempotency_keys), 1, 'S: trace_worker reads only its own scope in its job org');
+select matches(pg_temp.try($$update public.idempotency_keys set result_ref = 'result-1' where key = 'key-1'$$), '^42501 permission denied', 'U: trace_worker cannot update a key (L-20)');
+select matches(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'session_mirror', 'key-1', now() + interval '1 day')$$), '^23505', 'I: a repeated (org, scope, key) is refused, which is the idempotency guarantee');
+select matches(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'session_mirror', '' || repeat('k', 201) || '', now() + interval '1 day')$$), '^23514', 'I: a key longer than 200 characters is refused');
+select matches(pg_temp.try($$delete from public.idempotency_keys$$), '^42501 permission denied', 'D: trace_worker cannot delete (L-20)');
 select matches(pg_temp.try($$truncate public.idempotency_keys$$), '^42501 permission denied', 'D: trace_worker cannot truncate the ledger');
-select is(has_table_privilege('trace_worker', 'public.idempotency_keys', 'SELECT, INSERT, UPDATE, DELETE'), true, 'D: trace_worker holds select, insert, update and delete on the ledger');
-select is(pg_temp.try($$delete from public.idempotency_keys where org_id = 'a1000000-0000-4000-8000-000000000003'$$), 'OK 1', 'D: trace_worker deletes a key');
-select is((select count(*)::int from public.idempotency_keys), 1, 'D: the delete took effect');
+select is(has_table_privilege('trace_worker', 'public.idempotency_keys', 'SELECT, INSERT'), true, 'privileges: trace_worker holds select and insert on the ledger');
+select is(has_table_privilege('trace_worker', 'public.idempotency_keys', 'UPDATE') or has_table_privilege('trace_worker', 'public.idempotency_keys', 'DELETE'), false, 'privileges: trace_worker holds neither update nor delete (L-20)');
+reset trace.job_org_id;
+select is((select count(*)::int from public.idempotency_keys), 0, 'S: without a job org, trace_worker reads nothing');
 reset role;
 reset request.jwt.claims;
+-- The CHECKs and the org FK, on the operator path (RLS would refuse first for a worker).
+select matches(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-000000000001', '' || repeat('s', 65) || '', 'key-3', now() + interval '1 day')$$), '^23514', 'I: a scope longer than 64 characters is refused');
+select matches(pg_temp.try($$insert into public.idempotency_keys (org_id, scope, key, expires_at) values ('a1000000-0000-4000-8000-0000000000ee', 'session_mirror', 'key-3', now() + interval '1 day')$$), '^23503', 'I: a key for an org that does not exist is refused');
+select is((select result_ref from public.idempotency_keys where org_id = 'a1000000-0000-4000-8000-000000000001' and scope = 'session_mirror' and key = 'key-1'), null::text, 'U: the denied update changed nothing');
 
 -- ===== Everybody else is denied on each operation =====
 set local role authenticated;
@@ -163,17 +171,17 @@ select matches(pg_temp.try($$insert into public.idempotency_keys (org_id, scope,
 reset role;
 reset request.jwt.claims;
 set local role trace_quality_worker;
-select matches(pg_temp.try($$select * from public.idempotency_keys$$), '^42501 permission denied', 'S: trace_quality_worker cannot read the ledger');
+select is(pg_temp.try($$select * from public.idempotency_keys$$), 'OK 0', 'S: trace_quality_worker reads nothing without a job org (L-20: own scope in its job org only)');
 select matches(pg_temp.try($$delete from public.idempotency_keys$$), '^42501 permission denied', 'D: trace_quality_worker cannot delete');
 reset role;
 reset request.jwt.claims;
 set local role trace_integrity_worker;
-select matches(pg_temp.try($$select * from public.idempotency_keys$$), '^42501 permission denied', 'S: trace_integrity_worker cannot read the ledger');
+select is(pg_temp.try($$select * from public.idempotency_keys$$), 'OK 0', 'S: trace_integrity_worker reads nothing without a job org (L-20: own scope in its job org only)');
 select matches(pg_temp.try($$update public.idempotency_keys set result_ref = 'x'$$), '^42501 permission denied', 'U: trace_integrity_worker cannot update');
 reset role;
 reset request.jwt.claims;
-select is((select count(*)::int from public.idempotency_keys), 1, 'the denied statements changed nothing: one ledger row is left');
-select is((select result_ref from public.idempotency_keys), 'result-1', 'the surviving ledger row is untouched');
+select is((select count(*)::int from public.idempotency_keys), 3, 'the denied statements changed nothing: the three ledger rows are left');
+select is((select count(*)::int from public.idempotency_keys where result_ref is not null), 0, 'no ledger row was updated');
 
 select * from finish();
 rollback;

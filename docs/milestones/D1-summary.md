@@ -1,0 +1,110 @@
+# D1 summary: demo slice
+
+Written 2026-11-01 at the D1 CLOSE by the lead (Opus 5.5, D1 close chat). Sections follow `docs/AUTOPILOT.md` §2 CLOSE: built, deferred and why, Deferred gates table, autopilot decisions, how to demo. Then the AT-D2 record, Linear and the close record.
+Evidence rule: every claim cites a path, a commit SHA or a CI run id. All data is synthetic (`@example.test` contacts, synthetic staging users in the `smoke-staging` org).
+
+| Field | Value |
+| --- | --- |
+| Branch | `d1/integration` (worktree `.claude/worktrees/d1-integration`); draft PR TraceHiring/TraceHiring#4 into `main` |
+| Range | `trace/main` = `da5380d` (`m0b-reviewed`) to the CLOSE tip: 474 commits before this file, 615 files, +115 794 / −945 lines |
+| Spec | `specs/d1-demo-slice.md` revision 4p (`d658b83`) |
+| Review | `docs/reviews/D1.md`: first review BLOCK (D1-SPEC-1 High) → FIX → re-review CONFIRMED; "Review of the remainder" (`ceb0837..f226950`): PASS WITH FIXES (spec), APPROVE WITH FIXES (database/security), D1R-DB-1 fixed `1d36151`. **No open High or Medium** |
+| Staging on the CLOSE tip | Dispatch **41370292621** on `2cc6df5` (founder-approved in chat, 2026-11-02): all 7 jobs success (static, rls, security, migrations, e2e-local, deploy-staging, e2e-staging); tag `staging-applied-41370292621`. Earlier: 39820502191 on `1547fd0`, all success |
+| PR CI on the CLOSE tip | Run 41369824749 on `2cc6df5`: static, rls, security, migrations, e2e-local success. `cp/d1-12` = `2cc6df5` |
+| Dependency port at CLOSE | `4ea2739`, `791f3b1`, `ca64856` (from `m1/integration` `b397a29`, `2d91744`, `208e5ae`): zod 4.6.6, vitest 4.1.12, undici 7.30.1, happy-dom 20.14.6, dated osv ignores. No source change |
+| Floors | rls 2633, catalog 144 (`test:rls` on `a395c24`, `docs/progress/HANDOFF.md`) |
+
+## 1. What was built
+Exit gate (`docs/build-order.md:37`), status at CLOSE:
+| Item | Evidence | Status |
+| --- | --- | --- |
+| Recruiter creates a test (written + MCQ) and invites by link | `services/api/src/modules/tests/publish.test.ts`, `invitations/invitation.test.ts`; `apps/recruiter/src/d1-guards.test.tsx`; e2e slice steps 1-4 | Met |
+| Candidate takes it in the browser: server-held timer, start photo, autosave | `workers/edge/src/session-do.timer.test.ts`, `session-do.autosave.test.ts`, `photo.test.ts`; `apps/candidate/src/photo/blur.test.ts`; e2e steps 5-6, 10 | Met |
+| Answer Quality (0-100, mock grader) and Integrity band with evidence timeline as two separate results | AT-D3 (three strict DTOs, `ReportPage.test.tsx`, `packages/config/test/rule1-separation.test.ts`, `rls_d1_cards`, `rls_d1_reports`); AT-D4-D6 band property tests; AT-D19 `FlagCard.test.tsx`; e2e steps 7-8 | Met |
+| A reviewer opens the report | AT-D10 media-link tests, `rls_d1_assignments`, `rls_d1_media_view`; e2e steps 8-9 | Met |
+| Deployed on `*.workers.dev` / Pages | `deploy-staging` green in dispatches 39797279887 (`f226950`), 39820502191 (`1547fd0`) and 41370292621 (`2cc6df5`) | Met |
+| Full flow passes an automated E2E test on staging (AT-D1) | `e2e-staging` in 41370292621 on `2cc6df5`: manifest `sha` `2cc6df5…`, project `staging`, 55/55 steps ok, `durationMs` 290 715 | **Met on the CLOSE tip** |
+| A 5-minute screen recording (AT-D2) | Rule and duration gate in place (D1-SPEC-2, `2f0e249`; spec §7.3); the capture is the founder's (§6) | See §6 |
+
+What exists, by area:
+| Area | What | Evidence |
+| --- | --- | --- |
+| Database | Five D1 migrations plus the forward fix `20261021091905_d1_flags_rule_table.sql` (flags must match the session's pinned rule table, D1-DB-1); RLS on every table, separate policies per operation; 32 pgTAP files | `supabase/migrations/2026101*_d1_*.sql`; D1.md "Database summary" |
+| Band engine | `packages/band-engine`: pure, versioned rule table `d1-v1.json`, T3 cap, unvalidated rules context-only, low coverage → `insufficient_evidence` | property tests P1-P10; D1.md R3 |
+| Candidate runtime | `workers/edge` (`SessionDO`, `InviteOtpDO`, ES256 token, photo upload, link rate limit) and `apps/candidate` (link, OTP, age, consent, camera with on-device blur, test, receipt) | AT-D23-D37 (spec §4.8) |
+| Results | `workers/jobs`: mirror, quality, integrity stages from one Queue, idempotent per `${sessionId}:${job}:${rulesetVersionId}`; consumer runs up to 3 sessions, one integrity stage at a time per batch | AT-D16; `f226950`, `1d36151` |
+| Recruiter and reviewer | `apps/recruiter` test editor, invitations, results list, report with two separately loaded cards, 5-minute single-use watermarked photo link; `services/api` org and candidate RPC routes | AT-D3, AT-D10, AT-D13, AT-D14 |
+| Guards | AT-D21 never-build scan (`packages/config/test/never-build.test.ts`), route inventory without any reject path, no-demo-outbox build check, Sentry scrubber | D1.md FIX table |
+| CI and staging | `workflow_dispatch` staging deploy from `d1/**`, `e2e-local` and `e2e-staging` jobs, Hyperdrive with the Supabase CA (ADR-031 amendment 1) | `.github/workflows/ci.yml`; `scripts/ops/README.md` |
+
+## 2. What was deferred, and why
+| Item | Why | Owner |
+| --- | --- | --- |
+| D1R-DB-2: `max_concurrency` on the mirror consumer vs Hyperdrive `origin_connection_limit` 5 | Low; failure mode is a stage timeout and a retry, the stage keys prevent double writes; the fix needs a staging AT-D17 check | **M3a** |
+| D1R-SEC-1: socket-counting test for the consumer | Low; the comment is fixed (`1d36151`), the test is not written | **M3a** |
+| D1R-SPEC-7: 3 of 5 `messagingSend` invocations end `canceled` on staging | Note; cause unknown, AT-D18 unaffected | **M3a** (with OPEN-8a) |
+| D1-DB-2: media-link jti checks look back only 330 s | Low; not exploitable today (`MediaLinkDO` burns each jti, `randomUUID` ids) | **M3a** |
+| D1-SEC-3 (c, d): pin of the Playwright internal; fixture spec for leaked secrets | Low; (a, b) fixed in `cd2cffe` | **M1** |
+| D1-LEAD-1: gitleaks-driven tests slow under load on Windows | Tooling; green on Linux CI | **M1** |
+| N-1: MT-9 `hosted_member` fingerprint | Low; needs hosted extension versions | **M1** |
+| Peak memory of the consumer's worst case | Estimated (32-54 MB per integrity stage), not measured | **M3a** |
+| `scripts/test/gitleaks-config.test.mjs` random-input flake | **Fixed at CLOSE** (it failed CI `static` on `e153f18`, run 41256738659): generic-api-key's own allowlist `^[a-zA-Z_.-]+$` drops a digit-free secret; the fixtures now build only values the rule keeps (`genericKeyKeeps`, `keptSecret`), assertions unchanged | Closed |
+| Other carried items (DB-6, DB-7, DB-12, SEC-W1-1, C2 SEC-3/5/6, FR-1, M0B-DB-1, token lifetime) | Owners in D1.md "Carried items" | M1 / M3a / M3b / M4 / M5 / M7 |
+
+## 3. Deferred gates (build-order rule 6)
+| # | Gate | Proxy used now | Owner |
+| --- | --- | --- | --- |
+| 1 | AT-D1 and AT-D17 on the CLOSE tip | Dispatch 41370292621 on `2cc6df5` (all success). Later commits are docs only | Closed |
+| 2 | **AT-D17 ≤ 30 s p95 target** | Gate (fails above 90 s) passes: 41370292621 `time_to_ready_ms` A 72 100, B 34 528, C 43 002, D 35 041 (max 72.1 s, n = 4); earlier 39820502191: max 70.0 s. The 30 s target is a recorded deviation (spec 4p §5.1, D1R-SPEC-1) | **M5** ("deterministic scores p95 < 30 s after submit") |
+| 3 | **OPEN-8a Workers Paid** | DC-D8 FAIL against Free 10 ms (jobs consumer 50-99 ms, sweep ≤ 42 ms, api RPCs 12-30 ms; every invocation `ok` except D1R-SPEC-7); founder 2026-10-22: **"not yet"**, D1 closes without it | Founder; decide **before any load test (M3a)** |
+| 4 | DC-D7 staging half | Passes through Hyperdrive (AT-D1 green through the four configs) | Closed |
+| 5 | First `deploy-staging` from `main` | Founder 2026-11-02: no skip-ci marker on the CLOSE merge, so the push to `main` runs it; the M0b summary §3 row 3 points here | The CLOSE merge |
+| 6 | `e2e-local` back on ruleset 25633431's required checks | Taken off for the M0a/M0b CLOSE PRs | Founder after the D1 merge |
+
+## 4. Autopilot decisions (and founder answers)
+- ADR-030 (candidate token, ES256; Accepted in part), ADR-031 (`postgres` 3.4.9 driver; amendment 1: Hyperdrive with the Supabase CA on staging), ADR-032 (coarse edge link rate limit): all "Accepted (autopilot)".
+- Lead, 2026-10-22: the jobs consumer runs sessions side by side (cap 3, founder chose concurrency over a slower AT-D17) with one integrity stage per batch (D1R-DB-1), not a lower cap.
+- Lead, 2026-10-22: AT-D17's 30 s target is a deviation owned by M5; the 90 s gate is unchanged (spec 4p).
+- Founder, 2026-10-22: Workers Paid "not yet"; D1 paused (not closed) while M1 builds on `m1/integration` (cut from `1547fd0`).
+- Lead, 2026-11-01 (this chat): `pnpm audit --prod --audit-level=high` failed on zod GHSA-mrhx-c7xc-m3w5, so the three dependency commits already on `m1/integration` were cherry-picked as lead commits; the lockfile conflict was resolved by regenerating it (equal to m1's minus M1-only packages).
+- Lead, 2026-11-01: `staging-applied-*` tags added for dispatches 39787385654 (`f9ba70d`), 39791480658 (`3d1d196`), 39797279887 (`f226950`) and 39820502191 (`1547fd0`), per `scripts/ops/README.md` ("after every dispatch whose Apply migrations step passed"). Their frozen migration set is the same as `staging-applied-39762460219` (`git diff f9ba70d HEAD -- supabase/migrations` is empty). The CLOSE dispatch is tagged `staging-applied-41370292621`.
+- Lead, 2026-11-01: the gitleaks fixture flake was fixed at CLOSE (test data only, assertions unchanged) because it failed the required `static` check on the PR head.
+
+## 5. How to demo
+| Show | Command or place | Source |
+| --- | --- | --- |
+| The whole flow, local | `node scripts/e2e-local.mjs` (Docker up): Supabase, three Workers, both apps, then Playwright `d1-slice` project `local` | spec §7.2; CI `e2e-local` |
+| The whole flow, staging, recorded | `pnpm e2e:record` (headed, captions, 1280x720) with the steps in §6 | spec §7.3 |
+| Two separate results | report B on the recruiter app: two cards from `…/quality` and `…/integrity`, band Review with the paste flag and timestamp | e2e step 8 |
+| Below cutoff is not reviewed | report D: "Not reviewed (below cutoff)", no band or timeline in the response | e2e step 8; AT-D14 |
+| Tenancy and DB rules | `pnpm test:rls` | `scripts/test-rls.mjs` |
+| Staging apps | `https://trace-recruiter-staging.pages.dev`, `https://trace-candidate-staging.pages.dev` | `scripts/e2e-staging-preflight.mjs` `STAGING_ORIGINS` |
+
+## 6. AT-D2 recording (founder capture)
+The deliverable is one OS-level screen capture of the headed `pnpm e2e:record` run against staging (spec §7.3, D1-SPEC-2). `e2e:record` exits 0 only when the manifest's `recordedMs` is within 270 000-330 000 ms. The file is not committed; it is attached to the dispatch run as an artifact.
+
+Founder steps (Windows 11, from the repo root of a checkout at the dispatched SHA, e.g. `.claude/worktrees/d1-integration`; staging must serve that SHA, so run it before any later dispatch):
+0. Once per machine: `pnpm install --frozen-lockfile`, then `pnpm --filter @trace/e2e exec playwright install chromium`.
+1. Set the variables in the shell only (never in a file in the repo, never in chat). The public ones: `E2E_CANDIDATE_URL`, `E2E_RECRUITER_URL`, `E2E_API_URL`, `E2E_EDGE_URL` (exact values in `scripts/e2e-staging-preflight.mjs` `STAGING_ORIGINS`), `E2E_SUPABASE_URL`, `E2E_SUPABASE_PUBLISHABLE_KEY` (the `sb_publishable_…` key, never the secret key), `E2E_SHA` (the full 40-hex dispatched commit). The six credentials, typed with `Read-Host -AsSecureString` or pasted from the password manager: `E2E_RECRUITER_EMAIL`, `E2E_RECRUITER_PASSWORD`, `E2E_RECRUITER_TOTP_SECRET` (the `STAGING_SMOKE_*` user) and `E2E_REVIEWER_EMAIL`, `E2E_REVIEWER_PASSWORD`, `E2E_REVIEWER_TOTP_SECRET` (the `STAGING_REVIEWER_*` user).
+2. `pnpm e2e:staging:preflight` must print OK (health and versions equal `E2E_SHA`).
+3. Start an OS-level screen capture of the whole screen (Windows: Snipping Tool → Record, or Xbox Game Bar `Win+Alt+R`), then run `pnpm e2e:record`. Do not touch the browser windows while it runs (about 5 minutes).
+4. Stop the capture when `e2e:record` exits. It must exit 0: that means Playwright passed and `recordedMs` is within 270 000-330 000 ms.
+5. Send the lead: the file name, `Get-FileHash <file> -Algorithm SHA256` output, `recordedMs` and `sha` from `e2e/test-results/d1-manifest.json`, and the dispatch run id. Keep the file; it is not committed.
+
+| Field | Value |
+| --- | --- |
+| File name | pending (founder) |
+| SHA-256 | pending |
+| `recordedMs` | pending |
+| Dispatch run id (staging serving the recorded SHA) | pending |
+
+## 7. Linear
+Linear is not connected. Nothing to change for D1.
+
+## 8. Close record
+- **Full serial `pnpm verify` green on `ca64856`** (2026-11-01, lead, no agent running; the later commits are docs plus the scripts-test flake fix, after which `pnpm lint` 0 and the scripts suite 54 files, 2 718 passed + 1 skipped were re-run): `pnpm -r --workspace-concurrency=1 typecheck` 0; `pnpm lint` 0 (eslint, prettier, boundaries, workflows, catalog tests, migrations); `pnpm -r --workspace-concurrency=1 test` 0 (12 packages, 3 784 tests); `pnpm exec vitest run --root scripts --maxWorkers=1` 54 files, 2 715 passed + 1 skipped (K4); `pnpm test:rls` OK (32 test files, catalog 144 / floor 144, rls 2633 / floor 2633, db-types current); `pnpm -r --workspace-concurrency=1 build` 0, then `check-bundle-size` (candidate 81.9 kB gzip, photo chunk 3.5 kB, recruiter 351.5 kB information only), `check-headers`, `check-no-demo-outbox`, `scan-dist` all OK. `pnpm audit --prod --audit-level=high`: no high (1 moderate, minimatch GHSA-g3hv-75wg-m249, dated osv ignore).
+- CI on PR #4 for `2cc6df5`: run 41369824749, all success. (`e153f18`'s run 41256738659 failed `static` on the gitleaks fixture flake, fixed in `2cc6df5`.)
+- Checkpoint tag: `cp/d1-12` = `2cc6df5` (pushed).
+- Staging on `2cc6df5`: dispatch 41370292621, all success, `staging-applied-41370292621`.
+- Founder answers in chat (2026-11-02): staging dispatch approved; CLOSE merge approved "when all green" (required checks green on the PR head and the AT-D2 record in §6 filled in); **no skip-ci marker** on the merge commit, so the push to `main` runs CI and the first `deploy-staging` from `main`.
+- CLOSE PR merge ("Create a merge commit"): waits for the AT-D2 record. Then tag `d1-reviewed` on the merge commit (AUTOPILOT §2) and the founder adds `e2e-local` back to ruleset 25633431.

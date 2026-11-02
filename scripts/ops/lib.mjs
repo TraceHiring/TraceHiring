@@ -68,7 +68,7 @@ export function parseEnvOutput(text) {
 const STATUS_ARGS = ['exec', 'supabase', 'status', '-o', 'env'];
 
 /** The parent environment minus the names no child process needs (B0-SEC3). */
-function childEnvOf(env) {
+export function childEnvOf(env) {
   const out = { ...env };
   for (const name of [DB_URL_ENV, 'SMOKE_PASSWORD', 'SUPABASE_STAGING_PUBLISHABLE_KEY']) {
     delete out[name];

@@ -10,6 +10,8 @@ import {
   REPO_ROOT,
   extendPath,
   genericApiKeyStopwords,
+  genericKeyKeeps,
+  keptSecret,
   randomAlnum,
   tokenWith,
   upstreamAllowlistVictims,
@@ -110,6 +112,65 @@ describe('real gitleaks with the repository config (run at the repository root)'
     expect(r.status).toBe(0);
   });
 
+  // Chat E staging dispatch: the staging recruiter bundle inlines the public publishable key (H10) as
+  // VITE_SUPABASE_PUBLISHABLE_KEY:`sb_publishable_…`, which generic-api-key flagged. Only that exact
+  // key shape is allowed, and only for generic-api-key.
+  // Random bodies avoid generic-api-key's stopwords: gitleaks drops a match whose secret holds one, so
+  // an unlucky body would make these cases pass or fail by chance (security review SEC-GL-1).
+  const STOPWORDS = genericApiKeyStopwords().map((w) => w.toLowerCase());
+  const body = (n) => {
+    for (;;) {
+      const s = randomAlnum(n);
+      const lower = `sb_publishable_${s}`.toLowerCase();
+      if (!STOPWORDS.some((w) => lower.includes(w))) return s;
+    }
+  };
+  const NAME = 'VITE_SUPABASE_PUBLISHABLE_KEY';
+  /** `gitleaks stdin -v` over one line; the rule ids it reports (output redacted). */
+  const rules = (line) => {
+    const r = spawnSync(
+      'gitleaks',
+      [
+        'stdin',
+        '--no-banner',
+        '--no-color',
+        '--redact',
+        '-v',
+        '--config',
+        join(REPO_ROOT, '.gitleaks.toml'),
+      ],
+      { cwd: REPO_ROOT, input: `${line}\n`, encoding: 'utf8' },
+    );
+    expect(r.error).toBeUndefined();
+    return [...`${r.stdout}\n${r.stderr}`.matchAll(/RuleID:\s*(\S+)/g)].map((m) => m[1]);
+  };
+
+  it('passes the publishable key as the staging recruiter bundle inlines it', () => {
+    const r = scan(`${NAME}:\`${['sb', 'publishable', body(32)].join('_')}\``);
+    expect(r.out).not.toMatch(/Failed to load config/);
+    expect(r.out).toMatch(/no leaks found/);
+    expect(r.status).toBe(0);
+  });
+
+  it('still finds a secret key, or any other value, under the same name', () => {
+    expect(rules(`${NAME}:\`${['sb', 'secret', body(32)].join('_')}\``)).toContain(
+      'supabase-secret-key',
+    );
+    // generic-api-key itself (not github-pat): a plain high-entropy value, a prefixed one, and a
+    // publishable-looking value with a `.` tail that the anchored character set refuses (SEC-GL-2).
+    // Each whole secret is one generic-api-key keeps (a digit, no stopword), so none passes by chance.
+    const kept = (make) => keptSecret(make, STOPWORDS);
+    expect(rules(`${NAME}:\`${kept(() => body(40))}\``)).toContain('generic-api-key');
+    expect(
+      rules(`${NAME}:\`${kept(() => `x${['sb', 'publishable', body(32)].join('_')}`)}\``),
+    ).toContain('generic-api-key');
+    expect(
+      rules(
+        `${NAME}:\`${kept(() => `${['sb', 'publishable', body(24)].join('_')}.${body(16)}`)}\``,
+      ),
+    ).toContain('generic-api-key');
+  });
+
   it.each(upstreamAllowlistVictims().map((v) => [v.label, v]))('finds %s', (_label, v) => {
     const r = scan(v.line);
     expect(r.out).not.toMatch(/Failed to load config/);
@@ -135,5 +196,49 @@ describe('upstreamAllowlistVictims (test-data hygiene)', () => {
       expect(words.find((w) => lower.includes(w))).toBeUndefined();
       expect(v.secret.startsWith('true')).toBe(true);
     }
+  });
+
+  // generic-api-key's own allowlist `^[a-zA-Z_.-]+$` drops a secret with no digit; 30 random
+  // alphanumerics have none about once in 200 draws, which made "finds an api_key value" flaky.
+  it('never builds an api_key victim without a digit', () => {
+    for (let i = 0; i < 2000; i += 1) {
+      const v = upstreamAllowlistVictims().find((x) => x.label.startsWith('an api_key value'));
+      expect(v.secret).toMatch(/[0-9]/);
+    }
+  });
+});
+
+describe('genericKeyKeeps (test-data hygiene)', () => {
+  const words = genericApiKeyStopwords();
+  // A digit-free value and a value with a stopword, each built so the other reason cannot apply.
+  const lettersOnly = `sb_publishable_${'QzWxRvTn'.repeat(4)}`;
+  const withDigit = `sb_publishable_${'QzWxRvT7'.repeat(4)}`;
+  const stopword = words.find((w) => /^[a-z]{4,}$/.test(w));
+
+  it('keeps a value only when it holds a digit and no stopword', () => {
+    for (const s of [withDigit, lettersOnly]) {
+      expect(words.some((w) => s.toLowerCase().includes(w))).toBe(false);
+    }
+    expect(genericKeyKeeps(withDigit, words)).toBe(true);
+    expect(genericKeyKeeps(lettersOnly, words)).toBe(false);
+    expect(genericKeyKeeps(`${withDigit.slice(0, -8)}${stopword}7`, words)).toBe(false);
+  });
+
+  it('agrees with real gitleaks on the x-prefixed publishable shape (line-160 case)', () => {
+    const found = (secret) => {
+      const r = spawnSync(
+        'gitleaks',
+        ['stdin', '--no-banner', '--no-color', '--redact', '-v', '--config', '.gitleaks.toml'],
+        {
+          cwd: REPO_ROOT,
+          input: `VITE_SUPABASE_PUBLISHABLE_KEY:\`x${secret}\`\n`,
+          encoding: 'utf8',
+        },
+      );
+      expect(r.error).toBeUndefined();
+      return /RuleID:\s*generic-api-key/.test(`${r.stdout}\n${r.stderr}`);
+    };
+    expect(found(withDigit)).toBe(true);
+    expect(found(lettersOnly)).toBe(false);
   });
 });

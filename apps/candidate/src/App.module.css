@@ -1,16 +1,32 @@
-.page {
-  box-sizing: border-box;
-  max-width: 40rem;
-  margin: 0 auto;
-  padding: var(--space-32) var(--space-16);
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
 }
 
-.title {
-  margin: 0 0 var(--space-8);
-  font-weight: var(--type-h1-weight);
-  font-size: var(--type-h1-size);
-  line-height: var(--type-h1-line-height);
-  letter-spacing: var(--type-h1-letter-spacing);
+.header,
+.footer {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: var(--space-12) var(--space-16);
+}
+
+.brand {
+  margin: 0;
+  font-weight: var(--type-title-weight);
+  font-size: var(--type-title-size);
+  line-height: var(--type-title-line-height);
+}
+
+.page {
+  box-sizing: border-box;
+  flex: 1;
+  width: 100%;
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: var(--space-16);
 }
 
 .version {

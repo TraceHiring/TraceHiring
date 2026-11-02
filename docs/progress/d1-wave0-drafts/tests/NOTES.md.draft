@@ -1,0 +1,30 @@
+# D1 migration 1 pgTAP tests (RED first)
+
+Target: `<ts1>_d1_authoring.sql` (specs/d1-demo-slice.md §3.1 row 1). Style copied from supabase/tests/rls_teams.test.sql. All files are standalone (`begin; plan(N); ... finish(); rollback;`), synthetic `@example.test` users, fixed UUIDs, `pg_temp.try`/`pg_temp.keys`, `$$` quoting. `plan(N)` equals the real assertion count of each file. Nothing was run (no docker/supabase/pnpm).
+
+| File | §3.6 plan | Written | Covers |
+| --- | --- | --- | --- |
+| rls_d1_tests.test.sql | 75 | 236 | tests, test_versions (S/I/U/D, mandatory cutoff, 60..7200, one open draft, publish validation list, publish/retire pass the policy L-30, freeze for authenticated/postgres/replica, draft-only delete + ruleset row removal, audit keys), sections, item_versions (CHECKs, format FK), item_answer_keys, rubric_versions (lock when referenced) |
+| rls_d1_assignments.test.sql | 45 | 87 | assignments matrix, my_assigned_test_ids, reviewer visibility across all child tables, creator auto-assignment (highest role, skipped when inactive, audited), non-holder / inactive / cross-org refused, L-16 recruiter arm (own-assigned test, reviewer only, workspace fence, audited), no UPDATE, audit keys |
+| rls_d1_scoping.test.sql | 30 | 48 | L-27 copy trigger values, immutability, composite FKs and (org_id,test_id)/(org_id,workspace_id) indexes on the four migration-1 children, workspace and reviewer fences |
+| rls_d1_rulesets.test.sql | 35 | 65 | migration-1 subset only: ruleset_versions S arms, trigger-only columns, signal_settings CHECK, freeze (operator, replica), notice_versions S arms, immutability, CHECKs |
+| rls_d1_helpers.test.sql | (none; membership_counts_for is inside rls_d1_media_view's 40) | 49 | job_org_id, api_org_id, membership_counts_for truth table + L-25 (recruiter aal1: OTP allowed, password denied), delegation from membership_counts, EXECUTE lists, MT-7 properties |
+
+Total: 485 assertions in 5 files. Counts are above the §3.6 estimates because every cell has an allowed and a denied case.
+
+## Spec ambiguities (flagged, not resolved)
+1. **Migration order vs fixtures.** The L-8 trigger (ruleset and notice ids on draft insert) and the org seed (notice, band rule, rubric) are migration 3 (L-34). Tests that publish a version, and rls_d1_rulesets, need the full chain. With migration 1 alone, `ruleset_version_id`/`notice_version_id` are null and the publish guard's "band_rule_version_id is set" check cannot pass. The spec does not say how migration 1 is exercised alone.
+2. **`trace_api` does not exist until migration 2**, yet `api_org_id()` is listed in migration 1 and the §3.4 table grants it to `trace_api`. The helper test asserts only the function and that no existing role can call it; the grant is left to rls_d1_api.
+3. **Freeze error code.** The spec fixes `42501 TRACE_GUARD` for guards and `P0001 TRACE_APPEND_ONLY` for append-only, but not the SQLSTATE/tag of the freeze triggers. The tests accept `^(42501 TRACE_GUARD|P0001 TRACE_FROZEN)` (macro in the generator), and `^(42501|P0001)` for policy-or-trigger refusals. Pin it and tighten.
+4. **Freeze for workers.** §3.2 says freeze triggers bind workers, but workers hold no write grant on authoring tables, so only `42501 permission denied` is testable for them.
+5. **`created_by`** on tests/versions/sections/items/keys/assignments: the tests omit it on authenticated inserts and assert tests.created_by = caller (default or trigger). The spec does not say whether the client supplies it.
+6. **Client-supplied scoping values** (`workspace_id`, `test_id` on children): spec says "copied by trigger" and immutable, not whether a supplied value is overwritten or refused. Tests accept either (`OK 1` or `42501`) and then assert no mismatching row exists.
+7. **Which `ruleset_versions` columns an app role may write.** The matrix gives SIU(d), but `signal_settings` and `band_rule_version_id` are outside the grant and the draft row comes from the L-8 trigger. Tests assert those two columns are denied and the rest only via S fences; the writable column set is not specified.
+8. **Audit details**: `test.create` details assumed empty (like `team.create`); `assignment.create` assumed `{membership_id, test_id}` (the spec lists keys only for `assignment.delete`); `test.publish` `{version_no}`. For the auto-assignment at publish the actor is assumed to be the publisher.
+9. **`assignments` W for `org_owner`/`admin` as_role** and the `private.my_assigned_test_ids` return type (assumed `uuid[]`, from the `::uuid[]` cast in the §3.3 policy text).
+10. **Rubric `criteria` shape**: `anchors` element type is unspecified; tests use `[]`. The org seed's default rubric key is unknown; tests count rubrics `like 'writing-%'` to avoid it.
+11. **Delete of a draft test_version with sections** (FK cascade or not) is unspecified; the test deletes a section-less draft.
+12. **Reading the §3.3 cell "assignments RC: S"**: assumed org-wide select (workspace arm) for a recruiter; "RV: S (own)" assumed to mean rows of the reviewer's own membership.
+13. **Publishing a second version** while an earlier one is published (V4 on T3): assumed allowed and not retiring the earlier one.
+14. **Plan file ownership.** §3.6 puts `membership_counts_for` cases in rls_d1_media_view (migration 4). They are written here instead (helpers file) so migration 1 is covered; rls_d1_media_view can reuse its viewer-facing half.
+15. **Extra personas** beyond the §3.6 list: second recruiter, reviewer_other, a recruiter whose membership is removed before publish, and an org B reviewer (to test cross-org assignment).

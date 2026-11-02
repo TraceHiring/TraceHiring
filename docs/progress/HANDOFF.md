@@ -1,55 +1,52 @@
-# HANDOFF — 2026-10-13 20:25 IST
-Reason for stopping: phase done. **M0b FIX is complete** and AUTOPILOT §2 allows one phase per session. Usage at stop: about 80% of the 5-hour window (Pro plan, resets about 23:20 IST); weekly about 66%.
-The next session may be a new Claude Code on another account. Start from `docs/progress/RESUME-PROMPT.md` on **`m0b/integration`** (its §4 paste prompt).
+# HANDOFF — 2026-11-02 06:50 IST (D1 CLOSE: all verified and staged; waits only for the founder's AT-D2 capture, then the merge)
+Reason for stopping: this chat's work is done up to the founder action. Usage at stop: 5-hour window ~3% (Max), weekly ~46%, context ~33%. Start from the D1 close paste prompt on **`d1/integration`** (worktree `.claude/worktrees/d1-integration`). The repo wins over this file and over any memory.
 
-## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M8 = closed beta → M9 … M13)
-- Milestones closed: **0 of 17** (no `m*-reviewed` tag). Rough share of the whole build done: about 10%.
-- **M0a:** REVIEW and FIX are done; it stopped before CLOSE (founder gate). `milestone/m0a` @ `7dc8c0d` = `cp/m0a-06`.
-- **M0b:** BUILD, REVIEW and **FIX are done**. The code verdict is **PASS WITH CONDITIONS with no open Medium** (`docs/reviews/M0b.md`, sections "FIX" and "Re-review of the FIX"). The milestone stays INCOMPLETE until CLOSE, because the staging run (AT-B9, AT-B10) and `m0a-reviewed` are founder gates.
+## Overall progress (build-order.md: M0a → M0b → D1 → M1 … M13; 17 milestones)
+- Closed: **2 of 17**. `m0a-reviewed` = `3667678`, `m0b-reviewed` = `da5380d` (= `trace/main`).
+- **D1 ≈ 99.5%**: code reviewed and fixed, staging green on the CLOSE tip, summary written. Open: the AT-D2 capture (founder), then the CLOSE merge (approved "when all green"), `d1-reviewed`, `e2e-local` back on the ruleset (founder).
 
-## Where we are
-- **`m0b/integration`** (worktree `.claude/worktrees/m0b-integration`; enter it with `EnterWorktree` path). Its tip is this handoff commit, on top of `01b177c` docs(reviews): record the m0b fix re-review and gates.
-- **`milestone/m0b` @ `01b177c` = `cp/m0b-04`**: fast-forwarded this session from `4cb6775` (`cp/m0b-02`). **Stray tag:** `cp/m0b-03` also points at `4cb6775` (= `cp/m0b-02`). A failed fetch refspec in a chained command created it. It is local only: it is deliberately not pushed, and the wrap-up pushed tags by name. The tag rules forbid deleting it, so the founder may delete it locally (`git tag -d cp/m0b-03`), or leave it. The FIX checkpoint is `cp/m0b-04`.
-- Draft PR **TraceHiring/TraceHiring#3** (`m0b/integration` → `main`) is for CI only and is never merged.
-- Stream branches are all merged and kept: `m0b/b0-db` `dc4731a`, `m0b/b2-recruiter-auth` `91092ac`, `m0b/b2-fixes` `8f47fff`, `m0b/b4-smoke-auth` `04013ea`, plus the older `b0-rls-tests`, `b3-token-spike`, `b4-ops-scripts` and `b5-*`. This session created no stream branches.
-- Unchanged: `milestone/m0a` @ `7dc8c0d`, `m0a/integration` @ `c619525`, `main` @ `fe77a87`.
-- The local stack runs db, auth, kong, rest and mailpit (left up by `pnpm test:rls`).
+## Where we are (verified this chat)
+- **`d1/integration` HEAD = `130e160`** + this handoff commit. Clean tree. Pushed. **`cp/d1-12` = `2cc6df5`** (pushed).
+- PR TraceHiring/TraceHiring#4 (draft, `d1/integration` → `main`): CI run 41369824749 on `2cc6df5` all success (static, rls, security, migrations, e2e-local). `130e160` and this commit are docs only; their PR run starts with the push.
+- **Staging dispatch 41370292621 on `2cc6df5`** (founder-approved in chat 2026-11-02): all 7 jobs success. Manifest: project `staging`, `sha` `2cc6df5…`, 55/55 steps, `durationMs` 290 715, AT-D17 `time_to_ready_ms` A 72 100, B 34 528, C 43 002, D 35 041 (max 72.1 s < 90 s gate). Staging serves `2cc6df5`.
+- `trace/main` = `da5380d` (unchanged). `m1/integration` and `m2/integration` untouched by this chat.
 
-## Done this session (verified)
-- Resume check: the repo matched the handoff (`b3f8809` = remote; `milestone/m0b` = `cp/m0b-02` = `4cb6775`). `verify:fast` exit 0 (212 s).
-- FIX, one commit per finding, tests first:
-  - `1cc45e0` M0B-DB-2 (Medium): MT-11 now uses a caller-helper allow-list, plus the new branches `or_arm_without_caller` and `caller_only_null_tested`. 3 fixtures were seen failing; 2 negative controls added.
-  - `8c36e48` M0B-SP-1: the spike requires `42501`; re-run 27/0/0.
-  - `66c8459` B0-SP3: 2 audit cases and a spec §2.5 sentence.
-  - `c4db45c` B0-DB7: migration `20261013133323_m0b_staff_grant_checks.sql`; 3 staff cases seen failing.
-  - `545e1c2` B0-SP7: 6 cheap matrix cases.
-  - `ccb584a` M0B-DB-5: `scripts/test-concurrency-local.mjs` (two psql sessions, run by `test:rls`) **proved** that both owner demotions committed under REPEATABLE READ. Migration `20261013133832_m0b_owner_change_isolation.sql` adds `memberships_isolation_guard`.
-  - `0080700`: record and spec revision 8.
-- Re-review: one fresh Sonnet database-reviewer returned PASS WITH FINDINGS (3 Lows). FR-2 and FR-3 were fixed in `45bb351` (`is_operator` added to the allow-list; comment). FR-1 goes to **M1**. Recorded in `01b177c`.
-- Gates on `45bb351`, no agent running: full `pnpm verify` exit 0 (scripts 1559 + 1 skipped K4; catalog **138**, rls **697**; AT-B8 and the concurrency test OK). The first run failed the known redactor 50 ms timing at 50.2 ms; the re-run was green. Linux CI was green on `ccb584a` (38407442501) and on `01b177c` (38415375246).
-- Not fixed, with owners: **M0B-DB-1 → M7** (DR runbook) and **B0-SP7 rest → M1**. All other Lows keep the owners in `docs/reviews/M0b.md`.
+## Done this chat (verified, commits on d1/integration)
+| Commit | What |
+| --- | --- |
+| `4ea2739` | cherry-pick of m1 `b397a29`: zod 4.6.6 (GHSA-mrhx-c7xc-m3w5 made `pnpm audit --prod --audit-level=high` red); build-notes conflict resolved (zod row only) |
+| `791f3b1` | cherry-pick of m1 `2d91744`: dated osv ignores (undici, fast-uri, happy-dom) |
+| `ca64856` | port of m1 `208e5ae`: vitest 4.1.12, undici 7.30.1, happy-dom 20.14.6; lockfile regenerated (= m1's minus M1-only packages) |
+| `e153f18` | `docs/milestones/D1-summary.md`; FOUNDER-QUEUE row "D1 CLOSE" |
+| `2cc6df5` | test(scripts): gitleaks fixtures build only values generic-api-key keeps. Root cause of the flake that failed CI `static` on `e153f18` (run 41256738659): the rule's allowlist `^[a-zA-Z_.-]+$` drops a digit-free secret (real gitleaks 0/20 letters-only vs 20/20 with a digit). `genericKeyKeeps`, `keptSecret`; hygiene tests red first; assertions unchanged |
+| `130e160` | D1-summary CLOSE rows, AT-D2 steps (§6), founder answers; D1.md "CLOSE" section; FOUNDER-QUEUE update |
+- **Full serial verify green on `ca64856`**: typecheck 0, `pnpm lint` 0, package tests 0 (12 packages, 3 784), scripts 2 715 + 1 skipped, `test:rls` OK (32 files, catalog 144, rls 2633, db-types current), build 0 + bundle/headers/no-demo-outbox/scan-dist OK. After `2cc6df5`: `pnpm lint` 0, scripts 2 718 + 1 skipped.
+- Tags created and pushed: `staging-applied-39787385654` (`f9ba70d`), `-39791480658` (`3d1d196`), `-39797279887` (`f226950`), `-39820502191` (`1547fd0`), `-41370292621` (`2cc6df5`) per `scripts/ops/README.md`; `cp/d1-12`.
 
-## Next step (in order)
-1. **M0b cannot CLOSE until the founder gates are met:** `m0a-reviewed` (M0a CLOSE needs the GitHub plan, FOUNDER-QUEUE row 15) and the staging run of AT-B9 and AT-B10 (rows 20–21: H3–H5, H8–H11). Do not merge into `main` and do not tag `m*-reviewed` without the founder.
-2. **No unblocked autopilot phase is left without a founder answer.** D1 starts "right after `m0b-reviewed`, before M1" (`docs/build-order.md:36-38`, founder 2026-10-11), and Sentry (H6) must land before D1. The next session should ask the founder once (FOUNDER-QUEUE row added this session): may D1 SPEC start before `m0b-reviewed`, as M0b did before `m0a-reviewed`? If the answer is yes, run D1 SPEC in a fresh session on a new `d1/integration` cut from `milestone/m0b` (`cp/m0b-04`). If not, work the founder rows for CLOSE.
-3. Carry FR-1 (MT-11 caller calls that bind no row) into the M1 spec, before M1 adds tables.
+## Next step (one precise action list)
+1. **Founder: AT-D2 capture** with the steps in `docs/milestones/D1-summary.md` §6 against staging serving `2cc6df5` (no dispatch in between). The founder sends: file name, SHA-256 (`Get-FileHash`), `recordedMs` and `sha` from `e2e/test-results/d1-manifest.json`, run id 41370292621.
+2. Lead: fill the §6 table (and the line in D1.md "CLOSE"), commit, push, wait for PR #4's required checks (static, rls, security, migrations) green on that head.
+3. Lead: `gh pr ready 4`, then merge PR #4 with **"Create a merge commit"**, **no skip-ci marker** (founder 2026-11-02; approved "when all green"). Subject `chore: merge d1/integration (d1 close)`.
+4. Lead: tag `d1-reviewed` on the merge commit and push it; record the merge SHA in LOG.md; watch the push-to-`main` CI (first `deploy-staging` from `main`). Remind the founder to add `e2e-local` back to ruleset 25633431's required checks.
+5. Lead: update the "Paused: D1" section of `docs/progress/HANDOFF.md` on `m1/integration` to say D1 is closed (merge SHA, tag), commit, push. M1 CLOSE then waits only for the founder's go-ahead.
 
-## Decisions made this session (HOW-level, AUTOPILOT §4)
-- `private.valid_roles` was left off the MT-11 allow-list, because it is immutable and caller-independent. `private.caller_roles` was added, and `private.is_operator` was added after the re-review.
-- M0B-DB-5 was fixed by refusing owner or status changes outside READ COMMITTED (`0A000`, a separate trigger, fix-forward migration). No current path uses another isolation level; the reviewer verified the role and database defaults.
-- M0B-DB-1 goes to M7 rather than M0b FIX (the review allows either); B0-SP7 rest goes to M1.
-- Fix-forward migrations, not edits to the reviewed ones.
+## Decisions made this chat
+- Founder (2026-11-02, in chat): staging dispatch approved; CLOSE merge approved when all green (with the AT-D2 record); no skip-ci marker on the merge commit.
+- Lead: the dependency fixes were ported from m1 instead of re-derived; the gitleaks flake was fixed at CLOSE because it failed a required check (owner had been M1).
 
-## Open questions for the founder (`docs/progress/FOUNDER-QUEUE.md`)
-- **New:** may D1 SPEC start before `m0b-reviewed`? Options (a) start D1 SPEC now, (b) wait and work the CLOSE rows, (c) start M1 SPEC.
-- Unchanged: the GitHub plan (row 15, blocks M0a CLOSE); H8–H11 (row 20) and the H8 reminder (row 21); the URGENT Cloudflare token roll, `CLOUDFLARE_API_TOKEN`, `SUPABASE_STAGING_DB_URL`, H4, H5, H6 Sentry; B2-SEC-5 FYI (row 22); the session time-box FYI.
+## Founder items
+- AT-D2 screen capture (above). After the merge: `e2e-local` back on the required checks.
+- Workers Paid (OPEN-8a): "not yet"; decide before any load test (M3a). Dependabot PRs #7-#12: do not merge blind.
 
-## Gotchas / do not touch
-- Only the lead runs `supabase start/stop`, `db reset`, `test db`, `gen types`, `pnpm verify` and `pnpm test:rls`. Run the full verify **with no agent running**. The redactor 50 ms timing test can fail at about 50.2 ms under load; re-run before suspecting code.
-- Running a single pgTAP file by hand: pgTAP is absent outside `supabase test db`. Insert `create extension if not exists pgtap with schema extensions;` after the file's `begin;` (it rolls back with the file).
-- In node `String.replace`, `$$` in a replacement string becomes `$`: use the Edit tool for SQL with `$$`.
-- Worktree guard: no `git -C`, no `$(…)`, no heredocs containing backticks with git in the same command, and no pipes around git. commitlint body lines must be at most 100 characters.
-- Push and fetch: `git -c credential.helper= -c "credential.helper=!gh auth git-credential" push trace <refs>`.
+## Follow-ups (not blocking D1; owners in D1.md and D1-summary §2)
+- D1R-DB-2 (M3a), D1R-SEC-1 (M3a), D1R-SPEC-7 (M3a), D1-DB-2 (M3a), D1-SEC-3 c/d (M1), D1-LEAD-1 (M1), N-1 (M1); AT-D17 30 s target (M5).
+- Owed dependency bumps (also on m1): fast-uri override 3.1.9 on/after 2026-11-02 (osv ignores expire 11-09); happy-dom 21.0.4 from 2026-11-03 (expire 11-23); minimatch re-check by 11-30. After the D1 merge they land on `main` through the M1 CLOSE; if `main`'s `security` turns red first, port m1's fix the same way.
+
+## Gotchas
+- The worktree guard refuses compound git commands, `$(...)`, heredocs into repo files; commit messages via `git commit -F <scratchpad file>` (body lines ≤ 100).
+- Calling eslint directly on `scripts/test/fixtures/gitleaks-config.mjs` reports `trace/static-module-paths` on line 9 (pre-existing); `pnpm lint` is the gate and passes.
+- `gh run watch` output is long; redirect it and print job conclusions after.
+- m1 dispatches (`m1/**`) skip `deploy-staging` by design; only `d1/**` and `milestone/**` deploy staging.
 
 ## Verify first
-- `git fetch` (with the `-c` pair) · `git log --oneline -3 m0b/integration` · `git status` · `docker ps` · `pnpm -s verify:fast` · PR #3 checks
+`git -c credential.helper= -c "credential.helper=!gh auth git-credential" fetch trace` · `git log --oneline -3 d1/integration` (this handoff, parent `130e160`) · `git status` · `git rev-parse cp/d1-12^{commit}` (`2cc6df5…`) · `git rev-parse --short trace/main` (`da5380d`) · `gh pr checks 4 --repo TraceHiring/TraceHiring` · `pnpm -s verify:fast`

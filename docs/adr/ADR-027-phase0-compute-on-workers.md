@@ -46,7 +46,7 @@ Cloudflare stays on the **Workers free plan** until a free-plan limit blocks the
   - **Enterprise strict-residency SKU:** plan §8.2 puts its storage on S3 Mumbai. That **no longer gives full India residency**, because Durable Object and Queue data stay on Cloudflare. A customer who needs it is a reason to reopen this ADR.
 - **Processors outside India, recorded here and in the sub-processor list:**
   - Cloudflare (Workers, Durable Objects, Queues, R2, Workers Logs)
-  - Sentry: recruiter app and server Workers only, scrubbed; the region is chosen by the founder and recorded here when the project is created
+  - Sentry: recruiter app and server Workers only, scrubbed; the region is chosen by the founder and recorded here when the project is created. **Recorded 2026-10-14 (H6): EU (Germany) data region** (no India region exists), projects `trace-recruiter` and `trace-workers`, IP storage off, server-side scrubbing on.
   - Neither Sentry nor any other error tool runs on the candidate app or `workers/edge` until counsel approves (build-notes Q17).
 - **Deploys:** every deploy runs from GitHub Actions to staging with `wrangler`, and only on a push to `main` (`specs/m0-foundations.md` §7). There are no container images in Phase 0.
 - **Prod isolation (proposed, build-notes Q55):** at M8, prod gets a separate Supabase organisation and a separate Cloudflare account. A staging credential then cannot reach prod.

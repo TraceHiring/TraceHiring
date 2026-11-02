@@ -1,0 +1,121 @@
+/* The test screen: works at 320 px, targets of at least 24 px. */
+.test {
+  display: flex;
+  flex-direction: column;
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-12);
+}
+
+.timer {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-8);
+}
+
+.timerLabel {
+  color: var(--color-text-secondary);
+  font-size: var(--type-body-sm-size);
+}
+
+.timerValue {
+  font-family: var(--font-mono);
+  font-size: var(--type-h2-size);
+  font-weight: var(--type-h2-weight);
+  font-variant-numeric: tabular-nums;
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  margin: var(--space-16) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.navButton {
+  box-sizing: border-box;
+  min-width: var(--component-touch-target-min);
+  min-height: var(--component-touch-target-min);
+  padding: 0 var(--space-8);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.navButton[data-answered='yes'] {
+  background: var(--color-accent-subtle);
+}
+
+.navButton[aria-current='step'] {
+  border-width: 2px;
+  border-color: var(--color-accent-default);
+  font-weight: var(--type-body-strong-weight);
+}
+
+.item {
+  padding: var(--space-16);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+}
+
+.prompt {
+  margin: 0 0 var(--space-16);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-8);
+  min-height: var(--component-touch-target-min);
+  margin: var(--space-8) 0;
+  overflow-wrap: anywhere;
+}
+
+.option input {
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  flex: none;
+}
+
+.textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 12rem;
+  padding: var(--space-8) var(--space-12);
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  resize: vertical;
+}
+
+.submitArea {
+  margin: var(--space-24) 0;
+}
+
+.confirm {
+  padding: var(--space-16);
+  border: 2px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}

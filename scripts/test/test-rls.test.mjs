@@ -23,6 +23,9 @@ import {
   DOCKER_MESSAGE,
   AUTH_TEST_ARGS,
   CONCURRENCY_TEST_ARGS,
+  STAGING_ROLES_TEST_ARGS,
+  CATALOG_HOSTED_TEST_ARGS,
+  JOBS_DB_TEST_ARGS,
   EXCLUDED_SERVICES,
   FLOORS,
   GEN_TYPES_ARGS,
@@ -230,6 +233,9 @@ describe('§8.3 step 2: the shared lock', () => {
       'test',
       'auth',
       'concurrency',
+      'stagingroles',
+      'cataloghosted',
+      'jobsdb',
       'gen',
     ]);
     expect(existsSync(h.lockFile)).toBe(false);
@@ -548,6 +554,102 @@ describe('m0b M0B-DB-5: the two-connection owner-demotion test runs after AT-B8'
   });
 });
 
+describe('d1 revision 4m: the MT-9 hosted allow-list runs for real after the staging login-role test', () => {
+  it('runs node scripts/test-catalog-hosted-local.mjs from the root after the staging login-role test', async () => {
+    const h = harness();
+    expect(await h.go()).toBe(0);
+    const keys = h.stub.keys();
+    expect(keys.indexOf('cataloghosted')).toBe(keys.indexOf('stagingroles') + 1);
+    const call = h.stub.calls.find((c) => c.key === 'cataloghosted');
+    expect(call.line).toBe(`node ${CATALOG_HOSTED_TEST_ARGS.join(' ')}`);
+    expect(CATALOG_HOSTED_TEST_ARGS).toEqual(['scripts/test-catalog-hosted-local.mjs']);
+    expect(call.opts.cwd).toBe(h.root);
+  });
+
+  it('fails the run when it fails, printing only its own stdout lines', async () => {
+    const h = harness({
+      responses: {
+        cataloghosted: {
+          status: 1,
+          stdout:
+            'test-catalog-hosted-local: hosted_clean FAILED (hosted_clean:mt9_clean)\nnoise\n',
+          stderr: fakeDbUrl(),
+        },
+      },
+    });
+    expect(await h.go()).toBe(1);
+    expect(h.out.all()).toMatch(/test-catalog-hosted-local: hosted_clean FAILED/);
+    expect(h.out.all()).toMatch(/revision 4m/);
+    expect(h.out.all()).not.toContain('noise');
+    expect(h.out.all()).not.toContain('postgresql://');
+  });
+});
+
+describe('d1 chat e SR-E-5: the staging login-role SQL runs on the local stack after the concurrency test', () => {
+  it('runs node scripts/test-staging-roles-local.mjs from the root after the concurrency test', async () => {
+    const h = harness();
+    expect(await h.go()).toBe(0);
+    const call = h.stub.calls.find((c) => c.key === 'stagingroles');
+    expect(call.line).toBe(`node ${STAGING_ROLES_TEST_ARGS.join(' ')}`);
+    expect(STAGING_ROLES_TEST_ARGS).toEqual(['scripts/test-staging-roles-local.mjs']);
+    expect(call.opts.cwd).toBe(h.root);
+  });
+
+  it('fails the run when it fails, printing only its own stdout lines', async () => {
+    const h = harness({
+      responses: {
+        stagingroles: {
+          status: 1,
+          stdout: 'test-staging-roles-local: TR002 guard: FAILED\nnoise\n',
+          stderr: fakeDbUrl(),
+        },
+      },
+    });
+    expect(await h.go()).toBe(1);
+    expect(h.out.all()).toMatch(/test-staging-roles-local: TR002 guard: FAILED/);
+    expect(h.out.all()).toMatch(/SR-E-5/);
+    expect(h.out.all()).not.toContain('noise');
+    expect(h.out.all()).not.toContain('postgresql://');
+  });
+});
+
+describe('d1 AT-D16: the jobs real-database tests run after the concurrency test', () => {
+  it('runs the @trace/jobs db config from the root, after the concurrency test and before gen types', async () => {
+    const h = harness();
+    expect(await h.go()).toBe(0);
+    const jobs = h.stub.calls.find((c) => c.key === 'jobsdb');
+    expect(jobs.line).toBe(`pnpm ${JOBS_DB_TEST_ARGS.join(' ')}`);
+    expect(JOBS_DB_TEST_ARGS).toEqual([
+      '--filter',
+      '@trace/jobs',
+      'exec',
+      'vitest',
+      'run',
+      '-c',
+      'vitest.db.config.ts',
+    ]);
+    expect(jobs.opts.cwd).toBe(h.root);
+  });
+
+  it('fails the run when they fail, printing only redacted summary lines', async () => {
+    const h = harness({
+      responses: {
+        jobsdb: {
+          status: 1,
+          stdout: ` FAIL  db-test/stages.db.test.ts\n      Tests  1 failed | 36 passed (37)\n${fakeDbUrl()}\nnoise\n`,
+          stderr: fakeDbUrl(),
+        },
+      },
+    });
+    expect(await h.go()).toBe(1);
+    expect(h.out.all()).toMatch(/the jobs real-database tests failed \(d1 AT-D16\)/);
+    expect(h.out.all()).toMatch(/Tests {2}1 failed/);
+    expect(h.out.all()).not.toContain('noise');
+    expect(h.out.all()).not.toContain('postgresql://');
+    expect(h.stub.keys()).toContain('gen');
+  });
+});
+
 describe('§8.3 steps 3–4: start and reset', () => {
   it('starts the stack without the services M0a does not need (auth stays on), then resets it', async () => {
     const h = harness();
@@ -559,6 +661,9 @@ describe('§8.3 steps 3–4: start and reset', () => {
       'test',
       'auth',
       'concurrency',
+      'stagingroles',
+      'cataloghosted',
+      'jobsdb',
       'gen',
     ]);
     const [, start, reset] = h.stub.calls;
@@ -870,7 +975,7 @@ describe('§8.3 step 6: db-types drift', () => {
       '--schema',
       'public',
     ]);
-    expect(h.stub.calls[6].line).toBe(`pnpm ${GEN_TYPES_ARGS.join(' ')}`);
+    expect(h.stub.calls[9].line).toBe(`pnpm ${GEN_TYPES_ARGS.join(' ')}`);
     expect(DB_TYPES_FILE).toBe('packages/db-types/src/database.ts');
   });
 
@@ -944,6 +1049,9 @@ describe('§8.3 step 6: db-types drift', () => {
       'test',
       'auth',
       'concurrency',
+      'stagingroles',
+      'cataloghosted',
+      'jobsdb',
       'gen',
     ]);
     expect(h.out.all()).toMatch(/supabase test db exited 1/);
@@ -971,10 +1079,13 @@ describe('--stop (CI)', () => {
       'test',
       'auth',
       'concurrency',
+      'stagingroles',
+      'cataloghosted',
+      'jobsdb',
       'gen',
       'stop',
     ]);
-    expect(h.stub.calls[7].line).toBe(`pnpm ${STOP_ARGS.join(' ')}`);
+    expect(h.stub.calls[10].line).toBe(`pnpm ${STOP_ARGS.join(' ')}`);
     expect(heldDuringStop).toBe(true);
     expect(existsSync(h.lockFile)).toBe(false);
   });
@@ -1041,6 +1152,27 @@ describe('CLI and helpers', () => {
     expect(r.stdout.toString()).toBe('out\n');
     expect(r.stderr.toString()).toBe('err\n');
     expect(r.error).toBe(null);
+  });
+
+  it('spawnRun() merges an `env` option over the parent environment', async () => {
+    const name = `TRACE_SPAWN_TEST_${HEX().toUpperCase()}`;
+    const r = await spawnRun(
+      process.execPath,
+      [
+        '-e',
+        `process.stdout.write(JSON.stringify([process.env[${JSON.stringify(name)}] ?? null, typeof process.env.PATH === 'string' || typeof process.env.Path === 'string']))`,
+      ],
+      { env: { [name]: 'merged' } },
+    );
+    expect(r.status).toBe(0);
+    // The extra name arrives, and the parent's variables (PATH) are still there.
+    expect(JSON.parse(r.stdout.toString())).toEqual(['merged', true]);
+    // Without the option the child sees only the parent's environment.
+    const plain = await spawnRun(process.execPath, [
+      '-e',
+      `process.stdout.write(String(process.env[${JSON.stringify(name)}] ?? 'unset'))`,
+    ]);
+    expect(plain.stdout.toString()).toBe('unset');
   });
 
   it('spawnRun() reports a missing program as an error instead of throwing', async () => {

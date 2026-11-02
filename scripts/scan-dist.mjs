@@ -331,15 +331,15 @@ export function stdinPieces(buf) {
 const BLANK_LINE = Buffer.from('\n\n');
 
 /**
- * A piece with every blank line inside it broken by a `.` (`\n` + spaces/tabs/CRs + `\n` becomes
+ * A file with every blank line in it broken by a `.` (`\n` + spaces/tabs/CRs + `\n` becomes
  * `\n.` + …), so the separators are the only blank lines in the stream: gitleaks also cuts at a
  * blank line inside a piece, which split a key containing one, such as a PGP armour header or an
  * encrypted PEM's DEK-Info line (N10-N13 security re-review P1).
  */
-function withoutBlankLines(piece) {
-  const s = piece.toString('latin1');
+function withoutBlankLines(buf) {
+  const s = buf.toString('latin1');
   const t = s.replace(/\n(?=[\t\r ]*\n)/g, '\n.');
-  return t === s ? piece : Buffer.from(t, 'latin1');
+  return t === s ? buf : Buffer.from(t, 'latin1');
 }
 
 /**
@@ -362,11 +362,12 @@ export function distText(root, rel) {
       else if (e.isFile()) {
         const buf = readFileSync(childAbs);
         // The file's bytes, then the ASCII text of any UTF-16/UTF-32 in it (N13).
-        for (const b of [buf, wideText(buf)]) {
-          if (b === null) continue;
-          for (const [s, t] of stdinPieces(b)) {
-            parts.push(withoutBlankLines(b.subarray(s, t)), BLANK_LINE);
-          }
+        // Blank lines are broken before the file is cut, so the `.` they gain counts toward
+        // STDIN_PIECE_MAX (a piece sized first grew past it; CI on e277791).
+        for (const raw of [buf, wideText(buf)]) {
+          if (raw === null) continue;
+          const b = withoutBlankLines(raw);
+          for (const [s, t] of stdinPieces(b)) parts.push(b.subarray(s, t), BLANK_LINE);
         }
       }
     }

@@ -50,14 +50,27 @@ export function genericApiKeyStopwords(root = REPO_ROOT) {
   return [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1].toLowerCase());
 }
 
-/** `n` random alphanumerics that contain none of `words` (case-insensitive) after `prefix`. */
-const randomAlnumAvoiding = (prefix, n, words) => {
+/**
+ * Whether generic-api-key keeps `secret` as a finding: it holds a digit (the rule's own allowlist
+ * `^[a-zA-Z_.-]+$` drops a secret made only of letters, `_`, `.` and `-`) and none of the rule's
+ * stopwords (case-insensitive).
+ */
+export const genericKeyKeeps = (secret, words = genericApiKeyStopwords()) => {
+  const lower = secret.toLowerCase();
+  return /[0-9]/.test(secret) && !words.some((w) => lower.includes(w));
+};
+
+/** Calls `make` until generic-api-key would keep the value it returns. */
+export const keptSecret = (make, words = genericApiKeyStopwords()) => {
   for (;;) {
-    const s = `${prefix}${randomAlnum(n)}`;
-    const lower = s.toLowerCase();
-    if (!words.some((w) => lower.includes(w))) return s;
+    const s = make();
+    if (genericKeyKeeps(s, words)) return s;
   }
 };
+
+/** `prefix` and `n` random alphanumerics, as a value generic-api-key keeps. */
+const randomAlnumAvoiding = (prefix, n, words) =>
+  keptSecret(() => `${prefix}${randomAlnum(n)}`, words);
 
 /**
  * Secrets that gitleaks' default global allowlist regex `(?i)^true|false|null$` hid before the vendored

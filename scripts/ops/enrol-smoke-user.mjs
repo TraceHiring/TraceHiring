@@ -3,8 +3,9 @@
 //   SMOKE_PASSWORD=... node scripts/ops/enrol-smoke-user.mjs --env local --email <e>
 //   SMOKE_PASSWORD=... SUPABASE_STAGING_URL=... SUPABASE_STAGING_PUBLISHABLE_KEY=... \
 //     TRACE_OPERATOR_DB_URL=... node scripts/ops/enrol-smoke-user.mjs --env staging \
-//       --email <smoke> --owner-email <owner>
+//       --email <smoke> --owner-email <owner> [--roles recruiter|reviewer]
 // Arguments are validated with EnrolSmokeUserArgs; the password comes only from SMOKE_PASSWORD.
+// `--roles` (staging only; default recruiter) is exactly one of ROLES.
 //   local:   creates one confirmed user through the local Auth admin endpoint with the local stack's
 //            demo key (read from `supabase status -o env` at run time, never written anywhere).
 //            Refused (exit 2, before any request) unless the Auth URL host is exactly 127.0.0.1.
@@ -13,6 +14,10 @@
 //            in as the smoke user over the public Auth API (publishable key), enrols and verifies
 //            TOTP, prints the TOTP secret (the only output, once), then creates the smoke-staging org
 //            owned by the owner and adds the smoke user as a recruiter. No service-role key.
+//            With `--roles reviewer` (d1 §11 founder gate, the D1 reviewer smoke user): the org must
+//            already exist (the recruiter run made it). It resolves the smoke-staging org the owner
+//            owns before anything changes, enrols TOTP the same way, prints the secret, and adds the
+//            user to that org as a reviewer only; it never creates an org.
 // Failures print a fixed message and an HTTP status or SQLSTATE; no response body, URL or value.
 import { EnrolSmokeUserArgs, Password } from '../../packages/shared/src/contracts-tenancy.ts';
 import { isEntryPoint } from '../lib/cli.mjs';
@@ -27,6 +32,7 @@ import {
   lookupUserId,
   parseFlags,
   realDeps,
+  runSql,
   validate,
 } from './lib.mjs';
 
@@ -35,7 +41,13 @@ const OPTIONS = {
   env: { type: 'string' },
   email: { type: 'string' },
   'owner-email': { type: 'string' },
+  roles: { type: 'string' },
 };
+/** The one role each smoke user gets, and its membership display name (least privilege, m0b R4). */
+export const ROLES = Object.freeze({ recruiter: 'Smoke recruiter', reviewer: 'Smoke reviewer' });
+const SMOKE_ORG_SLUG = 'smoke-staging';
+// The smoke org the owner owns (an active org_owner membership); values only as psql -v variables.
+const LOOKUP_SMOKE_ORG_SQL = `select o.id from public.orgs o join public.memberships m on m.org_id = o.id where o.slug = :'p_slug' and m.user_id = :'p_owner'::uuid and m.status = 'active' and 'org_owner' = any(m.roles);\n`;
 const BASE32 = /^[A-Z2-7]{16,128}$/;
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -119,7 +131,7 @@ async function enrolLocal({ args, password, deps }) {
   return 0;
 }
 
-async function enrolStaging({ args, password, deps }) {
+async function enrolStaging({ args, password, role, deps }) {
   const env = deps.env;
   const missing = [
     'SUPABASE_STAGING_URL',
@@ -152,6 +164,30 @@ async function enrolStaging({ args, password, deps }) {
   if (!owner.ok) {
     line(deps.stderr, `${TAG}: looking up the owner: ${describeFailure(owner)}`);
     return 1;
+  }
+  // A reviewer joins the existing smoke org: find it now, so a missing org changes nothing.
+  let existingOrgId = null;
+  if (role === 'reviewer') {
+    const r = runSql(
+      {
+        url: dbUrl,
+        sql: LOOKUP_SMOKE_ORG_SQL,
+        vars: { p_slug: SMOKE_ORG_SLUG, p_owner: owner.id },
+      },
+      deps,
+    );
+    if (!r.ok) {
+      line(deps.stderr, `${TAG}: looking up the ${SMOKE_ORG_SLUG} org: ${describeFailure(r)}`);
+      return 1;
+    }
+    if (!isUuid(r.out)) {
+      line(
+        deps.stderr,
+        `${TAG}: the owner has no ${SMOKE_ORG_SLUG} org; enrol the recruiter smoke user first (the same command without --roles)`,
+      );
+      return 1;
+    }
+    existingOrgId = r.out.toLowerCase();
   }
 
   // 2. Sign in as the smoke user, enrol a TOTP factor, verify it.
@@ -202,29 +238,32 @@ async function enrolStaging({ args, password, deps }) {
   // 3. The secret is printed now, once: a database failure below must not lose it.
   line(deps.stdout, secret);
 
-  const requestId = deps.randomUUID();
-  const org = createOrg(
-    {
-      name: 'Smoke staging',
-      slug: 'smoke-staging',
-      kind: 'customer',
-      ownerUserId: owner.id,
-      displayName: 'Smoke owner',
-      requestId,
-    },
-    dbUrl,
-    deps,
-  );
-  if (!org.ok) {
-    line(deps.stderr, `${TAG}: create-org: ${describeFailure(org)}`);
-    return 1;
+  let orgId = existingOrgId;
+  if (orgId === null) {
+    const org = createOrg(
+      {
+        name: 'Smoke staging',
+        slug: SMOKE_ORG_SLUG,
+        kind: 'customer',
+        ownerUserId: owner.id,
+        displayName: 'Smoke owner',
+        requestId: deps.randomUUID(),
+      },
+      dbUrl,
+      deps,
+    );
+    if (!org.ok) {
+      line(deps.stderr, `${TAG}: create-org: ${describeFailure(org)}`);
+      return 1;
+    }
+    orgId = org.id;
   }
   const member = addMember(
     {
-      orgId: org.id,
+      orgId,
       userId: smoke.id,
-      roles: ['recruiter'],
-      displayName: 'Smoke recruiter',
+      roles: [role],
+      displayName: ROLES[role],
       requestId: deps.randomUUID(),
     },
     dbUrl,
@@ -246,6 +285,19 @@ export async function main({ argv, deps = realDeps() }) {
     line(deps.stderr, `${TAG}: unknown or malformed argument`);
     return 2;
   }
+  // --roles is not part of EnrolSmokeUserArgs (m0b §4.5): it is checked here, staging only, and is
+  // exactly one listed role (never an owner or admin role).
+  if (flags.roles !== undefined) {
+    if (flags.env !== 'staging') {
+      line(deps.stderr, `${TAG}: --roles applies to --env staging only`);
+      return 2;
+    }
+    if (!Object.hasOwn(ROLES, flags.roles)) {
+      line(deps.stderr, `${TAG}: --roles must be one of: ${Object.keys(ROLES).join(', ')}`);
+      return 2;
+    }
+  }
+  const role = flags.roles ?? 'recruiter';
   const input = { env: flags.env, email: flags.email };
   if (flags['owner-email'] !== undefined) input.ownerEmail = flags['owner-email'];
   const parsed = validate(EnrolSmokeUserArgs, input);
@@ -261,7 +313,7 @@ export async function main({ argv, deps = realDeps() }) {
   const args = parsed.data;
   return args.env === 'local'
     ? enrolLocal({ args, password, deps })
-    : enrolStaging({ args, password, deps });
+    : enrolStaging({ args, password, role, deps });
 }
 
 if (isEntryPoint(import.meta.url)) {

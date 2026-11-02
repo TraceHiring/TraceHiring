@@ -2,11 +2,11 @@
 -- table appears. Inside this rolled-back transaction a throwaway table, sequence and function is created as
 -- postgres in each of the four in-scope schemas. Each assertion also reports any probe object that is missing,
 -- so it can never pass vacuously. Hand-written; not generated.
--- Assertions 5 to 12 are MT-11 controls (W3b database review finding 7, catalog pass C review E2, M0b review
--- M0B-DB-2 and its re-review), 13 to 15 prove, one dynamic-SQL shape at a time, what MT-5b counts as naming a
--- schema, and 16 proves what MT-7 counts as changing the search path (catalog pass C review E1). See below.
+-- Assertions 5 to 14 are MT-11 controls (W3b database review finding 7, catalog pass C review E2, M0b review
+-- M0B-DB-2 and its re-review, D1 helpers), 15 to 17 prove, one dynamic-SQL shape at a time, what MT-5b counts as
+-- naming a schema, and 18 proves what MT-7 counts as changing the search path (catalog pass C review E1). See below.
 begin;
-select plan(16);
+select plan(18);
 
 create table public.mt_4b_t (id int);
 create table private.mt_4b_t (id int);
@@ -188,6 +188,25 @@ create policy mt_11_note_scoped_live on public.mt_11_note
 for delete
 to authenticated
 using (deleted_at is null and org_id = any((select private.my_org_ids('{admin}'::public.org_role[]))::uuid[]));
+-- D1 (spec specs/d1-demo-slice.md §3.5): job_org_id, api_org_id and my_assigned_test_ids are caller helpers, so a
+-- policy that binds one of them to a column is compliant; one that only tests a helper for null is not.
+create policy mt_11_note_job_org on public.mt_11_note
+for select
+to trace_worker
+using (org_id = (select private.job_org_id()));
+create policy mt_11_note_api_org on public.mt_11_note
+for select
+to trace_api
+using (org_id = (select private.api_org_id()));
+create policy mt_11_note_assigned on public.mt_11_note
+for select
+to authenticated
+using (owner_id = any((select private.my_assigned_test_ids('{reviewer}'::public.org_role[]))::uuid[]));
+create policy mt_11_note_job_org_open on public.mt_11_note
+for update
+to trace_worker
+using ((select private.job_org_id()) is not null)
+with check ((select private.job_org_id()) is not null);
 create temp view mt_11_run as
 -- MT-11 copy begin
 -- MT-11 (spec specs/m0-foundations.md §8.5, separate per-operation policies, CLAUDE.md): a policy on an in-scope
@@ -306,14 +325,20 @@ auth_function as (
 -- helper_function: the functions in schemas private and auth, joined by schema name ('private'::regnamespace
 -- would raise an error if the schema were missing). caller marks the allow-list of helpers whose result depends
 -- on who is asking (M0b review M0B-DB-2): auth.uid, auth.jwt, private.my_org_ids, private.my_workspace_ids,
--- private.caller_roles and private.is_operator (FIX re-review). Any other function there, such as auth.role or the
+-- private.caller_roles, private.is_operator (FIX re-review) and, from D1, private.job_org_id, private.api_org_id
+-- (per-transaction job/api org context) and private.my_assigned_test_ids. Any other function there, such as auth.role or the
 -- immutable private.valid_roles, is not a caller check. A new caller-dependent helper must be added here.
 helper_function (oid, nspname, caller, returns_bool) as (
   select
     p.oid,
     n.nspname::text,
     (n.nspname = 'auth' and p.proname in ('uid', 'jwt'))
-    or (n.nspname = 'private' and p.proname in ('my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator')),
+    or (
+      n.nspname = 'private'
+      and p.proname in (
+        'my_org_ids', 'my_workspace_ids', 'caller_roles', 'is_operator', 'job_org_id', 'api_org_id', 'my_assigned_test_ids'
+      )
+    ),
     p.prorettype = 'bool'::regtype
   from pg_proc as p
   join pg_namespace as n on n.oid = p.pronamespace
@@ -774,6 +799,26 @@ select is_empty(
     )
   $q$,
   'MT-11: no row for a caller call bound through EXISTS, IN, IS NOT DISTINCT FROM or a row compare (FR-1 controls)'
+);
+select is_empty(
+  $q$
+  select v.branch, v.object, v.detail
+  from mt_11_run as v
+  where v.object in (
+      'mt_11_note_job_org on public.mt_11_note',
+      'mt_11_note_api_org on public.mt_11_note',
+      'mt_11_note_assigned on public.mt_11_note'
+    )
+  $q$,
+  'MT-11: no row for a policy binding job_org_id, api_org_id or my_assigned_test_ids to a column (D1 controls)'
+);
+select isnt_empty(
+  $q$
+  select 1
+  from mt_11_run as v
+  where v.object = 'mt_11_note_job_org_open on public.mt_11_note'
+  $q$,
+  'MT-11: a worker policy that only checks job_org_id() for null still hits (D1 positive control)'
 );
 rollback to savepoint mt_11_negative;
 
@@ -1317,23 +1362,26 @@ supabase_owner as (
   )
     and not pg_has_role('postgres', r.oid, 'MEMBER')
 ),
-supabase_object (kind, schema_name, object_name, owner_name) as (
+supabase_object (kind, schema_name, object_name, relkind, owner_name) as (
   -- Supabase's own non-member objects whose owner postgres is or can become (postgres itself, and
   -- supabase_functions_admin, of which postgres is a member), from the day-one check on the local stack
-  -- (2026-10-11). A relation by relname (indexes and sequences too), a function by name and identity arguments.
+  -- (2026-10-11), plus the Supabase CLI's idempotency index seen on hosted Supabase (staging, 2026-10-20). A relation
+  -- by relname and relkind (indexes and sequences too, so a table cannot take an index name), a function by name and
+  -- identity arguments (relkind '').
   values
-    ('relation'::text, 'supabase_migrations'::name, 'schema_migrations'::text, 'postgres'::name),
-    ('relation', 'supabase_migrations', 'schema_migrations_pkey', 'postgres'),
-    ('relation', 'supabase_migrations', 'seed_files', 'postgres'),
-    ('relation', 'supabase_migrations', 'seed_files_pkey', 'postgres'),
-    ('relation', 'supabase_functions', 'hooks', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'hooks_pkey', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'hooks_id_seq', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'supabase_functions_hooks_h_table_id_h_name_idx', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'supabase_functions_hooks_request_id_idx', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'migrations', 'supabase_functions_admin'),
-    ('relation', 'supabase_functions', 'migrations_pkey', 'supabase_functions_admin'),
-    ('function', 'supabase_functions', 'http_request()', 'supabase_functions_admin')
+    ('relation'::text, 'supabase_migrations'::name, 'schema_migrations'::text, 'r'::text, 'postgres'::name),
+    ('relation', 'supabase_migrations', 'schema_migrations_pkey', 'i', 'postgres'),
+    ('relation', 'supabase_migrations', 'schema_migrations_idempotency_key_key', 'i', 'postgres'),
+    ('relation', 'supabase_migrations', 'seed_files', 'r', 'postgres'),
+    ('relation', 'supabase_migrations', 'seed_files_pkey', 'i', 'postgres'),
+    ('relation', 'supabase_functions', 'hooks', 'r', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'hooks_pkey', 'i', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'hooks_id_seq', 'S', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'supabase_functions_hooks_h_table_id_h_name_idx', 'i', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'supabase_functions_hooks_request_id_idx', 'i', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'migrations', 'r', 'supabase_functions_admin'),
+    ('relation', 'supabase_functions', 'migrations_pkey', 'i', 'supabase_functions_admin'),
+    ('function', 'supabase_functions', 'http_request()', '', 'supabase_functions_admin')
 ),
 outside_definer as (
   select

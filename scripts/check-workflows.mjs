@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // GitHub Actions hardening checks (spec specs/m0-foundations.md §7.1, §7.2, AT-12 local part).
 // Reads .github/workflows/*.y{a,}ml and .github/actions/**/action.y{a,}ml and fails (exit 1) unless:
-//   - triggers are only pull_request and push (§7.1); pull_request_target / workflow_run are named
+//   - triggers are only pull_request, push and workflow_dispatch (§7.1; d1 §7.1: a manual staging
+//     deploy from d1/** and milestone/** proves staging before main moves); pull_request_target /
+//     workflow_run are named
 //   - workflow-level permissions are exactly `contents: read`; no job asks for more
 //   - every remote `uses:` is pinned to a full 40-hex commit SHA (docker:// images to a sha256 digest);
 //     local `./` actions (also those used by another local action) must exist under
@@ -9,7 +11,7 @@
 //   - every actions/checkout step sets `persist-credentials: false` (and, in a required job, no
 //     `ref:` or `repository:`, so the check tests the commit under review); static, security and
 //     migrations check out with `fetch-depth: 0`; static sets MIGRATIONS_BASE=origin/main (§8.4)
-//   - only deploy-staging names an environment (environments hold the staging secrets)
+//   - only deploy-staging and e2e-staging name an environment (environments hold the staging secrets)
 //   - github.token (and the whole github context) counts as a secret (GITHUB_TOKEN); contexts
 //     match case-insensitively, as GitHub evaluates them
 //   - no job or step sets continue-on-error; the required jobs exist, have no `if:` on the job or
@@ -18,9 +20,25 @@
 //   - no bare CR, U+0085, U+2028 or U+2029 line break anywhere in the file
 //   - every env: (workflow, job, step, composite-action step) is a mapping whose keys are all on
 //     ENV_ALLOW_LIST; a whole-env expression or any other name fails (fail closed)
-//   - secrets appear only in step-level env:/with: of deploy-staging, never on or before an
-//     install/build step, and each staging secret only on the steps that use it (§7.2, §7.3)
+//   - secrets appear only in step-level env:/with: of deploy-staging and e2e-staging, never on or
+//     before an install/build step, and each staging secret only on the steps that use it (§7.2,
+//     §7.3); e2e-staging holds only the six E2E credentials, on its pinned Playwright step only
+//   - e2e-staging (when present; d1 §7.1, AT-D1) has the exact needs / if / environment /
+//     permissions and step list of E2E_STAGING_*: the preflight with the public contract only, the
+//     Playwright step, then an always() upload of e2e/test-results without any .zip (7 days)
 //   - deploy-staging (when present) has the exact needs / if / environment / concurrency of §7.2
+//     (the if: admits a push on main, or a workflow_dispatch on d1/** or milestone/**, never a PR)
+//   - deploy-staging's D1 chain (specs/d1-demo-slice.md §7.1, docs/reviews/D1-security-review-bindings.md
+//     F4/F5): check-deploy-vars, then migrations, then ensure-staging-resources, then exactly three
+//     `wrangler deploy --env staging` steps in the order services/api, workers/jobs, workers/edge
+//     with the exact `--var NAME:$SOURCE` set per Worker, public values only from `vars.*`, then
+//     check-staging-secrets; no wrangler delete anywhere in the job
+//   - the scanned bundle is what ships (m0-foundations §7.2 step 5, S3B-1): every dry-run line is
+//     exactly WORKER_BUILD_CMD and runs before scan-dist, scan-dist runs before the first Worker
+//     deploy, every other line naming wrangler and deploy (any form, D1 security review S2) is
+//     exactly WORKER_DEPLOY_CMD plus `--var`s (one per step) unless it is a plain
+//     `wrangler pages deploy`, each Worker deploy step's whole run text is pinned (no cd, pushd,
+//     --cwd, -c/--config, dlx or npx), and `wrangler versions` (an upload re-bundles) never runs
 // No YAML library is a root dependency, so this file carries a small parser for the YAML subset
 // workflows use (block mappings and sequences, plain/quoted/block scalars, flow collections).
 // Anything outside that subset (anchors, aliases, tags, merge keys, multiple documents) is an
@@ -28,6 +46,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { REQUIRED_VARS } from './check-deploy-vars.mjs';
 
 // ===================== YAML subset parser =====================
 
@@ -528,13 +547,107 @@ export function parseYaml(text) {
 
 export const REQUIRED_JOBS = ['static', 'rls', 'security', 'migrations'];
 export const DEPLOY_JOB = 'deploy-staging';
+// d1 §7.1 (D1-16): main deploys stay push-only; a manual dispatch may deploy from d1/** and
+// milestone/** (staging proof before merge, build-notes §0 founder-queue walkthrough 2026-10-15).
+// A pull_request run matches neither branch of the expression.
 export const DEPLOY_IF =
-  "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'TraceHiring/TraceHiring'";
+  "(github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/'))) && github.repository == 'TraceHiring/TraceHiring'";
 export const DEPLOY_ENVIRONMENT = 'staging';
 export const DEPLOY_CONCURRENCY = 'deploy-staging';
+/**
+ * DC-D9 and the Linux half of DC-D6 (specs/d1-demo-slice.md §7.1, §8): the local E2E stack
+ * (scripts/e2e-local.mjs) runs in its own job on a manual dispatch with run_e2e, or on a pull
+ * request from a d1/** branch (the draft PR from d1/integration), never on every PR, to spare the
+ * free CI minutes. It holds no secret and no environment (the general rules), and its artifact is
+ * only the Playwright report and test results (synthetic data), kept at most 7 days.
+ */
+export const E2E_JOB = 'e2e-local';
+export const E2E_IF =
+  "github.event_name == 'workflow_dispatch' && inputs.run_e2e || github.event_name == 'pull_request' && startsWith(github.head_ref, 'd1/') && github.event.pull_request.head.repo.full_name == github.repository";
+export const E2E_MAX_MINUTES = 25;
+export const E2E_RUNNER = 'ubuntu-24.04';
+export const E2E_ARTIFACT_PATHS = Object.freeze(['e2e/playwright-report', 'e2e/test-results']);
+export const E2E_ARTIFACT_MAX_DAYS = 7;
+const E2E_RUN = /^\s*node scripts\/e2e-local\.mjs --ci\s*$/;
+
+/**
+ * d1 §7.1, AT-D1, AT-D20 (stream R5): the slice spec against staging. It runs after deploy-staging,
+ * only on a manual dispatch from d1/** or milestone/** in this repository with run_e2e (the dispatch
+ * half of DEPLOY_IF: never a push, never a pull request), in the staging environment, which holds
+ * the E2E credentials. Its steps are pinned: checkout, setup, the Chromium cache and install, the
+ * preflight (the public contract only, no secret), the Playwright step (the only one holding the six
+ * credentials) and the upload of e2e/test-results without any .zip (a trace under any name,
+ * SEC-W6-4), kept at most 7 days.
+ */
+export const E2E_STAGING_JOB = 'e2e-staging';
+export const E2E_STAGING_IF =
+  "github.event_name == 'workflow_dispatch' && inputs.run_e2e && (startsWith(github.ref, 'refs/heads/d1/') || startsWith(github.ref, 'refs/heads/milestone/')) && github.repository == 'TraceHiring/TraceHiring'";
+export const E2E_STAGING_MAX_MINUTES = 25;
+export const E2E_STAGING_PREFLIGHT_CMD = 'pnpm e2e:staging:preflight';
+export const E2E_STAGING_RUN_CMD =
+  'pnpm --filter @trace/e2e exec playwright test tests/d1-slice.spec.ts --project staging';
+/** Spec review SR-W6-1: the slice's step timeouts sum to at most 20 minutes (W5); 22 fits in 25. */
+export const E2E_STAGING_RUN_MINUTES = 22;
+const E2E_STAGING_RUN_RE =
+  /^\s*pnpm --filter @trace\/e2e exec playwright test tests\/d1-slice\.spec\.ts --project staging\s*$/;
+const E2E_CHROMIUM_CMD = 'pnpm --filter @trace/e2e exec playwright install --with-deps chromium';
+/**
+ * Security review SEC-W6-3: e2e-staging's one actions/cache step restores exactly e2e-local's
+ * Playwright browser cache: this path, this lockfile-hash key, nothing else (no restore-keys).
+ */
+export const E2E_BROWSER_CACHE = Object.freeze({
+  path: '~/.cache/ms-playwright',
+  key: "playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}",
+});
+/** Upload paths, in order: the results folder, minus any Playwright trace (d1 bindings review F8). */
+export const E2E_STAGING_ARTIFACT_PATHS = Object.freeze([
+  'e2e/test-results',
+  '!e2e/test-results/**/*.zip',
+]);
+/**
+ * The public half of the E2E env contract (the four staging origins as literals, H4 label
+ * `abhayraj`, like VITE_EDGE_ORIGIN; the Supabase pair from the public staging variables; the
+ * deployed commit). The preflight step gets exactly this.
+ */
+export const E2E_STAGING_PREFLIGHT_ENV = Object.freeze({
+  E2E_CANDIDATE_URL: 'https://trace-candidate-staging.pages.dev',
+  E2E_RECRUITER_URL: 'https://trace-recruiter-staging.pages.dev',
+  E2E_API_URL: 'https://trace-api-staging.abhayraj.workers.dev',
+  E2E_EDGE_URL: 'https://trace-edge-staging.abhayraj.workers.dev',
+  E2E_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
+  E2E_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+  E2E_SHA: '${{ github.sha }}',
+});
+/** The Playwright step's env: the staging flag, the public contract and the six credentials. */
+export const E2E_STAGING_PLAYWRIGHT_ENV = Object.freeze({
+  E2E_STAGING: '1',
+  ...E2E_STAGING_PREFLIGHT_ENV,
+  // The H9 recruiter smoke user (m0b AT-B9) and the D1 reviewer smoke user (FOUNDER-QUEUE "D1: a
+  // staging reviewer smoke user with TOTP"; scripts/ops/enrol-smoke-user.mjs --roles reviewer).
+  E2E_RECRUITER_EMAIL: '${{ secrets.STAGING_SMOKE_EMAIL }}',
+  E2E_RECRUITER_PASSWORD: '${{ secrets.STAGING_SMOKE_PASSWORD }}',
+  E2E_RECRUITER_TOTP_SECRET: '${{ secrets.STAGING_SMOKE_TOTP_SECRET }}',
+  E2E_REVIEWER_EMAIL: '${{ secrets.STAGING_REVIEWER_EMAIL }}',
+  E2E_REVIEWER_PASSWORD: '${{ secrets.STAGING_REVIEWER_PASSWORD }}',
+  E2E_REVIEWER_TOTP_SECRET: '${{ secrets.STAGING_REVIEWER_TOTP_SECRET }}',
+});
+/** Names that may be set only in the env: of the e2e-staging preflight and Playwright steps. */
+export const E2E_STAGING_ONLY_ENV = Object.freeze(Object.keys(E2E_STAGING_PLAYWRIGHT_ENV));
+/**
+ * The secrets e2e-staging may hold and the command a step must run to hold one: the Playwright step
+ * only, whose whole run text is that one command (no other line, flag or comment can read them).
+ */
+export const E2E_STAGING_SECRET_USERS = Object.freeze({
+  STAGING_SMOKE_EMAIL: [E2E_STAGING_RUN_RE],
+  STAGING_SMOKE_PASSWORD: [E2E_STAGING_RUN_RE],
+  STAGING_SMOKE_TOTP_SECRET: [E2E_STAGING_RUN_RE],
+  STAGING_REVIEWER_EMAIL: [E2E_STAGING_RUN_RE],
+  STAGING_REVIEWER_PASSWORD: [E2E_STAGING_RUN_RE],
+  STAGING_REVIEWER_TOTP_SECRET: [E2E_STAGING_RUN_RE],
+});
 export const WORKFLOW_PERMISSIONS = { contents: 'read' };
 export const FORBIDDEN_TRIGGERS = ['pull_request_target', 'workflow_run'];
-export const ALLOWED_TRIGGERS = ['pull_request', 'push'];
+export const ALLOWED_TRIGGERS = ['pull_request', 'push', 'workflow_dispatch'];
 /** Jobs whose checkout needs the full history (§7.1: static and security; §7.1 table: migrations). */
 export const FULL_HISTORY_JOBS = ['static', 'security', 'migrations'];
 export const MIGRATIONS_BASE = 'origin/main';
@@ -542,16 +655,31 @@ export const MIGRATIONS_BASE = 'origin/main';
 /** The org sign-in smoke step's entire run text (m0b AT-B9). */
 const SMOKE_AUTH_RUN = /^\s*node scripts\/smoke-staging-auth\.mjs\s*$/;
 
+// d1 §7.1: the two scripts of the deploy chain. Each step's whole run text is that one command, so
+// no extra line, flag or comment can reach the Cloudflare token or skip the guard.
+const GUARD_RUN = /^\s*node scripts\/check-deploy-vars\.mjs\s*$/;
+const RESOURCES_RUN = /^\s*node scripts\/ensure-staging-resources\.mjs\s*$/;
+
 /** §7.3 staging secrets and the commands a step must run to be allowed to hold each one (§7.2). */
 export const STAGING_SECRET_USERS = {
   SUPABASE_STAGING_DB_URL: [/\bsupabase\s+db\s+push\b/, /\bpsql\b/],
-  CLOUDFLARE_API_TOKEN: [/\bwrangler\b/, /\bcheck-staging-secrets\b/],
+  // wrangler (deploy, pages), check-staging-secrets, and d1 §7.1's bucket and queue creation.
+  CLOUDFLARE_API_TOKEN: [/\bwrangler\b/, /\bcheck-staging-secrets\b/, RESOURCES_RUN],
   // specs/m0b-tenancy.md AT-B9, AT-B10 [R5]: the org sign-in smoke step only, whose whole run text
   // is that one command (no other line, comment or argument can read the secrets; B4-SEC-2).
   STAGING_SMOKE_EMAIL: [SMOKE_AUTH_RUN],
   STAGING_SMOKE_PASSWORD: [SMOKE_AUTH_RUN],
   STAGING_SMOKE_TOTP_SECRET: [SMOKE_AUTH_RUN],
 };
+
+/** The jobs that may hold secrets, each with its own list (a secret on no list, or off it, fails). */
+const SECRET_USERS_BY_JOB = Object.freeze({
+  [DEPLOY_JOB]: { list: '§7.3 staging', users: STAGING_SECRET_USERS },
+  [E2E_STAGING_JOB]: {
+    list: `${E2E_STAGING_JOB} (Playwright step only)`,
+    users: E2E_STAGING_SECRET_USERS,
+  },
+});
 
 /**
  * Build variables the recruiter bundle reads (specs/m0b-tenancy.md §2.7): set only on the
@@ -561,7 +689,82 @@ export const STAGING_SECRET_USERS = {
 export const BUILD_ONLY_ENV = Object.freeze({
   VITE_SUPABASE_URL: '${{ vars.SUPABASE_STAGING_URL }}',
   VITE_SUPABASE_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+  // d1 AT-D22 (m0-foundations §7.3): the recruiter's Sentry DSN, a public value (H6).
+  VITE_SENTRY_DSN: '${{ vars.VITE_SENTRY_DSN }}',
+  // d1 §7.1 check-headers: the recruiter CSP's connect-src api origin
+  // (https://trace-api-staging.<label>.workers.dev), a public value; unset drops the CSP token.
+  VITE_API_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
+  // d1 §6.1, AT-D18: only the staging recruiter build includes the demo outbox (mock Messaging); every other
+  // build is production-flavour and is checked by scripts/check-no-demo-outbox.mjs.
+  VITE_DEMO_OUTBOX: '1',
+  // d1 §4.7: the candidate app's edge origin, the same literal its public/_headers connect-src names
+  // (H4 label `abhayraj`, docs/infra/environments.md); a public value, so no variable is needed.
+  VITE_EDGE_ORIGIN: 'https://trace-edge-staging.abhayraj.workers.dev',
+  // d1 AT-D18 (SEC-W2-1): the recruiter registers the demo outbox only for VITE_DEMO_OUTBOX=1 with
+  // VITE_TRACE_ENV exactly dev or staging (an allow-list); the staging build says staging explicitly.
+  VITE_TRACE_ENV: 'staging',
 });
+
+/**
+ * Public values the deploy-staging steps read (d1 §7.1, review F4): wrangler.jsonc ships them as
+ * empty placeholders and `wrangler deploy` replaces dashboard vars, so the deploy passes them with
+ * `--var` from GitHub variables. Wherever one is set in a deploy-staging step's env:, it must be
+ * exactly its `vars.*` expression: never a secret (they are public) and never a literal.
+ */
+export const PUBLIC_DEPLOY_ENV = Object.freeze({
+  CANDIDATE_TOKEN_KID: '${{ vars.CANDIDATE_TOKEN_KID }}',
+  CANDIDATE_TOKEN_PUBLIC_JWK: '${{ vars.CANDIDATE_TOKEN_PUBLIC_JWK }}',
+  SENTRY_DSN_WORKERS: '${{ vars.SENTRY_DSN_WORKERS }}',
+  SUPABASE_STAGING_URL: '${{ vars.SUPABASE_STAGING_URL }}',
+  SUPABASE_STAGING_PUBLISHABLE_KEY: '${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}',
+  // Security review S8: check-deploy-vars pins it to the exact staging api origin.
+  API_STAGING_ORIGIN: '${{ vars.API_STAGING_ORIGIN }}',
+});
+
+/** What the guard step must see: exactly the variables scripts/check-deploy-vars.mjs requires. */
+export const DEPLOY_GUARD_ENV = REQUIRED_VARS;
+
+/**
+ * S3B-1 (m0-foundations §7.2 step 5): the no-secret build step writes each Worker's staging bundle
+ * into its dist/ with WORKER_BUILD_CMD, scan-dist scans it, and each Worker deploy uploads exactly
+ * that dist/index.js with WORKER_DEPLOY_CMD (plus its `--var`s), so the deployed bytes are the
+ * scanned bytes. wrangler --no-bundle still applies the env block's bindings, DO migrations, queue
+ * producers and consumers and crons: they come from the wrangler.jsonc env, not from the build.
+ */
+export const WORKER_BUILD_CMD = 'pnpm exec wrangler deploy --dry-run --env staging --outdir dist';
+export const WORKER_DEPLOY_CMD =
+  'pnpm exec wrangler deploy dist/index.js --no-bundle --env staging';
+const SCAN_RUN = /^\s*node scripts\/scan-dist\.mjs\s*$/;
+
+/**
+ * The three Worker deploys in the order spec §7.1 requires (edge's service binding targets api, so
+ * api first). `vars` maps each `--var NAME` to the shell variable that must feed it, exactly:
+ * `--var "NAME:$SOURCE"`. These are the wrangler.jsonc vars the deploy supplies (empty
+ * placeholders or "dev"): VERSION everywhere, the Sentry DSN to jobs and api only (never edge,
+ * m0-foundations §9.2), the candidate-token public values and the Supabase pair as the bindings
+ * table (d1 §4.2) assigns them. Changing the set is a spec change.
+ */
+export const WORKER_DEPLOYS = Object.freeze([
+  {
+    dir: 'services/api',
+    vars: {
+      VERSION: 'GITHUB_SHA',
+      SENTRY_DSN_WORKERS: 'SENTRY_DSN_WORKERS',
+      CANDIDATE_TOKEN_KID: 'CANDIDATE_TOKEN_KID',
+      CANDIDATE_TOKEN_PUBLIC_JWK: 'CANDIDATE_TOKEN_PUBLIC_JWK',
+      SUPABASE_URL: 'SUPABASE_STAGING_URL',
+      SUPABASE_PUBLISHABLE_KEY: 'SUPABASE_STAGING_PUBLISHABLE_KEY',
+    },
+  },
+  {
+    dir: 'workers/jobs',
+    vars: { VERSION: 'GITHUB_SHA', SENTRY_DSN_WORKERS: 'SENTRY_DSN_WORKERS' },
+  },
+  {
+    dir: 'workers/edge',
+    vars: { VERSION: 'GITHUB_SHA', CANDIDATE_TOKEN_PUBLIC_JWK: 'CANDIDATE_TOKEN_PUBLIC_JWK' },
+  },
+]);
 
 const INSTALL_RE = /\b(?:pnpm|npm|yarn)\s+(?:install|i|ci|add)\b/;
 const BUILD_RE = /\bpnpm\s+(?:(?:-r|--recursive|--filter\s+\S+)\s+)*(?:run\s+)?build\b/;
@@ -714,6 +917,24 @@ export const ENV_ALLOW_LIST = Object.freeze([
   // specs/m0b-tenancy.md §2.7: the deploy-staging build step only (BUILD_ONLY_ENV).
   'VITE_SUPABASE_URL',
   'VITE_SUPABASE_PUBLISHABLE_KEY',
+  'VITE_SENTRY_DSN',
+  // d1 §7.1 check-headers: the recruiter CSP api origin, the deploy-staging build step only.
+  'VITE_API_ORIGIN',
+  // d1 §6.1, AT-D18: the staging recruiter build's demo-outbox flag, the deploy-staging build step only.
+  'VITE_DEMO_OUTBOX',
+  // d1 §4.7: the candidate app's edge origin, the deploy-staging build step only.
+  'VITE_EDGE_ORIGIN',
+  // d1 AT-D18 (SEC-W2-1): the deploy flavour of the staging recruiter build, the deploy-staging build step only.
+  'VITE_TRACE_ENV',
+  // The check-deploy-vars step reads the same public variable (security review S8).
+  'API_STAGING_ORIGIN',
+  // d1 AT-D22 (specs/d1-demo-slice.md §7.1, L-24): the Workers deploy step passes it to jobs and api
+  // only, as a var (a DSN is public, not a secret).
+  'SENTRY_DSN_WORKERS',
+  // d1 §7.1 (security review F4): the candidate-token public values. The check-deploy-vars step and
+  // the api/edge deploy steps read them (PUBLIC_DEPLOY_ENV: exactly a GitHub variable, never a secret).
+  'CANDIDATE_TOKEN_KID',
+  'CANDIDATE_TOKEN_PUBLIC_JWK',
   // specs/m0b-tenancy.md AT-B9 [R5]: the org sign-in smoke step (public variables, then the three
   // smoke secrets bound by STAGING_SECRET_USERS).
   'SUPABASE_STAGING_URL',
@@ -721,6 +942,11 @@ export const ENV_ALLOW_LIST = Object.freeze([
   'STAGING_SMOKE_EMAIL',
   'STAGING_SMOKE_PASSWORD',
   'STAGING_SMOKE_TOTP_SECRET',
+  // d1 §7.1, AT-D1 (R5): the e2e-staging env contract (E2E_STAGING_PLAYWRIGHT_ENV), set only on that
+  // job's preflight step (the public names) and Playwright step (all of them, the credentials bound
+  // by E2E_STAGING_SECRET_USERS); E2E_STAGING_ONLY_ENV refuses them anywhere else. E2E_TRACE is not
+  // listed, so no workflow can turn Playwright traces on.
+  ...E2E_STAGING_ONLY_ENV,
 ]);
 export const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 const ENV_ALLOWED = new Set(ENV_ALLOW_LIST);
@@ -827,6 +1053,13 @@ const GITHUB_PATH_LINE_RE = /^\s*echo "\$RUNNER_TEMP\/gitleaks" >> "\$GITHUB_PAT
  */
 function checkRun(run, file, where, out) {
   if (typeof run !== 'string') return;
+  // Security review S7: GitHub expands ${{ }} into the script text before bash runs it, so an
+  // attacker-chosen value (a branch name, a PR title) would become code. Values go through env:.
+  if (run.includes('${{')) {
+    out.push(
+      v(file, where, 'run: may not contain a ${{ }} expression; pass the value through env:'),
+    );
+  }
   const text = run.replace(/\\\r?\n/g, '');
   // An empty $'' or $"" inside a word disappears too (re-review of dbb20c7, Low).
   const unquoted = text.replace(/\$(?=["'])/g, '').replace(/["'\\]/g, '');
@@ -1110,8 +1343,14 @@ export function checkWorkflow(doc, file, ctx = {}) {
       });
     }
     if (job.uses !== undefined) checkUses(job.uses, file, where, out, ctx);
-    if (job.environment !== undefined && name !== DEPLOY_JOB) {
-      out.push(v(file, where, `only ${DEPLOY_JOB} may use an environment: (it holds secrets)`));
+    if (job.environment !== undefined && name !== DEPLOY_JOB && name !== E2E_STAGING_JOB) {
+      out.push(
+        v(
+          file,
+          where,
+          `only ${DEPLOY_JOB} may use an environment: (it holds secrets), and ${E2E_STAGING_JOB} for its E2E credentials`,
+        ),
+      );
     }
     if (FULL_HISTORY_JOBS.includes(name)) {
       const checkouts = (Array.isArray(job.steps) ? job.steps : []).filter(
@@ -1157,12 +1396,13 @@ export function checkWorkflow(doc, file, ctx = {}) {
       if (!isObj(step)) return;
       const all = secretRefs(step);
       if (all.length === 0) return;
-      if (name !== DEPLOY_JOB) {
+      const allowed = Object.hasOwn(SECRET_USERS_BY_JOB, name) ? SECRET_USERS_BY_JOB[name] : null;
+      if (allowed === null) {
         out.push(
           v(
             file,
             sw,
-            `secrets (${all.join(', ')}) are not allowed outside ${DEPLOY_JOB}; pull requests run this job`,
+            `secrets (${all.join(', ')}) are not allowed outside ${DEPLOY_JOB} (and the ${E2E_STAGING_JOB} Playwright step); pull requests run this job`,
           ),
         );
         return;
@@ -1181,13 +1421,13 @@ export function checkWorkflow(doc, file, ctx = {}) {
       }
       const run = typeof step.run === 'string' ? step.run : '';
       for (const s of all) {
-        const users = STAGING_SECRET_USERS[s];
+        const users = Object.hasOwn(allowed.users, s) ? allowed.users[s] : undefined;
         if (!users)
           out.push(
             v(
               file,
               sw,
-              `secret ${s === '*' ? 'context (all secrets)' : s} is not on the §7.3 staging list`,
+              `secret ${s === '*' ? 'context (all secrets)' : s} is not on the ${allowed.list} list`,
             ),
           );
         else if (!users.some((re) => re.test(run))) {
@@ -1224,9 +1464,721 @@ export function checkWorkflow(doc, file, ctx = {}) {
         ),
       );
     }
+    checkDeployChain(d, where, file, out);
   }
+  checkE2eLocal(doc, file, out);
+  checkE2eStaging(doc, file, out);
+  if (isObj(doc.jobs[E2E_JOB]) || isObj(doc.jobs[E2E_STAGING_JOB]))
+    checkRunE2eInput(doc, file, out);
   checkBuildOnlyEnv(doc, file, out);
+  checkE2eStagingOnlyEnv(doc, file, out);
   return out;
+}
+
+const DRY_RUN_RE = /--dry-run\b/;
+const WRANGLER_DELETE_RE = /\bwrangler\b[^\n]*\b(?:delete|remove)\b/;
+const WRANGLER_VERSIONS_RE = /\bwrangler\s+versions\b/;
+// Bash removes a backslash-newline outright (no space), so `wrang\<newline>ler` is `wrangler`
+// (S2 re-review L1).
+const joinContinuations = (run) => run.replace(/\\\r?\n/g, '');
+/** A step's run text as commands: continuations joined, one per line, whitespace normalised. */
+const commandLines = (run) =>
+  joinContinuations(run)
+    .split('\n')
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter((l) => l !== '');
+/** The dry-run line is exactly WORKER_BUILD_CMD, bare or as `(cd "$dir" && …)` (S2: nothing else on it). */
+const isDryRunBuild = (line) =>
+  line === WORKER_BUILD_CMD || line === `(cd "$dir" && ${WORKER_BUILD_CMD})`;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const SCANNED_DEPLOY_LINE = new RegExp(`^${escapeRe(WORKER_DEPLOY_CMD)}(?: --var "[^"]*")*$`);
+/**
+ * Security review S2: any command line naming both wrangler and deploy is a deploy line, whatever
+ * its form (`wrangler --env staging deploy`, `pnpm dlx wrangler@… deploy`, a `-c` config). Only a
+ * plain `pnpm exec wrangler pages deploy` with no shell syntax (so no second command) is not one.
+ */
+const isWranglerDeployLine = (line) => /\bwrangler\b/.test(line) && /\bdeploy\b/.test(line);
+const PAGES_DEPLOY_LINE = /^pnpm exec wrangler pages deploy [\w./ =-]+$/;
+/** The run text of a Worker deploy step, before its deploy line (S2: the whole step is pinned). */
+export const WORKER_DEPLOY_STEP_PREFIX = Object.freeze([
+  'set -euo pipefail',
+  'export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"',
+]);
+/**
+ * The Pages deploy step's whole run text, as command lines (S2 re-review L1): with the Cloudflare
+ * token, any other line could deploy a Worker without spelling `wrangler deploy` (`de''ploy`, a
+ * variable, a backslash-newline split), so the step is pinned like the Worker deploy steps.
+ */
+export const PAGES_STEP_LINES = Object.freeze([
+  'set -euo pipefail',
+  'export WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/wrangler-output.ndjson"',
+  'projects="$(pnpm exec wrangler pages project list --json)"',
+  `jq -e 'type == "array"' <<<"$projects" >/dev/null`,
+  'for project in trace-candidate-staging trace-recruiter-staging; do',
+  `if ! jq -e --arg p "$project" 'any(.[]; .["Project Name"] == $p)' <<<"$projects" >/dev/null; then`,
+  'pnpm exec wrangler pages project create "$project" --production-branch main',
+  'fi',
+  'done',
+  'pnpm exec wrangler pages deploy apps/candidate/dist --project-name trace-candidate-staging --branch main',
+  'pnpm exec wrangler pages deploy apps/recruiter/dist --project-name trace-recruiter-staging --branch main',
+]);
+const SECRETS_CHECK_LINE = 'node scripts/check-staging-secrets.mjs';
+/** Words that change where or what a Worker deploy step runs (S2), each with its own pattern. */
+const WORKER_DEPLOY_FORBIDDEN = Object.freeze([
+  ['cd', /(?:^|[\s;&|(])cd(?:\s|$)/m],
+  ['pushd', /(?:^|[\s;&|(])pushd(?:\s|$)/m],
+  ['--cwd', /(?:^|\s)--cwd(?:[\s=]|$)/m],
+  ['-c', /(?:^|\s)-c(?:[\s=]|$)/m],
+  ['--config', /(?:^|\s)--config(?:[\s=]|$)/m],
+  ['dlx', /\bdlx\b/],
+  ['npx', /\bnpx\b/],
+]);
+
+/**
+ * deploy-staging's D1 chain (specs/d1-demo-slice.md §7.1; docs/reviews/D1-security-review-bindings.md
+ * F4, F5): the public-variable guard, then migrations, then bucket and queue creation, then exactly
+ * three Worker deploys in the order api, jobs, edge, each `--env staging` with its exact `--var` set
+ * from GitHub variables, then check-staging-secrets. `d` is the job; `where` is `jobs.deploy-staging`.
+ */
+function checkDeployChain(d, where, file, out) {
+  const steps = Array.isArray(d.steps) ? d.steps : [];
+  const runOf = (s) => (isObj(s) && typeof s.run === 'string' ? s.run : '');
+  const indexOf = (pred) => steps.findIndex((s) => pred(s));
+  const sw = (i) => `${where}.steps[${i}]`;
+
+  // Public values: wherever a deploy-staging step sets one, it is exactly its GitHub variable.
+  steps.forEach((s, i) => {
+    if (!isObj(s) || !isObj(s.env)) return;
+    for (const [name, want] of Object.entries(PUBLIC_DEPLOY_ENV)) {
+      if (Object.hasOwn(s.env, name) && normExpr(s.env[name]) !== normExpr(want)) {
+        out.push(
+          v(
+            file,
+            sw(i),
+            `env: ${name} must be exactly ${want} (a public GitHub variable; never a secret or a literal)`,
+          ),
+        );
+      }
+    }
+    // CI never deletes a staging resource (F5: create only if missing).
+    if (WRANGLER_DELETE_RE.test(joinContinuations(runOf(s)))) {
+      out.push(
+        v(
+          file,
+          sw(i),
+          'wrangler delete commands are not allowed in deploy-staging (CI only creates staging resources, never removes them)',
+        ),
+      );
+    }
+  });
+
+  // S3B-1 and S2: classify every command line naming wrangler and deploy (except a plain
+  // `wrangler pages deploy`). A dry-run line builds a staging bundle into dist/; any other is a
+  // Worker deploy and must upload exactly that scanned dist/index.js. A step is a Worker deploy
+  // step if it holds one such line.
+  const lines = steps.map((s) => commandLines(runOf(s)));
+  const dryRunSteps = [];
+  const deploys = [];
+  lines.forEach((ls, i) => {
+    const wranglerDeploys = ls.filter((l) => isWranglerDeployLine(l) && !PAGES_DEPLOY_LINE.test(l));
+    const real = wranglerDeploys.filter((l) => !DRY_RUN_RE.test(l));
+    for (const l of wranglerDeploys) {
+      if (DRY_RUN_RE.test(l) && !isDryRunBuild(l)) {
+        out.push(
+          v(
+            file,
+            sw(i),
+            `a dry-run build must be exactly ${WORKER_BUILD_CMD} (S3B-1: each Worker's staging bundle, into the dist/ that scan-dist scans)`,
+          ),
+        );
+      } else if (!DRY_RUN_RE.test(l) && !SCANNED_DEPLOY_LINE.test(l)) {
+        out.push(
+          v(
+            file,
+            sw(i),
+            `a line with wrangler and deploy must be a plain wrangler pages deploy, the dry-run build or exactly ${WORKER_DEPLOY_CMD} followed only by --var "NAME:$SOURCE" (S3B-1, S2: --no-bundle uploads the dist/index.js that scan-dist checked; any other form re-bundles)`,
+          ),
+        );
+      }
+    }
+    if (wranglerDeploys.length > real.length) dryRunSteps.push(i);
+    if (real.length > 1) {
+      out.push(v(file, sw(i), 'a Worker deploy step must run exactly one wrangler deploy (S3B-1)'));
+    }
+    if (real.length > 0) deploys.push([steps[i], i]);
+    if (ls.some((l) => WRANGLER_VERSIONS_RE.test(l))) {
+      out.push(
+        v(
+          file,
+          sw(i),
+          'wrangler versions is not allowed in deploy-staging (an upload re-bundles; the scanned dist/index.js must be what ships, S3B-1)',
+        ),
+      );
+    }
+  });
+  // S2 re-review L1: a step holding the Cloudflare token is one of the Worker deploy steps (pinned
+  // below), or its whole run text is the bucket and queue step, the secrets check or the pinned
+  // Pages step. No other command may run next to the token.
+  const sameLines = (ls, want) => ls.length === want.length && want.every((l, k) => ls[k] === l);
+  steps.forEach((s, i) => {
+    if (!isObj(s) || !secretRefs(s).includes('CLOUDFLARE_API_TOKEN')) return;
+    const ls = lines[i];
+    const allowed =
+      deploys.some(([step]) => step === s) ||
+      (ls.length === 1 && RESOURCES_RUN.test(ls[0])) ||
+      sameLines(ls, [SECRETS_CHECK_LINE]) ||
+      sameLines(ls, PAGES_STEP_LINES);
+    if (!allowed) {
+      out.push(
+        v(
+          file,
+          sw(i),
+          'a step holding CLOUDFLARE_API_TOKEN must be a pinned Worker deploy step, or exactly node scripts/ensure-staging-resources.mjs, node scripts/check-staging-secrets.mjs or the pinned Pages deploy (PAGES_STEP_LINES; S2 re-review L1)',
+        ),
+      );
+    }
+  });
+  const firstDeploy = deploys.length > 0 ? deploys[0][1] : -1;
+  const scan = indexOf((s) => SCAN_RUN.test(runOf(s)));
+  if (dryRunSteps.length === 0) {
+    out.push(
+      v(
+        file,
+        where,
+        `the staging Worker bundles must be built with the dry-run ${WORKER_BUILD_CMD} before scan-dist (S3B-1)`,
+      ),
+    );
+  } else if (scan >= 0 && Math.max(...dryRunSteps) > scan) {
+    out.push(
+      v(
+        file,
+        sw(Math.max(...dryRunSteps)),
+        'every dry-run build must come before scan-dist (S3B-1: a later build would ship bytes that were never scanned)',
+      ),
+    );
+  }
+  if (scan < 0) {
+    out.push(
+      v(
+        file,
+        where,
+        'a step must run exactly node scripts/scan-dist.mjs before the first Worker deploy (S3B-1)',
+      ),
+    );
+  } else if (firstDeploy >= 0 && scan > firstDeploy) {
+    out.push(
+      v(
+        file,
+        sw(scan),
+        'node scripts/scan-dist.mjs must run before the first Worker deploy (S3B-1)',
+      ),
+    );
+  }
+
+  // The guard: exactly check-deploy-vars, seeing the four required variables, before the migrations
+  // and before every Worker deploy.
+  const guard = indexOf((s) => GUARD_RUN.test(runOf(s)));
+  const migrate = indexOf((s) => /\bsupabase\s+db\s+push\b/.test(runOf(s)));
+  if (guard < 0) {
+    out.push(
+      v(
+        file,
+        where,
+        'a step must run exactly node scripts/check-deploy-vars.mjs (it fails the deploy on an empty public variable or a private JWK member, F4)',
+      ),
+    );
+  } else {
+    if ((migrate >= 0 && guard > migrate) || (firstDeploy >= 0 && guard > firstDeploy)) {
+      out.push(
+        v(
+          file,
+          sw(guard),
+          'node scripts/check-deploy-vars.mjs must run before the migrations and before the Worker deploys',
+        ),
+      );
+    }
+    const env = isObj(steps[guard].env) ? steps[guard].env : {};
+    for (const name of DEPLOY_GUARD_ENV) {
+      if (!Object.hasOwn(env, name)) {
+        out.push(
+          v(
+            file,
+            sw(guard),
+            `the check-deploy-vars step must set ${name} in env: (${PUBLIC_DEPLOY_ENV[name]})`,
+          ),
+        );
+      }
+    }
+  }
+
+  // Bucket and queue creation, before the first Worker deploy.
+  const resources = indexOf((s) => RESOURCES_RUN.test(runOf(s)));
+  if (resources < 0) {
+    out.push(
+      v(
+        file,
+        where,
+        'a step must run exactly node scripts/ensure-staging-resources.mjs (idempotent bucket and queue creation, F5)',
+      ),
+    );
+  } else if (firstDeploy >= 0 && resources > firstDeploy) {
+    out.push(
+      v(
+        file,
+        sw(resources),
+        'node scripts/ensure-staging-resources.mjs must run before the first Worker deploy',
+      ),
+    );
+  }
+
+  // Exactly three Worker deploys, in order.
+  const order = WORKER_DEPLOYS.map((w) => w.dir);
+  const dirs = deploys.map(([s]) => (isObj(s) ? s['working-directory'] : undefined));
+  if (JSON.stringify(dirs) !== JSON.stringify(order)) {
+    out.push(
+      v(
+        file,
+        where,
+        `deploy-staging must run exactly three wrangler deploy steps, in the order ${order.join(', ')} (a service-binding target must exist first), each with working-directory: set to its Worker; found ${dirs.length === 0 ? 'none' : dirs.map((x) => x ?? '(none)').join(', ')}`,
+      ),
+    );
+  } else {
+    deploys.forEach(([step, i], k) => checkWorkerDeploy(step, sw(i), WORKER_DEPLOYS[k], file, out));
+  }
+
+  // check-staging-secrets stays, after the last deploy.
+  const secrets = indexOf((s) => /\bcheck-staging-secrets\b/.test(runOf(s)));
+  const lastDeploy = deploys.length > 0 ? deploys[deploys.length - 1][1] : -1;
+  if (secrets < 0 || secrets < lastDeploy) {
+    out.push(
+      v(file, where, 'check-staging-secrets must run after the last Worker deploy (§7.2 step 6)'),
+    );
+  }
+}
+
+/**
+ * The e2e-local job (E2E_JOB; DC-D9): its exact if:, runner and time limit, no container or
+ * services, one unconditional step running exactly `node scripts/e2e-local.mjs --ci`, artifacts
+ * only from E2E_ARTIFACT_PATHS and kept at most E2E_ARTIFACT_MAX_DAYS (checkRunE2eInput pins the
+ * run_e2e dispatch input it reads). Secrets and environments are already refused for every job but
+ * deploy-staging and e2e-staging.
+ */
+function checkE2eLocal(doc, file, out) {
+  const j = doc.jobs[E2E_JOB];
+  if (!isObj(j)) return;
+  const where = `jobs.${E2E_JOB}`;
+  if (typeof j.if !== 'string' || normExpr(j.if) !== normExpr(E2E_IF)) {
+    out.push(v(file, where, `${E2E_JOB} must have exactly if: ${E2E_IF}`));
+  }
+  if (j['runs-on'] !== E2E_RUNNER) {
+    out.push(v(file, where, `${E2E_JOB} must run on ${E2E_RUNNER}`));
+  }
+  const t = j['timeout-minutes'];
+  if (typeof t !== 'number' || !Number.isInteger(t) || t < 1 || t > E2E_MAX_MINUTES) {
+    out.push(
+      v(file, where, `${E2E_JOB} must set timeout-minutes: 1 to ${E2E_MAX_MINUTES} (DC-D9)`),
+    );
+  }
+  if (j.container !== undefined || j.services !== undefined) {
+    out.push(v(file, where, `${E2E_JOB} may not use container: or services:`));
+  }
+  const steps = Array.isArray(j.steps) ? j.steps : [];
+  const runs = steps.filter(
+    (s) => isObj(s) && typeof s.run === 'string' && /e2e-local\.mjs/.test(s.run),
+  );
+  if (runs.length !== 1 || !E2E_RUN.test(runs[0].run) || runs[0].if !== undefined) {
+    out.push(
+      v(
+        file,
+        where,
+        `${E2E_JOB} must run exactly node scripts/e2e-local.mjs --ci in one step with no if:`,
+      ),
+    );
+  }
+  steps.forEach((s, i) => {
+    if (!isObj(s) || typeof s.uses !== 'string' || !/^actions\/upload-artifact@/i.test(s.uses)) {
+      return;
+    }
+    const w = isObj(s.with) ? s.with : {};
+    const paths =
+      typeof w.path === 'string'
+        ? w.path
+            .split(/\r?\n/)
+            .map((p) => p.trim())
+            .filter((p) => p !== '')
+        : [];
+    const days = w['retention-days'];
+    const ok =
+      paths.length > 0 &&
+      paths.every((p) => E2E_ARTIFACT_PATHS.includes(p)) &&
+      typeof days === 'number' &&
+      Number.isInteger(days) &&
+      days >= 1 &&
+      days <= E2E_ARTIFACT_MAX_DAYS;
+    if (!ok) {
+      out.push(
+        v(
+          file,
+          `${where}.steps[${i}]`,
+          `${E2E_JOB} artifacts must be only ${E2E_ARTIFACT_PATHS.join(' and ')}, kept at most ${E2E_ARTIFACT_MAX_DAYS} days (retention-days; synthetic data only)`,
+        ),
+      );
+    }
+  });
+}
+
+/** The e2e jobs read inputs.run_e2e; the dispatch declares exactly that one input. */
+function checkRunE2eInput(doc, file, out) {
+  const wd = isObj(doc.on) ? doc.on.workflow_dispatch : undefined;
+  const inputs = isObj(wd) && isObj(wd.inputs) ? wd.inputs : undefined;
+  const runE2e = inputs !== undefined && isObj(inputs.run_e2e) ? inputs.run_e2e : undefined;
+  if (
+    inputs === undefined ||
+    Object.keys(inputs).length !== 1 ||
+    runE2e === undefined ||
+    runE2e.type !== 'boolean' ||
+    runE2e.default !== true
+  ) {
+    out.push(
+      v(
+        file,
+        'on.workflow_dispatch',
+        'workflow_dispatch must declare exactly one input, run_e2e (type: boolean, default: true)',
+      ),
+    );
+  }
+}
+
+/** Is `env` exactly the mapping `want` (same keys; values equal as expressions)? */
+const sameEnv = (env, want) =>
+  isObj(env) &&
+  Object.keys(env).length === Object.keys(want).length &&
+  Object.entries(want).every(
+    ([k, val]) => Object.hasOwn(env, k) && normExpr(env[k]) === normExpr(val),
+  );
+
+/** The upload paths of an upload-artifact step's `with.path`, one per line, trimmed. */
+const artifactPaths = (w) =>
+  typeof w.path === 'string'
+    ? w.path
+        .split(/\r?\n/)
+        .map((p) => p.trim())
+        .filter((p) => p !== '')
+    : [];
+
+/**
+ * The e2e-staging job (E2E_STAGING_JOB; d1 §7.1, AT-D1, AT-D20): its exact needs, if:, environment,
+ * permissions, runner and time limit, no container or services, and a pinned step list. The
+ * preflight runs exactly E2E_STAGING_PREFLIGHT_CMD with exactly E2E_STAGING_PREFLIGHT_ENV (no secret),
+ * before the one Playwright step, which runs exactly E2E_STAGING_RUN_CMD with exactly
+ * E2E_STAGING_PLAYWRIGHT_ENV; the general secret rules bind the credentials to that command
+ * (E2E_STAGING_SECRET_USERS). Then one `if: always()` upload of exactly E2E_STAGING_ARTIFACT_PATHS
+ * (no .zip, so no trace), kept at most 7 days. No other step, if: or working-directory.
+ */
+function checkE2eStaging(doc, file, out) {
+  const j = doc.jobs[E2E_STAGING_JOB];
+  if (!isObj(j)) return;
+  const where = `jobs.${E2E_STAGING_JOB}`;
+  const sw = (i) => `${where}.steps[${i}]`;
+  const needs = typeof j.needs === 'string' ? [j.needs] : Array.isArray(j.needs) ? j.needs : [];
+  if (needs.length !== 1 || needs[0] !== DEPLOY_JOB) {
+    out.push(
+      v(file, where, `${E2E_STAGING_JOB} must have needs: ${DEPLOY_JOB} (and nothing else)`),
+    );
+  }
+  if (typeof j.if !== 'string' || normExpr(j.if) !== normExpr(E2E_STAGING_IF)) {
+    out.push(v(file, where, `${E2E_STAGING_JOB} must have exactly if: ${E2E_STAGING_IF}`));
+  }
+  const env = isObj(j.environment) ? j.environment.name : j.environment;
+  if (env !== DEPLOY_ENVIRONMENT) {
+    out.push(v(file, where, `${E2E_STAGING_JOB} must use environment: ${DEPLOY_ENVIRONMENT}`));
+  }
+  // Security review SEC-W6-1: the same group as deploy-staging, so a later dispatch's deploy (and
+  // migrations) waits until this E2E has finished; a queued run never cancels a running one.
+  const c = j.concurrency;
+  const group = isObj(c) ? c.group : c;
+  const cancel = isObj(c) ? c['cancel-in-progress'] : undefined;
+  if (group !== DEPLOY_CONCURRENCY || isTruthyFlag(cancel)) {
+    out.push(
+      v(
+        file,
+        where,
+        `${E2E_STAGING_JOB} must use concurrency: ${DEPLOY_CONCURRENCY} without cancel-in-progress (a later dispatch may not redeploy staging under a running E2E)`,
+      ),
+    );
+  }
+  if (
+    !isObj(j.permissions) ||
+    JSON.stringify(Object.entries(j.permissions).sort()) !==
+      JSON.stringify(Object.entries(WORKFLOW_PERMISSIONS))
+  ) {
+    out.push(v(file, where, `${E2E_STAGING_JOB} must set permissions: { contents: read }`));
+  }
+  if (j['runs-on'] !== E2E_RUNNER) {
+    out.push(v(file, where, `${E2E_STAGING_JOB} must run on ${E2E_RUNNER}`));
+  }
+  const t = j['timeout-minutes'];
+  if (typeof t !== 'number' || !Number.isInteger(t) || t < 1 || t > E2E_STAGING_MAX_MINUTES) {
+    out.push(
+      v(
+        file,
+        where,
+        `${E2E_STAGING_JOB} must set timeout-minutes: 1 to ${E2E_STAGING_MAX_MINUTES}`,
+      ),
+    );
+  }
+  if (j.container !== undefined || j.services !== undefined) {
+    out.push(v(file, where, `${E2E_STAGING_JOB} may not use container: or services:`));
+  }
+
+  const steps = Array.isArray(j.steps) ? j.steps : [];
+  const runOf = (s) => (isObj(s) && typeof s.run === 'string' ? s.run : '');
+  const usesOf = (s) => (isObj(s) && typeof s.uses === 'string' ? s.uses : '');
+  const preflights = [];
+  const playwrights = [];
+  const uploads = [];
+  const caches = [];
+  steps.forEach((s, i) => {
+    if (!isObj(s)) return;
+    const run = runOf(s);
+    const uses = usesOf(s);
+    if (/^actions\/cache@/i.test(uses)) caches.push(i);
+    if (/e2e:staging:preflight/.test(run)) preflights.push(i);
+    if (/playwright\s+test/.test(run)) playwrights.push(i);
+    if (/^actions\/upload-artifact@/i.test(uses)) uploads.push(i);
+    // Every step is one of the pinned kinds.
+    const known =
+      (s.run === undefined &&
+        (/^actions\/(?:checkout|cache|upload-artifact)@/i.test(uses) ||
+          uses === './.github/actions/setup')) ||
+      (s.uses === undefined &&
+        (run.trim() === E2E_CHROMIUM_CMD ||
+          /e2e:staging:preflight/.test(run) ||
+          /playwright\s+test/.test(run)));
+    if (!known) {
+      out.push(
+        v(
+          file,
+          sw(i),
+          `${E2E_STAGING_JOB} may only run its pinned steps: checkout, ./.github/actions/setup, the Playwright browser cache, ${E2E_CHROMIUM_CMD}, ${E2E_STAGING_PREFLIGHT_CMD}, ${E2E_STAGING_RUN_CMD} and the upload`,
+        ),
+      );
+    }
+    if (s['working-directory'] !== undefined) {
+      out.push(
+        v(
+          file,
+          sw(i),
+          `${E2E_STAGING_JOB} may only run its steps from the repository root (no working-directory:)`,
+        ),
+      );
+    }
+    if (s.if !== undefined && !uploads.includes(i)) {
+      out.push(v(file, sw(i), `${E2E_STAGING_JOB} may only put an if: on the upload step`));
+    }
+    // The checkout tests the deployed commit: no other ref or repository.
+    if (/^actions\/checkout@/i.test(uses)) {
+      const w = isObj(s.with) ? s.with : {};
+      if (Object.keys(w).some((k) => k !== 'persist-credentials')) {
+        out.push(
+          v(
+            file,
+            sw(i),
+            `${E2E_STAGING_JOB} may only set persist-credentials on its checkout (it tests the deployed commit)`,
+          ),
+        );
+      }
+    }
+    // Only the preflight and Playwright steps set env:, each exactly its contract.
+    if (s.env !== undefined && !preflights.includes(i) && !playwrights.includes(i)) {
+      out.push(
+        v(
+          file,
+          sw(i),
+          `${E2E_STAGING_JOB} may only set env: on the preflight and Playwright steps`,
+        ),
+      );
+    }
+  });
+
+  const cacheWith = caches.length === 1 ? steps[caches[0]].with : undefined;
+  if (!sameEnv(cacheWith, E2E_BROWSER_CACHE)) {
+    out.push(
+      v(
+        file,
+        caches.length === 1 ? sw(caches[0]) : where,
+        `${E2E_STAGING_JOB} must have exactly one actions/cache step with exactly path: ${E2E_BROWSER_CACHE.path} and key: ${E2E_BROWSER_CACHE.key} (e2e-local's browser cache; no other with: key, SEC-W6-3)`,
+      ),
+    );
+  }
+  const pwOk =
+    playwrights.length === 1 &&
+    E2E_STAGING_RUN_RE.test(runOf(steps[playwrights[0]])) &&
+    steps[playwrights[0]].if === undefined;
+  if (!pwOk) {
+    out.push(
+      v(
+        file,
+        where,
+        `${E2E_STAGING_JOB} must run exactly ${E2E_STAGING_RUN_CMD} in one step with no if:`,
+      ),
+    );
+  } else if (!sameEnv(steps[playwrights[0]].env, E2E_STAGING_PLAYWRIGHT_ENV)) {
+    out.push(
+      v(
+        file,
+        sw(playwrights[0]),
+        'env: must be exactly the Playwright contract (E2E_STAGING_PLAYWRIGHT_ENV in scripts/check-workflows.mjs: the staging flag, the public values and the six credentials)',
+      ),
+    );
+  }
+  const pw = playwrights.length === 1 ? playwrights[0] : -1;
+  if (pw >= 0 && steps[pw]['timeout-minutes'] !== E2E_STAGING_RUN_MINUTES) {
+    out.push(
+      v(
+        file,
+        sw(pw),
+        `the Playwright step must set timeout-minutes: ${E2E_STAGING_RUN_MINUTES} (the slice's step timeouts sum to at most 20; the job allows ${E2E_STAGING_MAX_MINUTES}; SR-W6-1)`,
+      ),
+    );
+  }
+  const pfOk =
+    preflights.length === 1 &&
+    runOf(steps[preflights[0]]).trim() === E2E_STAGING_PREFLIGHT_CMD &&
+    steps[preflights[0]].if === undefined &&
+    (pw < 0 || preflights[0] < pw);
+  if (!pfOk) {
+    out.push(
+      v(
+        file,
+        where,
+        `${E2E_STAGING_JOB} must run exactly ${E2E_STAGING_PREFLIGHT_CMD} in one step with no if:, before the Playwright step`,
+      ),
+    );
+  }
+  if (preflights.length === 1 && !sameEnv(steps[preflights[0]].env, E2E_STAGING_PREFLIGHT_ENV)) {
+    out.push(
+      v(
+        file,
+        sw(preflights[0]),
+        'env: must be exactly the public preflight contract (E2E_STAGING_PREFLIGHT_ENV in scripts/check-workflows.mjs; no secret)',
+      ),
+    );
+  }
+
+  const upload = uploads.length === 1 ? steps[uploads[0]] : null;
+  const w = upload !== null && isObj(upload.with) ? upload.with : {};
+  const paths = artifactPaths(w);
+  const days = w['retention-days'];
+  const uploadOk =
+    upload !== null &&
+    normExpr(upload.if ?? '') === 'always()' &&
+    pw >= 0 &&
+    uploads[0] > pw &&
+    Object.keys(w).every((k) => ['name', 'path', 'retention-days'].includes(k)) &&
+    JSON.stringify(paths) === JSON.stringify(E2E_STAGING_ARTIFACT_PATHS) &&
+    typeof days === 'number' &&
+    Number.isInteger(days) &&
+    days >= 1 &&
+    days <= E2E_ARTIFACT_MAX_DAYS;
+  if (!uploadOk) {
+    out.push(
+      v(
+        file,
+        uploads.length === 1 ? sw(uploads[0]) : where,
+        `${E2E_STAGING_JOB} must upload exactly e2e/test-results without any .zip (path: ${E2E_STAGING_ARTIFACT_PATHS.join(' then ')}; retention-days 1 to ${E2E_ARTIFACT_MAX_DAYS}; only name, path and retention-days), in one step with if: always(), after the Playwright step (synthetic data only; d1 bindings review F8: never a trace)`,
+      ),
+    );
+  }
+}
+
+/**
+ * E2E_STAGING_ONLY_ENV names: set only in the env: of the e2e-staging preflight and Playwright steps
+ * (whose exact values checkE2eStaging pins). Anywhere else (workflow or job env, any other step, any
+ * other job) they could hand the staging contract or a credential to another command.
+ */
+function checkE2eStagingOnlyEnv(doc, file, out) {
+  const misplaced = (env, where) => {
+    if (!isObj(env)) return;
+    for (const n of E2E_STAGING_ONLY_ENV) {
+      if (Object.hasOwn(env, n))
+        out.push(
+          v(
+            file,
+            where,
+            `${n} may be set only on the ${E2E_STAGING_JOB} preflight and Playwright steps (d1 §7.1)`,
+          ),
+        );
+    }
+  };
+  misplaced(doc.env, 'env');
+  for (const [name, job] of Object.entries(isObj(doc.jobs) ? doc.jobs : {})) {
+    if (!isObj(job)) continue;
+    const where = `jobs.${name}`;
+    misplaced(job.env, where);
+    (Array.isArray(job.steps) ? job.steps : []).forEach((step, i) => {
+      if (!isObj(step)) return;
+      const run = typeof step.run === 'string' ? step.run : '';
+      const own =
+        name === E2E_STAGING_JOB &&
+        (/e2e:staging:preflight/.test(run) || /playwright\s+test/.test(run));
+      if (!own) misplaced(step.env, `${where}.steps[${i}]`);
+    });
+  }
+}
+
+/** One Worker deploy step: --env staging, and exactly the --var set `spec.vars`, each from its source. */
+function checkWorkerDeploy(step, sw, spec, file, out) {
+  const text = joinContinuations(step.run);
+  // S2: the whole run text is pinned (the prefix, then the one scanned deploy line), and no word
+  // that moves the step to another directory, config or wrangler copy may appear in it.
+  const ls = commandLines(step.run);
+  const pinned =
+    ls.length === WORKER_DEPLOY_STEP_PREFIX.length + 1 &&
+    WORKER_DEPLOY_STEP_PREFIX.every((l, k) => ls[k] === l) &&
+    SCANNED_DEPLOY_LINE.test(ls[ls.length - 1]);
+  if (!pinned) {
+    out.push(
+      v(
+        file,
+        sw,
+        `a Worker deploy step must run exactly: ${WORKER_DEPLOY_STEP_PREFIX.join('; ')}; then ${WORKER_DEPLOY_CMD} with its --var set, and nothing else (S2)`,
+      ),
+    );
+  }
+  for (const [word, re] of WORKER_DEPLOY_FORBIDDEN) {
+    if (re.test(text)) out.push(v(file, sw, `${word} is not allowed in a Worker deploy step (S2)`));
+  }
+  if (!/(?<![\w-])--env\s+staging(?![\w-])/.test(text)) {
+    out.push(v(file, sw, `wrangler deploy must use --env staging (${spec.dir})`));
+  }
+  const found = [...text.matchAll(/--var\s+"([A-Z][A-Z0-9_]*):([^"]*)"/g)].map((m) => [m[1], m[2]]);
+  if ((text.match(/--var\b/g) ?? []).length !== found.length) {
+    out.push(
+      v(file, sw, 'every --var must be written --var "NAME:$SOURCE" (quoted, no other form)'),
+    );
+  }
+  const seen = new Set();
+  for (const [name, value] of found) {
+    const source = spec.vars[name];
+    if (source === undefined) {
+      out.push(v(file, sw, `--var ${name} is not allowed on ${spec.dir}`));
+    } else if (seen.has(name)) {
+      out.push(v(file, sw, `--var ${name} is given twice`));
+    } else if (value !== `$${source}`) {
+      out.push(v(file, sw, `--var ${name} must be "${name}:$${source}"`));
+    }
+    seen.add(name);
+  }
+  const env = isObj(step.env) ? step.env : {};
+  for (const [name, source] of Object.entries(spec.vars)) {
+    if (!seen.has(name)) out.push(v(file, sw, `--var ${name} is missing on ${spec.dir}`));
+    else if (source !== 'GITHUB_SHA' && !Object.hasOwn(env, source)) {
+      out.push(
+        v(file, sw, `the step uses $${source} for --var ${name} but does not set it in env:`),
+      );
+    }
+  }
 }
 
 /**
@@ -1286,6 +2238,16 @@ export function checkAction(doc, file, ctx = {}) {
             file,
             `runs.steps[${i}]`,
             `${n} may be set only on the ${DEPLOY_JOB} build step (§2.7)`,
+          ),
+        );
+    }
+    for (const n of E2E_STAGING_ONLY_ENV) {
+      if (Object.hasOwn(s.env, n))
+        out.push(
+          v(
+            file,
+            `runs.steps[${i}]`,
+            `${n} may be set only on the ${E2E_STAGING_JOB} preflight and Playwright steps (d1 §7.1)`,
           ),
         );
     }

@@ -1,0 +1,13 @@
+{
+  "name": "d1-spike-media-link",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": false,
+  "send_metrics": false,
+  // R2 through a binding only: no S3 access keys, no r2.dev or custom domain on the bucket.
+  "r2_buckets": [{ "binding": "MEDIA_BUCKET", "bucket_name": "trace-evidence-spike" }],
+  "durable_objects": { "bindings": [{ "name": "MEDIA_LINK_DO", "class_name": "MediaLinkDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MediaLinkDO"] }],
+  // MEDIA_LINK_HMAC_KEY and SPIKE_ROUTES come from .dev.vars (wrangler dev) or miniflare bindings (vitest).
+  "vars": { "ALLOWED_ORIGINS": "https://recruiter.synthetic.example" },
+}

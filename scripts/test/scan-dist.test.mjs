@@ -327,6 +327,30 @@ describe('distText pieces (N11)', () => {
     for (const b of Object.values(files))
       expect(text.includes(b)).toBe(b.length <= STDIN_PIECE_MAX);
   });
+
+  // CI on e277791: the `.` that breaks a blank line was added after a piece was sized, so a piece
+  // with blank lines in it grew past STDIN_PIECE_MAX (random bytes hit it by chance; a file of
+  // mostly blank lines doubled, past GITLEAKS_MAX_PEEK). Pieces are sized after the break.
+  it.each([
+    ['30 KB of newlines', Buffer.from('\n'.repeat(30_000))],
+    ['a 20 KB file of blank-line pairs', Buffer.from('a\n\n'.repeat(6_667))],
+    [
+      'a file exactly STDIN_PIECE_MAX bytes with one blank line',
+      Buffer.from(`${'a'.repeat(9_999)}\n\n${'a'.repeat(9_999)}`),
+    ],
+  ])('keeps every blank-line-free run within STDIN_PIECE_MAX for %s', (_label, buf) => {
+    const root = makeTempDir();
+    writeFiles(root, { 'd/f.txt': buf });
+    const text = distText(root, 'd');
+    let last = STDIN_HEADER.length + 1;
+    let longest = 0;
+    for (let i = text.indexOf('\n\n', last); i >= 0; i = text.indexOf('\n\n', i + 1)) {
+      longest = Math.max(longest, i - last);
+      last = i + 2;
+    }
+    longest = Math.max(longest, text.length - last);
+    expect(longest).toBeLessThanOrEqual(STDIN_PIECE_MAX);
+  });
 });
 
 /** Every secret real gitleaks stdin reports for the distText stream of `rel` (unredacted). */

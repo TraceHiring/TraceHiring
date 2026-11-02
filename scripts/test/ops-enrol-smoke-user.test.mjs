@@ -65,6 +65,7 @@ function harness({ env = {}, stack = stackText(), fetchHandlers = {}, sql = {} }
   const sqlResults = {
     lookupSmoke: { status: 0, stdout: `${SMOKE_ID}\n`, stderr: '' },
     lookupOwner: { status: 0, stdout: `${OWNER_ID}\n`, stderr: '' },
+    lookupOrg: { status: 0, stdout: `${ORG_ID}\n`, stderr: '' },
     createOrg: { status: 0, stdout: `${ORG_ID}\n`, stderr: '' },
     addMember: { status: 0, stdout: `${MEMBERSHIP_ID}\n`, stderr: '' },
     ...sql,
@@ -104,6 +105,7 @@ function harness({ env = {}, stack = stackText(), fetchHandlers = {}, sql = {} }
       if (opts.input.includes('auth.users')) {
         return vars.p_email === SMOKE_EMAIL ? sqlResults.lookupSmoke : sqlResults.lookupOwner;
       }
+      if (opts.input.includes('public.orgs')) return sqlResults.lookupOrg;
       if (opts.input.includes('create_org')) return sqlResults.createOrg;
       if (opts.input.includes('add_member')) return sqlResults.addMember;
       throw new Error('unexpected sql');
@@ -440,6 +442,16 @@ describe('enrol-smoke-user: --env staging', () => {
     expect(h.sqlCalls()).toHaveLength(3); // add-member never ran
   });
 
+  it('defaults to the recruiter role, and --roles recruiter is the same flow', async () => {
+    const h = harness({ env: stagingEnv() });
+    expect(await main({ argv: [...STAGING_ARGV, '--roles', 'recruiter'], deps: h.deps })).toBe(0);
+    const calls = h.sqlCalls();
+    expect(calls).toHaveLength(4);
+    expect(calls[2].opts.input).toContain('private.create_org');
+    expect(varsOf(calls[3].args)).toMatchObject({ p_roles: '{recruiter}' });
+    expect(calls.some((c) => c.opts.input.includes('public.orgs'))).toBe(false);
+  });
+
   it('rejects a malformed factor response without printing it', async () => {
     const h = harness({
       env: stagingEnv(),
@@ -450,5 +462,133 @@ describe('enrol-smoke-user: --env staging', () => {
     expect(await main({ argv: STAGING_ARGV, deps: h.deps })).toBe(1);
     expect(h.stdout()).toBe('');
     expect(h.allOutput()).not.toContain('not base32');
+  });
+});
+
+// specs/d1-demo-slice.md §1.4, §11 founder gates, FOUNDER-QUEUE "D1: a staging reviewer smoke user
+// with TOTP": the second smoke user joins the existing smoke-staging org as a reviewer only.
+describe('enrol-smoke-user: --env staging --roles reviewer (D1)', () => {
+  const REVIEWER_EMAIL = 'p-reviewer@example.test';
+  const REVIEWER_ARGV = [
+    '--env',
+    'staging',
+    '--email',
+    REVIEWER_EMAIL,
+    '--owner-email',
+    OWNER_EMAIL,
+    '--roles',
+    'reviewer',
+  ];
+  // The reviewer resolves like the smoke user in the harness (any email but the owner's resolves
+  // to lookupOwner, so route by the requested email).
+  const reviewerHarness = (opts = {}) => {
+    const h = harness({ env: stagingEnv(), ...opts });
+    const spawn = h.deps.spawnSync;
+    h.deps.spawnSync = (cmd, args, o) => {
+      if (o?.input?.includes('auth.users') && varsOf(args).p_email === REVIEWER_EMAIL) {
+        h.spawnCalls.push({ cmd, args, opts: o });
+        return opts.sql?.lookupReviewer ?? { status: 0, stdout: `${SMOKE_ID}\n`, stderr: '' };
+      }
+      return spawn(cmd, args, o);
+    };
+    return h;
+  };
+
+  it('finds the owner’s smoke-staging org before it signs in, then adds the user as a reviewer only', async () => {
+    const h = reviewerHarness();
+    expect(await main({ argv: REVIEWER_ARGV, deps: h.deps })).toBe(0);
+    expect(h.stdout()).toBe(`${TOTP_SECRET}\n`);
+    expect(h.stderr()).toBe('');
+    for (const secret of [PASSWORD, ACCESS_TOKEN, PUBLISHABLE_KEY, STAGING_DB_URL, DB_PASSWORD]) {
+      expect(h.allOutput()).not.toContain(secret);
+    }
+    const calls = h.sqlCalls();
+    expect(calls).toHaveLength(4);
+    expect(varsOf(calls[0].args).p_email).toBe(REVIEWER_EMAIL);
+    expect(varsOf(calls[1].args).p_email).toBe(OWNER_EMAIL);
+    // the org lookup: the smoke-staging org that the owner owns (values as psql -v variables only)
+    expect(calls[2].opts.input).toContain('public.orgs');
+    expect(calls[2].opts.input).toContain("'org_owner'");
+    expect(calls[2].opts.input).not.toContain('smoke-staging');
+    expect(calls[2].opts.input).not.toContain(OWNER_ID);
+    expect(varsOf(calls[2].args)).toEqual({
+      ON_ERROR_STOP: '1',
+      VERBOSITY: 'sqlstate',
+      p_slug: 'smoke-staging',
+      p_owner: OWNER_ID,
+    });
+    // never a second org
+    expect(calls.some((c) => c.opts.input.includes('create_org'))).toBe(false);
+    expect(calls[3].opts.input).toContain('private.add_member');
+    expect(varsOf(calls[3].args)).toMatchObject({
+      p_org: ORG_ID,
+      p_user: SMOKE_ID,
+      p_roles: '{reviewer}',
+      p_display: 'Smoke reviewer',
+      p_rid: REQUEST_ID,
+    });
+    // the same TOTP enrolment as the recruiter, over the public Auth API
+    expect(h.fetchCalls.map((c) => c.pathname)).toEqual([
+      '/auth/v1/token',
+      '/auth/v1/factors',
+      `/auth/v1/factors/${FACTOR_ID}/challenge`,
+      `/auth/v1/factors/${FACTOR_ID}/verify`,
+    ]);
+    expect(h.fetchCalls[0].body).toEqual({ email: REVIEWER_EMAIL, password: PASSWORD });
+  });
+
+  it('changes nothing when the owner has no smoke-staging org (enrol the recruiter first)', async () => {
+    const h = reviewerHarness({ sql: { lookupOrg: { status: 0, stdout: '', stderr: '' } } });
+    expect(await main({ argv: REVIEWER_ARGV, deps: h.deps })).toBe(1);
+    expect(h.fetchCalls).toHaveLength(0);
+    expect(h.stdout()).toBe('');
+    expect(h.stderr()).toMatch(/smoke-staging org/);
+    expect(h.stderr()).toMatch(/recruiter/);
+    expect(h.stderr()).not.toContain(OWNER_EMAIL);
+    expect(h.sqlCalls()).toHaveLength(3);
+  });
+
+  it('reports a failed org lookup by SQLSTATE only', async () => {
+    const h = reviewerHarness({
+      sql: { lookupOrg: { status: 1, stdout: '', stderr: `ERROR:  42501\n${STAGING_DB_URL}` } },
+    });
+    expect(await main({ argv: REVIEWER_ARGV, deps: h.deps })).toBe(1);
+    expect(h.stderr()).toContain('SQLSTATE 42501');
+    expect(h.stderr()).not.toContain(DB_PASSWORD);
+    expect(h.fetchCalls).toHaveLength(0);
+  });
+
+  it('prints the secret before add-member, so a failure there cannot lose it', async () => {
+    const h = reviewerHarness({
+      sql: { addMember: { status: 1, stdout: '', stderr: 'ERROR:  23505\n' } },
+    });
+    expect(await main({ argv: REVIEWER_ARGV, deps: h.deps })).toBe(1);
+    expect(h.stdout()).toBe(`${TOTP_SECRET}\n`);
+    expect(h.stderr()).toContain('SQLSTATE 23505');
+    expect(h.stderr()).not.toContain(TOTP_SECRET);
+  });
+
+  it.each([
+    [['--roles', 'admin']],
+    [['--roles', 'org_owner']],
+    [['--roles', 'recruiter,reviewer']],
+    [['--roles', 'Reviewer']],
+    [['--roles', '']],
+  ])('refuses %j (exit 2, names --roles, no call made)', async (extra) => {
+    const h = reviewerHarness();
+    expect(await main({ argv: [...STAGING_ARGV, ...extra], deps: h.deps })).toBe(2);
+    expect(h.stderr()).toContain('--roles');
+    expect(h.stderr()).not.toContain('org_owner');
+    expect(h.stdout()).toBe('');
+    expect(h.fetchCalls).toHaveLength(0);
+    expect(h.spawnCalls).toHaveLength(0);
+  });
+
+  it('refuses --roles with --env local (local users get their role from add-member)', async () => {
+    const h = harness({ env: { SMOKE_PASSWORD: PASSWORD } });
+    expect(await main({ argv: [...LOCAL_ARGV, '--roles', 'reviewer'], deps: h.deps })).toBe(2);
+    expect(h.stderr()).toContain('--roles');
+    expect(h.fetchCalls).toHaveLength(0);
+    expect(h.spawnCalls).toHaveLength(0);
   });
 });

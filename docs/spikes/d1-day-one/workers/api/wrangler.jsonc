@@ -1,0 +1,7 @@
+{
+  "name": "d1-spike-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": false,
+  "send_metrics": false,
+}

@@ -1,0 +1,386 @@
+-- rls_d1_assignments (spec specs/d1-demo-slice.md §3.6 row "rls_d1_assignments"; §3.2 assignments; §3.3 matrix row assignments + note 8; L-16 recruiter arm; R-15 creator auto-assignment; §3.4 private.my_assigned_test_ids). RED first: written from the spec, targets migration <ts1>_d1_authoring.sql. Personas are synthetic.
+begin;
+-- Helpers live in pg_temp (rolled back with the transaction). try() runs one statement as the current
+-- role and returns 'OK <rows>' or '<sqlstate> <message>', so a denial is an assertion, not an abort.
+create function pg_temp.try(p_sql text) returns text language plpgsql as $f$
+declare n bigint;
+begin
+  execute p_sql;
+  get diagnostics n = row_count;
+  return 'OK ' || n;
+exception when others then
+  return sqlstate || ' ' || sqlerrm;
+end
+$f$;
+grant execute on function pg_temp.try(text) to public;
+-- keys() lists the top-level keys of an audit details object, sorted and comma-joined.
+create function pg_temp.keys(p_details jsonb) returns text language sql as $f$
+  select coalesce(string_agg(k, ',' order by k), '') from jsonb_object_keys(p_details) as k
+$f$;
+grant execute on function pg_temp.keys(jsonb) to public;
+grant usage on schema extensions to authenticated, anon, service_role;
+select plan(91);
+
+grant trace_worker to postgres with inherit false, set true;
+grant usage on schema extensions to trace_worker;
+grant trace_quality_worker to postgres with inherit false, set true;
+grant usage on schema extensions to trace_quality_worker;
+grant trace_integrity_worker to postgres with inherit false, set true;
+grant usage on schema extensions to trace_integrity_worker;
+grant trace_candidate to postgres with inherit false, set true;
+grant usage on schema extensions to trace_candidate;
+-- Personas (spec D1 §3.6): synthetic users, fixed ids, created on the operator path (postgres, no claims).
+insert into auth.users (id, aud, role, email) values
+  ('00000000-0000-4000-8000-000000000001', 'authenticated', 'authenticated', 'p-owner-admin@example.test'),
+  ('00000000-0000-4000-8000-000000000003', 'authenticated', 'authenticated', 'p-admin@example.test'),
+  ('00000000-0000-4000-8000-000000000004', 'authenticated', 'authenticated', 'p-admin-aal1@example.test'),
+  ('00000000-0000-4000-8000-000000000005', 'authenticated', 'authenticated', 'p-recruiter-otp@example.test'),
+  ('00000000-0000-4000-8000-000000000006', 'authenticated', 'authenticated', 'p-recruiter-pw-aal1@example.test'),
+  ('00000000-0000-4000-8000-000000000007', 'authenticated', 'authenticated', 'p-reviewer-asg@example.test'),
+  ('00000000-0000-4000-8000-000000000008', 'authenticated', 'authenticated', 'p-hm@example.test'),
+  ('00000000-0000-4000-8000-000000000009', 'authenticated', 'authenticated', 'p-ws-recruiter@example.test'),
+  ('00000000-0000-4000-8000-00000000000e', 'authenticated', 'authenticated', 'p-b-admin@example.test'),
+  ('00000000-0000-4000-8000-000000000011', 'authenticated', 'authenticated', 'p-outsider@example.test'),
+  ('00000000-0000-4000-8000-000000000013', 'authenticated', 'authenticated', 'p-recruiter-two@example.test'),
+  ('00000000-0000-4000-8000-000000000014', 'authenticated', 'authenticated', 'p-reviewer-other@example.test'),
+  ('00000000-0000-4000-8000-000000000015', 'authenticated', 'authenticated', 'p-creator-removed@example.test'),
+  ('00000000-0000-4000-8000-000000000016', 'authenticated', 'authenticated', 'p-b-reviewer@example.test');
+
+-- Org A and org B (customers). Seeds (notice, band rules, rubric) arrive with the orgs from migration 3.
+insert into public.orgs (id, kind, name, slug) values
+  ('a1000000-0000-4000-8000-000000000001', 'customer', 'Org A', 'org-a-test'),
+  ('a1000000-0000-4000-8000-000000000003', 'customer', 'Org B', 'org-b-test');
+insert into public.workspaces (id, org_id, name, kind, is_default) values
+  ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'Default', 'default', true),
+  ('b1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'Client A2', 'client', false),
+  ('b1000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000003', 'Default', 'default', true);
+insert into public.memberships (org_id, user_id, roles, workspace_id, display_name, status) values
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', '{org_owner,admin}', null, 'Persona Owner Admin', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000003', '{admin}', null, 'Persona Admin', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000004', '{admin}', null, 'Persona Admin Aal1', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000005', '{recruiter}', null, 'Persona Recruiter Otp', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000006', '{recruiter}', null, 'Persona Recruiter Pw', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000007', '{reviewer}', null, 'Persona Reviewer Assigned', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000008', '{hiring_manager}', null, 'Persona Hiring Manager', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000009', '{recruiter}', 'b1000000-0000-4000-8000-000000000002', 'Persona Ws Recruiter', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000013', '{recruiter}', null, 'Persona Recruiter Two', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000014', '{reviewer}', null, 'Persona Reviewer Other', 'active'),
+  ('a1000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000015', '{recruiter}', null, 'Persona Creator Removed', 'active'),
+  ('a1000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-00000000000e', '{org_owner,admin}', null, 'Persona B Admin', 'active'),
+  ('a1000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000016', '{reviewer}', null, 'Persona B Reviewer', 'active');
+
+-- Authoring fixtures on the operator path. Four tests: T1 (ws A1, owner), T2 (ws A2, ws recruiter), T3 (ws A1,
+-- recruiter), TB (org B). Version V1 on T1 is a complete draft (publishable); V2 on T2 a draft; V3 on T3 is published
+-- below; VB is org B's draft. Only org_id, parents and content are supplied; workspace_id/test_id on children and the
+-- ruleset/notice ids on versions come from triggers (L-27, L-8).
+insert into public.tests (id, org_id, workspace_id, name, created_by) values
+  ('e1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Test One', '00000000-0000-4000-8000-000000000001'),
+  ('e1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000002', 'Test Two', '00000000-0000-4000-8000-000000000009'),
+  ('e1000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Test Three', '00000000-0000-4000-8000-000000000005'),
+  ('e1000000-0000-4000-8000-00000000000b', 'a1000000-0000-4000-8000-000000000003', 'b1000000-0000-4000-8000-000000000004', 'Test B', '00000000-0000-4000-8000-00000000000e');
+insert into public.rubric_versions (id, org_id, rubric_key, version_no, criteria, content_sha256, created_by) values
+  ('71000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'writing-basic', 1,
+   '[{"id": "c1", "label": "Clarity", "max_points": 5, "anchors": []}]', repeat('a', 64), '00000000-0000-4000-8000-000000000001'),
+  ('71000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'writing-spare', 1,
+   '[{"id": "c1", "label": "Clarity", "max_points": 5, "anchors": []}]', repeat('a', 64), '00000000-0000-4000-8000-000000000001'),
+  ('71000000-0000-4000-8000-00000000000b', 'a1000000-0000-4000-8000-000000000003', 'writing-b', 1,
+   '[{"id": "c1", "label": "Clarity", "max_points": 5, "anchors": []}]', repeat('a', 64), '00000000-0000-4000-8000-00000000000e');
+insert into public.test_versions (id, org_id, test_id, version_no, total_time_seconds, quality_cutoff, created_by) values
+  ('f1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 1, 1800, 40, '00000000-0000-4000-8000-000000000001'),
+  ('f1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000002', 1, 1800, 40, '00000000-0000-4000-8000-000000000009'),
+  ('f1000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000003', 1, 1800, 40, '00000000-0000-4000-8000-000000000005'),
+  ('f1000000-0000-4000-8000-00000000000b', 'a1000000-0000-4000-8000-000000000003', 'e1000000-0000-4000-8000-00000000000b', 1, 1800, 40, '00000000-0000-4000-8000-00000000000e');
+insert into public.sections (id, org_id, test_version_id, position, name, format, weight) values
+  ('51000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 1, 'Writing', 'written', 1),
+  ('51000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 2, 'Choices', 'mcq', 1),
+  ('51000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000002', 1, 'Choices Two', 'mcq', 1),
+  ('51000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000003', 1, 'Choices Three', 'mcq', 1),
+  ('51000000-0000-4000-8000-00000000000b', 'a1000000-0000-4000-8000-000000000003', 'f1000000-0000-4000-8000-00000000000b', 1, 'Choices B', 'mcq', 1);
+insert into public.item_versions (id, org_id, test_version_id, section_id, format, position, stem, options, rubric_version_id, origin, content_sha256, created_by) values
+  ('61000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', '51000000-0000-4000-8000-000000000001', 'written', 1, 'Describe a recent project.', null, '71000000-0000-4000-8000-000000000001', 'human', repeat('c', 64), '00000000-0000-4000-8000-000000000001'),
+  ('61000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', '51000000-0000-4000-8000-000000000002', 'mcq', 1, 'Pick one.', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', null, 'human', repeat('c', 64), '00000000-0000-4000-8000-000000000001'),
+  ('61000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000002', '51000000-0000-4000-8000-000000000003', 'mcq', 1, 'Pick one, again.', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', null, 'human', repeat('c', 64), '00000000-0000-4000-8000-000000000009'),
+  ('61000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000003', '51000000-0000-4000-8000-000000000004', 'mcq', 1, 'Pick one, third.', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', null, 'human', repeat('c', 64), '00000000-0000-4000-8000-000000000005'),
+  ('61000000-0000-4000-8000-00000000000b', 'a1000000-0000-4000-8000-000000000003', 'f1000000-0000-4000-8000-00000000000b', '51000000-0000-4000-8000-00000000000b', 'mcq', 1, 'Pick one, B.', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', null, 'human', repeat('c', 64), '00000000-0000-4000-8000-00000000000e');
+insert into public.item_answer_keys (org_id, item_version_id, format, key, created_by) values
+  ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000002', 'mcq', '{"option_id": "o1"}', '00000000-0000-4000-8000-000000000001'),
+  ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000003', 'mcq', '{"option_id": "o1"}', '00000000-0000-4000-8000-000000000009'),
+  ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000004', 'mcq', '{"option_id": "o1"}', '00000000-0000-4000-8000-000000000005'),
+  ('a1000000-0000-4000-8000-000000000003', '61000000-0000-4000-8000-00000000000b', 'mcq', '{"option_id": "o1"}', '00000000-0000-4000-8000-00000000000e');
+-- The assigned reviewer persona is assigned to T1 on the operator path (so the S* arm has something to see).
+insert into public.assignments (org_id, membership_id, scope, test_id, as_role, created_by)
+  select m.org_id, m.id, 'test', 'e1000000-0000-4000-8000-000000000001', 'reviewer', '00000000-0000-4000-8000-000000000001'
+  from public.memberships m where m.org_id = 'a1000000-0000-4000-8000-000000000001' and m.user_id = '00000000-0000-4000-8000-000000000007';
+-- V3 is published by the admin (plain update; it also makes the recruiter persona the auto-assigned creator of T3).
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = 'f1000000-0000-4000-8000-000000000003';
+reset role;
+reset request.jwt.claims;
+
+-- Start state: assignments = (assigned reviewer -> T1, reviewer), (recruiter -> T3, recruiter, auto from the V3 publish in the prelude).
+-- membership_id lookups go through pg_temp.mid(<user id>) (SECURITY DEFINER so RLS does not hide the membership).
+create function pg_temp.mid(p_user uuid) returns uuid language sql security definer as $f$
+  select id from public.memberships where user_id = p_user
+$f$;
+grant execute on function pg_temp.mid(uuid) to public;
+-- Fixture T5: a test whose creator (p-creator-removed) loses the membership before the publish (creator auto-assignment is skipped).
+insert into public.tests (id, org_id, workspace_id, name, created_by) values
+  ('e1000000-0000-4000-8000-000000000005', 'a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Test Five Removed', '00000000-0000-4000-8000-000000000015');
+insert into public.test_versions (id, org_id, test_id, version_no, total_time_seconds, quality_cutoff, created_by) values
+  ('f1000000-0000-4000-8000-000000000005', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000005', 1, 1800, 40, '00000000-0000-4000-8000-000000000015');
+insert into public.sections (id, org_id, test_version_id, position, name, format, weight) values
+  ('51000000-0000-4000-8000-000000000005', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000005', 1, 'Choices Five', 'mcq', 1);
+insert into public.item_versions (id, org_id, test_version_id, section_id, format, position, stem, options, rubric_version_id, origin, content_sha256, created_by) values
+  ('61000000-0000-4000-8000-000000000005', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000005', '51000000-0000-4000-8000-000000000005', 'mcq', 1, 'Pick one, fifth.', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', null, 'human', repeat('c', 64), '00000000-0000-4000-8000-000000000015');
+insert into public.item_answer_keys (org_id, item_version_id, format, key, created_by) values
+  ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000005', 'mcq', '{"option_id": "o1"}', '00000000-0000-4000-8000-000000000015');
+update public.memberships set status = 'removed' where user_id = '00000000-0000-4000-8000-000000000015';
+
+-- ===== S: who reads which assignments =====
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 2, 'S: org_owner sees both org A assignments');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 2, 'S: admin sees both org A assignments');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000005", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 2, 'S: recruiter (aal1, email OTP) sees both org A assignments');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000009", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 0, 'S: workspace-A2 recruiter sees no assignment of a workspace A1 test');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 1, 'S: assigned reviewer sees only their own assignment (S own)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000014", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 0, 'S: unassigned reviewer sees no assignment');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 0, 'S: reviewer at aal1 sees nothing (aal2 required)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 0, 'S: hiring_manager is denied');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000004", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 0, 'S: admin at aal1 sees nothing [AT-B6]');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000006", "aal": "aal1", "amr": [{"method": "password", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 0, 'S: password recruiter at aal1 sees nothing [AT-B6]');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 0, 'S: org B admin sees no org A assignment (cross-org)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000016", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select count(*)::int from public.assignments), 0, 'S: org B reviewer sees no org A assignment (cross-org)');
+reset role;
+reset request.jwt.claims;
+set local role anon;
+select matches(pg_temp.try('select * from public.assignments'), '^42501 permission denied', 'S: anon has no privilege');
+reset role;
+reset request.jwt.claims;
+set local role trace_candidate;
+select matches(pg_temp.try('select * from public.assignments'), '^42501 permission denied', 'S: trace_candidate has no privilege');
+reset role;
+reset request.jwt.claims;
+set local role trace_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select matches(pg_temp.try('select * from public.assignments'), '^42501 permission denied', 'S: trace_worker has no privilege');
+reset role;
+reset trace.job_org_id;
+set local role trace_quality_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select matches(pg_temp.try('select * from public.assignments'), '^42501 permission denied', 'S: trace_quality_worker has no privilege');
+reset role;
+reset trace.job_org_id;
+set local role trace_integrity_worker;
+set local trace.job_org_id = 'a1000000-0000-4000-8000-000000000001';
+select matches(pg_temp.try('select * from public.assignments'), '^42501 permission denied', 'S: trace_integrity_worker has no privilege');
+reset role;
+reset trace.job_org_id;
+
+-- ===== private.my_assigned_test_ids(org_role[]) =====
+-- Called as postgres: no app or worker role holds USAGE on schema private (M0b); the helper reads only GUCs.
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select private.my_assigned_test_ids('{reviewer}'::public.org_role[])::uuid[]), array['e1000000-0000-4000-8000-000000000001'::uuid], 'my_assigned_test_ids: the assigned reviewer gets exactly the assigned test');
+select is(cardinality(coalesce((select private.my_assigned_test_ids('{recruiter}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: a role the caller does not hold as the assignment''s as_role returns nothing');
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000014", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(cardinality(coalesce((select private.my_assigned_test_ids('{reviewer}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: an unassigned reviewer gets nothing');
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is(cardinality(coalesce((select private.my_assigned_test_ids('{reviewer}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: a reviewer at aal1 gets nothing (membership_counts rejects)');
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000005", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select private.my_assigned_test_ids('{recruiter}'::public.org_role[])::uuid[]), array['e1000000-0000-4000-8000-000000000003'::uuid], 'my_assigned_test_ids: the creator recruiter (OTP at aal1) gets the auto-assigned test');
+select is(cardinality(coalesce((select private.my_assigned_test_ids('{reviewer}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: a recruiter-role assignment does not count as reviewer');
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000006", "aal": "aal1", "amr": [{"method": "password", "timestamp": 1760000000}], "role": "authenticated"}';
+select is(cardinality(coalesce((select private.my_assigned_test_ids('{recruiter}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: a password recruiter at aal1 gets nothing');
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is(cardinality(coalesce((select private.my_assigned_test_ids('{reviewer,recruiter}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: hiring_manager gets nothing');
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(cardinality(coalesce((select private.my_assigned_test_ids('{reviewer,recruiter,admin,org_owner}'::public.org_role[])::uuid[]), '{}')), 0, 'my_assigned_test_ids: an org B admin gets no org A test (cross-org)');
+reset role;
+reset request.jwt.claims;
+set local role anon;
+select matches(pg_temp.try($$select private.my_assigned_test_ids('{reviewer}'::public.org_role[])$$), '^42501 permission denied', 'my_assigned_test_ids: anon cannot execute');
+reset role;
+reset request.jwt.claims;
+select is(has_function_privilege('authenticated', 'private.my_assigned_test_ids(public.org_role[])', 'execute'), true, 'my_assigned_test_ids: EXECUTE is granted to authenticated');
+select is((select count(*)::int from unnest(array['anon', 'service_role', 'trace_worker', 'trace_quality_worker', 'trace_integrity_worker', 'trace_candidate']) r where has_function_privilege(r, 'private.my_assigned_test_ids(public.org_role[])', 'execute')), 0, 'my_assigned_test_ids: EXECUTE is granted to no other role');
+
+-- ===== reviewer visibility follows the assignment, across all authoring child tables =====
+-- counts: tests, test_versions, sections, item_versions, item_answer_keys, ruleset_versions, assignments
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select array[(select count(*) from public.tests), (select count(*) from public.test_versions), (select count(*) from public.sections), (select count(*) from public.item_versions), (select count(*) from public.item_answer_keys), (select count(*) from public.ruleset_versions), (select count(*) from public.assignments)]::int[]), array[1, 1, 2, 2, 1, 1, 1], 'reviewer: the assigned test (T1) and nothing else across tests, versions, sections, items, keys, rulesets, assignments');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000014", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select array[(select count(*) from public.tests), (select count(*) from public.test_versions), (select count(*) from public.sections), (select count(*) from public.item_versions), (select count(*) from public.item_answer_keys), (select count(*) from public.ruleset_versions), (select count(*) from public.assignments)]::int[]), array[0, 0, 0, 0, 0, 0, 0], 'reviewer: an unassigned reviewer sees nothing in any authoring table');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select array[(select count(*) from public.tests), (select count(*) from public.test_versions), (select count(*) from public.sections), (select count(*) from public.item_versions), (select count(*) from public.item_answer_keys), (select count(*) from public.ruleset_versions), (select count(*) from public.assignments)]::int[]), array[0, 0, 0, 0, 0, 0, 0], 'reviewer: the assigned reviewer at aal1 sees nothing in any authoring table');
+reset role;
+reset request.jwt.claims;
+
+-- ===== creator auto-assignment at publish (R-15) =====
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = 'f1000000-0000-4000-8000-000000000001'$$), 'OK 1', 'publish: owner publishes V1 (their own test)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = 'f1000000-0000-4000-8000-000000000002'$$), 'OK 1', 'publish: admin publishes V2 (created by the workspace recruiter)');
+select is(pg_temp.try($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = 'f1000000-0000-4000-8000-000000000005'$$), 'OK 1', 'publish: admin publishes V5 whose creator membership is no longer active');
+reset role;
+reset request.jwt.claims;
+select is((select a.as_role::text from public.assignments a join public.memberships m on m.id = a.membership_id where m.user_id = '00000000-0000-4000-8000-000000000001' and a.test_id = 'e1000000-0000-4000-8000-000000000001'), 'org_owner', 'creator: the owner-admin creator is assigned as the highest of org_owner|admin|recruiter');
+select is((select a.as_role::text from public.assignments a join public.memberships m on m.id = a.membership_id where m.user_id = '00000000-0000-4000-8000-000000000009' and a.test_id = 'e1000000-0000-4000-8000-000000000002'), 'recruiter', 'creator: the workspace recruiter is assigned as recruiter by somebody else''s publish');
+select is((select a.as_role::text from public.assignments a join public.memberships m on m.id = a.membership_id where m.user_id = '00000000-0000-4000-8000-000000000005' and a.test_id = 'e1000000-0000-4000-8000-000000000003'), 'recruiter', 'creator: the recruiter creator of T3 was assigned at publish (prelude)');
+select is((select count(*)::int from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000005'), 0, 'creator: the assignment is skipped when the creator''s membership is no longer active');
+select is((select a.workspace_id from public.assignments a join public.memberships m on m.id = a.membership_id where m.user_id = '00000000-0000-4000-8000-000000000009' and a.test_id = 'e1000000-0000-4000-8000-000000000002'), 'b1000000-0000-4000-8000-000000000002'::uuid, 'creator: the assignment carries the test''s workspace_id (scoping copy)');
+select is((select pg_temp.keys(x.details) || '|' || x.actor_user_id::text from public.audit_log x join public.assignments a on a.id = x.object_id join public.memberships m on m.id = a.membership_id where x.action = 'assignment.create' and m.user_id = '00000000-0000-4000-8000-000000000009' and a.test_id = 'e1000000-0000-4000-8000-000000000002'), 'membership_id,test_id|00000000-0000-4000-8000-000000000003', 'event: the publish path writes assignment.create with exact keys and the publisher as actor');
+select is((select count(*)::int from public.audit_log where action = 'assignment.create' and pg_temp.keys(details) <> 'membership_id,test_id'), 0, 'event: every assignment.create row has exactly the keys membership_id,test_id');
+
+-- ===== I: org_owner and admin assign anything in their org =====
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-000000000001', 'reviewer')$$), 'OK 1', 'I: org_owner assigns a reviewer to a test');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-000000000001', 'reviewer')$$), '^23505', 'I: a second assignment of the same membership to the same test is refused');
+select is(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000013'), 'test', 'e1000000-0000-4000-8000-000000000001', 'recruiter')$$), 'OK 1', 'I: org_owner assigns a recruiter to a test');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000008'), 'test', 'e1000000-0000-4000-8000-000000000001', 'hiring_manager')$$), '^23514', 'I: as_role hiring_manager violates the CHECK (org_owner|admin|recruiter|reviewer only)');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'workspace', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^23514', 'I: scope other than test violates the CHECK');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000013'), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^42501 TRACE_GUARD', 'I: the membership must hold the as_role (a recruiter is not a reviewer)');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000015'), 'test', 'e1000000-0000-4000-8000-000000000001', 'recruiter')$$), '^42501 TRACE_GUARD', 'I: the membership must be active (a removed member cannot be assigned)');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000016'), 'test', 'e1000000-0000-4000-8000-000000000001', 'reviewer')$$), '^(23503|42501)', 'I: a membership of another org is refused (composite FK / guard, cross-org)');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-00000000000b', 'reviewer')$$), '^(23503|42501)', 'I: a test of another org is refused (composite FK, cross-org)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000003'), 'test', 'e1000000-0000-4000-8000-000000000003', 'admin')$$), 'OK 1', 'I: admin assigns an admin to a test');
+
+-- ===== I / D: the recruiter arm (L-16) =====
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000013", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is(pg_temp.try($$delete from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000001' and as_role = 'reviewer' and membership_id = pg_temp.mid('00000000-0000-4000-8000-000000000014')$$), 'OK 1', 'L-16: a recruiter assigned to the test unassigns a reviewer');
+select is(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-000000000001', 'reviewer')$$), 'OK 1', 'L-16: a recruiter assigned to the test assigns a reviewer');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000003'), 'test', 'e1000000-0000-4000-8000-000000000001', 'admin')$$), '^42501', 'L-16: a recruiter cannot assign a non-reviewer as_role');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^42501', 'L-16: a recruiter cannot assign on another recruiter''s test they are not assigned to');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000005", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), 'OK 1', 'L-16: the creator recruiter assigns a reviewer to their own test');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000007'), 'test', 'e1000000-0000-4000-8000-000000000002', 'reviewer')$$), '^42501', 'L-16: a recruiter cannot assign on another recruiter''s test (T2, not assigned)');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000013'), 'test', 'e1000000-0000-4000-8000-000000000003', 'recruiter')$$), '^42501', 'L-16: a recruiter cannot assign another recruiter (as_role must be reviewer)');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000016'), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^(23503|42501)', 'L-16: a recruiter cannot assign an org B reviewer (cross-org)');
+select is(pg_temp.try($$delete from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000003' and as_role = 'reviewer'$$), 'OK 1', 'L-16: the creator recruiter unassigns the reviewer from their own test');
+select is(pg_temp.try($$delete from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000001' and membership_id = pg_temp.mid('00000000-0000-4000-8000-000000000007')$$), 'OK 0', 'L-16: a recruiter cannot unassign on a test they are not assigned to');
+select is(pg_temp.try($$delete from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000003' and as_role = 'recruiter'$$), 'OK 0', 'L-16: a recruiter cannot delete a recruiter-role assignment (their own included)');
+select is(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), 'OK 1', 'L-16: the creator recruiter re-assigns the reviewer (kept for the audit and visibility checks)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000009", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-000000000002', 'reviewer')$$), 'OK 1', 'L-16: the workspace recruiter assigns a reviewer on their own workspace A2 test');
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000007'), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^42501', 'L-16: the workspace recruiter cannot assign on a workspace A1 test');
+select is(pg_temp.try($$delete from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000002' and as_role = 'reviewer'$$), 'OK 1', 'L-16: the workspace recruiter unassigns the reviewer on their own test');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000006", "aal": "aal1", "amr": [{"method": "password", "timestamp": 1760000000}], "role": "authenticated"}';
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^42501', 'L-16: a password recruiter at aal1 cannot assign [AT-B6]');
+
+-- ===== I / U / D: everybody else is refused =====
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000007'), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^42501', 'I: an assigned reviewer cannot self-assign to another test');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^42501', 'I: hiring_manager cannot assign');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000004", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^42501', 'I: admin at aal1 cannot assign [AT-B6]');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', pg_temp.mid('00000000-0000-4000-8000-000000000014'), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^42501', 'I: org B admin cannot assign in org A (cross-org)');
+select is(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000003', pg_temp.mid('00000000-0000-4000-8000-000000000016'), 'test', 'e1000000-0000-4000-8000-00000000000b', 'reviewer')$$), 'OK 1', 'I: org B admin assigns an org B reviewer in org B (the same operation, own org)');
+reset role;
+reset request.jwt.claims;
+set local role anon;
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', gen_random_uuid(), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^42501 permission denied', 'I: anon cannot insert');
+reset role;
+reset request.jwt.claims;
+set local role trace_candidate;
+select matches(pg_temp.try($$insert into public.assignments (org_id, membership_id, scope, test_id, as_role) values ('a1000000-0000-4000-8000-000000000001', gen_random_uuid(), 'test', 'e1000000-0000-4000-8000-000000000003', 'reviewer')$$), '^42501 permission denied', 'I: trace_candidate cannot insert');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select matches(pg_temp.try($$update public.assignments set as_role = 'reviewer' where test_id = 'e1000000-0000-4000-8000-000000000001'$$), '^42501 permission denied', 'U: org_owner has no UPDATE privilege (no UPDATE)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select matches(pg_temp.try($$update public.assignments set test_id = 'e1000000-0000-4000-8000-000000000002'$$), '^42501 permission denied', 'U: admin has no UPDATE privilege (no UPDATE)');
+select is(pg_temp.try($$delete from public.assignments where as_role = 'admin' and test_id = 'e1000000-0000-4000-8000-000000000003'$$), 'OK 1', 'D: admin deletes an assignment');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000001", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$delete from public.assignments where as_role = 'recruiter' and test_id = 'e1000000-0000-4000-8000-000000000001'$$), 'OK 1', 'D: org_owner deletes an assignment');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select matches(pg_temp.try($$delete from public.assignments$$), '^OK 0$', 'D: reviewer DELETE hits no row (RLS)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000008", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select matches(pg_temp.try($$delete from public.assignments$$), '^OK 0$', 'D: hiring_manager DELETE hits no row (RLS)');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-00000000000e", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$delete from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000001'$$), 'OK 0', 'D: org B admin cannot delete org A assignments (cross-org)');
+reset role;
+reset request.jwt.claims;
+select is((select count(*)::int from public.audit_log where action = 'assignment.delete' and actor_kind = 'org_user'), 5, 'event: five successful deletes (admin, owner, two recruiters, workspace recruiter) wrote assignment.delete');
+select is((select count(*)::int from public.audit_log where action = 'assignment.delete' and pg_temp.keys(details) <> 'membership_id,test_id'), 0, 'event: every assignment.delete row has exactly the keys membership_id,test_id');
+select is((select x.actor_user_id from public.audit_log x join public.assignments a on a.id = x.object_id where x.action = 'assignment.create' and a.test_id = 'e1000000-0000-4000-8000-000000000003' and a.as_role = 'reviewer'), '00000000-0000-4000-8000-000000000005'::uuid, 'event: the recruiter path writes assignment.create with the recruiter as actor (L-16 audited)');
+
+-- ===== visibility follows the assignment =====
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000014", "aal": "aal2", "amr": [{"method": "otp", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is((select array[(select count(*) from public.tests), (select count(*) from public.test_versions), (select count(*) from public.sections), (select count(*) from public.item_versions), (select count(*) from public.item_answer_keys), (select count(*) from public.ruleset_versions), (select count(*) from public.assignments)]::int[]), array[2, 2, 3, 3, 2, 2, 2], 'reviewer: once assigned to T1 and T3 (by a recruiter) the reviewer sees exactly those two tests and their children');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000007", "aal": "aal1", "amr": [{"method": "otp", "timestamp": 1760000000}], "role": "authenticated"}';
+select is((select count(*)::int from public.tests), 0, 'reviewer: aal1 still sees nothing after the assignments');
+reset role;
+reset request.jwt.claims;
+
+-- ===== DB review m1 m-2: the creator is auto-assigned on the test's first publish only =====
+-- The admin unassigns T2's creator (the workspace recruiter); version 2 of T2 is drafted on the operator path and
+-- published by the admin. The creator is not re-added and no new assignment.create row is written for them.
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$delete from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000002' and membership_id = pg_temp.mid('00000000-0000-4000-8000-000000000009')$$), 'OK 1', 'm-2: the admin unassigns the creator of T2');
+reset role;
+reset request.jwt.claims;
+insert into public.test_versions (id, org_id, test_id, version_no, total_time_seconds, quality_cutoff, created_by) values
+  ('f1000000-0000-4000-8000-000000000006', 'a1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000002', 2, 1800, 40, '00000000-0000-4000-8000-000000000003');
+insert into public.sections (id, org_id, test_version_id, position, name, format, weight) values
+  ('51000000-0000-4000-8000-000000000006', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000006', 1, 'Choices Two v2', 'mcq', 1);
+insert into public.item_versions (id, org_id, test_version_id, section_id, format, position, stem, options, rubric_version_id, origin, content_sha256, created_by) values
+  ('61000000-0000-4000-8000-000000000006', 'a1000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000006', '51000000-0000-4000-8000-000000000006', 'mcq', 1, 'Pick one, again (v2).', '[{"id": "o1", "text": "One"}, {"id": "o2", "text": "Two"}]', null, 'human', repeat('c', 64), '00000000-0000-4000-8000-000000000003');
+insert into public.item_answer_keys (org_id, item_version_id, format, key, created_by) values
+  ('a1000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000006', 'mcq', '{"option_id": "o1"}', '00000000-0000-4000-8000-000000000003');
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-4000-8000-000000000003", "aal": "aal2", "amr": [{"method": "password", "timestamp": 1760000000}, {"method": "totp", "timestamp": 1760000100}], "role": "authenticated"}';
+select is(pg_temp.try($$update public.test_versions set status = 'published', content_sha256 = repeat('b', 64) where id = 'f1000000-0000-4000-8000-000000000006'$$), 'OK 1', 'm-2: the admin publishes version 2 of T2');
+reset role;
+reset request.jwt.claims;
+select is((select count(*)::int from public.assignments where test_id = 'e1000000-0000-4000-8000-000000000002' and membership_id = pg_temp.mid('00000000-0000-4000-8000-000000000009')), 0, 'm-2: a later version''s publish does not re-add a creator who was unassigned (auto-assignment on the first publish only)');
+select is((select count(*)::int from public.audit_log where action = 'assignment.create' and details ->> 'test_id' = 'e1000000-0000-4000-8000-000000000002' and details ->> 'membership_id' = pg_temp.mid('00000000-0000-4000-8000-000000000009')::text), 1, 'm-2: the creator of T2 has exactly one assignment.create row (the first publish), none from version 2');
+
+select * from finish();
+rollback;

@@ -1,0 +1,5 @@
+{
+  "name": "d4-test",
+  "main": "../test/noop.ts",
+  "compatibility_date": "2026-08-15",
+}

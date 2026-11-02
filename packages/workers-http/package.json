@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./pg-socket": "./src/pg-socket.ts",
+    "./pg-socket-node": "./src/pg-socket-node.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
@@ -19,6 +21,7 @@
     "@trace/config": "workspace:*",
     "@types/node": "catalog:",
     "eslint": "catalog:",
+    "postgres": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

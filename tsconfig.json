@@ -6,6 +6,8 @@
     { "path": "./packages/ui" },
     { "path": "./packages/vendors" },
     { "path": "./packages/db-types" },
+    { "path": "./packages/band-engine" },
+    { "path": "./e2e" },
     { "path": "./apps/candidate" },
     { "path": "./apps/recruiter" },
     { "path": "./workers/edge" },

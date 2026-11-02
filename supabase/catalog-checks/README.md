@@ -93,7 +93,7 @@ major versions: run its fixtures again after any major upgrade.
   and all of them are on `supautils.reserved_memberships`, so only a superuser can grant them (`grant
   supabase_auth_admin to postgres` fails with "role memberships are reserved, only superusers can grant them").
   MT-7 and MT-9 therefore trust objects these roles own (the `supabase_owner` list). Every installed extension is
-  owned by `supabase_admin`.
+  owned by `supabase_admin` (locally; on hosted Supabase see "Hosted facts" below).
 - Non-member objects in the system schemas where `postgres` can create (relations, functions, and types other
   than relation row types and arrays):
   - `extensions`: functions `grant_pg_cron_access`, `grant_pg_graphql_access`, `grant_pg_net_access`,
@@ -138,3 +138,27 @@ major versions: run its fixtures again after any major upgrade.
   so no MT-11 branch is `unreachable`.
 - `supabase test db` installs pgTAP `with schema extensions`, owned by `supabase_admin`; `anon` and
   `authenticated` keep EXECUTE on it. It recurses into sub-directories and runs every `.sql` file.
+
+## Hosted facts (staging, 2026-10-20; specs/d1-demo-slice.md revision 4m)
+
+The day-one facts above are from the local stack. The first catalog run against hosted staging (dispatch 4, run
+39376946373) differed in two ways, both platform objects, not ours:
+
+- `pg_stat_statements`, `uuid-ossp` and `pgcrypto` are pre-installed in `extensions` and **owned by `postgres`**
+  (locally `supabase_admin`). The image's init scripts create extensions as `postgres` while it is still a
+  superuser, so their members are probably owned by `postgres` too; this account cannot see them. MT-9 skips
+  exactly these three in `extension_owner` (`hosted_extension`: name, schema and owner pinned) and trusts only
+  members whose code `postgres` cannot have made or replaced (`hosted_member`: C functions loaded from the extension's own
+  library without SECURITY DEFINER or SET, the two `pg_stat_statements` views whose rules depend only on the
+  extension's functions, and their row and array types). Every other member not owned by a Supabase service role
+  fails `extension_added_member`; a member of any other catalog of an extension `postgres` controls fails
+  `extension_other_member`.
+- `supabase_migrations.schema_migrations_idempotency_key_key` (an index the Supabase CLI adds, owned by `postgres`)
+  is on the `supabase_object` list, pinned to relkind `i`.
+
+`scripts/test-catalog-hosted-local.mjs` (`test:rls` step 5e) runs these predicates for real: it makes the local
+stack look hosted inside rolled-back superuser transactions (the three extensions and all their members owned by
+`postgres`) and runs MT-9 and MT-7 as `postgres` against nine scenarios (clean, an added function, a replaced
+function, SECURITY DEFINER, SET, a replaced view, a moved extension, a text search member, a table named like the
+index). If Trace ever installs `pgmq` (Supabase Queues), its after-create script re-owns it and its members to
+`postgres`, so `extension_owner` and `extension_added_member` fire by design.

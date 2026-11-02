@@ -1,0 +1,28 @@
+{
+  "version": "d1-v1",
+  "coverageFloorPermille": 700,
+  "coveragePhotoMissingFactorPermille": 750,
+  "families": ["paste", "input_origin", "focus"],
+  "rules": [
+    { "id": "D1-PASTE", "kinds": ["paste", "drop"], "family": "paste", "tier": "T3", "severity": "medium", "validated": true },
+    {
+      "id": "D1-UNTRUSTED-INPUT",
+      "kinds": ["untrusted_input"],
+      "family": "input_origin",
+      "tier": "T3",
+      "severity": "hard",
+      "validated": true,
+      "untrusted": true
+    },
+    {
+      "id": "D1-TAB-HIDDEN",
+      "kinds": ["tab_hidden"],
+      "minDurationMs": 3000,
+      "family": "focus",
+      "tier": "T3",
+      "severity": "soft",
+      "validated": false
+    },
+    { "id": "D1-FULLSCREEN-EXIT", "kinds": ["fullscreen_exit"], "family": "focus", "tier": "T3", "severity": "soft", "validated": false }
+  ]
+}

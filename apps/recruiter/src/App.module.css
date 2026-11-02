@@ -1,6 +1,6 @@
 .page {
   box-sizing: border-box;
-  max-width: 40rem;
+  max-width: 72rem;
   margin: 0 auto;
   padding: var(--space-32) var(--space-16);
 }

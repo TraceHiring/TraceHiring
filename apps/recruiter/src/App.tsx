@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Outlet, useRouteError } from 'react-router';
+import { Link, Outlet, useRouteError } from 'react-router';
 import { PRODUCT_NAME } from '@trace/shared';
 import styles from './App.module.css';
 import { AuthPanel } from './auth/AuthPanel';
@@ -27,6 +27,9 @@ export function HomePage() {
     <>
       <p>Recruiter workspace</p>
       <AuthPanel />
+      <p>
+        <Link to="/tests">Go to Tests</Link>
+      </p>
     </>
   );
 }

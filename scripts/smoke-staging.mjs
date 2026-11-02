@@ -21,7 +21,8 @@
 //     of scripts/check-headers.mjs, applied to the served headers)
 // Requests never follow redirects (a 3xx fails), time out, and read at most 64 KiB of a body (a
 // larger content-length is refused unread; a stream is cancelled at the cap). An endpoint that
-// fails is retried (a fresh deploy can take a few seconds to serve everywhere) until an overall
+// fails is retried (a fresh deploy can take a few seconds to serve everywhere; a fresh per-deployment Pages
+// host can take minutes to resolve, so it gets DEFAULTS.deploymentAttempts) until an overall
 // deadline (6 min); the last attempt's problems are reported, and checks the deadline cut off are
 // listed as not run. Bodies are never printed; only status codes, schema issue
 // paths and codes, and header names/values that this repository itself sets.
@@ -46,6 +47,12 @@ export const SHA_RE = /^[0-9a-f]{40}$/;
 export const MAX_BODY_BYTES = 65_536;
 export const DEFAULTS = Object.freeze({
   attempts: 12,
+  /**
+   * Attempts for a per-deployment Pages URL: a fresh <deployment>.<project>.pages.dev host can take minutes to
+   * resolve (dispatch 8, run 39559543112: the recruiter's failed 12 attempts with `request failed (TypeError)` while
+   * its production alias already served the build), so it gets 4 minutes at delayMs, inside deadlineMs.
+   */
+  deploymentAttempts: 48,
   delayMs: 5_000,
   timeoutMs: 15_000,
   /** Overall limit for the whole smoke; the job step's timeout-minutes (8) sits above it. */
@@ -394,6 +401,7 @@ export async function runSmoke({
   sleep = realSleep,
   now = Date.now,
   attempts = DEFAULTS.attempts,
+  deploymentAttempts = DEFAULTS.deploymentAttempts,
   delayMs = DEFAULTS.delayMs,
   timeoutMs = DEFAULTS.timeoutMs,
   deadlineMs = DEFAULTS.deadlineMs,
@@ -409,6 +417,7 @@ export async function runSmoke({
     ...Object.keys(APP_PROJECTS).map((app) => ({
       label: `${app} /version.json and headers`,
       prefix: '',
+      attempts: deploymentAttempts,
       run: () => smokeApp({ app, url: targets.apps[app], sha, fetch, timeoutMs }),
     })),
     // The production alias must serve the same build as the deployment URL (S3B-2).
@@ -435,18 +444,19 @@ export async function runSmoke({
     }
     let problems = [];
     let outOfTime = false;
-    for (let attempt = 1; attempt <= attempts; attempt++) {
+    const tries = c.attempts ?? attempts;
+    for (let attempt = 1; attempt <= tries; attempt++) {
       problems = await c.run();
       if (problems.length === 0) break;
       if (now() - started >= deadlineMs) {
         outOfTime = true;
         break;
       }
-      if (attempt < attempts) await sleep(delayMs);
+      if (attempt < tries) await sleep(delayMs);
     }
     if (problems.length === 0) report.push(`${c.label}: ok`);
     else {
-      const why = outOfTime ? `${deadlineText} exceeded` : `after ${attempts} attempts`;
+      const why = outOfTime ? `${deadlineText} exceeded` : `after ${tries} attempts`;
       violations.push(`${c.prefix}${problems.join('; ')} (${why})`);
     }
   }
