@@ -47,7 +47,7 @@ What exists, by area:
 | D1-LEAD-1: gitleaks-driven tests slow under load on Windows | Tooling; green on Linux CI | **M1** |
 | N-1: MT-9 `hosted_member` fingerprint | Low; needs hosted extension versions | **M1** |
 | Peak memory of the consumer's worst case | Estimated (32-54 MB per integrity stage), not measured | **M3a** |
-| `scripts/test/gitleaks-config.test.mjs` random-input flake | Make the random `body()` draw deterministic or entropy-checked; never loosen the assertion | **M1** (tooling) |
+| `scripts/test/gitleaks-config.test.mjs` random-input flake | **Fixed at CLOSE** (it failed CI `static` on `e153f18`, run 41256738659): generic-api-key's own allowlist `^[a-zA-Z_.-]+$` drops a digit-free secret; the fixtures now build only values the rule keeps (`genericKeyKeeps`, `keptSecret`), assertions unchanged | Closed |
 | Other carried items (DB-6, DB-7, DB-12, SEC-W1-1, C2 SEC-3/5/6, FR-1, M0B-DB-1, token lifetime) | Owners in D1.md "Carried items" | M1 / M3a / M3b / M4 / M5 / M7 |
 
 ## 3. Deferred gates (build-order rule 6)
@@ -92,7 +92,7 @@ The deliverable is one OS-level screen capture of the headed `pnpm e2e:record` r
 Linear is not connected. Nothing to change for D1.
 
 ## 8. Close record
-- **Full serial `pnpm verify` green on `ca64856`** (2026-11-01, lead, no agent running; the later commits are docs only): `pnpm -r --workspace-concurrency=1 typecheck` 0; `pnpm lint` 0 (eslint, prettier, boundaries, workflows, catalog tests, migrations); `pnpm -r --workspace-concurrency=1 test` 0 (12 packages, 3 784 tests); `pnpm exec vitest run --root scripts --maxWorkers=1` 54 files, 2 715 passed + 1 skipped (K4); `pnpm test:rls` OK (32 test files, catalog 144 / floor 144, rls 2633 / floor 2633, db-types current); `pnpm -r --workspace-concurrency=1 build` 0, then `check-bundle-size` (candidate 81.9 kB gzip, photo chunk 3.5 kB, recruiter 351.5 kB information only), `check-headers`, `check-no-demo-outbox`, `scan-dist` all OK. `pnpm audit --prod --audit-level=high`: no high (1 moderate, minimatch GHSA-g3hv-75wg-m249, dated osv ignore).
+- **Full serial `pnpm verify` green on `ca64856`** (2026-11-01, lead, no agent running; the later commits are docs plus the scripts-test flake fix, after which `pnpm lint` 0 and the scripts suite 54 files, 2 718 passed + 1 skipped were re-run): `pnpm -r --workspace-concurrency=1 typecheck` 0; `pnpm lint` 0 (eslint, prettier, boundaries, workflows, catalog tests, migrations); `pnpm -r --workspace-concurrency=1 test` 0 (12 packages, 3 784 tests); `pnpm exec vitest run --root scripts --maxWorkers=1` 54 files, 2 715 passed + 1 skipped (K4); `pnpm test:rls` OK (32 test files, catalog 144 / floor 144, rls 2633 / floor 2633, db-types current); `pnpm -r --workspace-concurrency=1 build` 0, then `check-bundle-size` (candidate 81.9 kB gzip, photo chunk 3.5 kB, recruiter 351.5 kB information only), `check-headers`, `check-no-demo-outbox`, `scan-dist` all OK. `pnpm audit --prod --audit-level=high`: no high (1 moderate, minimatch GHSA-g3hv-75wg-m249, dated osv ignore).
 - CI on PR #4 for the CLOSE tip: pending.
 - Checkpoint tag: pending.
 - CLOSE PR merge ("Create a merge commit"; required checks static, rls, security, migrations green on the PR head): only after the founder's go-ahead in chat.
